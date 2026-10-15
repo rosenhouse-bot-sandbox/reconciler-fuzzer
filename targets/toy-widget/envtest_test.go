@@ -24,9 +24,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/cluster"
-	toyv1 "github.com/rosenhouse/reconciler-fuzzer/targets/toy-widget/api/v1"
-	"github.com/rosenhouse/reconciler-fuzzer/targets/toy-widget/controller"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/cluster"
+	toyv1 "github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/targets/toy-widget/api/v1"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/targets/toy-widget/controller"
 )
 
 const (

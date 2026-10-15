@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/generate"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/reference"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/target"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/generate"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/reference"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/target"
 )
 
 const skillPage = "../../skills/adopt-reconciler-fuzzer/SKILL.md"

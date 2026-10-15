@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/launch"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/launch"
 )
 
 // forever keeps the shell alive without exec'ing away, so that it can still

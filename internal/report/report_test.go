@@ -16,10 +16,10 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/invariant"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/observe"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/proxy"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/report"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/invariant"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/observe"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/proxy"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/report"
 )
 
 const replayCommand = "reconciler-fuzzer replay --target targets/toy-widget/target.yaml reconciler-fuzzer-out/20260921T055744Z-23/run-1/sequence.json"
@@ -80,7 +80,7 @@ func TestReportLinksTheFailingChecksSection(t *testing.T) {
 
 		md, _ := write(t, failure)
 
-		if want := "](https://github.com/rosenhouse/reconciler-fuzzer/blob/main/docs/checks.md#" + anchor + ")"; !strings.Contains(md, want) {
+		if want := "](https://github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/blob/main/docs/checks.md#" + anchor + ")"; !strings.Contains(md, want) {
 			t.Errorf("A %s report does not link %q:\n%s", id, want, md)
 		}
 	}

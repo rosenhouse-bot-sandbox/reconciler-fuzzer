@@ -12,7 +12,7 @@ import (
 
 	"sigs.k8s.io/yaml"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/reference"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/reference"
 )
 
 const (

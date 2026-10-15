@@ -11,8 +11,8 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/run"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/target"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/run"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/target"
 )
 
 const limitsHeading = "## Limitations"
@@ -131,11 +131,11 @@ func TestLimitBulletsRefusesAnyOtherShape(t *testing.T) {
 
 func TestABulletSaysALimitWithItsWordsAndItsLink(t *testing.T) {
 	l := limit{says: "reconciler-fuzzer cannot", issue: 45}
-	link := "([#45](https://github.com/rosenhouse/reconciler-fuzzer/issues/45))"
+	link := "([#45](https://github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/issues/45))"
 	if !l.isIn("reconciler-fuzzer cannot " + link) {
 		t.Errorf("isIn misses the limit in %q.", "reconciler-fuzzer cannot "+link)
 	}
-	for _, bullet := range []string{"reconciler-fuzzer can " + link, "reconciler-fuzzer cannot ([#46](https://github.com/rosenhouse/reconciler-fuzzer/issues/46))"} {
+	for _, bullet := range []string{"reconciler-fuzzer can " + link, "reconciler-fuzzer cannot ([#46](https://github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/issues/46))"} {
 		if l.isIn(bullet) {
 			t.Errorf("isIn finds %q in %q.", l.says, bullet)
 		}
@@ -146,7 +146,7 @@ func TestABulletSaysALimitWithItsWordsAndItsLink(t *testing.T) {
 }
 
 func (l limit) isIn(bullet string) bool {
-	link := fmt.Sprintf("](https://github.com/rosenhouse/reconciler-fuzzer/issues/%d)", l.issue)
+	link := fmt.Sprintf("](https://github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/issues/%d)", l.issue)
 	return strings.Contains(bullet, l.says) && (l.issue == 0 || strings.Contains(bullet, link))
 }
 

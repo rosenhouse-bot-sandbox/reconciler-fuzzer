@@ -21,7 +21,7 @@ import (
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/yaml"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/observe"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/observe"
 )
 
 // declaration mirrors target.yaml. Decoding is strict, so a misspelled key is

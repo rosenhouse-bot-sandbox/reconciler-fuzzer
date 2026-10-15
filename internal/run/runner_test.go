@@ -20,12 +20,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/cluster"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/invariant"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/launch"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/observe"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/proxy"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/target"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/cluster"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/invariant"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/launch"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/observe"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/proxy"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/target"
 )
 
 // fakeHarness records what the Runner did to the run, in order, and answers
@@ -2973,7 +2973,7 @@ func TestWhatTheTargetSaidAboveItsStackTrace(t *testing.T) {
 			`{"controller": "configmap", "controllerGroup": "", "controllerKind": "ConfigMap", "ConfigMap": {"name":"widget-0","namespace":"default"}, "namespace": "default", "name": "widget-0", "reconcileID": "8a0fad41-f98f-47ea-87d1-990173d1d560", "error": "spec.count 11 is out of range"}`},
 		{"panic.log", "panic: runtime error: index out of range [150] with length 0"},
 		{"klog-fatal.log", "F0923 16:05:39.116650    7054 main.go:30] reconciling widget: the cache never synced"},
-		{"zap-json.log", `{"level":"error","ts":"2026-09-23T16:04:03Z","logger":"setup","msg":"unable to create controller","controller":"Widget","error":"no matches for kind \"Widget\" in version \"toy.reconciler-fuzzer/v1\"","stacktrace":"main.main\n\tgithub.com/rosenhouse/reconciler-fuzzer/zzprobe/main.go:39\nruntime.main\n\truntime/proc.go:290"}`},
+		{"zap-json.log", `{"level":"error","ts":"2026-09-23T16:04:03Z","logger":"setup","msg":"unable to create controller","controller":"Widget","error":"no matches for kind \"Widget\" in version \"toy.reconciler-fuzzer/v1\"","stacktrace":"main.main\n\tgithub.com/rosenhouse-bot-sandbox/reconciler-fuzzer/zzprobe/main.go:39\nruntime.main\n\truntime/proc.go:290"}`},
 		// Go's flag package prints the error above its usage text.
 		{"flag-usage.log", "flag provided but not defined: -no-such-flag"},
 		{"cobra-usage.log", "Error: unknown flag: --no-such-flag"},

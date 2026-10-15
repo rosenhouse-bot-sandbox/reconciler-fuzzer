@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/generate"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/run"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/generate"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/run"
 )
 
 // The README says the baseline catches a controller that does not watch a kind

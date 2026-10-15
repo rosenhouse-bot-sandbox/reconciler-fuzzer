@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/run"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/run"
 )
 
 // summaryMarkdownFile is summary.json for a person, such as a CI job's page.

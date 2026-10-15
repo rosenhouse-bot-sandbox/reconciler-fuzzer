@@ -44,7 +44,7 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-reconciler-fuzzer-${{ env.RECONCILER_FUZZER_VERSION }}-${{ env.SETUP_ENVTEST_VERSION }}-${{ env.ENVTEST_K8S_VERSION }}
       - if: steps.tools.outputs.cache-hit != 'true'
         run: |
-          go install "github.com/rosenhouse/reconciler-fuzzer/cmd/reconciler-fuzzer@$RECONCILER_FUZZER_VERSION"
+          go install "github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/cmd/reconciler-fuzzer@$RECONCILER_FUZZER_VERSION"
           go install "sigs.k8s.io/controller-runtime/tools/setup-envtest@$SETUP_ENVTEST_VERSION"
       - run: |
           assets=$(setup-envtest use "$ENVTEST_K8S_VERSION" --index "$ENVTEST_INDEX_URL" --bin-dir bin/envtest -p path)
@@ -133,9 +133,9 @@ mkdir -p tools/reconciler-fuzzer
 cd tools/reconciler-fuzzer
 go mod init example.com/operator/tools/reconciler-fuzzer
 go mod edit -go=1.26.0
-GOWORK=off go get -tool github.com/rosenhouse/reconciler-fuzzer/cmd/reconciler-fuzzer@latest
+GOWORK=off go get -tool github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/cmd/reconciler-fuzzer@latest
 cd ../..
-GOWORK=off go -C tools/reconciler-fuzzer build -o ../../bin/reconciler-fuzzer github.com/rosenhouse/reconciler-fuzzer/cmd/reconciler-fuzzer
+GOWORK=off go -C tools/reconciler-fuzzer build -o ../../bin/reconciler-fuzzer github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/cmd/reconciler-fuzzer
 bin/reconciler-fuzzer version
 ```
 

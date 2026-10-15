@@ -3,7 +3,7 @@ package proxy_test
 import (
 	"testing"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/proxy"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/proxy"
 )
 
 func TestRequestForbidden(t *testing.T) {

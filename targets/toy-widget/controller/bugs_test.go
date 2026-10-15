@@ -18,7 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	toyv1 "github.com/rosenhouse/reconciler-fuzzer/targets/toy-widget/api/v1"
+	toyv1 "github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/targets/toy-widget/api/v1"
 )
 
 // fixture wires a Reconciler running one seeded bug to a fake API server.

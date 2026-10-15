@@ -4,7 +4,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/proxy"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/proxy"
 )
 
 // Back is when the target first made a request after since that shows it

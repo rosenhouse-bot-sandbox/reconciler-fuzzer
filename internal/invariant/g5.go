@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/observe"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/observe"
 )
 
 // RestartStable is G5: restarting the target does not change converged state.

@@ -3,6 +3,6 @@
 2026-09-23T16:06:01Z	DEBUG	controller-runtime.test-env	installing webhooks
 2026-09-23T16:06:01Z	ERROR	setup	unable to start manager	{"error": "error listening on :45147: listen tcp :45147: bind: address already in use"}
 main.main
-	github.com/rosenhouse/reconciler-fuzzer/zzprobe/main.go:35
+	github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/zzprobe/main.go:35
 runtime.main
 	runtime/proc.go:290

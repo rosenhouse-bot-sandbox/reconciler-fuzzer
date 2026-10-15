@@ -8,7 +8,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/invariant"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/invariant"
 )
 
 const cleanup = "widget.reconciler-fuzzer/cleanup"

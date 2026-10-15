@@ -130,7 +130,7 @@ func replacingReconcilerFuzzer(t *testing.T, recipe, checkout string) string {
 		t.Fatalf("%s runs go mod init %d times, not once.", toolsRecipe, n)
 	}
 	return modInit.ReplaceAllStringFunc(recipe, func(line string) string {
-		return line + "go mod edit -replace=github.com/rosenhouse/reconciler-fuzzer=" + strconv.Quote(checkout) + "\n"
+		return line + "go mod edit -replace=github.com/rosenhouse-bot-sandbox/reconciler-fuzzer=" + strconv.Quote(checkout) + "\n"
 	})
 }
 

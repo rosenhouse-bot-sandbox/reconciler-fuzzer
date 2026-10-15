@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/target"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/target"
 )
 
 // maxValue bounds a quoted value, in runes.

@@ -1,4 +1,4 @@
-module github.com/rosenhouse/reconciler-fuzzer/docs/spikes/external-secrets-envtest
+module github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/docs/spikes/external-secrets-envtest
 
 go 1.26.0
 

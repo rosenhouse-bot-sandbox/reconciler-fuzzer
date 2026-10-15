@@ -21,7 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	toyv1 "github.com/rosenhouse/reconciler-fuzzer/targets/toy-widget/api/v1"
+	toyv1 "github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/targets/toy-widget/api/v1"
 )
 
 // Finalizer names the cleanup path a deleted Widget runs.

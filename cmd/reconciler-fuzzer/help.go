@@ -133,7 +133,7 @@ func help(name string) string {
 	c, found := lookup(name)
 	if !found {
 		return intro + "\n" + usage("") + runExits + environment +
-			"\nThe README at https://github.com/rosenhouse/reconciler-fuzzer shows a first run.\n" +
+			"\nThe README at https://github.com/rosenhouse-bot-sandbox/reconciler-fuzzer\nshows a first run.\n" +
 			"docs/reference.md there lists every key of target.yaml and every op.\n" +
 			"docs/checks.md there says what each check requires and what its failure says.\n" +
 			"docs/failures.md there says what each file of a failure holds.\n"

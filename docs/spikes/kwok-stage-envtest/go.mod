@@ -1,4 +1,4 @@
-module github.com/rosenhouse/reconciler-fuzzer/docs/spikes/kwok-stage-envtest
+module github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/docs/spikes/kwok-stage-envtest
 
 go 1.26.0
 

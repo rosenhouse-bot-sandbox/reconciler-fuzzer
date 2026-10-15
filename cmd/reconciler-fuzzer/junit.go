@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/run"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/run"
 )
 
 // junitTimestamp is the form JUnit's schema gives a timestamp.
