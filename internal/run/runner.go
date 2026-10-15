@@ -16,12 +16,12 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/cluster"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/invariant"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/launch"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/observe"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/proxy"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/target"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/cluster"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/invariant"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/launch"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/observe"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/proxy"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/target"
 )
 
 // defaultMaxManaged bounds the managed objects in the run namespace. Beyond

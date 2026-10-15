@@ -13,7 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/observe"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/observe"
 )
 
 var (

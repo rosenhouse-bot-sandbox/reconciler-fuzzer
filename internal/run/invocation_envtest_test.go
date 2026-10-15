@@ -11,9 +11,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/cluster"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/run"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/target"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/cluster"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/run"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/target"
 )
 
 func TestInvocationCreatesAndDeletesClusterScopedFixtures(t *testing.T) {

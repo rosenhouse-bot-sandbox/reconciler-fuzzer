@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/report"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/run"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/target"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/report"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/run"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/target"
 )
 
 // summaryJSONFile is written into the invocation's directory whatever the

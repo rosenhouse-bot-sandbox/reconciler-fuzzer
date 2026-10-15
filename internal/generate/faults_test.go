@@ -7,7 +7,7 @@ import (
 	gvkschema "k8s.io/apimachinery/pkg/runtime/schema"
 	"pgregory.net/rapid"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/run"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/run"
 )
 
 func TestDrawsInjectFaultsByDefault(t *testing.T) {

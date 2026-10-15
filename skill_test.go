@@ -71,7 +71,7 @@ func TestTheAdoptionSkillsPagesLand(t *testing.T) {
 	}
 }
 
-var installsReconcilerFuzzer = regexp.MustCompile(`go install github\.com/rosenhouse/reconciler-fuzzer/\S+`)
+var installsReconcilerFuzzer = regexp.MustCompile(`go install github\.com/rosenhouse-bot-sandbox/reconciler-fuzzer/\S+`)
 
 func TestTheAdoptionSkillInstallsWhatTheReadmeInstalls(t *testing.T) {
 	_, body := readSkill(t)
@@ -89,7 +89,7 @@ func TestTheAdoptionSkillInstallsWhatTheReadmeInstalls(t *testing.T) {
 
 // The README's copy command copies the skill from the module the reader installed.
 func TestTheReadmeCopiesTheAdoptionSkill(t *testing.T) {
-	copies := regexp.MustCompile(`cp -r "\$\(go env GOMODCACHE\)/github\.com/rosenhouse/reconciler-fuzzer@\$\(reconciler-fuzzer version[^)]*\)/(\S+)" \.claude/skills/`)
+	copies := regexp.MustCompile(`cp -r "\$\(go env GOMODCACHE\)/github\.com/rosenhouse-bot-sandbox/reconciler-fuzzer@\$\(reconciler-fuzzer version[^)]*\)/(\S+)" \.claude/skills/`)
 	m := copies.FindStringSubmatch(readFile(t, "README.md"))
 	if m == nil {
 		t.Fatal("README.md has no command that copies the skill from the module cache.")

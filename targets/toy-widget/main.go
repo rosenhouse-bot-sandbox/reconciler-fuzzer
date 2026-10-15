@@ -21,8 +21,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	toyv1 "github.com/rosenhouse/reconciler-fuzzer/targets/toy-widget/api/v1"
-	"github.com/rosenhouse/reconciler-fuzzer/targets/toy-widget/controller"
+	toyv1 "github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/targets/toy-widget/api/v1"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/targets/toy-widget/controller"
 )
 
 // b1Hold is how long B1 holds its premature status. It is longer than the

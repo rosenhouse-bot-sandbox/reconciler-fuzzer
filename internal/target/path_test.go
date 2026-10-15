@@ -8,7 +8,7 @@ import (
 
 	"pgregory.net/rapid"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/target"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/target"
 )
 
 var each = target.Step{Each: true}

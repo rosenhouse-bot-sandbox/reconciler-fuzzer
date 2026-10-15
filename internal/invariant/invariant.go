@@ -9,9 +9,9 @@ import (
 	"slices"
 	"time"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/observe"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/proxy"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/target"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/observe"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/proxy"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/target"
 )
 
 // OpType is the kind of one op in a sequence.

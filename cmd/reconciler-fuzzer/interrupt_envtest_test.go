@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/target"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/target"
 )
 
 // An interrupt leaves nothing behind: not the control plane and not the target,

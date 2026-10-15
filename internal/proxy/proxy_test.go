@@ -18,7 +18,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/proxy"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/proxy"
 )
 
 // startProxy puts a proxy in front of upstream and stops both when the test ends.

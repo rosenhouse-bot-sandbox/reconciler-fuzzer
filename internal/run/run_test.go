@@ -28,11 +28,11 @@ import (
 	"k8s.io/client-go/rest"
 	clienttesting "k8s.io/client-go/testing"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/cluster"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/launch"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/observe"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/proxy"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/target"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/cluster"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/launch"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/observe"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/proxy"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/target"
 )
 
 var (

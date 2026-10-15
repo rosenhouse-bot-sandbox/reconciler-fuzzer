@@ -9,9 +9,9 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/invariant"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/observe"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/proxy"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/invariant"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/observe"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/proxy"
 )
 
 // markdown renders report.md. It opens with what failed and the command that
@@ -252,7 +252,7 @@ func yes(set bool) string {
 }
 
 // ChecksPage says what each check requires.
-const ChecksPage = "https://github.com/rosenhouse/reconciler-fuzzer/blob/main/docs/checks.md"
+const ChecksPage = "https://github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/blob/main/docs/checks.md"
 
 // checkAnchors are the anchors of the generic checks' sections of ChecksPage.
 var checkAnchors = map[string]string{

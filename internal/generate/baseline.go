@@ -7,7 +7,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"pgregory.net/rapid"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/run"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/run"
 )
 
 // Baseline creates the sample, deletes the first object of each managed kind,

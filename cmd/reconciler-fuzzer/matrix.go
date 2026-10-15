@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/run"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/target"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/run"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/target"
 )
 
 // defaultMatrix is the bug matrix the repository checks in.

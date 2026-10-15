@@ -11,4 +11,4 @@ k8s.io/klog/v2.(*loggingT).printf(...)
 k8s.io/klog/v2.Fatalf(...)
 	k8s.io/klog/v2@v2.140.0/klog.go:1711
 main.main()
-	github.com/rosenhouse/reconciler-fuzzer/zzprobe/main.go:30 +0x26e
+	github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/zzprobe/main.go:30 +0x26e

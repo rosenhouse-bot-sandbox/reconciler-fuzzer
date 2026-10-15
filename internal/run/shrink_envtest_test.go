@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/generate"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/run"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/target"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/generate"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/run"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/target"
 )
 
 // theSeedThatDrawsAB2Reproducer draws more than three ops, so the shrink pass

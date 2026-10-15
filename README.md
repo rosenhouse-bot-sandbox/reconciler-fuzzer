@@ -30,12 +30,12 @@ You write no test code. One `target.yaml` describes your controller.
   [against a cluster](docs/targets.md#against-a-cluster), such as kind.
 - reconciler-fuzzer tests namespaced kinds only, in one namespace per run. It misses a child your
   controller leaks into another namespace, and it cannot supply an object your controller
-  reads from another namespace ([#38](https://github.com/rosenhouse/reconciler-fuzzer/issues/38)).
+  reads from another namespace ([#38](https://github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/issues/38)).
 
 ## Install
 
 ```sh
-go install github.com/rosenhouse/reconciler-fuzzer/cmd/reconciler-fuzzer@latest
+go install github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/cmd/reconciler-fuzzer@latest
 go install sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.25.2
 export PATH="$(go env GOPATH)/bin:$PATH"
 index=https://raw.githubusercontent.com/kubernetes-sigs/controller-tools/v0.22.0/envtest-releases.yaml
@@ -54,7 +54,7 @@ images set `GOTOOLCHAIN=local`, which stops the download, and `go install` fails
 ## Quick start
 
 This repository holds a toy controller with bugs you can switch on. Clone it with
-`git clone https://github.com/rosenhouse/reconciler-fuzzer`, and run this in the clone. The build takes a
+`git clone https://github.com/rosenhouse-bot-sandbox/reconciler-fuzzer`, and run this in the clone. The build takes a
 minute or two the first time, and the runs about half a minute:
 
 ```sh
@@ -108,7 +108,7 @@ install, copy the skill into your repository:
 
 ```sh
 mkdir -p .claude/skills
-cp -r "$(go env GOMODCACHE)/github.com/rosenhouse/reconciler-fuzzer@$(reconciler-fuzzer version | cut -d' ' -f2)/skills/adopt-reconciler-fuzzer" .claude/skills/
+cp -r "$(go env GOMODCACHE)/github.com/rosenhouse-bot-sandbox/reconciler-fuzzer@$(reconciler-fuzzer version | cut -d' ' -f2)/skills/adopt-reconciler-fuzzer" .claude/skills/
 chmod -R u+w .claude/skills/adopt-reconciler-fuzzer
 ```
 

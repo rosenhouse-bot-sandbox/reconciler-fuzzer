@@ -10,7 +10,7 @@ import (
 	"testing"
 	"unicode"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/report"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/report"
 )
 
 // A page that moved takes its headings with it, so each link from a page a

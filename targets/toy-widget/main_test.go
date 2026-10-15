@@ -15,8 +15,8 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/target"
-	"github.com/rosenhouse/reconciler-fuzzer/targets/toy-widget/controller"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/target"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/targets/toy-widget/controller"
 )
 
 func writeKubeconfig(t *testing.T, server string) string {

@@ -5,7 +5,7 @@ import (
 
 	rbacv1 "k8s.io/api/rbac/v1"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/cluster"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/cluster"
 )
 
 func TestNewIdentityRequiresANamespace(t *testing.T) {

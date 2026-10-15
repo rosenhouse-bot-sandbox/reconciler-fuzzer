@@ -1030,7 +1030,7 @@ server does take a supported flag, and the ephemeral port above keeps it out of 
 ### 8.2 Go form
 
 `internal/target` loads the YAML into a `Target`, and everything downstream consumes it.
-`go doc github.com/rosenhouse/reconciler-fuzzer/internal/target Target` lists its fields, so this document
+`go doc github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/target Target` lists its fields, so this document
 gives only the intent. `Ready` returns an error beside its verdict, and an error means not
 ready (§8.4). A property's error is a configuration error. A nil `Equal` means the §6
 default with the `equalIgnore` paths. An `equal` hook replaces the default and takes no
@@ -1180,7 +1180,7 @@ span several PRs.
 
 **M0 — Scaffold.** Deliverables:
 
-- Go module `github.com/rosenhouse/reconciler-fuzzer` on Go 1.26.
+- Go module `github.com/rosenhouse-bot-sandbox/reconciler-fuzzer` on Go 1.26.
 - `LICENSE` (Apache-2.0).
 - `Makefile` with `setup`, `test`, `test-envtest`, `fmt`, `vet`.
 - `setup-envtest` pinned through `ENVTEST_K8S_VERSION` and `ENVTEST_INDEX_URL`.

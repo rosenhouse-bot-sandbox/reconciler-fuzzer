@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/run"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/run"
 )
 
 // quickstartRun is a page's first cert-manager quickstart command and the

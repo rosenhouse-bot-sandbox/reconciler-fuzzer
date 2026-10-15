@@ -19,11 +19,11 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/util/retry"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/cluster"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/launch"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/observe"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/proxy"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/target"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/cluster"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/launch"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/observe"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/proxy"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/target"
 )
 
 // clearFinalizers is the merge patch the teardown forces on an object whose

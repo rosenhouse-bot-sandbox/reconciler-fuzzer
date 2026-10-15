@@ -12,9 +12,9 @@ import (
 	"slices"
 	"time"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/invariant"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/observe"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/proxy"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/invariant"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/observe"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/proxy"
 )
 
 // A failing run writes these two files.

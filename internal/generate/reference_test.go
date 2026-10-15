@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/reference"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/reference"
 )
 
 func TestTheReferenceNamesEveryOverlayKeyword(t *testing.T) {

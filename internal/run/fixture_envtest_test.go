@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/generate"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/run"
-	"github.com/rosenhouse/reconciler-fuzzer/internal/target"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/generate"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/run"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/target"
 )
 
 // lastFixtureSeed is the last seed fixtureSequences draws.

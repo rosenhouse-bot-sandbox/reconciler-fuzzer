@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/invariant"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/invariant"
 )
 
 // G1 ignores a watch whether it hung or failed; G6 counts the one that failed.

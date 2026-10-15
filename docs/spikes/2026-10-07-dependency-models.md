@@ -220,7 +220,7 @@ What a model does not give:
   refuses, is retried with backoff for as long as the run lasts, and the symptom is a bare
   G4. The model should refuse such a kind when the target loads.
 - A cluster-scoped or cross-namespace dependency is outside what a run observes
-  ([#38](https://github.com/rosenhouse/reconciler-fuzzer/issues/38)).
+  ([#38](https://github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/issues/38)).
 
 ## Open questions
 

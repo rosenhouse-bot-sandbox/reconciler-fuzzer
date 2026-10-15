@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/invariant"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/invariant"
 )
 
 func TestBackIsTheFirstRequestThatShowsTheTargetRunning(t *testing.T) {

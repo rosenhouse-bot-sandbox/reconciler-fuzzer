@@ -165,7 +165,7 @@ func TestTheTopLevelHelpListsTheCommandsUsersRun(t *testing.T) {
 	for _, want := range []string{
 		"\n  run ", "\n  replay ", "\n  version ",
 		"\nRun 'reconciler-fuzzer <command> --help' or 'reconciler-fuzzer help <command>'\nfor a command's flags.\n",
-		"\nThe README at https://github.com/rosenhouse/reconciler-fuzzer shows a first run.\n",
+		"\nThe README at https://github.com/rosenhouse-bot-sandbox/reconciler-fuzzer\nshows a first run.\n",
 		"\ndocs/reference.md there lists every key of target.yaml and every op.\n",
 		"\ndocs/checks.md there says what each check requires and what its failure says.\n",
 		"\ndocs/failures.md there says what each file of a failure holds.\n",

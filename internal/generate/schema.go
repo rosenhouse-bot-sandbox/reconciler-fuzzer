@@ -12,7 +12,7 @@ import (
 	gvkschema "k8s.io/apimachinery/pkg/runtime/schema"
 	"pgregory.net/rapid"
 
-	"github.com/rosenhouse/reconciler-fuzzer/internal/target"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/target"
 )
 
 // schema is the part of a CRD's OpenAPI v3 schema the generator reads. What

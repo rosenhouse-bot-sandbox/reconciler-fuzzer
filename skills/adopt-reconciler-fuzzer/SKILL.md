@@ -28,7 +28,7 @@ Copy this checklist into your task list and track it:
 If `reconciler-fuzzer` is not on `PATH` or in `$(go env GOPATH)/bin`, install it:
 
 ```sh
-GOTOOLCHAIN=auto go install github.com/rosenhouse/reconciler-fuzzer/cmd/reconciler-fuzzer@latest
+GOTOOLCHAIN=auto go install github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/cmd/reconciler-fuzzer@latest
 ```
 
 `go install` writes to `$(go env GOPATH)/bin`. If that is not on `PATH`, prefix each command
@@ -36,11 +36,11 @@ with `PATH="$(go env GOPATH)/bin:$PATH"`. Then print the directory of the module
 from:
 
 ```sh
-echo "$(go env GOMODCACHE)/github.com/rosenhouse/reconciler-fuzzer@$(reconciler-fuzzer version | cut -d' ' -f2)"
+echo "$(go env GOMODCACHE)/github.com/rosenhouse-bot-sandbox/reconciler-fuzzer@$(reconciler-fuzzer version | cut -d' ' -f2)"
 ```
 
 Below, `<module>` stands for that directory. If it is missing, run
-`go mod download github.com/rosenhouse/reconciler-fuzzer@<version>`. If the version ends in
+`go mod download github.com/rosenhouse-bot-sandbox/reconciler-fuzzer@<version>`. If the version ends in
 `+dirty`, or the download fails, reconciler-fuzzer was built from a clone, and `<module>` is
 that clone.
 
