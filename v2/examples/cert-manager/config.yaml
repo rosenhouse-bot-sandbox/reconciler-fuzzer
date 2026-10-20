@@ -1,0 +1,38 @@
+# cert-manager, unpatched, at the version the Makefile pins.
+launch:
+  binary: ../../../bin/cert-manager-controller
+  args:
+    - --kubeconfig=${systems.kube.kubeconfig}
+    - --leader-elect=false
+    - --enable-certificate-owner-ref=true
+    # The healthz server binds 0.0.0.0:9403, so runs cannot overlap.
+    - --metrics-listen-address=127.0.0.1:0
+  rbac:
+    - rbac/clusterrole.yaml
+crds:
+  - ../../../examples/cert-manager/crds/cert-manager.crds.yaml
+primary:
+  kind: cert-manager.io/v1/Certificate
+  sample: ../../../examples/cert-manager/certificate.yaml
+  # Each condition carries its own observedGeneration.
+  ready: >-
+    has(self.status) && has(self.status.conditions) && self.status.conditions.exists(c,
+      c.type == "Ready" && c.status == "True"
+      && has(c.observedGeneration) && c.observedGeneration == self.metadata.generation)
+fixtures:
+  - ../../../examples/cert-manager/issuer.yaml
+# No webhook runs, so the overlay states valid values. renewBefore is not
+# mutated, because the CRD lets it exceed duration.
+values:
+  distinct: [spec.secretName]
+  mutate:
+    - spec.dnsNames
+    - spec.duration
+    - spec.privateKey.algorithm
+    - spec.privateKey.rotationPolicy
+  overlay:
+    spec.dnsNames: {minItems: 1, maxItems: 3, items: {pattern: "^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?\\.example\\.test$"}}
+    spec.duration: {enum: ["1h", "24h", "2160h"]}
+    # Under Never, cert-manager keeps a stored key that a later algorithm
+    # does not match, and waits for a user. plans/rotation-never.json covers it.
+    spec.privateKey.rotationPolicy: {enum: ["Always"]}

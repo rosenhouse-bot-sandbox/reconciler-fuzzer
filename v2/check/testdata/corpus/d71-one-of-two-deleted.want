@@ -1,0 +1,1 @@
+# D71: Deleting one of two CRs leaves the other's children, which passes.

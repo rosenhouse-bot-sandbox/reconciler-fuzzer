@@ -16,10 +16,12 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -56,10 +58,13 @@ type Listener struct {
 	server  *http.Server
 	reverse *httputil.ReverseProxy
 
+	streams atomic.Uint64
+
 	mu       sync.Mutex
 	closed   bool
 	inFlight sync.WaitGroup
 	faults   []*activeFault
+	kill     func(context.Context) error
 }
 
 type activeFault struct {
@@ -157,7 +162,7 @@ func (l *Listener) pick(r Request) *activeFault {
 	defer l.mu.Unlock()
 	var picked *activeFault
 	for _, f := range l.faults {
-		if !Matches(f.fault.Match, r) {
+		if !Matches(f.fault.Match, r) || r.Watch && unknownOutcome(f.fault) {
 			continue
 		}
 		f.matched++
@@ -192,6 +197,9 @@ func (l *Listener) serve(w http.ResponseWriter, r *http.Request) {
 		},
 		decode: mutating(req.Verb),
 	}
+	if req.Watch {
+		rec.call.Stream = l.streams.Add(1)
+	}
 	defer rec.finish()
 
 	f := l.pick(req)
@@ -208,8 +216,40 @@ func (l *Listener) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	case f.fault.Delay != nil:
 		hold(r.Context(), f, time.Duration(*f.fault.Delay))
+	case unknownOutcome(f.fault):
+		l.answerUnseen(rec, upstream(r, rec.decode), f.fault.KillAfter)
+		return
 	}
-	l.reverse.ServeHTTP(rec, r)
+	l.reverse.ServeHTTP(rec, upstream(r, rec.decode))
+}
+
+// upstream keeps a write going after its client leaves, since the server
+// can commit it and the trace needs the server's answer.
+func upstream(r *http.Request, write bool) *http.Request {
+	if write && r.Context().Err() == nil {
+		return r.WithContext(context.WithoutCancel(r.Context()))
+	}
+	return r
+}
+
+func unknownOutcome(f plan.Fault) bool { return f.DropResponse || f.KillAfter }
+
+// answerUnseen lets the upstream answer in full and records the call. Then,
+// for killAfter, it kills the controller. Last it aborts the client's
+// connection without a response.
+func (l *Listener) answerUnseen(rec *recorder, r *http.Request, kill bool) {
+	buffered := *rec
+	buffered.ResponseWriter = httptest.NewRecorder()
+	rec.recorded = true
+	l.reverse.ServeHTTP(&buffered, r)
+	buffered.finish()
+	l.mu.Lock()
+	killFunc := l.kill
+	l.mu.Unlock()
+	if kill && killFunc != nil {
+		killFunc(context.WithoutCancel(r.Context()))
+	}
+	drop(rec.ResponseWriter)
 }
 
 // hold waits for d, the fault's end or the client's departure.
@@ -264,6 +304,9 @@ func (rec *recorder) finish() {
 		rec.readResult(rec.Header().Get("Content-Encoding"))
 	}
 	rec.record()
+	if record := rec.listener.o.Record; rec.call.Watch && record != nil {
+		record(trace.Event{WatchEnd: &trace.WatchEnd{Caller: rec.call.Caller, System: rec.call.Ref.System, Stream: rec.call.Stream}})
+	}
 }
 
 func (rec *recorder) readResult(encoding string) {
@@ -379,4 +422,12 @@ func drop(w http.ResponseWriter) {
 		panic(http.ErrAbortHandler)
 	}
 	conn.Close()
+}
+
+// SetKill sets what a killAfter fault calls to kill the controller. It
+// returns once the controller has exited.
+func (l *Listener) SetKill(kill func(context.Context) error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.kill = kill
 }

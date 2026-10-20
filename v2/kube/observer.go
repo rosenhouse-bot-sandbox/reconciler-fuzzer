@@ -40,10 +40,20 @@ type observer struct {
 	// or asked to watch.
 	kinds map[schema.GroupResource]schema.GroupVersionResource
 	seen  map[seenKey]bool
-	// gone holds each object the observer last saw deleted or being deleted.
-	gone    map[trace.Ref]bool
+	// gone holds the UID of each instance the observer saw deleted, being
+	// deleted, or replaced by another UID.
+	gone    map[string]bool
+	uids    map[trace.Ref]string
+	hear    []func(trace.Version)
 	stopped bool
 	wg      sync.WaitGroup
+}
+
+func newObserver() *observer {
+	return &observer{
+		record: func(trace.Event) {}, kinds: map[schema.GroupResource]schema.GroupVersionResource{},
+		seen: map[seenKey]bool{}, gone: map[string]bool{}, uids: map[trace.Ref]string{},
+	}
 }
 
 // seenKey includes deleted because a deletion may carry the object's last
@@ -163,7 +173,14 @@ func (o *observer) see(gr schema.GroupResource, obj any, deleted bool) {
 	key := seenKey{ref, u.GetResourceVersion(), deleted}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	o.gone[ref] = deleted || u.GetDeletionTimestamp() != nil
+	uid := string(u.GetUID())
+	if previous := o.uids[ref]; previous != "" && previous != uid {
+		o.gone[previous] = true
+	}
+	o.uids[ref] = uid
+	if deleted || u.GetDeletionTimestamp() != nil {
+		o.gone[uid] = true
+	}
 	if o.seen[key] {
 		return
 	}
@@ -172,7 +189,11 @@ func (o *observer) see(gr schema.GroupResource, obj any, deleted bool) {
 	if err != nil {
 		return
 	}
-	o.record(trace.Event{Version: &trace.Version{Ref: ref, UID: string(u.GetUID()), RV: key.rv, Deleted: deleted, Body: body}})
+	v := trace.Version{Ref: ref, UID: uid, RV: key.rv, Deleted: deleted, Body: body}
+	o.record(trace.Event{Version: &v})
+	for _, hear := range o.hear {
+		hear(v)
+	}
 }
 
 // recorded says whether the observer recorded rv of ref.
@@ -182,12 +203,12 @@ func (o *observer) recorded(ref trace.Ref, rv string) bool {
 	return o.seen[seenKey{ref, rv, false}] || o.seen[seenKey{ref, rv, true}]
 }
 
-// recordedGone says whether the observer last saw ref deleted or being
-// deleted.
-func (o *observer) recordedGone(ref trace.Ref) bool {
+// recordedGone says whether the observer saw instance uid of ref deleted,
+// being deleted, or replaced.
+func (o *observer) recordedGone(ref trace.Ref, uid string) bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	return o.gone[ref]
+	return o.gone[uid] || (o.uids[ref] != "" && o.uids[ref] != uid)
 }
 
 // await waits until done holds, so that a harness action returns only after

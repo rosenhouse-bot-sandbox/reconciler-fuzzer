@@ -143,12 +143,38 @@ func TestClause4CountsOnlySinceTheLastStart(t *testing.T) {
 	requireUnmet(t, b, 3500*ms, "no successful request")
 }
 
+func TestClause4IgnoresAWriteTheKilledProcessSent(t *testing.T) {
+	var b tt.Builder
+	write := tt.Call(ctl, "update", widgetA, 200, "")
+	write.Call.Latency = 200 * ms
+	b.Add(tt.Run("toy", "widgets"), tt.Start(1)).
+		At(1 * s).Add(tt.Version(widgetA, "ua", "1", ready(true))).
+		At(1 * s).Add(tt.Exit("signal: killed", true, "")).Add(tt.Start(2)).
+		At(1100 * ms).Add(write)
+	requireUnmet(t, &b, 4*s, "no successful request")
+}
+
 func TestClause7NoChangedWrite(t *testing.T) {
 	b := settledAt3s()
 	b.At(1500 * ms).Add(tt.Call(ctl, "update", cm, 200, "5"))
 	requireUnmet(t, b, 3*s, "changed configmaps ns/c")
 	if unmet := check.Settled(b.Index(), 3500*ms, spec); len(unmet) != 0 {
 		t.Fatalf("the change left the window, but unmet = %q", unmet)
+	}
+}
+
+func TestClause7CountsAChangedWriteInFlight(t *testing.T) {
+	b := settledAt3s()
+	b.At(3*s - 3*ms).Add(tt.Version(cm, "uc", "5", tt.Object("c")))
+	write := tt.Call(ctl, "update", cm, 200, "5")
+	write.Call.Latency = 6 * ms
+	b.At(3*s + 1*ms).Add(write)
+	requireUnmet(t, b, 3*s, "changed configmaps ns/c")
+	write.Call.Latency = 500 * time.Microsecond
+	b = settledAt3s()
+	b.At(3*s + 1*ms).Add(write)
+	if unmet := check.Settled(b.Index(), 3*s, spec); len(unmet) != 0 {
+		t.Fatalf("a write sent after t is in flight, but unmet = %q", unmet)
 	}
 }
 
@@ -259,5 +285,165 @@ func TestFirstSettledAtAnEventTime(t *testing.T) {
 		At(3700 * ms).Add(tt.Version(widgetA, "ua", "2", ready(true)))
 	if got, ok := check.FirstSettled(b.Index(), 0, 10*s, spec); !ok || got != 3700*ms {
 		t.Fatalf("FirstSettled = %v, %v; want 3.7s", got, ok)
+	}
+}
+
+func TestClause4IgnoresCallsOfUnknownOutcome(t *testing.T) {
+	var b tt.Builder
+	get := tt.Call(ctl, "get", widgetA, 200, "")
+	get.Call.Injected = trace.DropResponse
+	b.Add(tt.Run("toy", "widgets"), tt.Start(1)).
+		At(500 * ms).Add(get).
+		At(1 * s).Add(tt.Version(widgetA, "ua", "1", ready(true)))
+	requireUnmet(t, &b, 3*s, "no successful request")
+}
+
+// damagedAt1200ms settles at 3s but for clause 5: step 0 damaged cm at
+// 1.2s and ended its faults at 1.3s.
+func damagedAt1200ms(do string) *tt.Builder {
+	b := settledAt3s()
+	b.At(1 * s).Add(tt.Phase(0, trace.FaultPeriod)).
+		At(1200 * ms).Add(tt.Action(0, do, cm)).
+		At(1300 * ms).Add(tt.EndFaults(0, 10*s, false))
+	return b
+}
+
+func call(verb string, ref trace.Ref, status int, injected string) trace.Event {
+	e := tt.Call(ctl, verb, ref, status, "")
+	e.Call.Injected = injected
+	return e
+}
+
+func TestClause5TheControllerLooksAtEachChangedObject(t *testing.T) {
+	requireUnmet(t, damagedAt1200ms("damage"), 3200*ms, "has not looked at configmaps ns/c since the damage at 1.2s")
+	requireUnmet(t, damagedAt1200ms("changeFixture"), 3200*ms, "has not looked at configmaps ns/c since the changeFixture at 1.2s")
+	looks := map[string]trace.Event{
+		"a get":                     call("get", cm, 200, ""),
+		"a 404":                     call("get", cm, 404, ""),
+		"a list of the namespace":   call("list", tt.Ref("configmaps", "ns", ""), 200, ""),
+		"a list of every namespace": call("list", tt.Ref("configmaps", "", ""), 200, ""),
+		"a watch opened after":      call("watch", tt.Ref("configmaps", "", ""), 200, ""),
+	}
+	for name, look := range looks {
+		b := damagedAt1200ms("damage")
+		b.At(1500 * ms).Add(look)
+		if unmet := check.Settled(b.Index(), 3200*ms, spec); len(unmet) != 0 {
+			t.Errorf("%s: unmet = %q", name, unmet)
+		}
+	}
+}
+
+func TestClause5HoldsOnlyStableAfterTheChange(t *testing.T) {
+	b := damagedAt1200ms("damage")
+	b.At(1210 * ms).Add(call("get", cm, 404, ""))
+	requireUnmet(t, b, 3199*ms, "configmaps ns/c was changed at 1.2s, less than stable ago")
+	if got, ok := check.FirstSettled(b.Index(), 1300*ms, 10*s, spec); !ok || got != 3200*ms {
+		t.Errorf("FirstSettled = %v, %v; want 3.2s", got, ok)
+	}
+}
+
+func TestClause5DoesNotCount(t *testing.T) {
+	harnessGet := tt.Call(trace.Harness, "get", cm, 200, "")
+	for name, c := range map[string]struct {
+		at   time.Duration
+		call trace.Event
+	}{
+		"a call before the change":    {1100 * ms, call("get", cm, 200, "")},
+		"a failed call":               {1500 * ms, call("get", cm, 500, "")},
+		"a call of unknown outcome":   {1500 * ms, call("update", cm, 200, trace.DropResponse)},
+		"a killAfter call":            {1500 * ms, call("update", cm, 200, trace.KillAfter)},
+		"a call in another namespace": {1500 * ms, call("list", tt.Ref("configmaps", "other", ""), 200, "")},
+		"a call on another name":      {1500 * ms, call("get", tt.Ref("configmaps", "ns", "d"), 200, "")},
+		"a call on another kind":      {1500 * ms, call("get", tt.Ref("secrets", "ns", "c"), 200, "")},
+		"a harness call":              {1500 * ms, harnessGet},
+	} {
+		b := damagedAt1200ms("damage")
+		b.At(c.at).Add(c.call)
+		requireUnmetNamed(t, name, b, 3200*ms, "has not looked at configmaps ns/c")
+	}
+}
+
+func requireUnmetNamed(t *testing.T, name string, b *tt.Builder, at time.Duration, want string) {
+	t.Helper()
+	unmet := check.Settled(b.Index(), at, spec)
+	if !slices.ContainsFunc(unmet, func(u string) bool { return strings.Contains(u, want) }) {
+		t.Errorf("%s: unmet = %q, want one that says %q", name, unmet, want)
+	}
+}
+
+func watchCall(stream uint64) trace.Event {
+	e := call("watch", tt.Ref("configmaps", "ns", ""), 200, "")
+	e.Call.Watch, e.Call.Stream = true, stream
+	return e
+}
+
+func TestClause5CountsAWatchOpenAcrossTheChange(t *testing.T) {
+	b := settledAt3s()
+	b.At(1 * s).Add(tt.Phase(0, trace.FaultPeriod)).
+		At(1100 * ms).Add(watchCall(1)).
+		At(1200 * ms).Add(tt.Action(0, "damage", cm)).
+		At(1300 * ms).Add(tt.EndFaults(0, 10*s, false))
+	if unmet := check.Settled(b.Index(), 3200*ms, spec); len(unmet) != 0 {
+		t.Errorf("open watch: unmet = %q", unmet)
+	}
+	b.At(2 * s).Add(trace.Event{WatchEnd: &trace.WatchEnd{Caller: ctl, System: "kube", Stream: 1}})
+	requireUnmet(t, b, 3200*ms, "has not looked at configmaps ns/c")
+}
+
+func TestClause5LapsesAfterOneAndAHalfPollIntervals(t *testing.T) {
+	b := damagedAt1200ms("damage")
+	requireUnmet(t, b, 4299*ms, "has not looked at configmaps ns/c")
+	if unmet := check.Settled(b.Index(), 4300*ms, spec); len(unmet) != 0 {
+		t.Errorf("unmet = %q", unmet)
+	}
+	if got, ok := check.FirstSettled(b.Index(), 1300*ms, 10*s, spec); !ok || got != 4300*ms {
+		t.Errorf("FirstSettled = %v, %v; want the lapse at 4.3s", got, ok)
+	}
+	if got, ok := check.FirstSettled(b.Index(), 1300*ms, 4299*ms, spec); ok {
+		t.Errorf("FirstSettled before the lapse = %v", got)
+	}
+}
+
+func TestClause5DoesNotLapseBeforeEndFaults(t *testing.T) {
+	b := settledAt3s()
+	b.At(1 * s).Add(tt.Phase(0, trace.FaultPeriod)).
+		At(1200 * ms).Add(tt.Action(0, "damage", cm))
+	requireUnmet(t, b, 5*s, "has not looked at configmaps ns/c")
+}
+
+func TestClause5JudgesOnlyTheLatestStep(t *testing.T) {
+	b := damagedAt1200ms("damage")
+	b.At(2 * s).Add(tt.Phase(1, trace.FaultPeriod))
+	requireUnmet(t, b, 1900*ms, "configmaps ns/c was changed at 1.2s")
+	if unmet := check.Settled(b.Index(), 3*s, spec); len(unmet) != 0 {
+		t.Errorf("unmet = %q", unmet)
+	}
+}
+
+func TestClause5SkipsAnUnmatchedTarget(t *testing.T) {
+	b := settledAt3s()
+	b.At(1 * s).Add(tt.Phase(0, trace.FaultPeriod)).
+		At(1200 * ms).Add(trace.Event{Action: &trace.Action{Step: 0, Do: "damage", Error: "no instance matches"}})
+	if unmet := check.Settled(b.Index(), 3*s, spec); len(unmet) != 0 {
+		t.Errorf("unmet = %q", unmet)
+	}
+}
+
+func TestClause5SkipsAFailedChange(t *testing.T) {
+	b := settledAt3s()
+	b.At(1 * s).Add(tt.Phase(0, trace.FaultPeriod)).
+		At(1200 * ms).Add(trace.Event{Action: &trace.Action{Step: 0, Do: "damage", Ref: &cm, Error: "conflict"}})
+	if unmet := check.Settled(b.Index(), 3*s, spec); len(unmet) != 0 {
+		t.Errorf("unmet = %q", unmet)
+	}
+}
+
+func TestClause6NoModelHasWorkPending(t *testing.T) {
+	b := settledAt3s()
+	b.At(1 * s).Add(trace.Event{Work: &trace.Work{System: "gc", Pending: true}})
+	requireUnmet(t, b, 3*s, "model gc has work pending")
+	b.At(2 * s).Add(trace.Event{Work: &trace.Work{System: "gc", Pending: false}})
+	if unmet := check.Settled(b.Index(), 3*s, spec); len(unmet) != 0 {
+		t.Errorf("unmet = %q", unmet)
 	}
 }

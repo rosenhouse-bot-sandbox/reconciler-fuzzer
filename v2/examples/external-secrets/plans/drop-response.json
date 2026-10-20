@@ -1,0 +1,57 @@
+{
+  "steps": [
+    {
+      "actions": [
+        {
+          "do": "create",
+          "slot": "a",
+          "object": {
+            "apiVersion": "external-secrets.io/v1",
+            "kind": "ExternalSecret",
+            "metadata": {
+              "name": "example"
+            },
+            "spec": {
+              "refreshPolicy": "OnChange",
+              "refreshInterval": "1h0m0s",
+              "secretStoreRef": {
+                "kind": "SecretStore",
+                "name": "fake"
+              },
+              "target": {
+                "name": "example-secret"
+              },
+              "data": [
+                {
+                  "secretKey": "token",
+                  "remoteRef": {
+                    "key": "/token"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "period": "2s",
+      "faults": [
+        {
+          "match": {
+            "verb": "create",
+            "resource": "secrets"
+          },
+          "nth": 1,
+          "dropResponse": true
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "do": "delete",
+          "slot": "a"
+        }
+      ]
+    }
+  ]
+}

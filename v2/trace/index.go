@@ -25,6 +25,12 @@ type Index struct {
 	// writer is the caller of the first response to hold each
 	// resourceVersion.
 	writer map[objectRV]Caller
+	// watches holds each caller's watch calls; watchEnds the time each
+	// stream ended.
+	watches   map[Caller][]Event
+	watchEnds map[WatchEnd]time.Duration
+	// work holds each system's Work events.
+	work map[string][]Event
 }
 
 type objectRV struct {
@@ -41,6 +47,10 @@ func NewIndex(events []Event) *Index {
 		versions: map[groupResource]map[Ref][]Event{},
 		firstRV:  map[objectRV]Event{},
 		writer:   map[objectRV]Caller{},
+
+		watches:   map[Caller][]Event{},
+		watchEnds: map[WatchEnd]time.Duration{},
+		work:      map[string][]Event{},
 	}
 	ix.Append(events...)
 	return ix
@@ -66,6 +76,10 @@ func (ix *Index) Append(events ...Event) {
 			ix.procs = append(ix.procs, e)
 		case e.Action != nil:
 			ix.actions[e.Action.Step] = append(ix.actions[e.Action.Step], e)
+		case e.WatchEnd != nil:
+			ix.watchEnds[*e.WatchEnd] = e.At
+		case e.Work != nil:
+			ix.work[e.Work.System] = append(ix.work[e.Work.System], e)
 		}
 	}
 }
@@ -98,6 +112,9 @@ func (ix *Index) addPhase(e Event) {
 func (ix *Index) addCall(e Event) {
 	c := e.Call
 	ix.calls[c.Caller] = append(ix.calls[c.Caller], e)
+	if c.Watch {
+		ix.watches[c.Caller] = append(ix.watches[c.Caller], e)
+	}
 	if c.ResultRV == "" {
 		return
 	}
@@ -131,6 +148,13 @@ func (c Call) Object() Ref {
 		ref.Name = c.ResultName
 	}
 	return ref
+}
+
+// Covers reports whether a request on r reaches o: r names o's kind, and
+// o's namespace or none, and o's name or none.
+func (r Ref) Covers(o Ref) bool {
+	return r.System == o.System && r.Group == o.Group && r.Resource == o.Resource &&
+		(r.Namespace == "" || r.Namespace == o.Namespace) && (r.Name == "" || r.Name == o.Name)
 }
 
 // Len is the number of events indexed.
@@ -275,3 +299,32 @@ func (ix *Index) Actions(step int) []Event { return ix.actions[step] }
 
 // Procs returns every Proc event in Seq order.
 func (ix *Index) Procs() []Event { return ix.procs }
+
+// Watching reports whether a successful watch by caller that covers ref
+// opened at or before since and is still open at t.
+func (ix *Index) Watching(caller Caller, ref Ref, since, t time.Duration) bool {
+	watches := ix.watches[caller]
+	for _, e := range watches[:after(watches, since)] {
+		c := e.Call
+		if !c.Ref.Covers(ref) || c.Status < 200 || c.Status > 299 {
+			continue
+		}
+		if end, ended := ix.watchEnds[WatchEnd{Caller: caller, System: c.Ref.System, Stream: c.Stream}]; !ended || end > t {
+			return true
+		}
+	}
+	return false
+}
+
+// Pending returns, in name order, the systems whose latest Work event at t
+// says they have work pending.
+func (ix *Index) Pending(t time.Duration) []string {
+	var pending []string
+	for system, work := range ix.work {
+		if n := after(work, t); n > 0 && work[n-1].Work.Pending {
+			pending = append(pending, system)
+		}
+	}
+	slices.Sort(pending)
+	return pending
+}

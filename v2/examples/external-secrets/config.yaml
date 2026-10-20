@@ -1,0 +1,37 @@
+# external-secrets, unpatched, at the version the Makefile pins, built with
+# the fake provider.
+launch:
+  binary: ../../../bin/external-secrets
+  args:
+    - --enable-leader-election=false
+    - --metrics-addr=127.0.0.1:0
+    - --live-addr=127.0.0.1:0
+    # Each SecretStore validation writes. Longer than a run keeps it quiet.
+    - --store-requeue-interval=1h
+  # There is no --kubeconfig flag.
+  env:
+    KUBECONFIG: ${systems.kube.kubeconfig}
+  rbac:
+    - rbac/clusterrole.yaml
+crds:
+  - ../../../examples/external-secrets/crds/external-secrets.yaml
+primary:
+  kind: external-secrets.io/v1/ExternalSecret
+  sample: ../../../examples/external-secrets/externalsecret.yaml
+  # syncedResourceVersion is "<generation>-<hash>".
+  ready: >-
+    has(self.status) && has(self.status.syncedResourceVersion)
+    && self.status.syncedResourceVersion.startsWith(string(self.metadata.generation) + "-")
+    && has(self.status.conditions) && self.status.conditions.exists(c,
+      c.type == "Ready" && c.status == "True")
+fixtures:
+  - ../../../examples/external-secrets/secretstore.yaml
+# spec.data is not mutated: its optional enums draw specs the fake provider
+# rejects. creationPolicy and deletionPolicy are not mutated: Orphan is the
+# negative control.
+values:
+  distinct: [spec.target.name]
+  mutate: [spec.target.name, spec.refreshInterval]
+  overlay:
+    spec.target.name: {pattern: "^example-secret-[a-z0-9]{1,8}$"}
+    spec.refreshInterval: {enum: ["1h0m0s", "24h0m0s"]}

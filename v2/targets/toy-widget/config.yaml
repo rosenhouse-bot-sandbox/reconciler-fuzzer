@@ -22,3 +22,6 @@ fixtures:
 timeouts:
   settle: 5s
   stable: 2s
+values:
+  fixtures:
+    ../../../targets/toy-widget/config.yaml: [data.label]

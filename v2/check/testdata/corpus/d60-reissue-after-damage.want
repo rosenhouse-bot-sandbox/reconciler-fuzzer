@@ -1,0 +1,1 @@
+# D60: cert-manager answers a deleted Secret with a new key and a newly named CertificateRequest.

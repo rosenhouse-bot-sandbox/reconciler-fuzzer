@@ -20,6 +20,8 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/interpose"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/kube"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/launch"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/model"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/owner"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/plan"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/system"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/trace"
@@ -67,7 +69,14 @@ type Runner struct {
 	// Sample is the primary sample's body, which a create without an
 	// object uses.
 	Sample map[string]any
+	// Select resolves a damage or changeFixture target. owner.World.Select
+	// implements it.
+	Select Select
 }
+
+// Select resolves target at t among the live instances creator made, owned
+// by slot's CR when slot is set.
+type Select func(ix *trace.Index, creator trace.Caller, target plan.Target, slot string, t time.Duration) (trace.Ref, bool)
 
 // FaultTarget starts request faults. *interpose.Listener implements it.
 type FaultTarget interface {
@@ -77,66 +86,81 @@ type FaultTarget interface {
 // Options configure Run.
 type Options struct {
 	ConfigPath string
-	PlanPath   string
+	// Plan is used when PlanPath is empty.
+	PlanPath string
+	Plan     *plan.Plan
 	// Out receives plan.json, trace.jsonl, controller.log and report.md.
 	Out string
 	// LaunchArgs are appended to the config's launch args.
 	LaunchArgs []string
 }
 
-// Run loads the config and plan, starts the Kubernetes system and the
-// controller, executes the plan, judges the trace and writes the outputs.
-func Run(ctx context.Context, o Options) (findings int, err error) {
+// Run loads the config and plan, starts the Kubernetes system, the models
+// and the controller, executes the plan, judges the trace and writes the outputs.
+func Run(ctx context.Context, o Options) (check.Report, error) {
 	cfg, err := config.Load(o.ConfigPath)
 	if err != nil {
-		return 0, err
+		return check.Report{}, err
 	}
-	p, err := plan.Load(o.PlanPath)
-	if err != nil {
-		return 0, err
+	p := o.Plan
+	if o.PlanPath != "" {
+		if p, err = plan.Load(o.PlanPath); err != nil {
+			return check.Report{}, err
+		}
+	} else if err := p.Validate(); err != nil {
+		return check.Report{}, err
 	}
 	sample, err := loadSample(cfg.Primary.Sample)
 	if err != nil {
-		return 0, err
+		return check.Report{}, err
 	}
 	if err := os.MkdirAll(o.Out, 0o755); err != nil {
-		return 0, err
+		return check.Report{}, err
 	}
 	if err := plan.Save(filepath.Join(o.Out, "plan.json"), p); err != nil {
-		return 0, err
+		return check.Report{}, err
 	}
 	rec, err := trace.NewRecorder(filepath.Join(o.Out, "trace.jsonl"))
 	if err != nil {
-		return 0, err
+		return check.Report{}, err
 	}
 	err = execute(ctx, o, cfg, p, sample, rec)
 	if closeErr := rec.Close(); err == nil {
 		err = closeErr
 	}
 	if err != nil {
-		return 0, fmt.Errorf("%w; the trace is in %s", err, o.Out)
+		return check.Report{}, fmt.Errorf("%w; the trace is in %s", err, o.Out)
 	}
 	ix := trace.NewIndex(rec.Events())
 	spec, err := check.SpecFor(cfg, ix)
 	if err != nil {
-		return 0, err
+		return check.Report{}, err
 	}
 	report := check.Judge(ix, spec)
 	if err := os.WriteFile(filepath.Join(o.Out, "report.md"), []byte(check.Markdown(ix, report)), 0o644); err != nil {
-		return 0, err
+		return check.Report{}, err
 	}
-	return len(report.Findings), nil
+	return report, nil
 }
 
-// execute starts the Kubernetes system and the controller, runs the plan and
-// stops both.
+// execute starts the Kubernetes system, the models and the controller, runs
+// the plan and stops them.
 func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, sample map[string]any, rec *trace.Recorder) (err error) {
 	k := kube.New(kube.Options{CRDs: cfg.CRDs, RBAC: cfg.Launch.RBAC, Fixtures: cfg.Fixtures, Watch: []schema.GroupVersionKind{cfg.Primary.Kind}, Warm: []map[string]any{sample}})
-	endpoints, err := k.Start(ctx, &system.Env{Record: rec.Record, Dir: o.Out, Seed: p.Seed})
+	env := &system.Env{Record: rec.Record, Dir: o.Out, Seed: p.Seed}
+	endpoints, err := k.Start(ctx, env)
 	if err != nil {
 		return err
 	}
 	defer func() { err = errors.Join(err, k.Stop(context.WithoutCancel(ctx))) }()
+	for _, m := range model.New(k) {
+		if stopper, ok := m.(system.Stopper); ok {
+			defer func() { err = errors.Join(err, stopper.Stop(context.WithoutCancel(ctx))) }()
+		}
+		if _, err := m.Start(ctx, env); err != nil {
+			return fmt.Errorf("starting model %s: %w", m.Name(), err)
+		}
+	}
 	primary, err := k.Ref(cfg.Primary.Kind, "")
 	if err != nil {
 		return err
@@ -144,6 +168,7 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 	run := trace.Event{Run: &trace.Run{
 		Namespace: k.Namespace(), Primary: primary, PlanSteps: len(p.Steps),
 		Ready: cfg.Primary.Ready, Stable: cfg.Timeouts.Stable, Reads: cfg.Budgets.Reads, Writes: cfg.Budgets.Writes,
+		Retain: cfg.Primary.Retain,
 	}}
 	rec.Record(run)
 	spec, err := check.SpecFor(cfg, trace.NewIndex([]trace.Event{run}))
@@ -168,6 +193,7 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 		rec.Record(trace.Event{Proc: &trace.Proc{Event: trace.Exit, PID: e.PID, Exit: e.Status, HarnessCaused: e.HarnessCaused, StderrTail: e.Tail}})
 	}
 	controller := launch.New(launchOptions)
+	endpoints.Controller.SetKill(controller.Kill)
 	defer func() {
 		err = errors.Join(err, controller.Supervise(false), controller.Stop(context.WithoutCancel(ctx)))
 	}()
@@ -184,6 +210,12 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 			return check.FirstSettled(ix, from, to, spec)
 		},
 		Sample: sample,
+		Select: func(ix *trace.Index, creator trace.Caller, target plan.Target, slot string, t time.Duration) (trace.Ref, bool) {
+			return owner.New(ix).Select(creator, target, slot, t)
+		},
+	}
+	if err := runner.Quiet(ctx); err != nil {
+		return err
 	}
 	return runner.Execute(ctx, p)
 }

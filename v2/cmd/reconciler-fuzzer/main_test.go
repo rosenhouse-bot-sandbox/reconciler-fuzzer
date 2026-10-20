@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/check"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/plan"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/run"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/trace"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/trace/tracetest"
@@ -38,14 +40,22 @@ func cliOutput(args ...string) (code int, stdout, stderr string) {
 
 func TestUsageErrors(t *testing.T) {
 	cases := map[string][]string{
-		"no command":       {},
-		"unknown command":  {"fuzz"},
-		"unknown flag":     {"judge", "--config", toyConfig, "--trace", "t", "--verbose"},
-		"missing trace":    {"judge", "--config", toyConfig},
-		"extra args":       {"judge", "--config", toyConfig, "--trace", "t", "more"},
-		"run missing out":  {"run", "--config", toyConfig, "--plan", "p.json"},
-		"run missing plan": {"run", "--config", toyConfig, "--out", "dir"},
-		"run extra args":   {"run", "--config", toyConfig, "--plan", "p.json", "--out", "dir", "more"},
+		"no command":        {},
+		"unknown command":   {"fuzz"},
+		"unknown flag":      {"judge", "--config", toyConfig, "--trace", "t", "--verbose"},
+		"missing trace":     {"judge", "--config", toyConfig},
+		"extra args":        {"judge", "--config", toyConfig, "--trace", "t", "more"},
+		"run missing out":   {"run", "--config", toyConfig, "--plan", "p.json"},
+		"run missing plan":  {"run", "--config", toyConfig, "--out", "dir"},
+		"run plan and seed": {"run", "--config", toyConfig, "--plan", "p.json", "--seed", "1", "--out", "dir"},
+		"run bad seed":      {"run", "--config", toyConfig, "--seed", "x", "--out", "dir"},
+		"judge out":         {"judge", "--trace", "t", "--out", "dir"},
+		"hunt plan":         {"hunt", "--config", toyConfig, "--seeds", "2", "--plan", "p.json", "--out", "dir"},
+		"hunt no seeds":     {"hunt", "--config", toyConfig, "--out", "dir"},
+		"hunt missing out":  {"hunt", "--config", toyConfig, "--seeds", "2"},
+		"hunt overflow":     {"hunt", "--config", toyConfig, "--from", "5", "--seeds", "18446744073709551615", "--out", "dir"},
+		"shrink no plan":    {"shrink", "--config", toyConfig, "--out", "dir"},
+		"run extra args":    {"run", "--config", toyConfig, "--plan", "p.json", "--out", "dir", "more"},
 	}
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -58,8 +68,105 @@ func TestUsageErrors(t *testing.T) {
 }
 
 func TestUsageNamesTheMissingFlag(t *testing.T) {
-	if code, _, stderr := cliOutput("run", "--config", toyConfig, "--out", "dir"); code != 2 || !strings.Contains(stderr, "--plan is required") {
+	if code, _, stderr := cliOutput("run", "--config", toyConfig, "--out", "dir"); code != 2 || !strings.Contains(stderr, "exactly one of --plan and --seed") {
+		t.Errorf("cli = %d, stderr %q; want 2 naming --plan and --seed", code, stderr)
+	}
+	if code, _, stderr := cliOutput("shrink", "--config", toyConfig, "--out", "dir"); code != 2 || !strings.Contains(stderr, "--plan is required") {
 		t.Errorf("cli = %d, stderr %q; want 2 naming --plan", code, stderr)
+	}
+}
+
+// fakeRun replaces run.Run with one that records its options and gives
+// findings to the plans that hold a delete.
+func fakeRun(t *testing.T) *[]run.Options {
+	var got []run.Options
+	runPlan = func(_ context.Context, o run.Options) (check.Report, error) {
+		got = append(got, o)
+		for _, step := range o.Plan.Steps {
+			for _, a := range step.Actions {
+				if a.Do == plan.Delete {
+					return check.Report{Findings: []check.Finding{{Check: "Clean", Summary: "a ConfigMap stays"}}}, os.MkdirAll(o.Out, 0o755)
+				}
+			}
+		}
+		return check.Report{}, os.MkdirAll(o.Out, 0o755)
+	}
+	t.Cleanup(func() { runPlan = run.Run })
+	return &got
+}
+
+func TestRunDrawsThePlanOfASeed(t *testing.T) {
+	got := fakeRun(t)
+	out := t.TempDir()
+	if err := os.WriteFile(filepath.Join(out, "report.md"), []byte("No findings.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr := cliOutput("run", "--config", toyConfig, "--seed", "3", "--out", out, "--launch-arg", "--bug=3")
+	if code == 2 || stdout != "No findings.\n" || len(*got) != 1 {
+		t.Fatalf("cli = %d, stdout %q, stderr %q, runs %d", code, stdout, stderr, len(*got))
+	}
+	o := (*got)[0]
+	if o.Plan == nil || o.Plan.Seed != 3 || len(o.Plan.Steps) < 3 || o.PlanPath != "" || o.LaunchArgs[0] != "--bug=3" {
+		t.Errorf("run.Options = %+v, want the plan of seed 3.", o)
+	}
+}
+
+func TestHuntRunsTheSeedsAndPrintsTheSummary(t *testing.T) {
+	got := fakeRun(t)
+	out := t.TempDir()
+	code, stdout, stderr := cliOutput("hunt", "--config", toyConfig, "--seeds", "3", "--from", "5", "--out", out, "--launch-arg", "--bug=9")
+	var seeds []uint64
+	for _, o := range *got {
+		if o.ConfigPath != toyConfig || o.LaunchArgs[0] != "--bug=9" {
+			t.Fatalf("run.Options = %+v.", o)
+		}
+		if filepath.Dir(o.Out) == out {
+			seeds = append(seeds, o.Plan.Seed)
+		}
+	}
+	if !reflect.DeepEqual(seeds, []uint64{5, 6, 7}) {
+		t.Errorf("hunt ran seeds %v, want 5 to 7.", seeds)
+	}
+	summary, _ := os.ReadFile(filepath.Join(out, "summary.md"))
+	if code != 1 || stdout != string(summary) || !strings.Contains(stdout, "over 3 seeds") || !strings.Contains(stdout, "a ConfigMap stays") {
+		t.Errorf("cli = %d, stdout %q, stderr %q; want 1 and the summary", code, stdout, stderr)
+	}
+}
+
+func TestHuntLogsEachRun(t *testing.T) {
+	fakeRun(t)
+	_, _, stderr := cliOutput("hunt", "--config", toyConfig, "--seeds", "2", "--out", t.TempDir())
+	if !strings.Contains(stderr, "seed 1: ") || !strings.Contains(stderr, "seed 2: ") {
+		t.Errorf("stderr is %q, want a line for each seed", stderr)
+	}
+}
+
+func TestJudgeRefusesAConfigOfAnotherPrimary(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "trace.jsonl")
+	rec, err := trace.NewRecorder(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.Record(tracetest.Run("cert-manager.io", "certificates"))
+	if err := rec.Close(); err != nil {
+		t.Fatal(err)
+	}
+	code, _, stderr := cliOutput("judge", "--config", toyConfig, "--trace", path)
+	if code != 2 || !strings.Contains(stderr, "certificates") || !strings.Contains(stderr, "widgets") {
+		t.Errorf("cli = %d, stderr %q; want 2 naming both primaries", code, stderr)
+	}
+}
+
+func TestShrinkWritesTheShrunkPlan(t *testing.T) {
+	fakeRun(t)
+	out := t.TempDir()
+	code, stdout, stderr := cliOutput("shrink", "--config", toyConfig, "--plan", "../../targets/toy-widget/plans/b13.json", "--out", out)
+	shrunk, err := plan.Load(filepath.Join(out, "shrunk.json"))
+	if code != 1 || err != nil || !strings.Contains(stdout, "shrunk.json") {
+		t.Fatalf("cli = %d, stdout %q, stderr %q, %v", code, stdout, stderr, err)
+	}
+	if len(shrunk.Steps) != 2 {
+		t.Errorf("b13 shrinks to %+v, want its create and delete.", shrunk)
 	}
 }
 
@@ -73,9 +180,9 @@ func TestJudgeHarnessErrors(t *testing.T) {
 func TestRunPassesOptionsAndPrintsTheReport(t *testing.T) {
 	out := t.TempDir()
 	var got run.Options
-	runPlan = func(_ context.Context, o run.Options) (int, error) {
+	runPlan = func(_ context.Context, o run.Options) (check.Report, error) {
 		got = o
-		return 2, os.WriteFile(filepath.Join(o.Out, "report.md"), []byte("# Findings\n"), 0o644)
+		return check.Report{Findings: make([]check.Finding, 2)}, os.WriteFile(filepath.Join(o.Out, "report.md"), []byte("# Findings\n"), 0o644)
 	}
 	t.Cleanup(func() { runPlan = run.Run })
 	code, stdout, stderr := cliOutput("run", "--config", "c.yaml", "--plan", "p.json", "--out", out, "--launch-arg", "--bug=3", "--launch-arg", "-v")

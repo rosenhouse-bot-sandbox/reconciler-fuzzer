@@ -1,0 +1,49 @@
+{
+  "steps": [
+    {
+      "actions": [
+        {
+          "do": "create",
+          "slot": "a",
+          "object": {
+            "apiVersion": "cert-manager.io/v1",
+            "kind": "Certificate",
+            "metadata": {
+              "name": "example"
+            },
+            "spec": {
+              "secretName": "example-tls",
+              "commonName": "example.test",
+              "dnsNames": [
+                "example.test"
+              ],
+              "issuerRef": {
+                "kind": "Issuer",
+                "name": "selfsigned"
+              }
+            }
+          }
+        }
+      ],
+      "period": "2s",
+      "faults": [
+        {
+          "match": {
+            "verb": "create",
+            "resource": "secrets"
+          },
+          "nth": 1,
+          "dropResponse": true
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "do": "delete",
+          "slot": "a"
+        }
+      ]
+    }
+  ]
+}

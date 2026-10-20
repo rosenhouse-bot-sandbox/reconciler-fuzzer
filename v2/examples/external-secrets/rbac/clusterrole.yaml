@@ -1,0 +1,47 @@
+# The controller's rules from the v2.11.0 Helm chart (rbac.yaml), trimmed to
+# the fake provider. Generators, ConfigMap targets and service account
+# tokens are left out.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: external-secrets-controller
+rules:
+  - apiGroups: ["external-secrets.io"]
+    resources:
+      - secretstores
+      - clustersecretstores
+      - externalsecrets
+      - clusterexternalsecrets
+      - pushsecrets
+      - clusterpushsecrets
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["external-secrets.io"]
+    resources:
+      - externalsecrets/status
+      - externalsecrets/finalizers
+      - secretstores/status
+      - secretstores/finalizers
+      - clustersecretstores/status
+      - clustersecretstores/finalizers
+      - clusterexternalsecrets/status
+      - clusterexternalsecrets/finalizers
+      - pushsecrets/status
+      - pushsecrets/finalizers
+      - clusterpushsecrets/status
+      - clusterpushsecrets/finalizers
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["external-secrets.io"]
+    resources: ["externalsecrets", "pushsecrets"]
+    verbs: ["create", "delete"]
+  - apiGroups: ["generators.external-secrets.io"]
+    resources: ["generatorstates"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]

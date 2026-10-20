@@ -37,7 +37,30 @@ type job struct {
 	Defaults        any               `yaml:"defaults"`
 	ContinueOnError any               `yaml:"continue-on-error"`
 	TimeoutMinutes  any               `yaml:"timeout-minutes"`
-	Steps           []step            `yaml:"steps"`
+	Strategy        struct {
+		Matrix map[string]any `yaml:"matrix"`
+	} `yaml:"strategy"`
+	Steps []step `yaml:"steps"`
+}
+
+// expandMatrix returns run once for each combination of the job's matrix
+// values, with each ${{ matrix.<key> }} replaced.
+func (j job) expandMatrix(run string) []string {
+	runs := []string{run}
+	for key, values := range j.Strategy.Matrix {
+		list, ok := values.([]any)
+		if !ok {
+			continue
+		}
+		var expanded []string
+		for _, r := range runs {
+			for _, value := range list {
+				expanded = append(expanded, strings.ReplaceAll(r, "${{ matrix."+key+" }}", fmt.Sprint(value)))
+			}
+		}
+		runs = expanded
+	}
+	return runs
 }
 
 type step struct {

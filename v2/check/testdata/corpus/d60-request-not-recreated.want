@@ -1,0 +1,2 @@
+# D60: cert-manager does not recreate a deleted CertificateRequest; v2 has no notRecreated, so Restore fails it.
+Restore 1

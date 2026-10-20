@@ -13,6 +13,7 @@ import (
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/config"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/plan"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/system"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/trace"
 )
 
@@ -42,10 +43,34 @@ func (r *Runner) Execute(ctx context.Context, p *plan.Plan) error {
 	return e.step(ctx, n+1, plan.Step{Actions: []plan.Action{{Do: plan.Restart}}})
 }
 
+// Quiet waits until the settle condition holds, or for at most the settle
+// timeout, so that what the controller makes at startup precedes the first
+// CR.
+func (r *Runner) Quiet(ctx context.Context) error {
+	ix := trace.NewIndex(nil)
+	deadline := r.Recorder.Now() + r.Config.Timeouts.Settle
+	ticker := time.NewTicker(PollInterval)
+	defer ticker.Stop()
+	for {
+		now := r.Recorder.Now()
+		ix.Append(r.Recorder.EventsSince(ix.Len())...)
+		if _, ok := r.FirstSettled(ix, 0, now); ok || now >= deadline {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
 // errSlotTaken says a create waited the settle timeout for its slot's
 // previous CR to go. The step still settles, and then the plan skips to its
 // appended steps.
 var errSlotTaken = errors.New("the slot's previous CR is still there")
+
+var errNoMatch = errors.New("no instance matches")
 
 // Deadline is end faults + settle + min(fault period, backoffCap) + the
 // longest poll interval of the systems the step touched. backoffBound says
@@ -86,7 +111,12 @@ func (e *execution) step(ctx context.Context, n int, step plan.Step) error {
 		return err
 	}
 	endFaults := e.Recorder.Now()
-	deadline, backoffBound := Deadline(endFaults, time.Since(start), 0, e.Config.Timeouts)
+	var maxPoll time.Duration
+	if slices.ContainsFunc(step.Actions, func(a plan.Action) bool { return a.Do == plan.Damage || a.Do == plan.ChangeFixture }) {
+		// The Kubernetes system's poll interval is stable.
+		maxPoll = e.Config.Timeouts.Stable
+	}
+	deadline, backoffBound := Deadline(endFaults, time.Since(start), maxPoll, e.Config.Timeouts)
 	e.Recorder.Record(trace.Event{Phase: &trace.Phase{Step: n, Name: trace.EndFaults, Deadline: deadline, BackoffBound: backoffBound}})
 	if err := e.settle(ctx, n, deadline); err != nil {
 		return err
@@ -124,14 +154,14 @@ func (e *execution) faultPeriod(ctx context.Context, n int, step plan.Step, star
 			event.Error = err.Error()
 		}
 		e.Recorder.Record(trace.Event{Action: event})
-		if err != nil {
+		if err != nil && !errors.Is(err, errNoMatch) {
 			return ends, fmt.Errorf("steps[%d].actions[%d] %s: %w", n, i, a.Do, err)
 		}
 	}
 	return ends, sleepUntil(ctx, start.Add(time.Duration(step.Period)))
 }
 
-// act applies one action and returns the ref of the CR it touched.
+// act applies one action and returns the ref of the object it touched.
 func (e *execution) act(ctx context.Context, a plan.Action) (*trace.Ref, error) {
 	switch a.Do {
 	case plan.Create:
@@ -170,7 +200,10 @@ func (e *execution) act(ctx context.Context, a plan.Action) (*trace.Ref, error) 
 		}
 		delete(e.live, a.Slot)
 		e.deleted[a.Slot] = ref
-		return &ref, e.Cluster.Delete(ctx, ref)
+		if err := e.Cluster.Delete(ctx, ref); !errors.Is(err, system.ErrGone) {
+			return &ref, err
+		}
+		return &ref, nil
 	case plan.Restart:
 		if err := e.Process.Stop(ctx); err != nil {
 			return nil, err
@@ -178,6 +211,24 @@ func (e *execution) act(ctx context.Context, a plan.Action) (*trace.Ref, error) 
 		return nil, e.Process.Start(ctx)
 	case plan.Kill:
 		return nil, e.Process.Kill(ctx)
+	case plan.Damage, plan.ChangeFixture:
+		creator := trace.Controller
+		if a.Do == plan.ChangeFixture {
+			creator = trace.Harness
+		}
+		e.ix.Append(e.Recorder.EventsSince(e.ix.Len())...)
+		ref, found := e.Select(e.ix, creator, *a.Target, a.Slot, e.Recorder.Now())
+		if !found {
+			return nil, errNoMatch
+		}
+		if a.Patch != nil {
+			return &ref, e.Cluster.Patch(ctx, ref, a.Patch)
+		}
+		err := e.Cluster.Delete(ctx, ref)
+		if errors.Is(err, system.ErrGone) {
+			return nil, fmt.Errorf("%w: %w", errNoMatch, err)
+		}
+		return &ref, err
 	}
 	return nil, fmt.Errorf("unknown do %q", a.Do)
 }

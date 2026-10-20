@@ -16,6 +16,10 @@ const (
 	// Cluster stands for an unknown writer: a version no recorded response
 	// produced.
 	Cluster Caller = "cluster"
+	// GC and Namespaces are the models of kube-controller-manager's garbage
+	// collector and namespace controller.
+	GC         Caller = "gc"
+	Namespaces Caller = "namespace"
 )
 
 // Ref names one object. Namespace is empty for a cluster-scoped object.
@@ -41,6 +45,10 @@ type Event struct {
 	Call    *Call    `json:"call,omitempty"`
 	Version *Version `json:"version,omitempty"`
 	Proc    *Proc    `json:"proc,omitempty"`
+	// WatchEnd records that a watch Call's stream closed.
+	WatchEnd *WatchEnd `json:"watchEnd,omitempty"`
+	// Work records that a model started or stopped having work pending.
+	Work *Work `json:"work,omitempty"`
 }
 
 // Run describes the run. Fixture events precede it.
@@ -57,6 +65,7 @@ type Run struct {
 	Stable time.Duration `json:"stable,omitempty"`
 	Reads  int           `json:"reads,omitempty"`
 	Writes int           `json:"writes,omitempty"`
+	Retain string        `json:"retain,omitempty"`
 }
 
 // PhaseName marks a boundary inside a step.
@@ -80,7 +89,8 @@ type Phase struct {
 	BackoffBound bool `json:"backoffBound,omitempty"`
 }
 
-// Action records one plan action as the harness applied it.
+// Action records one plan action as the harness applied it. Ref is the CR
+// of a CR action, and the object a damage or changeFixture action changed.
 type Action struct {
 	Step  int    `json:"step"`
 	Index int    `json:"index"`
@@ -123,6 +133,33 @@ type Call struct {
 	// ResultName is the name the server gave an object created with
 	// generateName.
 	ResultName string `json:"resultName,omitempty"`
+	// Stream numbers a watch within its listener, so its WatchEnd can name
+	// it.
+	Stream uint64 `json:"stream,omitempty"`
+}
+
+// Unknown outcome effects: the server committed the request, and the caller
+// never saw the response.
+const (
+	DropResponse = "dropResponse"
+	KillAfter    = "killAfter"
+)
+
+// Unknown says the caller cannot tell whether the request happened.
+func (c Call) Unknown() bool { return c.Injected == DropResponse || c.Injected == KillAfter }
+
+// WatchEnd says the watch Call with Stream on Caller's listener for System
+// closed.
+type WatchEnd struct {
+	Caller Caller `json:"caller"`
+	System string `json:"system"`
+	Stream uint64 `json:"stream"`
+}
+
+// Work says whether System, a model, has work pending from this event on.
+type Work struct {
+	System  string `json:"system"`
+	Pending bool   `json:"pending"`
 }
 
 // Version is one state of one object, as the observer saw it.

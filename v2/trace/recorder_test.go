@@ -91,3 +91,25 @@ func TestEventsSince(t *testing.T) {
 		t.Fatalf("EventsSince(5) = %+v", got)
 	}
 }
+
+func TestLoadReadsWatchEndAndWork(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "trace.jsonl")
+	r, err := trace.NewRecorder(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Record(trace.Event{Call: &trace.Call{Caller: trace.Controller, Watch: true, Stream: 3}})
+	r.Record(trace.Event{WatchEnd: &trace.WatchEnd{Caller: trace.Controller, System: "kube", Stream: 3}})
+	r.Record(trace.Event{Work: &trace.Work{System: "gc", Pending: true}})
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := trace.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 3 || loaded[0].Call.Stream != 3 || *loaded[1].WatchEnd != (trace.WatchEnd{Caller: trace.Controller, System: "kube", Stream: 3}) ||
+		*loaded[2].Work != (trace.Work{System: "gc", Pending: true}) {
+		t.Fatalf("loaded %+v", loaded)
+	}
+}

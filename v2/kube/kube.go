@@ -73,6 +73,10 @@ type Kube struct {
 	mapper    meta.ResettableRESTMapper
 	harness   dynamic.Interface
 	observer  *observer
+	upstream  *url.URL
+	record    func(trace.Event)
+
+	mu        sync.Mutex
 	listeners []*interpose.Listener
 
 	stopOnce sync.Once
@@ -111,11 +115,11 @@ func (k *Kube) start(ctx context.Context, env *system.Env) (system.Endpoints, er
 
 	existing := false
 	k.env = &envtest.Environment{CRDDirectoryPaths: k.o.CRDs, UseExistingCluster: &existing, ErrorIfCRDPathMissing: true}
-	// Only kube-controller-manager removes the finalizers these add. Append
-	// keeps envtest's own entry, which disables ServiceAccount.
+	// Only kube-controller-manager removes the finalizers this plugin adds.
+	// Append keeps envtest's own entry, which disables ServiceAccount. The gc
+	// model removes the orphan and foregroundDeletion finalizers.
 	apiServer := k.env.ControlPlane.GetAPIServer().Configure()
 	apiServer.Append("disable-admission-plugins", "StorageObjectInUseProtection")
-	apiServer.Set("enable-garbage-collector", "false")
 	admin, err := k.env.Start()
 	if err != nil {
 		k.env = nil
@@ -145,20 +149,20 @@ func (k *Kube) start(ctx context.Context, env *system.Env) (system.Endpoints, er
 		return system.Endpoints{}, err
 	}
 	observerCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	k.observer = &observer{
-		ctx: observerCtx, cancel: cancel, client: direct, mapper: k.mapper, discovery: cached, record: env.Record,
-		kinds: map[schema.GroupResource]schema.GroupVersionResource{}, seen: map[seenKey]bool{}, gone: map[trace.Ref]bool{},
-	}
+	k.observer = newObserver()
+	k.observer.ctx, k.observer.cancel, k.observer.record = observerCtx, cancel, env.Record
+	k.observer.client, k.observer.mapper, k.observer.discovery = direct, k.mapper, cached
 
-	upstream, _, err := rest.DefaultServerUrlFor(admin)
+	k.upstream, _, err = rest.DefaultServerUrlFor(admin)
 	if err != nil {
 		return system.Endpoints{}, err
 	}
-	controller, err := k.listen(trace.Controller, upstream, identity, env.Record)
+	k.record = env.Record
+	controller, err := k.listen(trace.Controller, identity)
 	if err != nil {
 		return system.Endpoints{}, err
 	}
-	harness, err := k.listen(trace.Harness, upstream, admin, env.Record)
+	harness, err := k.listen(trace.Harness, admin)
 	if err != nil {
 		return system.Endpoints{}, err
 	}
@@ -225,19 +229,21 @@ func (k *Kube) warm(ctx context.Context, client dynamic.Interface, obj map[strin
 	return nil
 }
 
-func (k *Kube) listen(caller trace.Caller, upstream *url.URL, credentials *rest.Config, record func(trace.Event)) (*interpose.Listener, error) {
+func (k *Kube) listen(caller trace.Caller, credentials *rest.Config) (*interpose.Listener, error) {
 	transport, err := rest.TransportFor(credentials)
 	if err != nil {
 		return nil, err
 	}
 	listener, err := interpose.Listen(interpose.Options{
-		System: Name, Caller: caller, Upstream: upstream, Transport: transport,
-		Record: record, OnCall: k.observer.heard,
+		System: Name, Caller: caller, Upstream: k.upstream, Transport: transport,
+		Record: k.record, OnCall: k.observer.heard,
 	})
 	if err != nil {
 		return nil, err
 	}
+	k.mu.Lock()
 	k.listeners = append(k.listeners, listener)
+	k.mu.Unlock()
 	return listener, nil
 }
 
@@ -295,7 +301,10 @@ func (k *Kube) Stop(ctx context.Context) error {
 		if k.observer != nil {
 			k.observer.stop()
 		}
-		for _, listener := range k.listeners {
+		k.mu.Lock()
+		listeners := k.listeners
+		k.mu.Unlock()
+		for _, listener := range listeners {
 			errs = append(errs, listener.Close())
 		}
 		if k.env != nil {
@@ -361,20 +370,29 @@ func (k *Kube) Patch(ctx context.Context, ref trace.Ref, patch []byte) error {
 	return k.awaitVersion(ctx, ref, patched.GetResourceVersion())
 }
 
-// Delete deletes through the harness listener. A missing object is no error.
+// Delete deletes through the harness listener. It returns system.ErrGone
+// when the object is missing or was replaced before the delete.
 func (k *Kube) Delete(ctx context.Context, ref trace.Ref) error {
 	resource, err := k.resource(ref)
 	if err != nil {
 		return err
 	}
-	err = resource.Delete(ctx, ref.Name, metav1.DeleteOptions{})
+	current, err := resource.Get(ctx, ref.Name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
-		return nil
+		return system.ErrGone
 	}
 	if err != nil {
 		return err
 	}
-	return k.observer.await(ctx, "the deletion of "+describe(ref), func() bool { return k.observer.recordedGone(ref) })
+	uid := current.GetUID()
+	err = resource.Delete(ctx, ref.Name, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}})
+	if apierrors.IsNotFound(err) || apierrors.IsConflict(err) {
+		return system.ErrGone
+	}
+	if err != nil {
+		return err
+	}
+	return k.observer.await(ctx, "the deletion of "+describe(ref), func() bool { return k.observer.recordedGone(ref, string(uid)) })
 }
 
 // WaitGone returns once ref names no object, finalizers included.
@@ -429,3 +447,27 @@ func (k *Kube) resource(ref trace.Ref) (dynamic.ResourceInterface, error) {
 	}
 	return k.harness.Resource(gvr).Namespace(ref.Namespace), nil
 }
+
+// Listen opens a listener for caller, a model, that forwards as admin, and
+// returns a client config that points at it. Call it after Start. Stop
+// closes the listener.
+func (k *Kube) Listen(caller trace.Caller) (*rest.Config, error) {
+	listener, err := k.listen(caller, k.admin)
+	if err != nil {
+		return nil, err
+	}
+	return &rest.Config{Host: listener.URL(), QPS: -1}, nil
+}
+
+// Subscribe calls hear with each version the observer records, after it
+// records it, in record order. Call it after Start. hear runs under the
+// observer's lock, so it must not block or call k.
+func (k *Kube) Subscribe(hear func(trace.Version)) {
+	k.observer.mu.Lock()
+	defer k.observer.mu.Unlock()
+	k.observer.hear = append(k.observer.hear, hear)
+}
+
+// Mapper maps kinds to resources and scopes. It rediscovers a kind it does
+// not know.
+func (k *Kube) Mapper() meta.RESTMapper { return k.mapper }

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/check"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/run"
 )
 
@@ -34,8 +35,12 @@ var gate = []struct {
 	{"b12", 12, "Crash: the controller exited", 1, "exit status 2"},
 	{"b12-fault", 12, "Crash: the controller exited", 1, "exit status 2"},
 	{"b13", 13, "Converge: did not settle", 1, "is being deleted"},
-	{"b15", 15, "Converge: did not settle", 0, "widget-2 is not ready"},
+	{"b15", 15, "Converge: did not settle", 0, "is not ready"},
 	{"b16", 16, "Converge: did not settle", 0, "is not ready"},
+	{"b3", 3, "Clean: left resources behind", 1, "widget-0 (rule 4, slot a)"},
+	{"b9", 9, "Clean: left resources behind", 1, "widget-1 (rule 4, slot a)"},
+	{"b8", 8, "Restore: did not restore damaged resources", 1, "widget-0"},
+	{"b14", 14, "Restore: changed resources", 2, "widget-0"},
 }
 
 // hasFinding says whether report holds a finding whose heading starts with
@@ -50,11 +55,16 @@ func hasFinding(report, heading string, step int, detail string) bool {
 	return false
 }
 
-func TestGate(t *testing.T) {
+func TestMain(m *testing.M) {
 	build := exec.Command("go", "build", "-o", "../../../bin/toy-widget", "../../../targets/toy-widget")
 	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("Building the toy: %v\n%s", err, out)
+		fmt.Fprintf(os.Stderr, "Building the toy: %v\n%s", err, out)
+		os.Exit(2)
 	}
+	os.Exit(m.Run())
+}
+
+func TestGate(t *testing.T) {
 	for _, g := range gate {
 		t.Run(fmt.Sprintf("%s catches B%d", g.plan, g.bug), func(t *testing.T) {
 			t.Parallel()
@@ -80,22 +90,36 @@ func TestGate(t *testing.T) {
 }
 
 func runPlan(t *testing.T, plan string, bug int) (int, string) {
-	out := t.TempDir()
-	findings, err := run.Run(t.Context(), run.Options{
-		ConfigPath: "config.yaml",
-		PlanPath:   filepath.Join("plans", plan+".json"),
-		Out:        out,
-		LaunchArgs: []string{fmt.Sprintf("--bug=%d", bug)},
+	report, text := run1(t, run.Options{PlanPath: filepath.Join("plans", plan+".json")}, bug)
+	if strings.Contains(text, "# Notes") {
+		t.Errorf("report.md has notes:\n%s", text)
+	}
+	return len(report.Findings), text
+}
+
+// run1 runs o under bug into a directory it removes only if the test passes.
+func run1(t *testing.T, o run.Options, bug int) (check.Report, string) {
+	t.Helper()
+	out, err := os.MkdirTemp("", "rf-gate-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if !t.Failed() {
+			os.RemoveAll(out)
+		}
 	})
+	o.ConfigPath, o.Out, o.LaunchArgs = "config.yaml", out, []string{fmt.Sprintf("--bug=%d", bug)}
+	report, err := run.Run(t.Context(), o)
+	if err != nil {
+		t.Fatalf("%v; the run is in %s", err, out)
+	}
+	text, err := os.ReadFile(filepath.Join(out, "report.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	report, err := os.ReadFile(filepath.Join(out, "report.md"))
-	if err != nil {
-		t.Fatal(err)
+	if t.Failed() || len(report.Findings) > 0 {
+		t.Logf("The run is in %s.", out)
 	}
-	if strings.Contains(string(report), "# Notes") {
-		t.Errorf("report.md has notes:\n%s", report)
-	}
-	return findings, string(report)
+	return report, string(text)
 }

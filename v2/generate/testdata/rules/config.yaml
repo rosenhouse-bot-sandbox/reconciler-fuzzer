@@ -1,0 +1,9 @@
+# Nothing launches this target.
+launch:
+  binary: none
+crds: [crd.yaml]
+primary:
+  kind: rules.reconciler-fuzzer/v1/Gadget
+  sample: gadget.yaml
+  ready: "true"
+fixtures: [settings.yaml]
