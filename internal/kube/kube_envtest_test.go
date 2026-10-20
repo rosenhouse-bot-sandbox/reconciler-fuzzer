@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -78,6 +79,7 @@ func TestKube(t *testing.T) {
 		RBAC:     []string{toy + "rbac/role.yaml"},
 		Fixtures: []string{toy + "widget-config.yaml"},
 		Watch:    []schema.GroupVersionKind{widgetGVK},
+		Seen:     []schema.GroupVersionKind{widgetGVK},
 		Warm:     []map[string]any{{"apiVersion": "toy.reconciler-fuzzer/v1", "kind": "Widget", "metadata": map[string]any{"name": "warm"}, "spec": map[string]any{"count": int64(1)}}},
 	})
 	endpoints, err := k.Start(ctx, &system.Env{Record: recorded.record, Dir: t.TempDir()})
@@ -164,6 +166,31 @@ func TestKube(t *testing.T) {
 		recorded.await(t, "version of the created widget", func(e trace.Event) bool {
 			return e.Version != nil && e.Version.Ref == widget && e.Version.RV == create.ResultRV && !e.Version.Deleted
 		})
+	})
+
+	t.Run("the controller listener alone records Seen", func(t *testing.T) {
+		config, _ := clientcmd.BuildConfigFromFlags("", endpoints.Vars["kubeconfig"])
+		widgets := schema.GroupVersionResource{Group: widgetGVK.Group, Version: "v1", Resource: "widgets"}
+		got, err := dynamic.NewForConfigOrDie(config).Resource(widgets).Namespace(ns).Get(ctx, widget.Name, metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		recorded.await(t, "the controller's Seen of the widget", func(e trace.Event) bool {
+			return e.Seen != nil && e.Seen.Caller == trace.Controller && e.Seen.Ref == widget && e.Seen.RV == got.GetResourceVersion()
+		})
+		if _, err := k.harness.Resource(widgets).Namespace(ns).Get(ctx, widget.Name, metav1.GetOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		if recorded.holds(func(e trace.Event) bool { return e.Seen != nil && e.Seen.Caller != trace.Controller }) {
+			t.Error("Another listener recorded a Seen.")
+		}
+	})
+
+	t.Run("status kinds list the widget", func(t *testing.T) {
+		want := trace.Kind{Group: widgetGVK.Group, Version: "v1", Kind: "Widget", Resource: "widgets"}
+		if got := k.StatusKinds(); !slices.Contains(got, want) {
+			t.Errorf("StatusKinds = %+v, want the widget's.", got)
+		}
 	})
 
 	t.Run("a controller call on a new kind starts its watch", func(t *testing.T) {

@@ -20,8 +20,8 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/run"
 )
 
-func generator(t *testing.T) (*generate.Generator, map[string]any) {
-	cfg, err := config.Load("config.yaml")
+func generator(t *testing.T, path string) (*generate.Generator, map[string]any) {
+	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,15 +32,30 @@ func generator(t *testing.T) (*generate.Generator, map[string]any) {
 	return g, readSample(t, cfg.Primary.Sample)
 }
 
-// TestGeneratedPlansWithFaultsPassB0 also requires some plans to have a
-// fault that picked a request, so the gate fails if faults stop firing.
+// TestGeneratedPlansWithFaultsPassB0 runs plans with a fault, or with a
+// model fault for the gadget config. It also requires some plans to have a
+// fault that picked a request or held an object, so the gate fails if
+// faults stop firing.
 func TestGeneratedPlansWithFaultsPassB0(t *testing.T) {
+	for _, cfg := range configs {
+		t.Run(cfg, func(t *testing.T) {
+			t.Parallel()
+			generatedPlansPassB0(t, cfg)
+		})
+	}
+}
+
+func generatedPlansPassB0(t *testing.T, cfg string) {
 	const plans, firing = 20, 3
-	g, _ := generator(t)
+	g, _ := generator(t, cfg)
 	var fired atomic.Int32
+	drawn := faults
+	if cfg == gadgetConfig {
+		drawn = modelFaults
+	}
 	t.Cleanup(func() {
 		if n := fired.Load(); n < firing {
-			t.Errorf("A fault picked a request in %d of %d plans, want at least %d.", n, plans, firing)
+			t.Errorf("A fault fired in %d of %d plans, want at least %d.", n, plans, firing)
 		}
 	})
 	for seed, n := uint64(1), 0; n < plans; seed++ {
@@ -48,19 +63,19 @@ func TestGeneratedPlansWithFaultsPassB0(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if faults(p) == 0 {
+		if drawn(p) == 0 {
 			continue
 		}
 		n++
 		t.Run(fmt.Sprintf("seed %d", seed), func(t *testing.T) {
 			t.Parallel()
-			report, text := run1(t, run.Options{Plan: p}, 0)
+			report, text := run1(t, cfg, run.Options{Plan: p}, 0)
 			if len(report.Findings) != 0 {
 				t.Errorf("Found %d, want none. report.md:\n%s", len(report.Findings), text)
 			}
 			unpicked := 0
 			for _, note := range report.Notes {
-				if strings.HasSuffix(note, "picked no request.") {
+				if strings.HasSuffix(note, "picked no request.") || strings.HasSuffix(note, "held no object.") {
 					unpicked++
 				}
 			}
@@ -69,6 +84,18 @@ func TestGeneratedPlansWithFaultsPassB0(t *testing.T) {
 			}
 		})
 	}
+}
+
+func modelFaults(p *plan.Plan) int {
+	n := 0
+	for _, s := range p.Steps {
+		for _, f := range s.Faults {
+			if f.ModelFault() {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 func faults(p *plan.Plan) int {
@@ -83,12 +110,12 @@ func faults(p *plan.Plan) int {
 func TestAGeneratedFailingPlanShrinks(t *testing.T) {
 	t.Parallel()
 	const seed, bug = 4, 3
-	g, sample := generator(t)
+	g, sample := generator(t, "config.yaml")
 	p, err := g.Plan(seed)
 	if err != nil {
 		t.Fatal(err)
 	}
-	report, text := run1(t, run.Options{Plan: p}, bug)
+	report, text := run1(t, "config.yaml", run.Options{Plan: p}, bug)
 	if len(report.Findings) == 0 {
 		t.Fatalf("Seed %d finds nothing under B%d. report.md:\n%s", seed, bug, text)
 	}
@@ -103,7 +130,7 @@ func TestAGeneratedFailingPlanShrinks(t *testing.T) {
 	}
 	shrunk, err := hunt.Shrink(t.Context(), p, sample, func(_ context.Context, c *plan.Plan) (bool, error) {
 		for range 2 {
-			if r, _ := run1(t, run.Options{Plan: c}, bug); gives(r) {
+			if r, _ := run1(t, "config.yaml", run.Options{Plan: c}, bug); gives(r) {
 				return true, nil
 			}
 		}
@@ -116,7 +143,7 @@ func TestAGeneratedFailingPlanShrinks(t *testing.T) {
 		t.Errorf("Shrank %d steps to %d, want at most 3.", len(p.Steps), len(shrunk.Steps))
 	}
 	t.Logf("Shrank %d steps to %d.", len(p.Steps), len(shrunk.Steps))
-	if r, text := run1(t, run.Options{Plan: shrunk}, bug); !gives(r) {
+	if r, text := run1(t, "config.yaml", run.Options{Plan: shrunk}, bug); !gives(r) {
 		t.Errorf("The shrunk plan does not fail with %q. report.md:\n%s", want.Signature(), text)
 	}
 }

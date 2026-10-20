@@ -2,6 +2,7 @@ package check
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
@@ -45,9 +46,70 @@ func Converge(ix *trace.Index, s Spec) (findings []Finding, notes []string) {
 			f.At = confirm
 			f.describe("did not stay settled", unmets)
 		}
+		f.Details = append(f.Details, unmodelledKinds(ix, f.At, s)...)
 		findings = append(findings, f)
 	}
 	return findings, notes
+}
+
+// builtinStatusKinds are built-in kinds whose status another controller
+// writes, each with literal status fields that a model can add. A model
+// cannot track a Deployment's or StatefulSet's observedGeneration, so
+// those kinds are left out.
+var builtinStatusKinds = map[trace.Kind]string{
+	{Group: "batch", Version: "v1", Kind: "Job", Resource: "jobs"}:                     "{succeeded: 1}",
+	{Version: "v1", Kind: "Pod", Resource: "pods"}:                                     "{phase: Running}",
+	{Version: "v1", Kind: "PersistentVolumeClaim", Resource: "persistentvolumeclaims"}: "{phase: Bound}",
+}
+
+// unmodelledKinds names each status kind that the controller read or
+// watched by t, that nothing models, whose status the controller never
+// wrote, and that has a live instance with no status at t.
+func unmodelledKinds(ix *trace.Index, t time.Duration, s Spec) []string {
+	kinds := slices.Clone(s.StatusKinds)
+	for k := range builtinStatusKinds {
+		kinds = append(kinds, k)
+	}
+	read, written := map[trace.Kind]bool{}, map[trace.Kind]bool{}
+	for _, e := range ix.Calls(trace.Controller, -1, t) {
+		c := e.Call
+		i := slices.IndexFunc(kinds, func(k trace.Kind) bool {
+			return c.Ref.System == "kube" && k.Group == c.Ref.Group && k.Resource == c.Ref.Resource
+		})
+		if i < 0 {
+			continue
+		}
+		k := kinds[i]
+		switch {
+		case trace.Mutating(c.Verb) && c.Subresource == "status":
+			written[k] = true
+		case c.Verb == "get" || c.Verb == "list" || c.Verb == "watch":
+			read[k] = true
+		}
+	}
+	var lines []string
+	for k := range read {
+		modelled := slices.ContainsFunc(s.Models, func(m Model) bool { return m.Kind.Group == k.Group && m.Kind.Resource == k.Resource })
+		if written[k] || modelled || k.Group == s.PrimaryGroup && k.Resource == s.PrimaryResource || !slices.ContainsFunc(ix.Live(k.Group, k.Resource, t), noStatus) {
+			continue
+		}
+		gvk := k.Version + "/" + k.Kind
+		if k.Group != "" {
+			gvk = k.Group + "/" + gvk
+		}
+		entry := fmt.Sprintf("{kind: %s, stages: readyCondition, after: 200ms}", gvk)
+		if status, builtin := builtinStatusKinds[k]; builtin {
+			entry = fmt.Sprintf("{kind: %s, stages: readyCondition, after: 200ms, status: %s}, with status holding the fields the controller reads", gvk, status)
+		}
+		lines = append(lines, fmt.Sprintf("The controller reads %s, whose status nothing models. If another controller sets it, add to models: - %s", gvk, entry))
+	}
+	slices.Sort(lines)
+	return lines
+}
+
+func noStatus(v trace.Version) bool {
+	status, _ := decode(v.Body)["status"].(map[string]any)
+	return len(status) == 0
 }
 
 // recordedEnd is the last time the trace records for steps[i]: its confirm,

@@ -97,3 +97,40 @@ func EndFaults(step int, deadline time.Duration, backoffBound bool) trace.Event 
 func Action(step int, do string, ref trace.Ref) trace.Event {
 	return trace.Event{Action: &trace.Action{Step: step, Do: do, Ref: &ref}}
 }
+
+// Seen is a response that showed caller version rv of ref, whose uid is uid.
+func Seen(caller trace.Caller, ref trace.Ref, uid, rv string) trace.Event {
+	return trace.Event{Seen: &trace.Seen{Caller: caller, Ref: ref, UID: uid, RV: rv}}
+}
+
+// ReadyCondition is a body named name of generation whose Ready condition
+// is True or False for that generation.
+func ReadyCondition(name string, generation int, ready bool) map[string]any {
+	status := "False"
+	if ready {
+		status = "True"
+	}
+	return map[string]any{
+		"metadata": map[string]any{"name": name, "generation": generation},
+		"status":   map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": status, "observedGeneration": generation}}},
+	}
+}
+
+// Fault is the start, or with ended the end, of fault index of step.
+func Fault(step, index int, ended bool, what string) trace.Event {
+	return trace.Event{Fault: &trace.Fault{Step: step, Index: index, Ended: ended, What: what}}
+}
+
+// ModelFault is Fault taken by model.
+func ModelFault(step, index int, ended bool, what, model string) trace.Event {
+	e := Fault(step, index, ended, what)
+	e.Fault.Model = model
+	return e
+}
+
+// HoldFault is Fault of a holdWatch on the kind of hold.
+func HoldFault(step, index int, ended bool, hold trace.Ref) trace.Event {
+	e := Fault(step, index, ended, "holdWatch")
+	e.Fault.Hold = &hold
+	return e
+}

@@ -273,3 +273,84 @@ func TestValues(t *testing.T) {
 		t.Errorf("a fixture the config does not list: err = %v", err)
 	}
 }
+
+func TestModels(t *testing.T) {
+	c, err := config.Load(writeConfig(t, minimal(t)+`models:
+  - kind: example.com/v1/Gadget
+    stages: readyCondition
+    after: 200ms
+    status: {address: 10.0.0.1}
+    dependency: {track: 5s}
+  - kind: example.com/v1/Doohickey
+    after: 1s
+    dependency: {required: false}
+  - kind: example.com/v1/Gizmo
+    after: 0s
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Models) != 3 {
+		t.Fatalf("models = %+v", c.Models)
+	}
+	gadget, doohickey, gizmo := c.Models[0], c.Models[1], c.Models[2]
+	if want := (schema.GroupVersionKind{Group: "example.com", Version: "v1", Kind: "Gadget"}); gadget.Kind != want {
+		t.Errorf("kind = %v", gadget.Kind)
+	}
+	if gadget.Stage != config.ReadyCondition || gadget.After != 200*time.Millisecond || gadget.Status["address"] != "10.0.0.1" {
+		t.Errorf("gadget = %+v", gadget)
+	}
+	if gadget.Dependency == nil || !gadget.Dependency.Required || gadget.Dependency.Track != 5*time.Second {
+		t.Errorf("gadget dependency = %+v", gadget.Dependency)
+	}
+	if doohickey.Stage != config.ReadyCondition || doohickey.Dependency == nil || doohickey.Dependency.Required {
+		t.Errorf("doohickey = %+v, %+v", doohickey, doohickey.Dependency)
+	}
+	if gizmo.Dependency != nil || gizmo.After != 0 {
+		t.Errorf("gizmo = %+v", gizmo)
+	}
+}
+
+func TestModelsRefuseMistakes(t *testing.T) {
+	for _, models := range []string{
+		"- {after: 1s}",
+		"- {kind: Gadget, after: 1s}",
+		"- {kind: example.com/v1/Gadget}",
+		"- {kind: example.com/v1/Gadget, after: -1s}",
+		"- {kind: example.com/v1/Gadget, after: 1s, stages: flap}",
+		"- {kind: example.com/v1/Gadget, after: 1s, dependency: {track: 0s}}",
+		"- {kind: v1/ConfigMap, after: 1s}",
+		"- {kind: example.com/v1/Gadget, after: 1s}\n- {kind: example.com/v1/Gadget, after: 2s}",
+	} {
+		if _, err := config.Load(writeConfig(t, minimal(t)+"models:\n"+models+"\n")); err == nil {
+			t.Errorf("models %q loaded, want an error", models)
+		}
+	}
+}
+
+func TestModelReady(t *testing.T) {
+	ready, err := config.CompileReady(config.ReadyConditionCEL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gadget := func(generation int, conditions ...any) map[string]any {
+		return map[string]any{"metadata": map[string]any{"generation": generation}, "status": map[string]any{"conditions": conditions}}
+	}
+	condition := func(status string, observed int) map[string]any {
+		return map[string]any{"type": "Ready", "status": status, "observedGeneration": observed}
+	}
+	for name, c := range map[string]struct {
+		obj  map[string]any
+		want bool
+	}{
+		"ready":     {gadget(2, condition("True", 2)), true},
+		"stale":     {gadget(2, condition("True", 1)), false},
+		"false":     {gadget(2, condition("False", 2)), false},
+		"other":     {gadget(1, map[string]any{"type": "Synced", "status": "True", "observedGeneration": 1}), false},
+		"no status": {map[string]any{"metadata": map[string]any{"generation": 1}}, false},
+	} {
+		if got, err := ready(c.obj); err != nil || got != c.want {
+			t.Errorf("%s: ready = %v, %v; want %v", name, got, err, c.want)
+		}
+	}
+}

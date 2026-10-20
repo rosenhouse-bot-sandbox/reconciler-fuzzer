@@ -8,13 +8,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -57,6 +60,9 @@ type Options struct {
 	// Watch lists kinds the observer watches from the start. It adds any
 	// other kind a listener sees a request for.
 	Watch []schema.GroupVersionKind
+	// Seen lists the dependency kinds whose objects the controller
+	// listener records as Seen events.
+	Seen []schema.GroupVersionKind
 	// Warm holds objects that Start creates with a server-side dry run as
 	// admin. The API server's first create of a new kind can take seconds,
 	// which would otherwise lengthen the first fault period.
@@ -158,7 +164,15 @@ func (k *Kube) start(ctx context.Context, env *system.Env) (system.Endpoints, er
 		return system.Endpoints{}, err
 	}
 	k.record = env.Record
-	controller, err := k.listen(trace.Controller, identity)
+	var seen []schema.GroupResource
+	for _, gvk := range k.o.Seen {
+		mapping, err := k.mapping(gvk)
+		if err != nil {
+			return system.Endpoints{}, err
+		}
+		seen = append(seen, mapping.Resource.GroupResource())
+	}
+	controller, err := k.listen(trace.Controller, identity, seen...)
 	if err != nil {
 		return system.Endpoints{}, err
 	}
@@ -229,14 +243,14 @@ func (k *Kube) warm(ctx context.Context, client dynamic.Interface, obj map[strin
 	return nil
 }
 
-func (k *Kube) listen(caller trace.Caller, credentials *rest.Config) (*interpose.Listener, error) {
+func (k *Kube) listen(caller trace.Caller, credentials *rest.Config, seen ...schema.GroupResource) (*interpose.Listener, error) {
 	transport, err := rest.TransportFor(credentials)
 	if err != nil {
 		return nil, err
 	}
 	listener, err := interpose.Listen(interpose.Options{
 		System: Name, Caller: caller, Upstream: k.upstream, Transport: transport,
-		Record: k.record, OnCall: k.observer.heard,
+		Record: k.record, OnCall: k.observer.heard, Seen: seen,
 	})
 	if err != nil {
 		return nil, err
@@ -459,13 +473,35 @@ func (k *Kube) Listen(caller trace.Caller) (*rest.Config, error) {
 	return &rest.Config{Host: listener.URL(), QPS: -1}, nil
 }
 
-// Subscribe calls hear with each version the observer records, after it
-// records it, in record order. Call it after Start. hear runs under the
-// observer's lock, so it must not block or call k.
+// Subscribe calls hear with each live object's latest version, in ref
+// order, then with each version the observer records, after it records it,
+// in record order. Call it after Start. hear runs under the observer's
+// lock, so it must not block or call k.
 func (k *Kube) Subscribe(hear func(trace.Version)) {
 	k.observer.mu.Lock()
 	defer k.observer.mu.Unlock()
+	for _, ref := range slices.SortedFunc(maps.Keys(k.observer.latest), func(a, b trace.Ref) int {
+		return strings.Compare(fmt.Sprint(a), fmt.Sprint(b))
+	}) {
+		hear(k.observer.latest[ref])
+	}
 	k.observer.hear = append(k.observer.hear, hear)
+}
+
+// StatusKinds lists the installed CRDs' kinds that have a status
+// subresource. Call it after Start.
+func (k *Kube) StatusKinds() []trace.Kind { return statusKinds(k.env.CRDs) }
+
+func statusKinds(crds []*apiextensionsv1.CustomResourceDefinition) []trace.Kind {
+	var kinds []trace.Kind
+	for _, crd := range crds {
+		for _, v := range crd.Spec.Versions {
+			if v.Storage && v.Served && v.Subresources != nil && v.Subresources.Status != nil {
+				kinds = append(kinds, trace.Kind{Group: crd.Spec.Group, Version: v.Name, Kind: crd.Spec.Names.Kind, Resource: crd.Spec.Names.Plural})
+			}
+		}
+	}
+	return kinds
 }
 
 // Mapper maps kinds to resources and scopes. It rediscovers a kind it does

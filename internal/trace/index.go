@@ -22,9 +22,14 @@ type Index struct {
 	// firstRV is the first event, a version or a response, to hold each
 	// object's resourceVersion.
 	firstRV map[objectRV]Event
-	// writer is the caller of the first response to hold each
-	// resourceVersion.
-	writer map[objectRV]Caller
+	// writeCall is the first response to hold each resourceVersion.
+	writeCall map[objectRV]Event
+	// byRV holds each object's Version event of each resourceVersion.
+	byRV map[objectRV]Event
+	// seen holds each caller's Seen events by UID, and opaque its opaque
+	// ones.
+	seen   map[Caller]map[string][]Event
+	opaque map[Caller][]Event
 	// watches holds each caller's watch calls; watchEnds the time each
 	// stream ended.
 	watches   map[Caller][]Event
@@ -41,12 +46,15 @@ type objectRV struct {
 // NewIndex indexes events, which must be in Seq order.
 func NewIndex(events []Event) *Index {
 	ix := &Index{
-		steps:    map[int]*StepSpan{},
-		calls:    map[Caller][]Event{},
-		actions:  map[int][]Event{},
-		versions: map[groupResource]map[Ref][]Event{},
-		firstRV:  map[objectRV]Event{},
-		writer:   map[objectRV]Caller{},
+		steps:     map[int]*StepSpan{},
+		calls:     map[Caller][]Event{},
+		actions:   map[int][]Event{},
+		versions:  map[groupResource]map[Ref][]Event{},
+		firstRV:   map[objectRV]Event{},
+		writeCall: map[objectRV]Event{},
+		byRV:      map[objectRV]Event{},
+		seen:      map[Caller]map[string][]Event{},
+		opaque:    map[Caller][]Event{},
 
 		watches:   map[Caller][]Event{},
 		watchEnds: map[WatchEnd]time.Duration{},
@@ -80,6 +88,13 @@ func (ix *Index) Append(events ...Event) {
 			ix.watchEnds[*e.WatchEnd] = e.At
 		case e.Work != nil:
 			ix.work[e.Work.System] = append(ix.work[e.Work.System], e)
+		case e.Seen != nil && e.Seen.Opaque:
+			ix.opaque[e.Seen.Caller] = append(ix.opaque[e.Seen.Caller], e)
+		case e.Seen != nil:
+			if ix.seen[e.Seen.Caller] == nil {
+				ix.seen[e.Seen.Caller] = map[string][]Event{}
+			}
+			ix.seen[e.Seen.Caller][e.Seen.UID] = append(ix.seen[e.Seen.Caller][e.Seen.UID], e)
 		}
 	}
 }
@@ -122,8 +137,8 @@ func (ix *Index) addCall(e Event) {
 	if _, seen := ix.firstRV[key]; !seen {
 		ix.firstRV[key] = e
 	}
-	if _, seen := ix.writer[key]; !seen {
-		ix.writer[key] = c.Caller
+	if _, seen := ix.writeCall[key]; !seen {
+		ix.writeCall[key] = e
 	}
 }
 
@@ -137,6 +152,9 @@ func (ix *Index) addVersion(e Event) {
 	key := objectRV{v.Ref, v.RV}
 	if _, seen := ix.firstRV[key]; !seen {
 		ix.firstRV[key] = e
+	}
+	if _, seen := ix.byRV[key]; !seen {
+		ix.byRV[key] = e
 	}
 }
 
@@ -246,10 +264,58 @@ func compareRefs(a, b Ref) int {
 // Writer returns the caller whose response carried v's Ref and RV, or
 // Cluster when none did.
 func (ix *Index) Writer(v Version) Caller {
-	if caller, found := ix.writer[objectRV{v.Ref, v.RV}]; found {
-		return caller
+	if e, found := ix.writeCall[objectRV{v.Ref, v.RV}]; found {
+		return e.Call.Caller
 	}
 	return Cluster
+}
+
+// WriteCall is the first call whose response carried ref and rv.
+func (ix *Index) WriteCall(ref Ref, rv string) (Event, bool) {
+	e, found := ix.writeCall[objectRV{ref, rv}]
+	return e, found
+}
+
+// VersionOf is the version of ref with rv.
+func (ix *Index) VersionOf(ref Ref, rv string) (Version, bool) {
+	e, found := ix.byRV[objectRV{ref, rv}]
+	if !found {
+		return Version{}, false
+	}
+	return *e.Version, true
+}
+
+// Later reports whether ref's version rv came at or after its version
+// base, by the observer's order. found is false when the trace lacks either.
+func (ix *Index) Later(ref Ref, rv, base string) (later, found bool) {
+	v, foundV := ix.byRV[objectRV{ref, rv}]
+	b, foundB := ix.byRV[objectRV{ref, base}]
+	if !foundV || !foundB {
+		return false, false
+	}
+	return v.Seq >= b.Seq, true
+}
+
+// Seen returns the Seen events by caller of the object with uid, in Seq
+// order.
+func (ix *Index) Seen(caller Caller, uid string) []Event { return ix.seen[caller][uid] }
+
+// Opaque reports whether a response that caller's listener could not
+// decode may have shown caller ref in (from, to]: a get or list that ended
+// then, or a watch open then.
+func (ix *Index) Opaque(caller Caller, ref Ref, from, to time.Duration) bool {
+	opaque := ix.opaque[caller]
+	return slices.ContainsFunc(opaque[:after(opaque, to)], func(e Event) bool {
+		s := e.Seen
+		if !s.Ref.Covers(ref) {
+			return false
+		}
+		if s.Stream == 0 {
+			return e.At > from
+		}
+		end, ended := ix.watchEnds[WatchEnd{Caller: caller, System: s.Ref.System, Stream: s.Stream}]
+		return !ended || end > from
+	})
 }
 
 // Changed reports whether e, a successful mutating call, produced a

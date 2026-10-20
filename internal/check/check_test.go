@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/check"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
@@ -431,5 +433,96 @@ func TestWriteCleanTrace(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join("testdata", "clean.jsonl"), lines, 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+var gadgetKind = trace.Kind{Group: "toy.reconciler-fuzzer", Version: "v1", Kind: "Gadget", Resource: "gadgets"}
+
+func TestSpecForTakesModelsFromTheConfig(t *testing.T) {
+	c, err := config.Load("../../targets/toy-widget/config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dep := &config.Dependency{Required: true, Track: s}
+	c.Models = []config.Model{
+		{Kind: schema.GroupVersionKind{Group: "toy.reconciler-fuzzer", Version: "v1", Kind: "Gadget"}, Dependency: dep},
+		{Kind: schema.GroupVersionKind{Group: "toy.reconciler-fuzzer", Version: "v1", Kind: "Gizmo"}},
+	}
+	run := tt.Run("toy.reconciler-fuzzer", "widgets")
+	recorded := gadgetKind
+	recorded.Resource = "gadgetries"
+	run.Run.Models = []trace.Model{{Kind: recorded, Ready: "false", Dependency: &trace.Dependency{}}}
+	run.Run.StatusKinds = []trace.Kind{gadgetKind}
+	var b tt.Builder
+	got, err := check.SpecFor(c, b.Add(run).Index())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Models) != 2 || got.Models[0].Kind != recorded || *got.Models[0].Dependency != (trace.Dependency{Required: true, Track: s}) ||
+		got.Models[1].Kind.Resource != "gizmos" || got.Models[1].Kind.Kind != "Gizmo" || got.Models[1].Dependency != nil {
+		t.Fatalf("models = %+v", got.Models)
+	}
+	ready := map[string]any{"metadata": map[string]any{"generation": int64(2)},
+		"status": map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "True", "observedGeneration": int64(2)}}}}
+	if ok, err := got.Models[0].Ready(ready); !ok || err != nil {
+		t.Fatalf("model Ready is not config.ReadyConditionCEL: %v, %v", ok, err)
+	}
+	if !slices.Equal(got.StatusKinds, run.Run.StatusKinds) {
+		t.Fatalf("status kinds = %+v", got.StatusKinds)
+	}
+}
+
+func TestSpecForWithoutAConfigTakesModelsFromTheRunEvent(t *testing.T) {
+	run := tt.Run("toy", "widgets")
+	run.Run.Ready, run.Run.Stable, run.Run.Reads, run.Run.Writes = "self.ok", 4*s, 3, 5
+	run.Run.Models = []trace.Model{{Kind: gadgetKind, Ready: "self.ok", Dependency: &trace.Dependency{Track: s}}}
+	run.Run.StatusKinds = []trace.Kind{gadgetKind}
+	var b tt.Builder
+	got, err := check.SpecFor(nil, b.Add(run).Index())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Models) != 1 || got.Models[0].Kind != gadgetKind || got.Models[0].Dependency.Track != s || len(got.StatusKinds) != 1 {
+		t.Fatalf("spec = %+v", got)
+	}
+	if ok, err := got.Models[0].Ready(map[string]any{"ok": true}); !ok || err != nil {
+		t.Fatalf("model Ready = %v, %v", ok, err)
+	}
+	run.Run.Models[0].Ready = "self.("
+	b = tt.Builder{}
+	if _, err := check.SpecFor(nil, b.Add(run).Index()); err == nil {
+		t.Fatal("SpecFor accepts a model ready that does not compile")
+	}
+}
+
+func TestJudgeNotesAModelFaultThatHeldNoObject(t *testing.T) {
+	model := trace.Caller("model:gadgets.toy")
+	stuck := tt.ReadyCondition("a", 1, false)
+	stuck["status"].(map[string]any)["conditions"].([]any)[0].(map[string]any)["reason"] = "Stuck"
+	held := map[string]any{"metadata": map[string]any{"finalizers": []any{"other", trace.SlowDeleteFinalizer}}}
+	for name, c := range map[string]struct {
+		what   string
+		writer trace.Caller
+		body   map[string]any
+		noted  bool
+	}{
+		"nothing written":          {"stuck", "", nil, true},
+		"a stuck status":           {"stuck", model, stuck, false},
+		"another's stuck status":   {"stuck", ctl, stuck, true},
+		"a not ready status":       {"stuck", model, tt.ReadyCondition("a", 1, false), true},
+		"the slowDelete finalizer": {"slowDelete", model, held, false},
+		"a stuck for slowDelete":   {"slowDelete", model, stuck, true},
+	} {
+		b := createStep()
+		b.At(2*s).Add(tt.Phase(1, trace.FaultPeriod), tt.ModelFault(1, 0, false, c.what, string(model)))
+		if c.writer != "" {
+			b.At(2500*ms).Add(tt.Call(c.writer, "patch", gadgetA, 200, "9"), tt.Version(gadgetA, "ug", "9", c.body))
+		}
+		b.At(3 * s).Add(tt.ModelFault(1, 0, true, c.what, string(model)))
+		notes := check.Judge(b.Index(), spec).Notes
+		want := "Step 1, fault 0 (" + c.what + ") held no object."
+		if got := slices.Contains(notes, want); got != c.noted {
+			t.Errorf("%s: notes = %q, want %q: %v", name, notes, want, c.noted)
+		}
 	}
 }

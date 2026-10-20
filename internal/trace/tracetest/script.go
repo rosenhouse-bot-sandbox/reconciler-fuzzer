@@ -203,3 +203,15 @@ func (tl *Timeline) JSONL() []byte {
 	}
 	return out
 }
+
+// See records that a response showed caller ref's latest version.
+func (r *Script) See(caller trace.Caller, ref trace.Ref) *Script {
+	return r.Add(Seen(caller, ref, r.uids[ref], r.lastRV(ref)))
+}
+
+// SeeDeleted records a watch DELETED event of ref shown to caller.
+func (r *Script) SeeDeleted(caller trace.Caller, ref trace.Ref) *Script {
+	e := Seen(caller, ref, r.uids[ref], r.lastRV(ref))
+	e.Seen.Deleted = true
+	return r.Add(e)
+}

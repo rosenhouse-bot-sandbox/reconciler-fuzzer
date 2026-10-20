@@ -187,7 +187,9 @@ func TestRunPrintsTheUsageForHelp(t *testing.T) {
 	if !errors.Is(err, flag.ErrHelp) {
 		t.Errorf("run returned %v for --help, want flag.ErrHelp so that main exits 0.", err)
 	}
-	if !strings.Contains(printed.String(), "-bug") {
-		t.Errorf("run printed %q for --help, want the usage.", printed.String())
+	for _, flag := range []string{"-bug", "-gadget"} {
+		if !strings.Contains(printed.String(), flag) {
+			t.Errorf("run printed %q for --help, want the usage of %s.", printed.String(), flag)
+		}
 	}
 }

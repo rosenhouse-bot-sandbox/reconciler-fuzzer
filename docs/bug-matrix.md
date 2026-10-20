@@ -5,7 +5,7 @@ This file is generated from targets/toy-widget/gate_test.go by `make bug-matrix`
 
 | Bug | Description | Plan | Check | Step |
 |---|---|---|---|---|
-| B0 | The correct controller. | all 23 in plans/ | none | |
+| B0 | The correct controller. | all 39 in plans/ and gadget/plans/ | none | |
 | B1 | Reports children ready before it creates them. | b1 | Converge | 0 |
 | B2 | Creates children with generated names, so it duplicates them. | b2 | Converge | 0 |
 | B3 | Leaves child 0 without an owner reference. | b3 | Clean | 1 |
@@ -24,3 +24,12 @@ This file is generated from targets/toy-widget/gate_test.go by `make bug-matrix`
 | B14 | Does not watch the label source, so a changed label reaches no child. | b14 | Restore | 2 |
 | B15 | Names children after the kind, so two Widgets share them. | b15 | Converge | 0 |
 | B16 | Writes status with Update, which its RBAC does not allow. | b16 | Converge | 0 |
+| B17 | Reports its Gadget ready without reading the Gadget's status. | gadget/b17 | Honest | 0 |
+| B18 | Drops a Widget's Gadget events once it saw the Gadget not ready, so it never notices recovery. | gadget/b18 | Converge | 1 |
+| B19 | Never reports its Gadget not ready once it was ready. | gadget/b19 | Honest | 1 |
+| B20 | Creates no Gadget and reports it ready. | gadget/b20 | Honest | 0 |
+| B21 | Updates its Gadget on every reconcile and requeues after 100 ms. | gadget/b21 | Converge | 0 |
+| B22 | Orphans its Gadget on delete instead of deleting it. | gadget/b22 | Clean | 1 |
+| B23 | Gives up on cleanup for good when its Gadget outlives the delete, so the finalizer stays. | gadget/b23 | Converge | 1 |
+| B24 | Never recreates a missing Gadget once it reported it ready. | gadget/b24 | Restore | 1 |
+| B25 | Retries a forbidden Gadget status patch every 10 ms while the Gadget has Ready False. | gadget/b25 | Backoff | 1 |

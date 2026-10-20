@@ -42,8 +42,10 @@ type observer struct {
 	seen  map[seenKey]bool
 	// gone holds the UID of each instance the observer saw deleted, being
 	// deleted, or replaced by another UID.
-	gone    map[string]bool
-	uids    map[trace.Ref]string
+	gone map[string]bool
+	uids map[trace.Ref]string
+	// latest holds each live object's last recorded version.
+	latest  map[trace.Ref]trace.Version
 	hear    []func(trace.Version)
 	stopped bool
 	wg      sync.WaitGroup
@@ -52,7 +54,7 @@ type observer struct {
 func newObserver() *observer {
 	return &observer{
 		record: func(trace.Event) {}, kinds: map[schema.GroupResource]schema.GroupVersionResource{},
-		seen: map[seenKey]bool{}, gone: map[string]bool{}, uids: map[trace.Ref]string{},
+		seen: map[seenKey]bool{}, gone: map[string]bool{}, uids: map[trace.Ref]string{}, latest: map[trace.Ref]trace.Version{},
 	}
 }
 
@@ -191,6 +193,11 @@ func (o *observer) see(gr schema.GroupResource, obj any, deleted bool) {
 	}
 	v := trace.Version{Ref: ref, UID: uid, RV: key.rv, Deleted: deleted, Body: body}
 	o.record(trace.Event{Version: &v})
+	if deleted {
+		delete(o.latest, ref)
+	} else {
+		o.latest[ref] = v
+	}
 	for _, hear := range o.hear {
 		hear(v)
 	}

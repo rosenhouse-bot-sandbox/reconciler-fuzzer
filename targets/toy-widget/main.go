@@ -47,6 +47,7 @@ func run(args []string, out io.Writer) error {
 	cleanupDelay := flags.Duration("cleanup-delay", 0, "how long a deleted Widget keeps its finalizer before the controller cleans up")
 	labelFrom := flags.String("label-from", "", "a ConfigMap in the Widget's namespace whose data.label each child copies")
 	lease := flags.Duration("lease", 0, "elect a leader through a Lease in $WATCH_NAMESPACE that lasts this long, and exit on losing it; 0 elects none")
+	gadget := flags.Bool("gadget", false, "give each Widget a Gadget, and report whether it is ready in status.gadgetReady")
 	index := flags.Bool("index", false, "index Widgets by spec.count, which starts their informer before the manager leads")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -99,6 +100,7 @@ func run(args []string, out io.Writer) error {
 		Resync:       *resync,
 		CleanupDelay: *cleanupDelay,
 		LabelFrom:    *labelFrom,
+		Gadget:       *gadget,
 	}
 	if err := reconciler.SetupWithManager(manager); err != nil {
 		return fmt.Errorf("setting up the controller: %w", err)

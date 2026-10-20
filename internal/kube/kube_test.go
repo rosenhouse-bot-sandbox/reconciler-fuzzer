@@ -13,6 +13,7 @@ import (
 	"time"
 
 	rbacv1 "k8s.io/api/rbac/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -265,5 +266,54 @@ func TestWarmCreatesWithADryRunInTheNamespace(t *testing.T) {
 	}
 	if got.Method != http.MethodPost || got.URL.Path != "/api/v1/namespaces/ns/configmaps" || got.URL.Query().Get("dryRun") != "All" {
 		t.Errorf("warm sent %s %s", got.Method, got.URL)
+	}
+}
+
+func crd(group, kind, plural string, versions ...apiextensionsv1.CustomResourceDefinitionVersion) *apiextensionsv1.CustomResourceDefinition {
+	return &apiextensionsv1.CustomResourceDefinition{Spec: apiextensionsv1.CustomResourceDefinitionSpec{
+		Group: group, Names: apiextensionsv1.CustomResourceDefinitionNames{Kind: kind, Plural: plural}, Versions: versions,
+	}}
+}
+
+func crdVersion(name string, served, storage, status bool) apiextensionsv1.CustomResourceDefinitionVersion {
+	v := apiextensionsv1.CustomResourceDefinitionVersion{Name: name, Served: served, Storage: storage}
+	if status {
+		v.Subresources = &apiextensionsv1.CustomResourceSubresources{Status: &apiextensionsv1.CustomResourceSubresourceStatus{}}
+	}
+	return v
+}
+
+func TestStatusKindsListsServedStorageVersionsWithStatus(t *testing.T) {
+	got := statusKinds([]*apiextensionsv1.CustomResourceDefinition{
+		crd("a.io", "Gadget", "gadgets", crdVersion("v1alpha1", true, false, false), crdVersion("v1", true, true, true)),
+		crd("a.io", "Plain", "plains", crdVersion("v1", true, true, false)),
+		crd("a.io", "Old", "olds", crdVersion("v1", true, false, true), crdVersion("v2", true, true, false)),
+		crd("a.io", "Unserved", "unserveds", crdVersion("v1", false, true, true)),
+	})
+	want := []trace.Kind{{Group: "a.io", Version: "v1", Kind: "Gadget", Resource: "gadgets"}}
+	if !slices.Equal(got, want) {
+		t.Errorf("Got %+v, want %+v.", got, want)
+	}
+}
+
+func TestALateSubscriberFirstHearsEachLiveObjectsLatestVersion(t *testing.T) {
+	o := newObserver()
+	k := &Kube{observer: o}
+	see := func(name, rv string, deleted bool) {
+		c := &unstructured.Unstructured{}
+		c.SetName(name)
+		c.SetResourceVersion(rv)
+		o.see(schema.GroupResource{Resource: "configmaps"}, c, deleted)
+	}
+	see("b", "1", false)
+	see("a", "2", false)
+	see("b", "3", false)
+	see("gone", "4", false)
+	see("gone", "5", true)
+	var heard []string
+	k.Subscribe(func(v trace.Version) { heard = append(heard, v.Ref.Name+" "+v.RV) })
+	see("a", "6", false)
+	if want := []string{"a 2", "b 3", "a 6"}; !slices.Equal(heard, want) {
+		t.Errorf("Heard %q, want %q.", heard, want)
 	}
 }

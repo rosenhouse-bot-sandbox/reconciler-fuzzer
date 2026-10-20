@@ -75,9 +75,10 @@ type Target struct {
 	Nth int `json:"nth,omitempty"`
 }
 
-// Fault is a request fault on one system's controller listener. It starts
-// with the fault period and ends with it. Exactly one of Error, Delay, Drop,
-// DropResponse and KillAfter is set.
+// Fault starts with the fault period and ends with it. A request fault acts
+// on one system's controller listener. A model fault, Stuck or SlowDelete,
+// acts on the stage model of the kind Match names. Exactly one effect is
+// set.
 type Fault struct {
 	// System defaults to "kube".
 	System string `json:"system,omitempty"`
@@ -94,7 +95,14 @@ type Fault struct {
 	// KillAfter forwards the request, kills the controller once the server
 	// has answered, and then aborts the connection.
 	KillAfter bool `json:"killAfter,omitempty"`
+	// Stuck keeps each matching object not ready.
+	Stuck bool `json:"stuck,omitempty"`
+	// SlowDelete holds each matching object's deletion until the fault ends.
+	SlowDelete bool `json:"slowDelete,omitempty"`
 }
+
+// ModelFault reports whether a stage model, not a listener, takes f.
+func (f Fault) ModelFault() bool { return f.Stuck || f.SlowDelete }
 
 // Match selects requests. An empty field matches any value.
 type Match struct {
@@ -297,16 +305,27 @@ func isObject(raw json.RawMessage) bool {
 }
 
 // Validate requires exactly one effect, an error code from 400 to 599, a
-// known system and a non-negative nth.
+// known system and a non-negative nth. A model fault needs a resource and
+// takes no verb, subresource or nth.
 func (f Fault) Validate() error {
 	effects := 0
-	for _, set := range []bool{f.Error != nil, f.Delay != nil, f.Drop, f.DropResponse, f.KillAfter} {
+	for _, set := range []bool{f.Error != nil, f.Delay != nil, f.Drop, f.DropResponse, f.KillAfter, f.Stuck, f.SlowDelete} {
 		if set {
 			effects++
 		}
 	}
 	if effects != 1 {
-		return fmt.Errorf("a fault sets %d of error, delay, drop, dropResponse and killAfter, want exactly one", effects)
+		return fmt.Errorf("a fault sets %d of error, delay, drop, dropResponse, killAfter, stuck and slowDelete, want exactly one", effects)
+	}
+	if f.ModelFault() {
+		switch effect := f.Effect(); {
+		case f.Match.Resource == "":
+			return fmt.Errorf("%s needs a match with a resource", effect)
+		case f.Match.Verb != "" || f.Match.Subresource != "":
+			return fmt.Errorf("%s matches objects, so it takes no verb or subresource", effect)
+		case f.Nth != 0:
+			return fmt.Errorf("%s takes no nth", effect)
+		}
 	}
 	if f.Error != nil && (f.Error.Code < 400 || f.Error.Code > 599) {
 		return fmt.Errorf("error code %d is not from 400 to 599", f.Error.Code)
@@ -331,6 +350,10 @@ func (f Fault) Effect() string {
 		return "dropResponse"
 	case f.KillAfter:
 		return "killAfter"
+	case f.Stuck:
+		return "stuck"
+	case f.SlowDelete:
+		return "slowDelete"
 	}
 	return "drop"
 }

@@ -36,6 +36,10 @@ type WidgetStatus struct {
 	// change.
 	// +optional
 	LastSyncTime *metav1.MicroTime `json:"lastSyncTime,omitempty"`
+	// GadgetReady says whether the Widget's Gadget is ready. Only --gadget
+	// writes it.
+	// +optional
+	GadgetReady *bool `json:"gadgetReady,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -60,5 +64,5 @@ type WidgetList struct {
 }
 
 func init() {
-	schemeBuilder.Register(&Widget{}, &WidgetList{})
+	schemeBuilder.Register(&Widget{}, &WidgetList{}, &Gadget{}, &GadgetList{})
 }

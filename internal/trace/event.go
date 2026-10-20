@@ -22,6 +22,15 @@ const (
 	Namespaces Caller = "namespace"
 )
 
+// ModelCaller is the caller, and system name, of the stage model of a kind:
+// "model:" + resource, then "." + group unless the group is core.
+func ModelCaller(group, resource string) Caller {
+	if group == "" {
+		return Caller("model:" + resource)
+	}
+	return Caller("model:" + resource + "." + group)
+}
+
 // Ref names one object. Namespace is empty for a cluster-scoped object.
 type Ref struct {
 	System    string `json:"system"`
@@ -49,6 +58,8 @@ type Event struct {
 	WatchEnd *WatchEnd `json:"watchEnd,omitempty"`
 	// Work records that a model started or stopped having work pending.
 	Work *Work `json:"work,omitempty"`
+	// Seen records that a response showed a caller one object version.
+	Seen *Seen `json:"seen,omitempty"`
 }
 
 // Run describes the run. Fixture events precede it.
@@ -66,6 +77,34 @@ type Run struct {
 	Reads  int           `json:"reads,omitempty"`
 	Writes int           `json:"writes,omitempty"`
 	Retain string        `json:"retain,omitempty"`
+	// Models lists the config's stage models.
+	Models []Model `json:"models,omitempty"`
+	// StatusKinds lists the installed CRDs with a status subresource.
+	StatusKinds []Kind `json:"statusKinds,omitempty"`
+}
+
+// Kind names a kind both ways: by group, version and Kind, and by resource.
+type Kind struct {
+	Group    string `json:"group,omitempty"`
+	Version  string `json:"version"`
+	Kind     string `json:"kind"`
+	Resource string `json:"resource"`
+}
+
+// Model is one stage model as the checks need it.
+type Model struct {
+	Kind Kind `json:"kind"`
+	// Ready is CEL over self, an object of the kind.
+	Ready string `json:"ready"`
+	// Dependency is set when the kind is a readiness dependency of the
+	// primary.
+	Dependency *Dependency `json:"dependency,omitempty"`
+}
+
+// Dependency says how Honest judges a dependency kind.
+type Dependency struct {
+	Required bool          `json:"required,omitempty"`
+	Track    time.Duration `json:"track,omitempty"`
 }
 
 // PhaseName marks a boundary inside a step.
@@ -100,12 +139,24 @@ type Action struct {
 	Error string `json:"error,omitempty"`
 }
 
+// SlowDeleteFinalizer is the finalizer a slowDelete fault holds objects
+// with, and StuckReason the Ready condition's reason a stuck fault writes.
+const (
+	SlowDeleteFinalizer = "reconciler-fuzzer.dev/slow-delete"
+	StuckReason         = "Stuck"
+)
+
 // Fault records that a fault started or ended.
 type Fault struct {
 	Step  int    `json:"step"`
 	Index int    `json:"index"`
 	Ended bool   `json:"ended,omitempty"`
 	What  string `json:"what"`
+	// Model names the model that took a stuck or slowDelete fault.
+	Model string `json:"model,omitempty"`
+	// Hold names the kind whose watch events a holdWatch fault holds.
+	// Nothing sets it before M5.
+	Hold *Ref `json:"hold,omitempty"`
 }
 
 // Call is one request on one listener, recorded when its response ends. A
@@ -133,6 +184,8 @@ type Call struct {
 	// ResultName is the name the server gave an object created with
 	// generateName.
 	ResultName string `json:"resultName,omitempty"`
+	// RequestName is a create's requested name, or else its generateName.
+	RequestName string `json:"requestName,omitempty"`
 	// Stream numbers a watch within its listener, so its WatchEnd can name
 	// it.
 	Stream uint64 `json:"stream,omitempty"`
@@ -160,6 +213,24 @@ type WatchEnd struct {
 type Work struct {
 	System  string `json:"system"`
 	Pending bool   `json:"pending"`
+}
+
+// Seen says a response on Caller's listener showed it an object version:
+// a get, one item of a list, one watch event, or a write's result.
+// Listeners record Seen only for dependency kinds. Its At is when the
+// listener forwarded it.
+type Seen struct {
+	Caller Caller `json:"caller"`
+	Ref    Ref    `json:"ref"`
+	UID    string `json:"uid"`
+	RV     string `json:"rv"`
+	// Deleted marks a watch DELETED event.
+	Deleted bool `json:"deleted,omitempty"`
+	// Stream is the watch's stream, or zero otherwise.
+	Stream uint64 `json:"stream,omitempty"`
+	// Opaque marks a response the listener could not decode, which may
+	// have shown any object Ref covers. Its UID and RV are empty.
+	Opaque bool `json:"opaque,omitempty"`
 }
 
 // Version is one state of one object, as the observer saw it.

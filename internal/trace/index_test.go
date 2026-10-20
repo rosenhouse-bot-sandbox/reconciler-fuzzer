@@ -317,3 +317,49 @@ func TestPending(t *testing.T) {
 		}
 	}
 }
+
+func TestSeen(t *testing.T) {
+	var b tt.Builder
+	b.At(1*s).Add(tt.Seen(trace.Controller, widgetA, "u1", "1"), tt.Seen(trace.Harness, widgetA, "u1", "1")).
+		At(2 * s).Add(tt.Seen(trace.Controller, widgetB, "u2", "1")).
+		At(3 * s).Add(tt.Seen(trace.Controller, widgetA, "u1", "2"))
+	ix := b.Index()
+	got := ix.Seen(trace.Controller, "u1")
+	if len(got) != 2 || got[0].Seen.RV != "1" || got[1].Seen.RV != "2" || got[1].At != 3*s {
+		t.Fatalf("Seen(controller, u1) = %+v", got)
+	}
+	if got := ix.Seen(trace.Harness, "u2"); len(got) != 0 {
+		t.Fatalf("Seen(harness, u2) = %+v", got)
+	}
+}
+
+func TestVersionOf(t *testing.T) {
+	var b tt.Builder
+	b.Add(tt.Call(trace.Controller, "update", widgetA, 200, "2")).
+		Add(tt.Version(widgetA, "u", "1", map[string]any{"n": 1})).
+		Add(tt.Version(widgetA, "u", "2", map[string]any{"n": 2}))
+	ix := b.Index()
+	if v, found := ix.VersionOf(widgetA, "2"); !found || string(v.Body) != `{"n":2}` {
+		t.Fatalf("VersionOf(a, 2) = %+v, %v", v, found)
+	}
+	if _, found := ix.VersionOf(widgetB, "2"); found {
+		t.Fatal("VersionOf found another object's version")
+	}
+}
+
+func TestWriteCall(t *testing.T) {
+	first := tt.Call(trace.Controller, "update", widgetA, 200, "2")
+	first.Call.Latency = 300 * time.Millisecond
+	var b tt.Builder
+	b.At(1 * s).Add(tt.Version(widgetA, "u", "2", nil)).
+		At(2 * s).Add(first).
+		At(3 * s).Add(tt.Call(trace.Harness, "update", widgetA, 200, "2"))
+	ix := b.Index()
+	e, found := ix.WriteCall(widgetA, "2")
+	if !found || e.At != 2*s || e.Call.Caller != trace.Controller {
+		t.Fatalf("WriteCall(a, 2) = %+v, %v", e, found)
+	}
+	if _, found := ix.WriteCall(widgetA, "1"); found {
+		t.Fatal("WriteCall found a call for a version no response carried")
+	}
+}

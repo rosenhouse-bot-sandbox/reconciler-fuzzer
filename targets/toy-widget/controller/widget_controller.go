@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -14,12 +15,15 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	ctrlbuilder "sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	toyv1 "github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/targets/toy-widget/api/v1"
 )
@@ -63,6 +67,8 @@ type Reconciler struct {
 	// LabelFrom names a ConfigMap in the Widget's namespace whose data.label
 	// each child copies. Empty turns this off.
 	LabelFrom string
+	// Gadget gives each Widget a Gadget it depends on.
+	Gadget bool
 
 	// createdFor holds the Widgets this process created a child for. Only B10
 	// reads it, and a restart loses it. Reconciles run on one worker (the
@@ -72,6 +78,12 @@ type Reconciler struct {
 	// for. Only B11 reads it, and a create the API server refused leaves an
 	// entry no reconcile revisits.
 	believedPresent sets.Set[types.NamespacedName]
+	// ignored holds the Widgets whose Gadget events B18 drops. Its predicate
+	// runs outside the reconcile worker, so ignoredMu guards it.
+	ignored   sets.Set[types.NamespacedName]
+	ignoredMu sync.Mutex
+	// gaveUp holds the Widgets whose cleanup B23 abandoned.
+	gaveUp sets.Set[types.NamespacedName]
 }
 
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -82,6 +94,9 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if r.Bug != B14 {
 		// B14: without this watch, a changed label reaches no child.
 		builder = builder.Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.widgetsCopying))
+	}
+	if r.Gadget {
+		builder = builder.Owns(&toyv1.Gadget{}, ctrlbuilder.WithPredicates(predicate.NewPredicateFuncs(r.passesGadgetEvent)))
 	}
 	return builder.WithOptions(r.controllerOptions()).Complete(r)
 }
@@ -145,7 +160,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, err
 	}
 
-	status, changed := statusFor(widget, ready)
+	gadgetReady, requeue, err := r.syncGadget(ctx, widget)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	status, changed := statusFor(widget, ready, gadgetReady)
 	if r.Bug == B6 {
 		// B6: a fresh lastSyncTime on every reconcile.
 		syncedAt := metav1.NowMicro()
@@ -164,13 +184,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		// B12: a count of 0 divides by zero.
 		log.FromContext(ctx).Info("reconciled", "percentReady", 100*status.Ready/widget.Spec.Count)
 	}
-	return ctrl.Result{RequeueAfter: r.Resync}, nil
+	if requeue == 0 || r.Resync > 0 && r.Resync < requeue {
+		requeue = r.Resync
+	}
+	return ctrl.Result{RequeueAfter: requeue}, nil
 }
 
 // claimChildrenEarly reports the children ready and holds that state, so that a
 // checkpoint sees a status no ConfigMap backs (B1).
 func (r *Reconciler) claimChildrenEarly(ctx context.Context, widget *toyv1.Widget) error {
-	status, changed := statusFor(widget, widget.Spec.Count)
+	status, changed := statusFor(widget, widget.Spec.Count, widget.Status.GadgetReady)
 	if !changed {
 		return nil
 	}
@@ -249,14 +272,14 @@ func (r *Reconciler) label(ctx context.Context, namespace string) (string, error
 
 // statusFor returns the status a Widget should carry and whether that differs
 // from the one it carries now.
-func statusFor(widget *toyv1.Widget, ready int32) (toyv1.WidgetStatus, bool) {
-	status := toyv1.WidgetStatus{Ready: ready, ObservedGeneration: widget.Generation}
+func statusFor(widget *toyv1.Widget, ready int32, gadgetReady *bool) (toyv1.WidgetStatus, bool) {
+	status := toyv1.WidgetStatus{Ready: ready, ObservedGeneration: widget.Generation, GadgetReady: gadgetReady}
 	current := widget.Status
-	// Field by field: LastSyncTime is a pointer, so struct equality would
-	// compare addresses rather than the times themselves.
+	// Field by field: the pointers would compare by address.
 	changed := status.Ready != current.Ready ||
 		status.ObservedGeneration != current.ObservedGeneration ||
-		!status.LastSyncTime.Equal(current.LastSyncTime)
+		!status.LastSyncTime.Equal(current.LastSyncTime) ||
+		!ptr.Equal(status.GadgetReady, current.GadgetReady)
 	return status, changed
 }
 
@@ -432,6 +455,9 @@ func (r *Reconciler) cleanUp(ctx context.Context, widget *toyv1.Widget) error {
 	case B13:
 		return nil // B13: the cleanup never runs.
 	}
+	if r.gaveUp.Has(client.ObjectKeyFromObject(widget)) {
+		return nil
+	}
 	controlled, err := controlledChildren(ctx, r.APIReader, widget)
 	if err != nil {
 		return err
@@ -441,7 +467,11 @@ func (r *Reconciler) cleanUp(ctx context.Context, widget *toyv1.Widget) error {
 			return err
 		}
 	}
-	if len(controlled) > 0 {
+	gadgetGone, err := r.deleteGadget(ctx, widget)
+	if err != nil {
+		return err
+	}
+	if len(controlled) > 0 || !gadgetGone {
 		return nil // Each deletion reconciles the Widget again.
 	}
 	return r.releaseWidget(ctx, widget)

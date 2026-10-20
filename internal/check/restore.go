@@ -42,7 +42,7 @@ func Restore(ix *trace.Index, s Spec) []Finding {
 			for _, i := range was {
 				if j := slices.IndexFunc(is, func(j owner.Instance) bool { return j.UID == i.UID }); j < 0 {
 					replaced[k] = append(replaced[k], v.describeAll([]owner.Instance{i}, from)...)
-				} else if paths := differ(v.w.Body(i, from), v.w.Body(is[j], to)); len(paths) > 0 {
+				} else if paths := differ(v.w.Body(i, from), v.w.Body(is[j], to), v.modelled(i.Ref)); len(paths) > 0 {
 					changed[k] = append(changed[k], v.describeAll([]owner.Instance{i}, from)[0]+": "+strings.Join(paths, ", "))
 				}
 			}
@@ -93,9 +93,15 @@ func sorted(details map[string][]string) map[string][]string {
 	return details
 }
 
+// modelled reports whether a model writes the status of ref's kind.
+func (v *view) modelled(ref trace.Ref) bool {
+	return slices.ContainsFunc(v.s.Models, func(m Model) bool { return m.Kind.Group == ref.Group && m.Kind.Resource == ref.Resource })
+}
+
 // differ lists the top-level fields, and metadata's fields, in which two
-// bodies differ, ignoring what every write changes.
-func differ(a, b json.RawMessage) []string {
+// bodies differ, ignoring what every write changes, and status when a
+// model writes it.
+func differ(a, b json.RawMessage, modelled bool) []string {
 	var was, is map[string]any
 	if json.Unmarshal(a, &was) != nil || json.Unmarshal(b, &is) != nil {
 		return []string{"(body)"}
@@ -106,6 +112,9 @@ func differ(a, b json.RawMessage) []string {
 			delete(metadata, "resourceVersion")
 			delete(metadata, "managedFields")
 			delete(metadata, "generation")
+		}
+		if modelled {
+			delete(side, "status")
 		}
 	}
 	for _, key := range slices.Sorted(maps.Keys(merge(was, is))) {

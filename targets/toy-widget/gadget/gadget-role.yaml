@@ -1,0 +1,9 @@
+# No gadgets/status: the Gadget's own controller writes it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: toy-widget-gadget
+rules:
+  - apiGroups: ["toy.reconciler-fuzzer"]
+    resources: ["gadgets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

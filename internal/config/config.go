@@ -24,6 +24,7 @@ type Config struct {
 	Primary  Primary
 	Fixtures []string
 	Values   Values
+	Models   []Model
 	Budgets  Budgets
 	Timeouts Timeouts
 
@@ -67,6 +68,35 @@ type Primary struct {
 	Retain string
 }
 
+// ReadyCondition is the only stage: the model sets the Ready condition True
+// for the object's generation, After the object or its generation appears.
+const ReadyCondition = "readyCondition"
+
+// ReadyConditionCEL says whether a ReadyCondition model's object is ready.
+const ReadyConditionCEL = `has(self.status) && has(self.status.conditions) && self.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True' && has(c.observedGeneration) && c.observedGeneration == self.metadata.generation)`
+
+// Model is one models entry: the harness plays the controller of Kind.
+type Model struct {
+	Kind  schema.GroupVersionKind
+	Stage string
+	// Status holds literal fields the stage adds to every status write.
+	Status map[string]any
+	After  time.Duration
+	// Dependency is nil unless the kind is a readiness dependency of the
+	// primary.
+	Dependency *Dependency
+}
+
+// Dependency marks a model kind as one the primary's readiness depends on.
+type Dependency struct {
+	// Required demands at least one owned dependency when a CR becomes
+	// Ready. It defaults to true.
+	Required bool
+	// Track, when set, fails a CR that stays Ready longer than Track after
+	// the controller read a not-ready dependency.
+	Track time.Duration
+}
+
 // Budgets cap the controller's requests per live CR per stable period, not
 // per poll period: the Kubernetes system has no poll.
 // Reads count gets and lists. Writes count mutating requests, no-op writes
@@ -104,7 +134,17 @@ type declaration struct {
 		Retain string `json:"retain"`
 	} `json:"primary"`
 	Fixtures []string `json:"fixtures"`
-	Values   struct {
+	Models   []struct {
+		Kind       string         `json:"kind"`
+		Stages     string         `json:"stages"`
+		Status     map[string]any `json:"status"`
+		After      string         `json:"after"`
+		Dependency *struct {
+			Required *bool  `json:"required"`
+			Track    string `json:"track"`
+		} `json:"dependency"`
+	} `json:"models"`
+	Values struct {
 		Overlay  map[string]map[string]any `json:"overlay"`
 		Distinct []string                  `json:"distinct"`
 		Mutate   []string                  `json:"mutate"`
@@ -200,6 +240,10 @@ func load(path string) (*Config, error) {
 		c.Values.Fixtures[path] = paths
 	}
 
+	if c.Models, err = models(d, c.Primary.Kind); err != nil {
+		return nil, err
+	}
+
 	c.Budgets = DefaultBudgets
 	for _, b := range []struct {
 		key      string
@@ -241,6 +285,45 @@ func load(path string) (*Config, error) {
 		*t.value = parsed
 	}
 	return c, nil
+}
+
+func models(d declaration, primary schema.GroupVersionKind) ([]Model, error) {
+	var models []Model
+	seen := map[schema.GroupKind]bool{primary.GroupKind(): true}
+	for i, declared := range d.Models {
+		key := fmt.Sprintf("models[%d]", i)
+		if declared.Kind == "" {
+			return nil, fmt.Errorf("%s.kind is required", key)
+		}
+		kind, err := parseGVK(declared.Kind)
+		if err != nil {
+			return nil, fmt.Errorf("%s.kind %q: %w", key, declared.Kind, err)
+		}
+		if seen[kind.GroupKind()] {
+			return nil, fmt.Errorf("%s.kind %s: the primary or another model has this kind", key, declared.Kind)
+		}
+		seen[kind.GroupKind()] = true
+		m := Model{Kind: kind, Stage: ReadyCondition, Status: declared.Status}
+		if declared.Stages != "" && declared.Stages != ReadyCondition {
+			return nil, fmt.Errorf("%s.stages %q: the only stage is %s", key, declared.Stages, ReadyCondition)
+		}
+		if declared.After == "" {
+			return nil, fmt.Errorf("%s.after is required", key)
+		}
+		if m.After, err = time.ParseDuration(declared.After); err != nil || m.After < 0 {
+			return nil, fmt.Errorf("%s.after %q: want a duration of 0 or more", key, declared.After)
+		}
+		if dep := declared.Dependency; dep != nil {
+			m.Dependency = &Dependency{Required: dep.Required == nil || *dep.Required}
+			if dep.Track != "" {
+				if m.Dependency.Track, err = time.ParseDuration(dep.Track); err != nil || m.Dependency.Track <= 0 {
+					return nil, fmt.Errorf("%s.dependency.track %q: want a positive duration", key, dep.Track)
+				}
+			}
+		}
+		models = append(models, m)
+	}
+	return models, nil
 }
 
 func resolve(dir, path string) string {

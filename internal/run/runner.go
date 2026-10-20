@@ -98,10 +98,10 @@ func (e *execution) step(ctx context.Context, n int, step plan.Step) error {
 	if err := e.Process.Supervise(false); err != nil {
 		return err
 	}
-	ends, err := e.faultPeriod(ctx, n, step, start)
-	for i, end := range ends {
-		end()
-		e.Recorder.Record(trace.Event{Fault: &trace.Fault{Step: n, Index: i, Ended: true, What: step.Faults[i].String()}})
+	started, err := e.faultPeriod(ctx, n, step, start)
+	for i, f := range started {
+		f.end()
+		e.Recorder.Record(trace.Event{Fault: &trace.Fault{Step: n, Index: i, Ended: true, What: step.Faults[i].String(), Model: f.model}})
 	}
 	if err != nil && !errors.Is(err, errSlotTaken) {
 		return err
@@ -124,29 +124,31 @@ func (e *execution) step(ctx context.Context, n int, step plan.Step) error {
 	return taken
 }
 
+// startedFault is a fault to end, and the model that took it.
+type startedFault struct {
+	end   func()
+	model string
+}
+
 // faultPeriod starts the step's faults, applies its actions and waits out
-// its period. It returns the end of every fault it started.
-func (e *execution) faultPeriod(ctx context.Context, n int, step plan.Step, start time.Time) ([]func(), error) {
-	var ends []func()
+// its period. It returns every fault it started.
+func (e *execution) faultPeriod(ctx context.Context, n int, step plan.Step, start time.Time) ([]startedFault, error) {
+	var started []startedFault
 	for i, f := range step.Faults {
-		system := f.System
-		if system == "" {
-			system = "kube"
+		target, model, err := e.target(f)
+		if err != nil {
+			return started, fmt.Errorf("steps[%d].faults[%d]: %w", n, i, err)
 		}
-		target, known := e.Listeners[system]
-		if !known {
-			return ends, fmt.Errorf("steps[%d].faults[%d]: unknown system %q", n, i, system)
-		}
+		e.Recorder.Record(trace.Event{Fault: &trace.Fault{Step: n, Index: i, What: f.String(), Model: model}})
 		end, err := target.Fault(f)
 		if err != nil {
-			return ends, fmt.Errorf("steps[%d].faults[%d]: %w", n, i, err)
+			return started, fmt.Errorf("steps[%d].faults[%d]: %w", n, i, err)
 		}
-		ends = append(ends, end)
-		e.Recorder.Record(trace.Event{Fault: &trace.Fault{Step: n, Index: i, What: f.String()}})
+		started = append(started, startedFault{end, model})
 	}
 	for i, a := range step.Actions {
 		if err := sleepUntil(ctx, start.Add(time.Duration(a.At))); err != nil {
-			return ends, err
+			return started, err
 		}
 		ref, err := e.act(ctx, a)
 		event := &trace.Action{Step: n, Index: i, Do: string(a.Do), Slot: a.Slot, Ref: ref}
@@ -155,10 +157,32 @@ func (e *execution) faultPeriod(ctx context.Context, n int, step plan.Step, star
 		}
 		e.Recorder.Record(trace.Event{Action: event})
 		if err != nil && !errors.Is(err, errNoMatch) {
-			return ends, fmt.Errorf("steps[%d].actions[%d] %s: %w", n, i, a.Do, err)
+			return started, fmt.Errorf("steps[%d].actions[%d] %s: %w", n, i, a.Do, err)
 		}
 	}
-	return ends, sleepUntil(ctx, start.Add(time.Duration(step.Period)))
+	return started, sleepUntil(ctx, start.Add(time.Duration(step.Period)))
+}
+
+// target returns the first model that takes a model fault, or the
+// controller listener of a request fault's system.
+func (e *execution) target(f plan.Fault) (target FaultTarget, model string, err error) {
+	if f.ModelFault() {
+		for _, m := range e.Models {
+			if m.Takes(f) {
+				return m, m.Name(), nil
+			}
+		}
+		return nil, "", fmt.Errorf("no model takes %s", f)
+	}
+	system := f.System
+	if system == "" {
+		system = "kube"
+	}
+	target, known := e.Listeners[system]
+	if !known {
+		return nil, "", fmt.Errorf("unknown system %q", system)
+	}
+	return target, "", nil
 }
 
 // act applies one action and returns the ref of the object it touched.

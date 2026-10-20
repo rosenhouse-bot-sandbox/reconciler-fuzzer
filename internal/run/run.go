@@ -64,7 +64,9 @@ type Runner struct {
 	Process  Process
 	// Listeners maps a system name to its controller listener, where
 	// request faults go.
-	Listeners    map[string]FaultTarget
+	Listeners map[string]FaultTarget
+	// Models take the model faults, stuck and slowDelete.
+	Models       []ModelTarget
 	FirstSettled FirstSettled
 	// Sample is the primary sample's body, which a create without an
 	// object uses.
@@ -82,6 +84,16 @@ type Select func(ix *trace.Index, creator trace.Caller, target plan.Target, slot
 type FaultTarget interface {
 	Fault(f plan.Fault) (end func(), err error)
 }
+
+// ModelTarget is a stage model. *model.Stage implements it.
+type ModelTarget interface {
+	FaultTarget
+	Name() string
+	// Takes reports whether f is a model fault on the model's kind.
+	Takes(f plan.Fault) bool
+}
+
+var _ ModelTarget = (*model.Stage)(nil)
 
 // Options configure Run.
 type Options struct {
@@ -146,14 +158,27 @@ func Run(ctx context.Context, o Options) (check.Report, error) {
 // execute starts the Kubernetes system, the models and the controller, runs
 // the plan and stops them.
 func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, sample map[string]any, rec *trace.Recorder) (err error) {
-	k := kube.New(kube.Options{CRDs: cfg.CRDs, RBAC: cfg.Launch.RBAC, Fixtures: cfg.Fixtures, Watch: []schema.GroupVersionKind{cfg.Primary.Kind}, Warm: []map[string]any{sample}})
+	watch, seen := modelKinds(cfg.Models)
+	k := kube.New(kube.Options{
+		CRDs: cfg.CRDs, RBAC: cfg.Launch.RBAC, Fixtures: cfg.Fixtures, Warm: []map[string]any{sample},
+		Watch: append([]schema.GroupVersionKind{cfg.Primary.Kind}, watch...), Seen: seen,
+	})
 	env := &system.Env{Record: rec.Record, Dir: o.Out, Seed: p.Seed}
 	endpoints, err := k.Start(ctx, env)
 	if err != nil {
 		return err
 	}
 	defer func() { err = errors.Join(err, k.Stop(context.WithoutCancel(ctx))) }()
-	for _, m := range model.New(k) {
+	systems := model.New(k)
+	var stages []ModelTarget
+	for _, m := range cfg.Models {
+		stage, err := model.NewStage(k, m)
+		if err != nil {
+			return err
+		}
+		systems, stages = append(systems, stage), append(stages, stage)
+	}
+	for _, m := range systems {
 		if stopper, ok := m.(system.Stopper); ok {
 			defer func() { err = errors.Join(err, stopper.Stop(context.WithoutCancel(ctx))) }()
 		}
@@ -165,10 +190,14 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 	if err != nil {
 		return err
 	}
+	models, err := traceModels(cfg.Models, k.Ref)
+	if err != nil {
+		return err
+	}
 	run := trace.Event{Run: &trace.Run{
 		Namespace: k.Namespace(), Primary: primary, PlanSteps: len(p.Steps),
 		Ready: cfg.Primary.Ready, Stable: cfg.Timeouts.Stable, Reads: cfg.Budgets.Reads, Writes: cfg.Budgets.Writes,
-		Retain: cfg.Primary.Retain,
+		Retain: cfg.Primary.Retain, Models: models, StatusKinds: k.StatusKinds(),
 	}}
 	rec.Record(run)
 	spec, err := check.SpecFor(cfg, trace.NewIndex([]trace.Event{run}))
@@ -206,6 +235,7 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 		Cluster:   k,
 		Process:   controller,
 		Listeners: map[string]FaultTarget{kube.Name: endpoints.Controller},
+		Models:    stages,
 		FirstSettled: func(ix *trace.Index, from, to time.Duration) (time.Duration, bool) {
 			return check.FirstSettled(ix, from, to, spec)
 		},
@@ -218,6 +248,39 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 		return err
 	}
 	return runner.Execute(ctx, p)
+}
+
+// modelKinds returns the kinds the observer watches for the models, and the
+// dependency kinds the controller listener records Seen events for.
+func modelKinds(models []config.Model) (watch, seen []schema.GroupVersionKind) {
+	for _, m := range models {
+		watch = append(watch, m.Kind)
+		if m.Dependency != nil {
+			seen = append(seen, m.Kind)
+		}
+	}
+	return watch, seen
+}
+
+// traceModels describes the models for the run event. ref maps a kind to
+// its resource.
+func traceModels(models []config.Model, ref func(schema.GroupVersionKind, string) (trace.Ref, error)) ([]trace.Model, error) {
+	var described []trace.Model
+	for _, m := range models {
+		r, err := ref(m.Kind, "")
+		if err != nil {
+			return nil, err
+		}
+		d := trace.Model{
+			Kind:  trace.Kind{Group: m.Kind.Group, Version: m.Kind.Version, Kind: m.Kind.Kind, Resource: r.Resource},
+			Ready: config.ReadyConditionCEL,
+		}
+		if m.Dependency != nil {
+			d.Dependency = &trace.Dependency{Required: m.Dependency.Required, Track: m.Dependency.Track}
+		}
+		described = append(described, d)
+	}
+	return described, nil
 }
 
 // expandLaunch expands ${systems.<name>.<key>} in the launch args, with

@@ -48,12 +48,17 @@ type Options struct {
 	Record    func(trace.Event)
 	// OnCall hears each call after it is recorded.
 	OnCall func(trace.Call)
+	// Seen lists the kinds whose objects the listener records as Seen
+	// events when a get, a list, a watch event or a write's result shows
+	// them to Caller.
+	Seen []schema.GroupResource
 }
 
 // Listener serves plain HTTP on 127.0.0.1. Watch responses stream through
 // as they arrive.
 type Listener struct {
 	o       Options
+	seen    map[schema.GroupResource]bool
 	url     string
 	server  *http.Server
 	reverse *httputil.ReverseProxy
@@ -83,7 +88,10 @@ func Listen(o Options) (*Listener, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listening for %s: %w", o.Caller, err)
 	}
-	l := &Listener{o: o, url: "http://" + socket.Addr().String()}
+	l := &Listener{o: o, url: "http://" + socket.Addr().String(), seen: map[schema.GroupResource]bool{}}
+	for _, gr := range o.Seen {
+		l.seen[gr] = true
+	}
 	l.reverse = &httputil.ReverseProxy{
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.Out.Header.Del("Authorization")
@@ -196,9 +204,13 @@ func (l *Listener) serve(w http.ResponseWriter, r *http.Request) {
 			Subresource: req.Subresource, Watch: req.Watch,
 		},
 		decode: mutating(req.Verb),
+		seen:   l.seen[schema.GroupResource{Group: req.Ref.Group, Resource: req.Ref.Resource}] && showing(req.Verb),
 	}
 	if req.Watch {
 		rec.call.Stream = l.streams.Add(1)
+	}
+	if req.Verb == "create" {
+		rec.call.RequestName = requestedName(r)
 	}
 	defer rec.finish()
 
@@ -232,6 +244,32 @@ func upstream(r *http.Request, write bool) *http.Request {
 	return r
 }
 
+// requestedName reads a JSON create's name, or else its generateName, from
+// its first MaxResultBody bytes, and leaves r's body as it was.
+func requestedName(r *http.Request) string {
+	if r.Body == nil || media(r.Header.Get("Content-Type")) != "application/json" {
+		return ""
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, MaxResultBody+1))
+	r.Body = struct {
+		io.Reader
+		io.Closer
+	}{io.MultiReader(bytes.NewReader(body), r.Body), r.Body}
+	var object objectMeta
+	if err != nil || json.Unmarshal(body, &object) != nil {
+		return ""
+	}
+	if object.Metadata.Name != "" {
+		return object.Metadata.Name
+	}
+	return object.Metadata.GenerateName
+}
+
+// showing reports whether a response to verb shows objects.
+func showing(verb string) bool {
+	return reading(verb) || verb == "create" || verb == "update" || verb == "patch"
+}
+
 func unknownOutcome(f plan.Fault) bool { return f.DropResponse || f.KillAfter }
 
 // answerUnseen lets the upstream answer in full and records the call. Then,
@@ -240,6 +278,8 @@ func unknownOutcome(f plan.Fault) bool { return f.DropResponse || f.KillAfter }
 func (l *Listener) answerUnseen(rec *recorder, r *http.Request, kill bool) {
 	buffered := *rec
 	buffered.ResponseWriter = httptest.NewRecorder()
+	// The caller sees no object.
+	buffered.seen = false
 	rec.recorded = true
 	l.reverse.ServeHTTP(&buffered, r)
 	buffered.finish()
@@ -273,6 +313,15 @@ type recorder struct {
 	decode   bool
 	body     *bytes.Buffer
 	recorded bool
+
+	// seen says the response can show objects of a Seen kind. A watch
+	// hands each write to frames and waits until it is decoded. Any other
+	// response holds its body in seenBody until its Seen events are
+	// recorded.
+	seen     bool
+	seenBody *bytes.Buffer
+	frames   *feed
+	decoded  chan struct{}
 }
 
 func (rec *recorder) WriteHeader(status int) {
@@ -280,6 +329,15 @@ func (rec *recorder) WriteHeader(status int) {
 	header := rec.Header()
 	if rec.decode && status >= 200 && status < 300 && decodable(header.Get("Content-Type")) {
 		rec.body = &bytes.Buffer{}
+	}
+	switch {
+	case !rec.seen || status < 200 || status > 299:
+	case media(header.Get("Content-Type")) != "application/json":
+		rec.recordOpaque()
+	case rec.call.Watch:
+		rec.decodeWatch(header.Get("Content-Encoding"))
+	default:
+		rec.seenBody = &bytes.Buffer{}
 	}
 	rec.ResponseWriter.WriteHeader(status)
 	if rec.call.Watch {
@@ -294,6 +352,17 @@ func (rec *recorder) Write(p []byte) (int, error) {
 	if rec.body != nil && rec.body.Len() <= MaxResultBody {
 		rec.body.Write(p[:min(len(p), MaxResultBody+1-rec.body.Len())])
 	}
+	if rec.seenBody != nil {
+		rec.seenBody.Write(p)
+		if rec.seenBody.Len() <= MaxResultBody {
+			return len(p), nil
+		}
+		p, rec.seenBody = rec.seenBody.Bytes(), nil
+		rec.recordOpaque()
+	}
+	if rec.frames != nil {
+		rec.frames.write(p, rec.decoded)
+	}
 	return rec.ResponseWriter.Write(p)
 }
 
@@ -303,23 +372,38 @@ func (rec *recorder) finish() {
 	if rec.body != nil && rec.body.Len() <= MaxResultBody {
 		rec.readResult(rec.Header().Get("Content-Encoding"))
 	}
+	if rec.seenBody != nil {
+		rec.readSeen(rec.Header().Get("Content-Encoding"))
+		rec.ResponseWriter.Write(rec.seenBody.Bytes())
+	}
+	if rec.frames != nil {
+		close(rec.frames.chunks)
+		<-rec.decoded
+	}
 	rec.record()
 	if record := rec.listener.o.Record; rec.call.Watch && record != nil {
 		record(trace.Event{WatchEnd: &trace.WatchEnd{Caller: rec.call.Caller, System: rec.call.Ref.System, Stream: rec.call.Stream}})
 	}
 }
 
-func (rec *recorder) readResult(encoding string) {
-	var body io.Reader = rec.body
+// decompress undoes encoding, or returns nil for an unknown encoding.
+func decompress(body io.Reader, encoding string) io.Reader {
 	switch encoding {
 	case "", "identity":
+		return body
 	case "gzip":
 		unzipped, err := gzip.NewReader(body)
 		if err != nil {
-			return
+			return nil
 		}
-		body = io.LimitReader(unzipped, MaxResultBody)
-	default:
+		return io.LimitReader(unzipped, MaxResultBody)
+	}
+	return nil
+}
+
+func (rec *recorder) readResult(encoding string) {
+	body := decompress(rec.body, encoding)
+	if body == nil {
 		return
 	}
 	var meta metav1.ObjectMeta
@@ -339,6 +423,127 @@ func (rec *recorder) readResult(encoding string) {
 	rec.call.ResultName = meta.Name
 	rec.call.ResultUID = string(meta.UID)
 	rec.call.ResultRV = meta.ResourceVersion
+}
+
+type objectMeta struct {
+	Metadata metav1.ObjectMeta `json:"metadata"`
+}
+
+// readSeen records a Seen for each list item, or the one object of any
+// other response.
+func (rec *recorder) readSeen(encoding string) {
+	body := decompress(bytes.NewReader(rec.seenBody.Bytes()), encoding)
+	if body == nil {
+		rec.recordOpaque()
+		return
+	}
+	var objects []objectMeta
+	if rec.call.Verb == "list" {
+		var list struct {
+			Items []objectMeta `json:"items"`
+		}
+		if json.NewDecoder(body).Decode(&list) != nil {
+			rec.recordOpaque()
+			return
+		}
+		objects = list.Items
+	} else {
+		var object objectMeta
+		if json.NewDecoder(body).Decode(&object) != nil {
+			rec.recordOpaque()
+			return
+		}
+		objects = []objectMeta{object}
+	}
+	for _, o := range objects {
+		rec.recordSeen(o.Metadata, false)
+	}
+}
+
+// decodeWatch decodes the watch's frames as the listener forwards them, and
+// records a Seen for each ADDED, MODIFIED or DELETED event.
+func (rec *recorder) decodeWatch(encoding string) {
+	rec.frames, rec.decoded = &feed{chunks: make(chan []byte), drained: make(chan struct{})}, make(chan struct{})
+	go func() {
+		defer close(rec.decoded)
+		body := decompress(rec.frames, encoding)
+		if body == nil {
+			rec.recordOpaque()
+			return
+		}
+		decoder := json.NewDecoder(body)
+		for {
+			var event struct {
+				Type   string     `json:"type"`
+				Object objectMeta `json:"object"`
+			}
+			if err := decoder.Decode(&event); err != nil {
+				return
+			}
+			switch event.Type {
+			case "ADDED", "MODIFIED", "DELETED":
+				rec.recordSeen(event.Object.Metadata, event.Type == "DELETED")
+			}
+		}
+	}()
+}
+
+// feed hands a watch's writes to its decoder. A write returns once the
+// decoder asks for more, so it has recorded every whole frame written.
+type feed struct {
+	chunks  chan []byte
+	drained chan struct{}
+	rest    []byte
+	waiting bool
+}
+
+func (f *feed) Read(p []byte) (int, error) {
+	if len(f.rest) == 0 {
+		if f.waiting {
+			f.drained <- struct{}{}
+			f.waiting = false
+		}
+		chunk, open := <-f.chunks
+		if !open {
+			return 0, io.EOF
+		}
+		f.rest, f.waiting = chunk, true
+	}
+	n := copy(p, f.rest)
+	f.rest = f.rest[n:]
+	return n, nil
+}
+
+// write waits until the decoder took p, or until it stopped.
+func (f *feed) write(p []byte, stopped <-chan struct{}) {
+	select {
+	case f.chunks <- p:
+	case <-stopped:
+		return
+	}
+	select {
+	case <-f.drained:
+	case <-stopped:
+	}
+}
+
+func (rec *recorder) recordOpaque() {
+	if record := rec.listener.o.Record; record != nil {
+		record(trace.Event{Seen: &trace.Seen{Caller: rec.call.Caller, Ref: rec.call.Ref, Stream: rec.call.Stream, Opaque: true}})
+	}
+}
+
+func (rec *recorder) recordSeen(meta metav1.ObjectMeta, deleted bool) {
+	record := rec.listener.o.Record
+	if record == nil {
+		return
+	}
+	ref := rec.call.Ref
+	ref.Namespace, ref.Name = meta.Namespace, meta.Name
+	record(trace.Event{Seen: &trace.Seen{
+		Caller: rec.call.Caller, Ref: ref, UID: string(meta.UID), RV: meta.ResourceVersion,
+		Deleted: deleted, Stream: rec.call.Stream,
+	}})
 }
 
 const protobufType = "application/vnd.kubernetes.protobuf"
