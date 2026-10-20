@@ -1,0 +1,9 @@
+launch:
+  binary: bin/controller
+  rbac: [role.yaml]
+crds: [crd.yaml]
+primary:
+  kind: v1/ConfigMap
+  sample: sample.yaml
+  ready: "true"
+fixtures: [fixture.yaml]

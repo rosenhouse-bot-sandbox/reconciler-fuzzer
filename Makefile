@@ -106,6 +106,8 @@ help:
 	@echo "  verify-external-secrets-pin            Fail if the example drifted from the pin."
 	@echo "  test                                   Run the unit tier. No API server."
 	@echo "  test-envtest                           Run the envtest tier."
+	@echo "  test-v2                                Run v2's tests that need no API server."
+	@echo "  test-v2-envtest                        Run v2's envtest tests, including the toy's bug gate."
 	@echo "  test-example                           Run the cert-manager example and its negative control."
 	@echo "  test-example-external-secrets          Run the external-secrets example and its negative control."
 	@echo "  test-example-nightly                   Run the cert-manager example on seeds reconciler-fuzzer draws."
@@ -284,7 +286,15 @@ test:
 
 .PHONY: test-envtest
 test-envtest: setup
-	KUBEBUILDER_ASSETS="$$($(ENVTEST_USE))" go test -tags envtest -count=1 ./...
+	KUBEBUILDER_ASSETS="$$($(ENVTEST_USE))" go test -tags envtest -count=1 $$(go list ./... | grep -v /v2/)
+
+.PHONY: test-v2
+test-v2:
+	go test -count=1 ./v2/...
+
+.PHONY: test-v2-envtest
+test-v2-envtest: setup
+	KUBEBUILDER_ASSETS="$$($(ENVTEST_USE))" go test -tags envtest -count=1 -p 2 -parallel 3 -timeout 20m ./v2/...
 
 # The negative control every example tier ends with: (tier name, a command that
 # must fail, the clause of the statement it must fail on). A tier whose control

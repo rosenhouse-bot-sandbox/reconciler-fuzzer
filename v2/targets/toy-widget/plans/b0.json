@@ -1,0 +1,58 @@
+{
+  "steps": [
+    {
+      "actions": [
+        {
+          "do": "create",
+          "slot": "a",
+          "object": {
+            "apiVersion": "toy.reconciler-fuzzer/v1",
+            "kind": "Widget",
+            "metadata": {
+              "name": "widget"
+            },
+            "spec": {
+              "count": 3
+            }
+          }
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "do": "update",
+          "slot": "a",
+          "patch": {
+            "spec": {
+              "count": 5
+            }
+          }
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "do": "restart"
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "do": "kill"
+        }
+      ],
+      "period": "1s"
+    },
+    {
+      "actions": [
+        {
+          "do": "delete",
+          "slot": "a"
+        }
+      ]
+    }
+  ]
+}
