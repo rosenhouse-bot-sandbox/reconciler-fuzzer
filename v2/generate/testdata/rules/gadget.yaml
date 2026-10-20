@@ -1,0 +1,8 @@
+apiVersion: rules.reconciler-fuzzer/v1
+kind: Gadget
+metadata:
+  name: gadget
+spec:
+  count: 3
+  mode: fast
+  left: one

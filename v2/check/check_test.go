@@ -48,7 +48,7 @@ func TestConvergeB1DidNotStaySettled(t *testing.T) {
 		At(4500 * ms).Add(tt.Call(ctl, "create", cm, 201, "3")).
 		At(5500 * ms).Add(tt.Phase(0, trace.Confirmed))
 	f := only(t, converge(b, spec))
-	if f.Check != "Converge" || f.Step != 0 || f.Summary != "did not stay settled" || f.At != 5500*ms {
+	if f.Check != "Converge" || f.Step != 0 || f.Summary != "did not stay settled (clause 7)" || f.Kind != "kube/configmaps" || f.At != 5500*ms {
 		t.Fatalf("finding = %+v", f)
 	}
 	if !slices.ContainsFunc(f.Details, func(d string) bool { return strings.Contains(d, "changed configmaps ns/c") }) {
@@ -75,7 +75,7 @@ func churn(backoffBound bool) *tt.Builder {
 
 func TestConvergeChurnDidNotSettle(t *testing.T) {
 	f := only(t, converge(churn(false), spec))
-	if f.Summary != "did not settle" || f.At != 10*s || len(f.Labels) != 0 {
+	if f.Summary != "did not settle (clause 7)" || f.Kind != "kube/configmaps" || f.At != 10*s || len(f.Labels) != 0 {
 		t.Fatalf("finding = %+v", f)
 	}
 	if !slices.ContainsFunc(f.Details, func(d string) bool { return strings.Contains(d, "changed configmaps ns/c") }) {
@@ -100,7 +100,7 @@ func TestConvergeStuckDeletion(t *testing.T) {
 		At(5700 * ms).Add(tt.EndFaults(1, 15*s, false)).
 		At(15 * s).Add(tt.Phase(1, trace.TimedOut))
 	f := only(t, converge(b, spec))
-	if f.Step != 1 || f.Summary != "did not settle" ||
+	if f.Step != 1 || f.Summary != "did not settle (clause 2)" || f.Kind != "kube/toy/widgets" ||
 		!slices.ContainsFunc(f.Details, func(d string) bool { return strings.Contains(d, "ns/a is being deleted") }) {
 		t.Fatalf("finding = %+v", f)
 	}
@@ -113,7 +113,7 @@ func TestConvergeReadLoop(t *testing.T) {
 	}
 	b.At(10 * s).Add(tt.Phase(0, trace.TimedOut))
 	f := only(t, converge(b, spec))
-	if f.Summary != "did not settle" ||
+	if f.Summary != "did not settle (clause 7)" || f.Kind != "" ||
 		!slices.ContainsFunc(f.Details, func(d string) bool { return strings.Contains(d, "gets and lists") }) {
 		t.Fatalf("finding = %+v", f)
 	}
@@ -142,7 +142,7 @@ func TestConvergeSearchesOnlyUntilConfirmed(t *testing.T) {
 		At(5500 * ms).Add(tt.Phase(0, trace.Confirmed))
 	longer := spec
 	longer.Stable = 5 * s
-	if f := only(t, converge(b, longer)); f.Summary != "did not settle" || f.At != 5500*ms {
+	if f := only(t, converge(b, longer)); f.Summary != "did not settle (clause 7)" || f.At != 5500*ms {
 		t.Fatalf("finding = %+v", f)
 	}
 }
@@ -217,7 +217,7 @@ func TestRecordedB0RunHasNoFindings(t *testing.T) {
 
 func TestRecordedB16RunDidNotSettle(t *testing.T) {
 	r := judgeRecorded(t, "testdata/b16.jsonl")
-	if f := only(t, r.Findings); f.Summary != "did not settle" || f.Step != 0 ||
+	if f := only(t, r.Findings); f.Summary != "did not settle (clause 1)" || f.Step != 0 ||
 		!slices.ContainsFunc(f.Details, func(d string) bool { return strings.HasSuffix(d, "/widget is not ready") }) {
 		t.Fatalf("finding = %+v", f)
 	}
@@ -234,6 +234,31 @@ func TestCrash(t *testing.T) {
 	details := strings.Join(f.Details, "\n")
 	if !strings.Contains(details, "exit status 2") || !strings.Contains(details, "panic: boom") || strings.Contains(details, "again") {
 		t.Fatalf("details = %q", f.Details)
+	}
+}
+
+func TestCrashAllowsAnExitWithinASecondOfALeaseFault(t *testing.T) {
+	lease := trace.Ref{System: "kube", Group: "coordination.k8s.io", Resource: "leases", Namespace: "ns", Name: "l"}
+	faulted := func(ref trace.Ref, injected string) trace.Event {
+		e := tt.Call(trace.Controller, "update", ref, 500, "")
+		e.Call.Injected = injected
+		return e
+	}
+	for name, tc := range map[string]struct {
+		call  trace.Event
+		after time.Duration
+		want  int
+	}{
+		"lease fault, exit at 1s":     {faulted(lease, "error(500)"), 1 * s, 0},
+		"lease fault, exit after 1s":  {faulted(lease, "error(500)"), 1100 * ms, 1},
+		"lease failure with no fault": {faulted(lease, ""), 100 * ms, 1},
+		"fault on another kind":       {faulted(tt.Ref("configmaps", "ns", "c"), "error(500)"), 100 * ms, 1},
+	} {
+		b := cleanRun()
+		b.At(10 * s).Add(tc.call).At(10*s + tc.after).Add(tt.Exit("exit status 1", false, "")).Add(tt.Start(3))
+		if got := check.Crash(b.Index()); len(got) != tc.want {
+			t.Errorf("%s: findings = %+v, want %d", name, got, tc.want)
+		}
 	}
 }
 
@@ -263,6 +288,52 @@ func TestJudgeNotesAFailedAction(t *testing.T) {
 	notes := check.Judge(b.Index(), spec).Notes
 	if len(notes) != 1 || notes[0] != "Step 1, action 2 (create) failed at 10s: the slot's previous CR is still there" {
 		t.Fatalf("notes = %q", notes)
+	}
+}
+
+func TestJudgeNotesAFaultThatPickedNoRequest(t *testing.T) {
+	const what = "dropResponse on verb=create resource=configmaps nth=2"
+	fault := func(ended bool) trace.Event {
+		return trace.Event{Fault: &trace.Fault{Step: 1, Index: 0, Ended: ended, What: what}}
+	}
+	picked := tt.Call(ctl, "create", cm, 201, "7")
+	picked.Call.Injected = trace.DropResponse
+	for name, tc := range map[string]struct {
+		call  trace.Event
+		notes int
+	}{
+		"picked":                 {picked, 0},
+		"no call":                {tt.Call(ctl, "get", cm, 200, ""), 1},
+		"another effect":         {call("get", cm, 500, "error(500)"), 1},
+		"picked after the fault": {picked, 1},
+		"held past the fault":    {picked, 0},
+	} {
+		b := createStep()
+		b.At(2*s).Add(tt.Phase(1, trace.FaultPeriod), fault(false))
+		switch name {
+		case "picked after the fault":
+			b.At(2100 * ms).Add(fault(true)).At(2200 * ms).Add(tc.call)
+		case "held past the fault":
+			held := *tc.call.Call
+			held.Latency = 150 * ms
+			tc.call.Call = &held
+			b.At(2100 * ms).Add(fault(true)).At(2200 * ms).Add(tc.call)
+		default:
+			b.At(2100 * ms).Add(tc.call).At(2200 * ms).Add(fault(true))
+		}
+		var notes []string
+		for _, note := range check.Judge(b.Index(), spec).Notes {
+			if strings.Contains(note, "fault") {
+				notes = append(notes, note)
+			}
+		}
+		if len(notes) != tc.notes {
+			t.Errorf("%s: notes = %q, want %d", name, notes, tc.notes)
+			continue
+		}
+		if tc.notes == 1 && notes[0] != "Step 1, fault 0 ("+what+") picked no request." {
+			t.Errorf("%s: note = %q", name, notes[0])
+		}
 	}
 }
 

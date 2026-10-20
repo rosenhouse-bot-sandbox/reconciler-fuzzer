@@ -32,16 +32,18 @@ func Converge(ix *trace.Index, s Spec) (findings []Finding, notes []string) {
 			notes = append(notes, fmt.Sprintf("%s is not judged: the trace ends at %v, before its deadline %v.", stepName(ix, step.Step), end, to))
 			continue
 		case !ok:
-			f.At, f.Summary, f.Details = to, "did not settle", Settled(ix, to, s)
+			f.At = to
+			f.describe("did not settle", unmetClauses(ix, to, s))
 		case confirm > end:
 			notes = append(notes, fmt.Sprintf("%s is not judged: it settled at %v, but the trace ends at %v, before its confirm window ends.", stepName(ix, step.Step), settled, end))
 			continue
 		default:
-			unmet := Settled(ix, confirm, s)
-			if len(unmet) == 0 {
+			unmets := unmetClauses(ix, confirm, s)
+			if len(unmets) == 0 {
 				continue
 			}
-			f.At, f.Summary, f.Details = confirm, "did not stay settled", unmet
+			f.At = confirm
+			f.describe("did not stay settled", unmets)
 		}
 		findings = append(findings, f)
 	}
@@ -59,4 +61,14 @@ func recordedEnd(ix *trace.Index, steps []trace.StepSpan, i int) time.Duration {
 	}
 	events := ix.Events()
 	return events[len(events)-1].At
+}
+
+// describe names the first unmet clause, and its object's kind, so that
+// findings of different clauses have different signatures.
+func (f *Finding) describe(summary string, unmets []unmet) {
+	f.Summary = fmt.Sprintf("%s (clause %d)", summary, unmets[0].clause)
+	f.Kind = unmets[0].kind
+	for _, u := range unmets {
+		f.Details = append(f.Details, u.text)
+	}
 }

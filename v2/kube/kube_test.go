@@ -82,7 +82,8 @@ func TestNamespaceNameIsRFAndEightHex(t *testing.T) {
 
 func TestObserverRecordsEachVersionOnce(t *testing.T) {
 	var versions []trace.Version
-	o := &observer{record: func(e trace.Event) { versions = append(versions, *e.Version) }, seen: map[seenKey]bool{}, gone: map[trace.Ref]bool{}}
+	o := newObserver()
+	o.record = func(e trace.Event) { versions = append(versions, *e.Version) }
 	gr := schema.GroupResource{Group: "toy.reconciler-fuzzer", Resource: "widgets"}
 	w := &unstructured.Unstructured{}
 	w.SetNamespace("rf-1")
@@ -113,34 +114,74 @@ func TestObserverRecordsEachVersionOnce(t *testing.T) {
 	}
 }
 
+func TestSubscribersHearEachVersionAfterItIsRecorded(t *testing.T) {
+	var order []string
+	o := newObserver()
+	o.record = func(e trace.Event) { order = append(order, "record "+e.Version.RV) }
+	k := &Kube{observer: o}
+	k.Subscribe(func(v trace.Version) { order = append(order, "first "+v.RV) })
+	k.Subscribe(func(v trace.Version) { order = append(order, "second "+v.RV) })
+	c := &unstructured.Unstructured{}
+	c.SetName("c")
+	for _, rv := range []string{"5", "5", "6"} {
+		c.SetResourceVersion(rv)
+		o.see(schema.GroupResource{Resource: "configmaps"}, c, false)
+	}
+	want := []string{"record 5", "first 5", "second 5", "record 6", "first 6", "second 6"}
+	if !slices.Equal(order, want) {
+		t.Errorf("Heard %q, want %q.", order, want)
+	}
+}
+
 func TestObserverKnowsWhatItRecorded(t *testing.T) {
-	o := &observer{record: func(trace.Event) {}, seen: map[seenKey]bool{}, gone: map[trace.Ref]bool{}}
+	o := newObserver()
 	gr := schema.GroupResource{Resource: "configmaps"}
 	ref := trace.Ref{System: "kube", Resource: "configmaps", Namespace: "rf-1", Name: "c"}
 	c := &unstructured.Unstructured{}
 	c.SetNamespace("rf-1")
 	c.SetName("c")
+	c.SetUID("u1")
 	c.SetResourceVersion("5")
 	o.see(gr, c, false)
-	if !o.recorded(ref, "5") || o.recorded(ref, "6") || o.recordedGone(ref) {
-		t.Errorf("After version 5: recorded(5) %v, recorded(6) %v, gone %v.", o.recorded(ref, "5"), o.recorded(ref, "6"), o.recordedGone(ref))
+	if !o.recorded(ref, "5") || o.recorded(ref, "6") || o.recordedGone(ref, "u1") {
+		t.Errorf("After version 5: recorded(5) %v, recorded(6) %v, gone %v.", o.recorded(ref, "5"), o.recorded(ref, "6"), o.recordedGone(ref, "u1"))
 	}
 	c.SetResourceVersion("6")
 	now := metav1.Now()
 	c.SetDeletionTimestamp(&now)
 	o.see(gr, c, false)
-	if !o.recordedGone(ref) {
+	if !o.recordedGone(ref, "u1") {
 		t.Error("A version being deleted is not gone.")
 	}
 	c.SetResourceVersion("7")
 	c.SetDeletionTimestamp(nil)
-	o.see(gr, c, false)
-	if o.recordedGone(ref) {
-		t.Error("A recreated object is still gone.")
-	}
 	o.see(gr, c, true)
-	if !o.recordedGone(ref) {
+	if !o.recordedGone(ref, "u1") {
 		t.Error("A deleted object is not gone.")
+	}
+	c.SetUID("u2")
+	c.SetResourceVersion("8")
+	o.see(gr, c, false)
+	if !o.recordedGone(ref, "u1") || o.recordedGone(ref, "u2") {
+		t.Errorf("After a recreate: u1 gone %v, u2 gone %v; want true, false.", o.recordedGone(ref, "u1"), o.recordedGone(ref, "u2"))
+	}
+}
+
+func TestObserverCountsAnotherUIDAsGone(t *testing.T) {
+	o := newObserver()
+	gr := schema.GroupResource{Resource: "configmaps"}
+	ref := trace.Ref{System: "kube", Resource: "configmaps", Namespace: "rf-1", Name: "c"}
+	c := &unstructured.Unstructured{}
+	c.SetNamespace("rf-1")
+	c.SetName("c")
+	c.SetUID("u1")
+	c.SetResourceVersion("5")
+	o.see(gr, c, false)
+	c.SetUID("u2")
+	c.SetResourceVersion("9")
+	o.see(gr, c, false)
+	if !o.recordedGone(ref, "u1") {
+		t.Error("An object replaced unseen is not gone.")
 	}
 }
 

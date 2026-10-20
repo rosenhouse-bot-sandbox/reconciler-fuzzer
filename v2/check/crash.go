@@ -7,14 +7,15 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/trace"
 )
 
-// Crash fails every controller exit the harness did not cause. It gives one
-// finding per step.
+// Crash fails every controller exit the harness did not cause, except one
+// within leaseGrace of a fault on a Lease request: leader election exits by
+// design. It gives one finding per step.
 func Crash(ix *trace.Index) []Finding {
 	var order []int
 	exits := map[int][]trace.Event{}
 	steps := ix.Steps()
 	for _, e := range ix.Procs() {
-		if e.Proc.Event != trace.Exit || e.Proc.HarnessCaused {
+		if e.Proc.Event != trace.Exit || e.Proc.HarnessCaused || leaseFaulted(ix, e.At) {
 			continue
 		}
 		step := stepAt(steps, e.At)
@@ -37,6 +38,17 @@ func Crash(ix *trace.Index) []Finding {
 		findings = append(findings, Finding{Check: "Crash", Step: step, At: first.At, Summary: summary, Details: details})
 	}
 	return findings
+}
+
+const leaseGrace = time.Second
+
+func leaseFaulted(ix *trace.Index, exit time.Duration) bool {
+	for _, c := range ix.Calls(trace.Controller, exit-leaseGrace-1, exit) {
+		if c.Call.Injected != "" && c.Call.Ref.Group == "coordination.k8s.io" && c.Call.Ref.Resource == "leases" {
+			return true
+		}
+	}
+	return false
 }
 
 // stepAt is the step whose span holds t: from its start to the next step's

@@ -5,8 +5,13 @@ package check
 import (
 	"errors"
 	"fmt"
+	"math"
+	"slices"
 	"strings"
 	"time"
+
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/config"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/trace"
@@ -20,6 +25,9 @@ type Spec struct {
 	Ready           func(obj map[string]any) (bool, error)
 	Stable          time.Duration
 	Budgets         config.Budgets
+	// Retain says whether Clean allows a deleted CR's resources to stay.
+	// It is nil when the config sets no primary.retain.
+	Retain func(cr map[string]any) (bool, error)
 }
 
 // SpecFor builds a Spec from c, or from the trace's Run event when c is nil.
@@ -31,7 +39,13 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 	}
 	s := Spec{PrimaryGroup: run.Primary.Group, PrimaryResource: run.Primary.Resource}
 	if c != nil {
+		if want, _ := meta.UnsafeGuessKindToResource(c.Primary.Kind); want.Group != s.PrimaryGroup || want.Resource != s.PrimaryResource {
+			return Spec{}, fmt.Errorf("the config's primary is %s, but the trace's is %s", want.GroupResource(), schema.GroupResource{Group: s.PrimaryGroup, Resource: s.PrimaryResource})
+		}
 		s.Ready, s.Stable, s.Budgets = c.Ready, c.Timeouts.Stable, c.Budgets
+		if c.Primary.Retain != "" {
+			s.Retain = c.Retain
+		}
 		return s, nil
 	}
 	if run.Ready == "" || run.Stable <= 0 || run.Reads <= 0 || run.Writes <= 0 {
@@ -42,6 +56,11 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 		return Spec{}, fmt.Errorf("the trace's ready: %w", err)
 	}
 	s.Ready, s.Stable, s.Budgets = ready, run.Stable, config.Budgets{Reads: run.Reads, Writes: run.Writes}
+	if run.Retain != "" {
+		if s.Retain, err = config.CompileReady(run.Retain); err != nil {
+			return Spec{}, fmt.Errorf("the trace's retain: %w", err)
+		}
+	}
 	return s, nil
 }
 
@@ -55,6 +74,16 @@ type Finding struct {
 	Labels  []string `json:"labels,omitempty"`
 	Summary string   `json:"summary"`
 	Details []string `json:"details,omitempty"`
+	// Kind is the system, group and resource of the object the finding is
+	// about, such as "kube/apps/deployments", or "kube/configmaps" for the
+	// core group. It is empty when the finding is about no one kind.
+	Kind string `json:"kind,omitempty"`
+}
+
+// Signature identifies a finding across replays and shrinking: its check,
+// summary and kind. Steps and names change between runs.
+func (f Finding) Signature() string {
+	return f.Check + "|" + f.Summary + "|" + f.Kind
 }
 
 // Report holds the findings and the notes on what the trace could not
@@ -67,7 +96,36 @@ type Report struct {
 // Judge runs every check.
 func Judge(ix *trace.Index, s Spec) Report {
 	findings, notes := Converge(ix, s)
-	return Report{Findings: append(findings, Crash(ix)...), Notes: append(actionErrors(ix), notes...)}
+	findings = append(findings, Crash(ix)...)
+	findings = append(findings, Clean(ix, s)...)
+	findings = append(findings, Restore(ix, s)...)
+	findings = append(findings, Unique(ix, s)...)
+	notes = append(append(actionErrors(ix), unpicked(ix)...), notes...)
+	return Report{Findings: findings, Notes: notes}
+}
+
+// unpicked notes each fault that altered no controller request while it
+// was active.
+func unpicked(ix *trace.Index) []string {
+	starts := map[[2]int]trace.Event{}
+	var notes []string
+	for _, e := range ix.Events() {
+		f := e.Fault
+		if f == nil {
+			continue
+		}
+		key := [2]int{f.Step, f.Index}
+		if !f.Ended {
+			starts[key] = e
+			continue
+		}
+		if !slices.ContainsFunc(ix.Calls(trace.Controller, starts[key].At, math.MaxInt64), func(c trace.Event) bool {
+			return c.At-c.Call.Latency <= e.At && c.Call.Injected != "" && strings.HasPrefix(f.What, c.Call.Injected)
+		}) {
+			notes = append(notes, fmt.Sprintf("%s, fault %d (%s) picked no request.", stepName(ix, f.Step), f.Index, f.What))
+		}
+	}
+	return notes
 }
 
 func actionErrors(ix *trace.Index) []string {

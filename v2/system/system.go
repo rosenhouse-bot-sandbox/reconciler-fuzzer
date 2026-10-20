@@ -4,6 +4,7 @@ package system
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/interpose"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/plan"
@@ -56,3 +57,7 @@ type Resource struct {
 type Stopper interface {
 	Stop(ctx context.Context) error
 }
+
+// ErrGone says an object was gone, or replaced, before the harness could act
+// on it.
+var ErrGone = errors.New("the object was gone or replaced before the action")

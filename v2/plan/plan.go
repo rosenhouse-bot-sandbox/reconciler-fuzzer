@@ -41,6 +41,13 @@ const (
 	// Kill sends SIGKILL. The controller stays down until the fault period
 	// ends.
 	Kill Do = "kill"
+	// Damage deletes the object Target selects among those the controller
+	// created, or merge-patches it with Patch when set. The harness never
+	// undoes it.
+	Damage Do = "damage"
+	// ChangeFixture merge-patches the fixture Target names with Patch, or
+	// deletes it when Patch is empty.
+	ChangeFixture Do = "changeFixture"
 )
 
 // Action is something the harness does once in a step, At after the fault
@@ -51,11 +58,26 @@ type Action struct {
 	Slot   string          `json:"slot,omitempty"`
 	Object json.RawMessage `json:"object,omitempty"`
 	Patch  json.RawMessage `json:"patch,omitempty"`
+	Target *Target         `json:"target,omitempty"`
+}
+
+// Target selects one object for damage or changeFixture. It is resolved
+// when the action runs. An empty field matches any value.
+type Target struct {
+	// System defaults to "kube".
+	System   string `json:"system,omitempty"`
+	Group    string `json:"group,omitempty"`
+	Resource string `json:"resource"`
+	Name     string `json:"name,omitempty"`
+	Role     string `json:"role,omitempty"`
+	// Nth picks the nth match in creation order, counting from 1. Zero
+	// picks the first.
+	Nth int `json:"nth,omitempty"`
 }
 
 // Fault is a request fault on one system's controller listener. It starts
-// with the fault period and ends with it. Exactly one of Error, Delay and
-// Drop is set.
+// with the fault period and ends with it. Exactly one of Error, Delay, Drop,
+// DropResponse and KillAfter is set.
 type Fault struct {
 	// System defaults to "kube".
 	System string `json:"system,omitempty"`
@@ -66,6 +88,12 @@ type Fault struct {
 	Error *Error    `json:"error,omitempty"`
 	Delay *Duration `json:"delay,omitempty"`
 	Drop  bool      `json:"drop,omitempty"`
+	// DropResponse forwards the request, lets the server commit it, and
+	// aborts the connection without a response.
+	DropResponse bool `json:"dropResponse,omitempty"`
+	// KillAfter forwards the request, kills the controller once the server
+	// has answered, and then aborts the connection.
+	KillAfter bool `json:"killAfter,omitempty"`
 }
 
 // Match selects requests. An empty field matches any value.
@@ -168,6 +196,9 @@ func (a Action) validate(names map[string]string) error {
 	if a.At < 0 {
 		return errors.New("at is negative")
 	}
+	if a.Target != nil && a.Do != Damage && a.Do != ChangeFixture {
+		return fmt.Errorf("%s takes no target", a.Do)
+	}
 	switch a.Do {
 	case Create:
 		if a.Slot == "" {
@@ -204,8 +235,41 @@ func (a Action) validate(names map[string]string) error {
 		if a.Slot != "" || a.Object != nil || a.Patch != nil {
 			return fmt.Errorf("%s takes no slot, object or patch", a.Do)
 		}
+	case Damage, ChangeFixture:
+		return a.validateChange(names)
 	default:
 		return fmt.Errorf("unknown do %q", a.Do)
+	}
+	return nil
+}
+
+func (a Action) validateChange(names map[string]string) error {
+	if a.Target == nil || a.Target.Resource == "" {
+		return fmt.Errorf("%s needs a target with a resource", a.Do)
+	}
+	if a.Patch != nil && !isObject(a.Patch) {
+		return fmt.Errorf("%s needs a JSON object patch", a.Do)
+	}
+	if a.Do == ChangeFixture {
+		if a.Slot != "" || a.Object != nil {
+			return errors.New("changeFixture takes no slot or object")
+		}
+		if a.Target.Name == "" {
+			return errors.New("changeFixture needs a target name")
+		}
+		return nil
+	}
+	if a.Object != nil {
+		return errors.New("damage takes no object")
+	}
+	if a.Slot == "" {
+		return nil
+	}
+	switch name, made := names[a.Slot]; {
+	case !made:
+		return fmt.Errorf("damage names slot %q, which no earlier create made", a.Slot)
+	case name == emptied:
+		return fmt.Errorf("damage names slot %q, which an earlier delete emptied", a.Slot)
 	}
 	return nil
 }
@@ -236,13 +300,13 @@ func isObject(raw json.RawMessage) bool {
 // known system and a non-negative nth.
 func (f Fault) Validate() error {
 	effects := 0
-	for _, set := range []bool{f.Error != nil, f.Delay != nil, f.Drop} {
+	for _, set := range []bool{f.Error != nil, f.Delay != nil, f.Drop, f.DropResponse, f.KillAfter} {
 		if set {
 			effects++
 		}
 	}
 	if effects != 1 {
-		return fmt.Errorf("a fault sets %d of error, delay and drop, want exactly one", effects)
+		return fmt.Errorf("a fault sets %d of error, delay, drop, dropResponse and killAfter, want exactly one", effects)
 	}
 	if f.Error != nil && (f.Error.Code < 400 || f.Error.Code > 599) {
 		return fmt.Errorf("error code %d is not from 400 to 599", f.Error.Code)
@@ -263,6 +327,10 @@ func (f Fault) Effect() string {
 		return fmt.Sprintf("error(%d)", f.Error.Code)
 	case f.Delay != nil:
 		return fmt.Sprintf("delay(%s)", time.Duration(*f.Delay))
+	case f.DropResponse:
+		return "dropResponse"
+	case f.KillAfter:
+		return "killAfter"
 	}
 	return "drop"
 }

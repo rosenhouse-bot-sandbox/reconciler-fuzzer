@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,10 +23,25 @@ type Config struct {
 	CRDs     []string
 	Primary  Primary
 	Fixtures []string
+	Values   Values
 	Budgets  Budgets
 	Timeouts Timeouts
 
-	ready func(self map[string]any) (bool, error)
+	ready, retain func(self map[string]any) (bool, error)
+}
+
+// Values say how the generator draws CRs and fixture changes. Paths are
+// dotted, such as spec.count.
+type Values struct {
+	// Overlay maps a path to schema keywords that narrow the CRD's.
+	Overlay map[string]map[string]any
+	// Distinct paths hold a different value in each CR of a plan.
+	Distinct []string
+	// Mutate paths are the ones updates change.
+	Mutate []string
+	// Fixtures maps a fixture file, as an absolute path, to the string
+	// paths changeFixture may set.
+	Fixtures map[string][]string
 }
 
 // Launch says how to run the controller. Args and Env may hold
@@ -46,6 +62,9 @@ type Primary struct {
 	Sample string
 	// Ready is CEL over self, the CR.
 	Ready string
+	// Retain is CEL over self, a deleted CR. Where it holds, Clean allows
+	// the CR's resources to stay. It is empty when unset.
+	Retain string
 }
 
 // Budgets cap the controller's requests per live CR per stable period, not
@@ -82,9 +101,16 @@ type declaration struct {
 		Kind   string `json:"kind"`
 		Sample string `json:"sample"`
 		Ready  string `json:"ready"`
+		Retain string `json:"retain"`
 	} `json:"primary"`
 	Fixtures []string `json:"fixtures"`
-	Budgets  struct {
+	Values   struct {
+		Overlay  map[string]map[string]any `json:"overlay"`
+		Distinct []string                  `json:"distinct"`
+		Mutate   []string                  `json:"mutate"`
+		Fixtures map[string][]string       `json:"fixtures"`
+	} `json:"values"`
+	Budgets struct {
 		Reads  *int `json:"reads"`
 		Writes *int `json:"writes"`
 	} `json:"budgets"`
@@ -158,6 +184,20 @@ func load(path string) (*Config, error) {
 	c.Primary.Ready = d.Primary.Ready
 	if c.ready, err = CompileReady(d.Primary.Ready); err != nil {
 		return nil, fmt.Errorf("primary.ready: %w", err)
+	}
+	if c.Primary.Retain = d.Primary.Retain; c.Primary.Retain != "" {
+		if c.retain, err = CompileReady(c.Primary.Retain); err != nil {
+			return nil, fmt.Errorf("primary.retain: %w", err)
+		}
+	}
+
+	c.Values = Values{Overlay: d.Values.Overlay, Distinct: d.Values.Distinct, Mutate: d.Values.Mutate, Fixtures: map[string][]string{}}
+	for file, paths := range d.Values.Fixtures {
+		path := resolve(dir, file)
+		if !slices.Contains(c.Fixtures, path) {
+			return nil, fmt.Errorf("values.fixtures %s: fixtures lists no such file", file)
+		}
+		c.Values.Fixtures[path] = paths
 	}
 
 	c.Budgets = DefaultBudgets
@@ -254,6 +294,15 @@ func (c *Config) Ready(obj map[string]any) (bool, error) {
 		return false, errors.New("ready is not compiled; load the config with Load")
 	}
 	return c.ready(obj)
+}
+
+// Retain evaluates Primary.Retain over cr, a deleted CR's body. It is false
+// when Retain is empty.
+func (c *Config) Retain(cr map[string]any) (bool, error) {
+	if c.retain == nil {
+		return false, nil
+	}
+	return c.retain(cr)
 }
 
 // Expand replaces each ${key} in s with vars[key]. An unknown key is an

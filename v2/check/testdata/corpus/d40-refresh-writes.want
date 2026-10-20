@@ -1,0 +1,2 @@
+# D40: Refresh writes on a timer fail Converge until primary.periodic arrives.
+Converge 0

@@ -4,6 +4,8 @@ package kube
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -216,13 +218,13 @@ func TestKube(t *testing.T) {
 		if err := k.Patch(ctx, widget, []byte(`{"metadata":{"finalizers":null}}`)); err != nil {
 			t.Fatal(err)
 		}
-		if err := k.Delete(ctx, widget); err != nil {
-			t.Errorf("Deleting a missing widget: %v", err)
-		}
 		waitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		if err := k.WaitGone(waitCtx, widget); err != nil {
 			t.Fatal(err)
+		}
+		if err := k.Delete(ctx, widget); !errors.Is(err, system.ErrGone) {
+			t.Errorf("Deleting a missing widget = %v, want ErrGone.", err)
 		}
 		recorded.await(t, "deleted version", func(e trace.Event) bool {
 			return e.Version != nil && e.Version.Ref == widget && e.Version.Deleted && strings.Contains(string(e.Version.Body), `"count":2`)
@@ -238,6 +240,19 @@ func TestKube(t *testing.T) {
 		}
 	})
 
+	gc, err := k.Listen(trace.GC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Run("a model listener records its caller and acts as admin", func(t *testing.T) {
+		if _, err := kubernetes.NewForConfigOrDie(gc).CoreV1().Secrets(ns).Get(ctx, "s", metav1.GetOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		recorded.await(t, "the gc's get", func(e trace.Event) bool {
+			return e.Call != nil && e.Call.Caller == trace.GC && e.Call.Verb == "get" && e.Call.Ref.Name == "s" && e.Call.Status == 200
+		})
+	})
+
 	t.Run("stop is idempotent", func(t *testing.T) {
 		if err := k.Stop(ctx); err != nil {
 			t.Fatal(err)
@@ -247,6 +262,9 @@ func TestKube(t *testing.T) {
 		}
 		if _, err := k.Snapshot(ctx); err == nil {
 			t.Error("Snapshot reached envtest after Stop.")
+		}
+		if _, err := http.Get(gc.Host); err == nil {
+			t.Error("The gc listener answered after Stop.")
 		}
 	})
 }

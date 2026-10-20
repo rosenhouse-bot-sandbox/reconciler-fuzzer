@@ -1,13 +1,10 @@
-// Command reconciler-fuzzer runs a plan against a controller, or judges a
-// stored trace.
-//
-//	reconciler-fuzzer run --config c.yaml --plan plan.json --out dir [--launch-arg a]...
-//	reconciler-fuzzer judge --trace dir[/trace.jsonl] [--config c.yaml]
+// Command reconciler-fuzzer runs plans against a controller, judges a stored
+// trace, hunts over seeds and shrinks a failing plan.
 //
 // judge reads ready, stable and budgets from the trace unless --config is
 // given.
 //
-// Both exit 1 when a check fails and 2 on a usage or harness error.
+// Each command exits 1 with findings and 2 on a usage or harness error.
 package main
 
 import (
@@ -19,24 +16,38 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
+	"github.com/go-logr/logr"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/check"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/config"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/generate"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/hunt"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/plan"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/run"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/trace"
 )
 
 const usage = `usage:
-  reconciler-fuzzer run --config c.yaml --plan plan.json --out dir [--launch-arg a]...
-  reconciler-fuzzer judge --trace dir[/trace.jsonl] [--config c.yaml]
+  reconciler-fuzzer run    --config c.yaml (--plan plan.json | --seed n) --out dir [--launch-arg a]...
+  reconciler-fuzzer judge  --trace dir[/trace.jsonl] [--config c.yaml]
+  reconciler-fuzzer hunt   --config c.yaml --seeds n [--from s] --out dir [--launch-arg a]...
+  reconciler-fuzzer shrink --config c.yaml --plan plan.json --out dir [--launch-arg a]...
 `
 
 // runPlan is run.Run, which a test replaces.
 var runPlan = run.Run
 
-func main() { os.Exit(cli(os.Args[1:], os.Stdout, os.Stderr)) }
+func main() {
+	// envtest logs through controller-runtime, which otherwise prints a
+	// warning with a stack trace.
+	ctrllog.SetLogger(logr.Discard())
+	os.Exit(cli(os.Args[1:], os.Stdout, os.Stderr))
+}
 
 // cli runs one command and returns the exit code.
 func cli(args []string, stdout, stderr io.Writer) int {
@@ -47,20 +58,43 @@ func cli(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	configPath := flags.String("config", "", "")
+	var out, planPath *string
+	var launchArgs repeated
+	if args[0] != "judge" {
+		out = flags.String("out", "", "")
+		flags.Var(&launchArgs, "launch-arg", "")
+	}
+	if args[0] == "run" || args[0] == "shrink" {
+		planPath = flags.String("plan", "", "")
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	// runInto runs one plan, as hunt and shrink do.
+	runInto := func(ctx context.Context, p *plan.Plan, out string) (check.Report, error) {
+		return runPlan(ctx, run.Options{ConfigPath: *configPath, Plan: p, Out: out, LaunchArgs: launchArgs})
+	}
 	var command func() (int, error)
 	switch args[0] {
 	case "run":
-		planPath := flags.String("plan", "", "")
-		out := flags.String("out", "", "")
-		var launchArgs repeated
-		flags.Var(&launchArgs, "launch-arg", "")
+		seed := flags.String("seed", "", "")
 		command = func() (int, error) {
-			if err := required(flags, "config", "plan", "out"); err != nil {
+			if err := required(flags, "config", "out"); err != nil {
 				return 0, err
 			}
-			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-			defer stop()
-			findings, err := runPlan(ctx, run.Options{ConfigPath: *configPath, PlanPath: *planPath, Out: *out, LaunchArgs: launchArgs})
+			o := run.Options{ConfigPath: *configPath, PlanPath: *planPath, Out: *out, LaunchArgs: launchArgs}
+			switch {
+			case (*planPath == "") == (*seed == ""):
+				return 0, errors.New("give exactly one of --plan and --seed")
+			case *seed != "":
+				n, err := strconv.ParseUint(*seed, 10, 64)
+				if err != nil {
+					return 0, fmt.Errorf("--seed %s: want a non-negative integer", *seed)
+				}
+				if o.Plan, err = drawPlan(*configPath, n); err != nil {
+					return 0, harnessError{err}
+				}
+			}
+			result, err := runPlan(ctx, o)
 			if err != nil {
 				return 0, harnessError{err}
 			}
@@ -69,7 +103,46 @@ func cli(args []string, stdout, stderr io.Writer) int {
 				return 0, harnessError{err}
 			}
 			stdout.Write(report)
-			return findings, nil
+			return len(result.Findings), nil
+		}
+	case "hunt":
+		seeds := flags.Uint64("seeds", 0, "")
+		from := flags.Uint64("from", 1, "")
+		command = func() (int, error) {
+			if err := required(flags, "config", "out"); err != nil {
+				return 0, err
+			}
+			if *seeds == 0 {
+				return 0, errors.New("the flag --seeds needs a positive count")
+			}
+			if *from+*seeds-1 < *from {
+				return 0, errors.New("--from plus --seeds passes the largest seed")
+			}
+			o := hunt.Options{ConfigPath: *configPath, Out: *out, Run: runInto, Log: stderr, Seeds: func(yield func(uint64) bool) {
+				for n := range *seeds {
+					if !yield(*from + n) {
+						return
+					}
+				}
+			}}
+			found, err := hunt.Hunt(ctx, o)
+			printSummary(stdout, *out)
+			if err != nil {
+				return 0, harnessError{err}
+			}
+			return len(found), nil
+		}
+	case "shrink":
+		command = func() (int, error) {
+			if err := required(flags, "config", "plan", "out"); err != nil {
+				return 0, err
+			}
+			found, err := hunt.ShrinkPlan(ctx, hunt.ShrinkOptions{ConfigPath: *configPath, PlanPath: *planPath, Out: *out, Run: runInto, Log: stderr})
+			if err != nil {
+				return 0, harnessError{err}
+			}
+			printSummary(stdout, *out)
+			return len(found), nil
 		}
 	case "judge":
 		tracePath := flags.String("trace", "", "")
@@ -113,6 +186,13 @@ func cli(args []string, stdout, stderr io.Writer) int {
 
 type harnessError struct{ error }
 
+// printSummary prints the summary.md that hunt and shrink write, if any.
+func printSummary(stdout io.Writer, out string) {
+	if summary, err := os.ReadFile(filepath.Join(out, "summary.md")); err == nil {
+		stdout.Write(summary)
+	}
+}
+
 func required(flags *flag.FlagSet, names ...string) error {
 	for _, name := range names {
 		if flags.Lookup(name).Value.String() == "" {
@@ -120,6 +200,18 @@ func required(flags *flag.FlagSet, names ...string) error {
 		}
 	}
 	return nil
+}
+
+func drawPlan(configPath string, seed uint64) (*plan.Plan, error) {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return nil, err
+	}
+	g, err := generate.New(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return g.Plan(seed)
 }
 
 // judge returns report.md and the number of findings.

@@ -90,6 +90,26 @@ jobs:
       - name: v2 envtest tests
         run: make test-v2-envtest
 
+  # The toy's generated plans: 20 seeds with faults under B0, and one shrink.
+  v2-generated:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Cache envtest control-plane binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            bin/envtest
+            bin/setup-envtest
+          key: envtest-${{ runner.os }}-${{ hashFiles('Makefile') }}
+      - name: v2 generated plans
+        run: make test-v2-generated
+
   # The bug matrix of DESIGN.md §9.1: two envtest runs per seeded bug, under it
   # and without it, and one of b0.json. The committed docs/bug-matrix.md must
   # match. It takes about four minutes.
@@ -204,5 +224,47 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: reconciler-fuzzer-out-external-secrets
+          path: reconciler-fuzzer-out/
+          if-no-files-found: ignore
+
+  # v2's examples (v2/DESIGN.md §16): committed plans, the seeds file and a
+  # negative control each.
+  v2-example:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        example: [cert-manager, external-secrets]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Cache envtest control-plane binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            bin/envtest
+            bin/setup-envtest
+          key: envtest-${{ runner.os }}-${{ hashFiles('Makefile') }}
+      - name: Read the ${{ matrix.example }} pin
+        id: pin
+        run: echo "version=$(make --no-print-directory ${{ matrix.example }}-version)" >>"$GITHUB_OUTPUT"
+      - name: Cache the ${{ matrix.example }} controller
+        uses: actions/cache@v4
+        with:
+          path: |
+            bin/${{ matrix.example == 'cert-manager' && 'cert-manager-controller' || 'external-secrets' }}
+            bin/${{ matrix.example }}-${{ steps.pin.outputs.version }}.built
+          key: ${{ matrix.example }}-${{ runner.os }}-${{ steps.pin.outputs.version }}
+      - name: The v2 ${{ matrix.example }} example and its negative control
+        run: make test-v2-example-${{ matrix.example }}
+      - name: Keep the failing run's evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reconciler-fuzzer-out-v2-${{ matrix.example }}
           path: reconciler-fuzzer-out/
           if-no-files-found: ignore

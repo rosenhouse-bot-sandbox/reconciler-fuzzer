@@ -250,3 +250,70 @@ func TestStep(t *testing.T) {
 		t.Fatal("Step(0) found a step the trace lacks")
 	}
 }
+
+func watch(caller trace.Caller, ref trace.Ref, status int, stream uint64) trace.Event {
+	return trace.Event{Call: &trace.Call{Caller: caller, Verb: "watch", Watch: true, Ref: ref, Status: status, Stream: stream}}
+}
+
+func watchEnd(caller trace.Caller, system string, stream uint64) trace.Event {
+	return trace.Event{WatchEnd: &trace.WatchEnd{Caller: caller, System: system, Stream: stream}}
+}
+
+func TestWatching(t *testing.T) {
+	ctl := trace.Controller
+	cms := tt.Ref("configmaps", "", "")
+	var b tt.Builder
+	b.At(1 * s).Add(watch(ctl, cms, 200, 1)).
+		At(3 * s).Add(watchEnd(ctl, "kube", 1))
+	ix := b.Index()
+	cases := []struct {
+		name   string
+		ix     *trace.Index
+		caller trace.Caller
+		ref    trace.Ref
+		since  time.Duration
+		at     time.Duration
+		want   bool
+	}{
+		{"open", ix, ctl, cm, 2 * s, 2 * s, true},
+		{"opened at since", ix, ctl, cm, 1 * s, 2 * s, true},
+		{"opened after since", ix, ctl, cm, s - 1, 2 * s, false},
+		{"ended at t", ix, ctl, cm, 2 * s, 3 * s, false},
+		{"other caller", ix, trace.Harness, cm, 2 * s, 2 * s, false},
+		{"other group", ix, ctl, widgetA, 2 * s, 2 * s, false},
+		{"other resource", ix, ctl, tt.Ref("secrets", "ns", "c"), 2 * s, 2 * s, false},
+		{"other system", ix, ctl, trace.Ref{System: "vault", Resource: "configmaps", Namespace: "ns", Name: "c"}, 2 * s, 2 * s, false},
+		{"other group, same resource", ix, ctl, trace.Ref{System: "kube", Group: "g", Resource: "configmaps", Namespace: "ns", Name: "c"}, 2 * s, 2 * s, false},
+		{"end of another stream", (&tt.Builder{}).Add(watch(ctl, cms, 200, 1), watchEnd(ctl, "kube", 2)).Index(), ctl, cm, 0, s, true},
+		{"end on another system", (&tt.Builder{}).Add(watch(ctl, cms, 200, 1), watchEnd(ctl, "vault", 1)).Index(), ctl, cm, 0, s, true},
+		{"end by another caller", (&tt.Builder{}).Add(watch(ctl, cms, 200, 1), watchEnd(trace.Harness, "kube", 1)).Index(), ctl, cm, 0, s, true},
+		{"same namespace", (&tt.Builder{}).Add(watch(ctl, tt.Ref("configmaps", "ns", ""), 200, 1)).Index(), ctl, cm, 0, s, true},
+		{"other namespace", (&tt.Builder{}).Add(watch(ctl, tt.Ref("configmaps", "other", ""), 200, 1)).Index(), ctl, cm, 0, s, false},
+		{"same name", (&tt.Builder{}).Add(watch(ctl, cm, 200, 1)).Index(), ctl, cm, 0, s, true},
+		{"other name", (&tt.Builder{}).Add(watch(ctl, tt.Ref("configmaps", "ns", "d"), 200, 1)).Index(), ctl, cm, 0, s, false},
+		{"failed watch", (&tt.Builder{}).Add(watch(ctl, cms, 403, 1)).Index(), ctl, cm, 0, s, false},
+		{"a get", (&tt.Builder{}).Add(tt.Call(ctl, "list", cms, 200, "")).Index(), ctl, cm, 0, s, false},
+	}
+	for _, c := range cases {
+		if got := c.ix.Watching(c.caller, c.ref, c.since, c.at); got != c.want {
+			t.Errorf("%s: Watching = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func work(system string, pending bool) trace.Event {
+	return trace.Event{Work: &trace.Work{System: system, Pending: pending}}
+}
+
+func TestPending(t *testing.T) {
+	var b tt.Builder
+	b.At(1*s).Add(work("namespace", true), work("gc", true)).
+		At(2 * s).Add(work("gc", false)).
+		At(3 * s).Add(work("gc", true))
+	ix := b.Index()
+	for at, want := range map[time.Duration][]string{0: nil, 1 * s: {"gc", "namespace"}, 2 * s: {"namespace"}, 3 * s: {"gc", "namespace"}} {
+		if got := ix.Pending(at); !slices.Equal(got, want) {
+			t.Errorf("Pending(%v) = %q, want %q", at, got, want)
+		}
+	}
+}

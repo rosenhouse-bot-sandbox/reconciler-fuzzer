@@ -15,6 +15,7 @@ import (
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/config"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/plan"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/system"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/trace"
 )
 
@@ -58,7 +59,8 @@ type fakeCluster struct {
 	createErr error
 	created   []map[string]any
 	// waitGone replaces WaitGone's answer when set.
-	waitGone func(ctx context.Context) error
+	waitGone  func(ctx context.Context) error
+	deleteErr error
 }
 
 func (c *fakeCluster) Create(_ context.Context, obj map[string]any) (trace.Ref, error) {
@@ -76,7 +78,7 @@ func (c *fakeCluster) Patch(_ context.Context, ref trace.Ref, patch []byte) erro
 
 func (c *fakeCluster) Delete(_ context.Context, ref trace.Ref) error {
 	c.add("delete %s", ref.Name)
-	return nil
+	return c.deleteErr
 }
 
 func (c *fakeCluster) WaitGone(ctx context.Context, ref trace.Ref) error {
@@ -513,5 +515,161 @@ func TestDeadline(t *testing.T) {
 				t.Errorf("Deadline = %v, %v, want %v, %v", got, backoffBound, c.want, c.wantBackoffBound)
 			}
 		})
+	}
+}
+
+// selection is what a fake Select was asked.
+type selection struct {
+	creator trace.Caller
+	target  plan.Target
+	slot    string
+	// indexed says the index held every event recorded before the call.
+	indexed bool
+}
+
+func selecting(f *fixture, found map[string]trace.Ref) *[]selection {
+	var asked []selection
+	f.runner.Select = func(ix *trace.Index, creator trace.Caller, target plan.Target, slot string, t time.Duration) (trace.Ref, bool) {
+		asked = append(asked, selection{creator, target, slot, ix.Len() == len(f.rec.Events())})
+		ref, ok := found[target.Resource]
+		return ref, ok
+	}
+	return &asked
+}
+
+func TestExecuteDamagesAndChangesFixtures(t *testing.T) {
+	f := newFixture(t, nil)
+	cm := trace.Ref{System: "kube", Resource: "configmaps", Namespace: "ns", Name: "child"}
+	secret := trace.Ref{System: "kube", Resource: "secrets", Namespace: "ns", Name: "fixture"}
+	asked := selecting(f, map[string]trace.Ref{"configmaps": cm, "secrets": secret})
+	p := &plan.Plan{Steps: []plan.Step{
+		{Actions: []plan.Action{{Do: plan.Create, Slot: "a", Object: widget("w")}}},
+		{Actions: []plan.Action{
+			{Do: plan.Damage, Slot: "a", Target: &plan.Target{Resource: "configmaps", Role: "child"}},
+			{Do: plan.Damage, Target: &plan.Target{Resource: "configmaps"}, Patch: json.RawMessage(`{"data":{}}`)},
+			{Do: plan.ChangeFixture, Target: &plan.Target{Resource: "secrets", Name: "fixture"}, Patch: json.RawMessage(`{"data":null}`)},
+			{Do: plan.ChangeFixture, Target: &plan.Target{Resource: "secrets", Name: "fixture"}},
+		}},
+	}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	want := []selection{
+		{trace.Controller, plan.Target{Resource: "configmaps", Role: "child"}, "a", true},
+		{trace.Controller, plan.Target{Resource: "configmaps"}, "", true},
+		{trace.Harness, plan.Target{Resource: "secrets", Name: "fixture"}, "", true},
+		{trace.Harness, plan.Target{Resource: "secrets", Name: "fixture"}, "", true},
+	}
+	if !reflect.DeepEqual(*asked, want) {
+		t.Errorf("Select asked %+v, want %+v", *asked, want)
+	}
+	wantCluster := []string{"create w", "delete child", `patch child {"data":{}}`, `patch fixture {"data":null}`, "delete fixture", "delete w"}
+	if got := f.cluster.all(); !reflect.DeepEqual(got, wantCluster) {
+		t.Errorf("cluster calls = %q, want %q", got, wantCluster)
+	}
+	var refs []trace.Ref
+	for _, e := range f.rec.Events() {
+		if a := e.Action; a != nil && a.Step == 1 {
+			refs = append(refs, *a.Ref)
+		}
+	}
+	if !reflect.DeepEqual(refs, []trace.Ref{cm, cm, secret, secret}) {
+		t.Errorf("action refs = %+v", refs)
+	}
+}
+
+func TestExecuteGoesOnAfterAnUnmatchedTarget(t *testing.T) {
+	f := newFixture(t, nil)
+	selecting(f, nil)
+	p := &plan.Plan{Steps: []plan.Step{
+		{Actions: []plan.Action{{Do: plan.Damage, Target: &plan.Target{Resource: "configmaps"}}, {Do: plan.Create, Slot: "a", Object: widget("w")}}},
+		{Actions: []plan.Action{{Do: plan.ChangeFixture, Target: &plan.Target{Resource: "secrets", Name: "s"}}}},
+	}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	var errs []string
+	for _, e := range f.rec.Events() {
+		if a := e.Action; a != nil {
+			errs = append(errs, fmt.Sprintf("%d.%d %s %q", a.Step, a.Index, a.Do, a.Error))
+		}
+	}
+	want := []string{`0.0 damage "no instance matches"`, `0.1 create ""`, `1.0 changeFixture "no instance matches"`, `2.0 delete ""`, `3.0 restart ""`}
+	if !reflect.DeepEqual(errs, want) {
+		t.Errorf("actions = %q, want %q", errs, want)
+	}
+}
+
+func TestExecuteAddsThePollIntervalToAChangingStepsDeadline(t *testing.T) {
+	f := newFixture(t, nil)
+	selecting(f, nil)
+	p := &plan.Plan{Steps: []plan.Step{
+		{Actions: []plan.Action{{Do: plan.Damage, Target: &plan.Target{Resource: "configmaps"}}}},
+		{Actions: []plan.Action{{Do: plan.ChangeFixture, Target: &plan.Target{Resource: "secrets", Name: "s"}}}},
+		{Actions: []plan.Action{{Do: plan.Restart}}},
+	}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	events := f.rec.Events()
+	for step, poll := range []time.Duration{timeouts.Stable, timeouts.Stable, 0} {
+		start, _ := find(events, step, trace.FaultPeriod)
+		endFaults, _ := find(events, step, trace.EndFaults)
+		want, _ := Deadline(endFaults.At, endFaults.At-start.At, poll, timeouts)
+		if got := endFaults.Phase.Deadline; (got - want).Abs() > 5*time.Millisecond {
+			t.Errorf("step %d deadline = %v, want about %v", step, got, want)
+		}
+	}
+}
+
+func TestExecuteRecordsADamageOfAGoneObjectAsUnmatched(t *testing.T) {
+	f := newFixture(t, nil)
+	selecting(f, map[string]trace.Ref{"configmaps": {System: "kube", Resource: "configmaps", Namespace: "ns", Name: "child"}})
+	f.cluster.deleteErr = system.ErrGone
+	p := &plan.Plan{Steps: []plan.Step{
+		{Actions: []plan.Action{{Do: plan.Create, Slot: "a", Object: widget("w")}, {Do: plan.Delete, Slot: "a"}}},
+		{Actions: []plan.Action{{Do: plan.Damage, Target: &plan.Target{Resource: "configmaps"}}}},
+	}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, e := range f.rec.Events() {
+		if a := e.Action; a != nil && a.Do != "restart" {
+			got = append(got, fmt.Sprintf("%s ref=%v errored=%v", a.Do, a.Ref != nil, a.Error != ""))
+		}
+	}
+	want := []string{"create ref=true errored=false", "delete ref=true errored=false", "damage ref=false errored=true"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("actions = %q, want %q", got, want)
+	}
+}
+
+func TestQuietWaitsUntilTheControllerSettles(t *testing.T) {
+	var polls int
+	f := newFixture(t, func(ix *trace.Index, from, to time.Duration) (time.Duration, bool) {
+		polls++
+		return to, polls == 3
+	})
+	start := time.Now()
+	if err := f.runner.Quiet(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if polls != 3 || time.Since(start) < 2*PollInterval {
+		t.Errorf("Quiet returned after %d polls and %v, want 3 polls", polls, time.Since(start))
+	}
+	if events := f.rec.Events(); len(events) != 0 {
+		t.Errorf("Quiet recorded %d events, want none", len(events))
+	}
+}
+
+func TestQuietGivesUpAfterTheSettleTimeout(t *testing.T) {
+	f := newFixture(t, func(*trace.Index, time.Duration, time.Duration) (time.Duration, bool) { return 0, false })
+	start := time.Now()
+	if err := f.runner.Quiet(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if waited := time.Since(start); waited < timeouts.Settle || waited > timeouts.Settle+3*PollInterval {
+		t.Errorf("Quiet waited %v, want the settle timeout %v", waited, timeouts.Settle)
 	}
 }

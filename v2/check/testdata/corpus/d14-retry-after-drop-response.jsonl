@@ -1,0 +1,35 @@
+{"seq":1,"at":0,"run":{"namespace":"ns","primary":{"system":"kube","group":"toy","resource":"widgets"},"planSteps":1,"ready":"has(self.status) \u0026\u0026 self.status.ready == true","stable":1000000000,"reads":2,"writes":4}}
+{"seq":2,"at":0,"proc":{"event":"start","pid":1}}
+{"seq":3,"at":0,"call":{"caller":"controller","method":"","path":"","verb":"list","ref":{"system":"kube","group":"toy","resource":"widgets","namespace":"ns"},"status":200}}
+{"seq":4,"at":10000000,"phase":{"step":0,"name":"faultPeriod"}}
+{"seq":5,"at":20000000,"call":{"caller":"harness","method":"","path":"","verb":"create","ref":{"system":"kube","group":"toy","resource":"widgets","namespace":"ns"},"status":201,"resultUID":"u1","resultRV":"2","resultName":"a"}}
+{"seq":6,"at":20000000,"version":{"ref":{"system":"kube","group":"toy","resource":"widgets","namespace":"ns","name":"a"},"uid":"u1","rv":"2","body":{"metadata":{"name":"a"},"status":{"ready":false}}}}
+{"seq":7,"at":30000000,"action":{"step":0,"index":0,"do":"create","slot":"a","ref":{"system":"kube","group":"toy","resource":"widgets","namespace":"ns","name":"a"}}}
+{"seq":8,"at":40000000,"call":{"caller":"controller","method":"","path":"","verb":"create","ref":{"system":"kube","resource":"configmaps","namespace":"ns"},"status":201,"injected":"dropResponse","resultUID":"u-lost","resultRV":"lost","resultName":"a-0"}}
+{"seq":9,"at":40000000,"version":{"ref":{"system":"kube","resource":"configmaps","namespace":"ns","name":"a-0"},"uid":"u-lost","rv":"lost","body":{"metadata":{"name":"a-0","ownerReferences":[{"controller":true,"uid":"u1"}]}}}}
+{"seq":10,"at":50000000,"call":{"caller":"controller","method":"","path":"","verb":"create","ref":{"system":"kube","resource":"configmaps","namespace":"ns"},"status":409}}
+{"seq":11,"at":60000000,"call":{"caller":"controller","method":"","path":"","verb":"get","ref":{"system":"kube","resource":"configmaps","namespace":"ns","name":"a-0"},"status":200}}
+{"seq":12,"at":70000000,"call":{"caller":"controller","method":"","path":"","verb":"update","ref":{"system":"kube","group":"toy","resource":"widgets","namespace":"ns","name":"a"},"status":200,"resultRV":"3"}}
+{"seq":13,"at":70000000,"version":{"ref":{"system":"kube","group":"toy","resource":"widgets","namespace":"ns","name":"a"},"uid":"u1","rv":"3","body":{"metadata":{"name":"a"},"status":{"ready":true}}}}
+{"seq":14,"at":80000000,"phase":{"step":0,"name":"endFaults","deadline":30080000000}}
+{"seq":15,"at":1090000000,"phase":{"step":0,"name":"settled"}}
+{"seq":16,"at":2090000000,"phase":{"step":0,"name":"confirmed"}}
+{"seq":17,"at":2100000000,"phase":{"step":1,"name":"faultPeriod"}}
+{"seq":18,"at":2110000000,"call":{"caller":"harness","method":"","path":"","verb":"delete","ref":{"system":"kube","group":"toy","resource":"widgets","namespace":"ns","name":"a"},"status":200,"resultRV":"4"}}
+{"seq":19,"at":2110000000,"version":{"ref":{"system":"kube","group":"toy","resource":"widgets","namespace":"ns","name":"a"},"uid":"u1","rv":"4","deleted":true,"body":{"metadata":{"name":"a"},"status":{"ready":true}}}}
+{"seq":20,"at":2120000000,"action":{"step":1,"index":0,"do":"delete","slot":"a","ref":{"system":"kube","group":"toy","resource":"widgets","namespace":"ns","name":"a"}}}
+{"seq":21,"at":2130000000,"phase":{"step":1,"name":"endFaults","deadline":32130000000}}
+{"seq":22,"at":2140000000,"work":{"system":"gc","pending":true}}
+{"seq":23,"at":2140000000,"call":{"caller":"gc","method":"","path":"","verb":"delete","ref":{"system":"kube","resource":"configmaps","namespace":"ns","name":"a-0"},"status":200,"resultRV":"gc1"}}
+{"seq":24,"at":2140000000,"version":{"ref":{"system":"kube","resource":"configmaps","namespace":"ns","name":"a-0"},"uid":"u-lost","rv":"gc1","deleted":true,"body":null}}
+{"seq":25,"at":2150000000,"work":{"system":"gc","pending":false}}
+{"seq":26,"at":3150000000,"phase":{"step":1,"name":"settled"}}
+{"seq":27,"at":4150000000,"phase":{"step":1,"name":"confirmed"}}
+{"seq":28,"at":4160000000,"phase":{"step":2,"name":"faultPeriod"}}
+{"seq":29,"at":4170000000,"proc":{"event":"exit","exit":"signal: terminated","harnessCaused":true}}
+{"seq":30,"at":4170000000,"proc":{"event":"start","pid":5}}
+{"seq":31,"at":4180000000,"action":{"step":2,"index":0,"do":"restart"}}
+{"seq":32,"at":4190000000,"call":{"caller":"controller","method":"","path":"","verb":"list","ref":{"system":"kube","group":"toy","resource":"widgets","namespace":"ns"},"status":200}}
+{"seq":33,"at":4200000000,"phase":{"step":2,"name":"endFaults","deadline":34200000000}}
+{"seq":34,"at":5210000000,"phase":{"step":2,"name":"settled"}}
+{"seq":35,"at":6210000000,"phase":{"step":2,"name":"confirmed"}}

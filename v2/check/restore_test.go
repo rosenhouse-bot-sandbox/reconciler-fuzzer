@@ -1,0 +1,168 @@
+package check_test
+
+import (
+	"testing"
+
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/check"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/trace"
+	tt "github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/v2/trace/tracetest"
+)
+
+var (
+	childA = tt.Ref("configmaps", "ns", "a-0")
+	childB = tt.Ref("configmaps", "ns", "b-0")
+)
+
+// twoCRs settles a step that creates slots a and b, each with its child.
+func twoCRs() *tt.Script {
+	r := newRun(3)
+	r.Begin()
+	withChild(r, "a", true)
+	withChild(r, "b", true)
+	return r.EndFaults().Settle()
+}
+
+// damageA starts a step that deletes slot a's child behind the
+// controller's back.
+func damageA(r *tt.Script) *tt.Script {
+	return r.Begin().Delete(trace.Harness, childA).Act("damage", "a", &childA).EndFaults()
+}
+
+func restore(t *testing.T, r *tt.Script) []check.Finding { return judgeWith(t, r, check.Restore) }
+
+func TestRestoreFailsADamagedResourceThatStaysGone(t *testing.T) {
+	r := damageA(twoCRs())
+	r.Call(ctl, "get", childA, 404).Settle()
+	requireFinding(t, restore(t, r), "Restore", 1, "did not restore damaged resources", "kube/configmaps", "configmaps ns/a-0 (rule 1, slot a)")
+}
+
+func TestRestoreJudgesADamagedCROnExistenceOnly(t *testing.T) {
+	r := damageA(twoCRs())
+	r.Create(ctl, childA, tt.OwnedBy(map[string]any{"metadata": map[string]any{"name": "a-0"}, "data": "new"}, r.UID(widgetA), true))
+	r.Create(ctl, tt.Ref("configmaps", "ns", "a-x1"), tt.OwnedBy(tt.Generated("a-", "a-x1"), r.UID(widgetA), true))
+	r.Settle()
+	requireNone(t, restore(t, r))
+}
+
+func TestRestoreFailsAnUndamagedCRsReplacedResource(t *testing.T) {
+	r := damageA(twoCRs())
+	r.Create(ctl, childA, tt.OwnedBy(tt.Object("a-0"), r.UID(widgetA), true))
+	r.Delete(ctl, childB).Create(ctl, childB, tt.OwnedBy(tt.Object("b-0"), r.UID(widgetB), true))
+	r.Settle()
+	requireFinding(t, restore(t, r), "Restore", 1, "replaced resources", "kube/configmaps", "configmaps ns/b-0 (rule 1, slot b)")
+}
+
+func TestRestoreFailsANewResource(t *testing.T) {
+	r := twoCRs()
+	r.Begin().Restart()
+	r.Create(ctl, tt.Ref("configmaps", "ns", "a-1"), tt.OwnedBy(tt.Object("a-1"), r.UID(widgetA), true))
+	r.EndFaults().Settle()
+	requireFinding(t, restore(t, r), "Restore", 1, "replaced resources", "kube/configmaps", "configmaps ns/a-1")
+}
+
+func TestRestoreFailsAChangedResource(t *testing.T) {
+	r := twoCRs()
+	r.Begin().Restart()
+	r.Update(ctl, childA, tt.OwnedBy(map[string]any{"metadata": map[string]any{"name": "a-0"}, "data": map[string]any{"label": "blue"}}, r.UID(widgetA), true))
+	r.EndFaults().Settle()
+	requireFinding(t, restore(t, r), "Restore", 1, "changed resources", "kube/configmaps", "configmaps ns/a-0 (rule 1, slot a): data")
+}
+
+func TestRestoreIgnoresMetadataEveryWriteChanges(t *testing.T) {
+	r := twoCRs()
+	r.Begin().Restart()
+	body := tt.OwnedBy(tt.Object("a-0"), r.UID(widgetA), true)
+	metadata := body["metadata"].(map[string]any)
+	metadata["resourceVersion"], metadata["generation"], metadata["managedFields"] = "99", 2, []any{"x"}
+	r.Update(ctl, childA, body)
+	r.EndFaults().Settle()
+	requireNone(t, restore(t, r))
+}
+
+func TestRestoreSkipsAStepThatChangesWhatItCompares(t *testing.T) {
+	for _, do := range []string{"create", "update", "delete", "changeFixture"} {
+		r := twoCRs()
+		r.Begin().Restart().Act(do, "a", &widgetA)
+		r.Update(ctl, childA, map[string]any{"data": "changed"})
+		r.EndFaults().Settle()
+		if findings := restore(t, r); len(findings) != 0 {
+			t.Errorf("with %s: findings = %+v", do, findings)
+		}
+	}
+}
+
+func TestRestoreNeedsBothStepsSettled(t *testing.T) {
+	unsettled := twoCRs()
+	unsettled.Begin().Restart().EndFaults().At(unsettled.Now, tt.Phase(1, trace.Settled))
+	unsettled.Tick(500*ms).Update(ctl, childA, map[string]any{"data": "changed"}).Tick(500*ms).At(unsettled.Now, tt.Phase(1, trace.Confirmed))
+	unsettled.Begin().Restart().EndFaults().Settle()
+	requireNone(t, restore(t, unsettled))
+
+	r := newRun(1)
+	r.Begin().Restart()
+	r.Create(ctl, cm, tt.Object("c"))
+	r.EndFaults().Settle()
+	requireNone(t, restore(t, r))
+}
+
+// reissue settles a step that creates certificate a with its request a-1
+// and Secret a-tls, then starts one that damages the Secret.
+func reissue() (r *tt.Script, request, secret trace.Ref) {
+	r = newRun(2)
+	request, secret = tt.Ref("cert-manager.io/certificaterequests", "ns", "a-1"), tt.Ref("secrets", "ns", "a-tls")
+	r.Begin()
+	uid := r.CreateCR("a", widgetA)
+	r.Create(ctl, request, tt.OwnedBy(tt.Object("a-1"), uid, true))
+	r.Create(ctl, secret, tt.OwnedBy(map[string]any{"metadata": map[string]any{"name": "a-tls"}, "data": "key-1"}, uid, true))
+	r.Ready(widgetA).EndFaults().Settle()
+	r.Begin().Delete(trace.Harness, secret).Act("damage", "a", &secret).EndFaults()
+	return r, request, secret
+}
+
+func TestRestoreLetsADamagedCRRenameItsOtherResources(t *testing.T) {
+	r, request, secret := reissue()
+	uid := r.UID(widgetA)
+	r.Create(ctl, tt.Ref("cert-manager.io/certificaterequests", "ns", "a-2"), tt.OwnedBy(tt.Object("a-2"), uid, true))
+	r.Delete(ctl, request)
+	r.Create(ctl, secret, tt.OwnedBy(map[string]any{"metadata": map[string]any{"name": "a-tls"}, "data": "key-2"}, uid, true))
+	r.Settle()
+	requireNone(t, restore(t, r))
+}
+
+func TestRestoreFailsADamagedCRThatLosesAKind(t *testing.T) {
+	r, request, secret := reissue()
+	r.Delete(ctl, request)
+	r.Create(ctl, secret, tt.OwnedBy(tt.Object("a-tls"), r.UID(widgetA), true))
+	r.Settle()
+	requireFinding(t, restore(t, r), "Restore", 1, "did not restore damaged resources", "kube/cert-manager.io/certificaterequests", "certificaterequests.cert-manager.io ns/a-1")
+}
+
+func TestRestoreFailsADamagedResourceWhoseKindHasOthers(t *testing.T) {
+	r := newRun(2)
+	r.Begin()
+	withChild(r, "a", true)
+	r.Create(ctl, tt.Ref("configmaps", "ns", "a-1"), tt.OwnedBy(tt.Object("a-1"), r.UID(widgetA), true))
+	r.EndFaults().Settle()
+	damageA(r).Call(ctl, "get", childA, 404).Settle()
+	requireFinding(t, restore(t, r), "Restore", 1, "did not restore damaged resources", "kube/configmaps", "configmaps ns/a-0")
+}
+
+func TestRestoreJudgesADamagedSharedResourceOnExistenceOnly(t *testing.T) {
+	r := newRun(2)
+	webhook := tt.Ref("secrets", "ns", "webhook-cert")
+	r.Create(ctl, webhook, tt.Object("webhook-cert"))
+	r.Begin().Restart().EndFaults().Settle()
+	r.Begin().Delete(trace.Harness, webhook).Act("damage", "", &webhook).EndFaults()
+	r.Call(ctl, "get", webhook, 404).Create(ctl, webhook, tt.Object("webhook-cert"))
+	r.Settle()
+	requireNone(t, restore(t, r))
+}
+
+func TestRestoreJudgesAFailedDamageAsNoDamage(t *testing.T) {
+	r := twoCRs()
+	r.Begin()
+	r.Add(trace.Event{Action: &trace.Action{Step: 1, Do: "damage", Slot: "a", Ref: &childA, Error: "conflict"}})
+	r.Delete(ctl, childA).Create(ctl, childA, tt.OwnedBy(tt.Object("a-0"), r.UID(widgetA), true))
+	r.EndFaults().Settle()
+	requireFinding(t, restore(t, r), "Restore", 1, "replaced resources", "kube/configmaps", "configmaps ns/a-0 (rule 1, slot a)")
+}

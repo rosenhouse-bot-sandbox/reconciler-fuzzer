@@ -1,0 +1,22 @@
+{"seq":1,"at":0,"run":{"namespace":"ns","primary":{"system":"kube","group":"toy","resource":"widgets"},"planSteps":1,"ready":"has(self.status) \u0026\u0026 self.status.ready == true","stable":1000000000,"reads":2,"writes":4}}
+{"seq":2,"at":0,"proc":{"event":"start","pid":1}}
+{"seq":3,"at":0,"call":{"caller":"controller","method":"","path":"","verb":"list","ref":{"system":"kube","group":"toy","resource":"widgets","namespace":"ns"},"status":200}}
+{"seq":4,"at":10000000,"phase":{"step":0,"name":"faultPeriod"}}
+{"seq":5,"at":20000000,"call":{"caller":"harness","method":"","path":"","verb":"create","ref":{"system":"kube","group":"toy","resource":"widgets","namespace":"ns"},"status":201,"resultUID":"u1","resultRV":"2","resultName":"a"}}
+{"seq":6,"at":20000000,"version":{"ref":{"system":"kube","group":"toy","resource":"widgets","namespace":"ns","name":"a"},"uid":"u1","rv":"2","body":{"metadata":{"name":"a"},"status":{"ready":false}}}}
+{"seq":7,"at":30000000,"action":{"step":0,"index":0,"do":"create","slot":"a","ref":{"system":"kube","group":"toy","resource":"widgets","namespace":"ns","name":"a"}}}
+{"seq":8,"at":40000000,"call":{"caller":"controller","method":"","path":"","verb":"create","ref":{"system":"kube","resource":"configmaps","namespace":"ns"},"status":201,"resultUID":"u3","resultRV":"4","resultName":"a-0"}}
+{"seq":9,"at":40000000,"version":{"ref":{"system":"kube","resource":"configmaps","namespace":"ns","name":"a-0"},"uid":"u3","rv":"4","body":{"metadata":{"name":"a-0","ownerReferences":[{"controller":true,"uid":"u1"}]}}}}
+{"seq":10,"at":50000000,"call":{"caller":"controller","method":"","path":"","verb":"update","ref":{"system":"kube","group":"toy","resource":"widgets","namespace":"ns","name":"a"},"status":200,"resultRV":"5"}}
+{"seq":11,"at":50000000,"version":{"ref":{"system":"kube","group":"toy","resource":"widgets","namespace":"ns","name":"a"},"uid":"u1","rv":"5","body":{"metadata":{"name":"a"},"status":{"ready":true}}}}
+{"seq":12,"at":60000000,"phase":{"step":0,"name":"endFaults","deadline":30060000000}}
+{"seq":13,"at":1570000000,"call":{"caller":"controller","method":"","path":"","verb":"update","ref":{"system":"kube","group":"toy","resource":"widgets","namespace":"ns","name":"a"},"status":200,"resultRV":"6"}}
+{"seq":14,"at":1570000000,"version":{"ref":{"system":"kube","group":"toy","resource":"widgets","namespace":"ns","name":"a"},"uid":"u1","rv":"6","body":{"metadata":{"name":"a"},"status":{"ready":true,"refreshTime":0}}}}
+{"seq":15,"at":3080000000,"call":{"caller":"controller","method":"","path":"","verb":"update","ref":{"system":"kube","group":"toy","resource":"widgets","namespace":"ns","name":"a"},"status":200,"resultRV":"7"}}
+{"seq":16,"at":3080000000,"version":{"ref":{"system":"kube","group":"toy","resource":"widgets","namespace":"ns","name":"a"},"uid":"u1","rv":"7","body":{"metadata":{"name":"a"},"status":{"ready":true,"refreshTime":1}}}}
+{"seq":17,"at":4590000000,"call":{"caller":"controller","method":"","path":"","verb":"update","ref":{"system":"kube","group":"toy","resource":"widgets","namespace":"ns","name":"a"},"status":200,"resultRV":"8"}}
+{"seq":18,"at":4590000000,"version":{"ref":{"system":"kube","group":"toy","resource":"widgets","namespace":"ns","name":"a"},"uid":"u1","rv":"8","body":{"metadata":{"name":"a"},"status":{"ready":true,"refreshTime":2}}}}
+{"seq":19,"at":6100000000,"call":{"caller":"controller","method":"","path":"","verb":"update","ref":{"system":"kube","group":"toy","resource":"widgets","namespace":"ns","name":"a"},"status":200,"resultRV":"9"}}
+{"seq":20,"at":6100000000,"version":{"ref":{"system":"kube","group":"toy","resource":"widgets","namespace":"ns","name":"a"},"uid":"u1","rv":"9","body":{"metadata":{"name":"a"},"status":{"ready":true,"refreshTime":3}}}}
+{"seq":21,"at":6110000000,"phase":{"step":0,"name":"settled"}}
+{"seq":22,"at":7110000000,"phase":{"step":0,"name":"confirmed"}}

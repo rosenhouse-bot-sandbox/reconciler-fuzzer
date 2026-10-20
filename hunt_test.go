@@ -386,10 +386,12 @@ func TestNoPullRequestReachesAHunt(t *testing.T) {
 		}
 		for name, j := range w.Jobs {
 			for _, s := range j.Steps {
-				for _, m := range regexp.MustCompile(`(?m)\bmake ((?:[\w-]+ ?)+)`).FindAllStringSubmatch(s.Run, -1) {
-					checked++
-					if dry := dryRun(t, strings.Fields(m[1])...); strings.Contains(dry, "hunt") {
-						t.Errorf("%s, job %s: make %s reaches a hunt:\n%s", path, name, m[1], dry)
+				for _, run := range j.expandMatrix(s.Run) {
+					for _, m := range regexp.MustCompile(`(?m)\bmake ((?:[\w-]+ ?)+)`).FindAllStringSubmatch(run, -1) {
+						checked++
+						if dry := dryRun(t, strings.Fields(m[1])...); strings.Contains(dry, "hunt") {
+							t.Errorf("%s, job %s: make %s reaches a hunt:\n%s", path, name, m[1], dry)
+						}
 					}
 				}
 			}

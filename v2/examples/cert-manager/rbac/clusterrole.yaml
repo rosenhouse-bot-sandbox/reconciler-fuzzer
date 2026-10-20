@@ -1,0 +1,48 @@
+# The controller's rules from the v1.21.2 Helm chart (rbac.yaml), merged.
+# Writes for ACME HTTP01, Gateway API and leader election are left out.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cert-manager-controller
+rules:
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates", "certificaterequests", "issuers", "clusterissuers"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificaterequests"]
+    verbs: ["create", "delete"]
+  - apiGroups: ["cert-manager.io"]
+    resources:
+      - certificates/status
+      - certificaterequests/status
+      - issuers/status
+      - clusterissuers/status
+    verbs: ["update", "patch"]
+  - apiGroups: ["cert-manager.io"]
+    resources:
+      - certificates/finalizers
+      - certificaterequests/finalizers
+      - issuers/finalizers
+      - clusterissuers/finalizers
+    verbs: ["update"]
+  - apiGroups: ["acme.cert-manager.io"]
+    resources: ["orders", "challenges"]
+    verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
+  - apiGroups: ["acme.cert-manager.io"]
+    resources: ["orders/status", "challenges/status"]
+    verbs: ["update", "patch"]
+  - apiGroups: ["acme.cert-manager.io"]
+    resources: ["orders/finalizers", "challenges/finalizers"]
+    verbs: ["update"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods", "services"]
+    verbs: ["get", "list", "watch"]

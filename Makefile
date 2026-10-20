@@ -108,6 +108,10 @@ help:
 	@echo "  test-envtest                           Run the envtest tier."
 	@echo "  test-v2                                Run v2's tests that need no API server."
 	@echo "  test-v2-envtest                        Run v2's envtest tests, including the toy's bug gate."
+	@echo "  test-v2-generated                      Run the toy's generated plans under B0, and shrink one under B3."
+	@echo "  build-v2                               Build bin/reconciler-fuzzer-v2."
+	@echo "  test-v2-example-cert-manager           Run v2's cert-manager plans, seeds and negative control."
+	@echo "  test-v2-example-external-secrets       Run v2's external-secrets plans, seeds and negative control."
 	@echo "  test-example                           Run the cert-manager example and its negative control."
 	@echo "  test-example-external-secrets          Run the external-secrets example and its negative control."
 	@echo "  test-example-nightly                   Run the cert-manager example on seeds reconciler-fuzzer draws."
@@ -292,9 +296,32 @@ test-envtest: setup
 test-v2:
 	go test -count=1 ./v2/...
 
+# The toy's generated plans run in their own target, test-v2-generated.
+V2_GENERATED = TestGeneratedPlansWithFaultsPassB0|TestAGeneratedFailingPlanShrinks
+
 .PHONY: test-v2-envtest
 test-v2-envtest: setup
-	KUBEBUILDER_ASSETS="$$($(ENVTEST_USE))" go test -tags envtest -count=1 -p 2 -parallel 3 -timeout 20m ./v2/...
+	KUBEBUILDER_ASSETS="$$($(ENVTEST_USE))" go test -tags envtest -count=1 -p 2 -parallel 3 -timeout 20m -skip '$(V2_GENERATED)' ./v2/...
+
+.PHONY: test-v2-generated
+test-v2-generated: setup
+	KUBEBUILDER_ASSETS="$$($(ENVTEST_USE))" go test -tags envtest -count=1 -parallel 3 -timeout 30m -run '$(V2_GENERATED)' ./v2/targets/toy-widget
+
+# Each v2 example runs its plans and the seeds its seeds file lists, then its
+# negative control. Set V2_EXAMPLE_SEEDS to run other seeds.
+.PHONY: build-v2
+build-v2:
+	go build -o bin/reconciler-fuzzer-v2 ./v2/cmd/reconciler-fuzzer
+
+.PHONY: test-v2-example-cert-manager
+test-v2-example-cert-manager: verify-cert-manager-port setup build-v2 cert-manager
+	$(call must-pass,KUBEBUILDER_ASSETS="$$($(ENVTEST_USE))" v2/examples/test.sh cert-manager \
+		plans/issue.json example-tls --launch-arg --enable-certificate-owner-ref=false)
+
+.PHONY: test-v2-example-external-secrets
+test-v2-example-external-secrets: setup build-v2 external-secrets
+	$(call must-pass,KUBEBUILDER_ASSETS="$$($(ENVTEST_USE))" v2/examples/test.sh external-secrets \
+		controls/orphan.json example-secret)
 
 # The negative control every example tier ends with: (tier name, a command that
 # must fail, the clause of the statement it must fail on). A tier whose control

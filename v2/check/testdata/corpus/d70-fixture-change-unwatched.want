@@ -1,0 +1,2 @@
+# D70: A fixture change the controller sees only after a restart fails Restore, as B14 does.
+Restore 2

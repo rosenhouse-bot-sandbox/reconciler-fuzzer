@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -225,4 +226,50 @@ func writeConfig(t *testing.T, content string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func TestRetain(t *testing.T) {
+	path := writeConfig(t, strings.Replace(minimal(t), `  ready: "true"`, `  ready: "true"`+"\n  retain: has(self.keep)", 1))
+	c, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Primary.Retain != "has(self.keep)" {
+		t.Errorf("retain = %q", c.Primary.Retain)
+	}
+	for obj, want := range map[string]bool{`{"keep": 1}`: true, `{}`: false} {
+		var self map[string]any
+		if err := json.Unmarshal([]byte(obj), &self); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := c.Retain(self); got != want || err != nil {
+			t.Errorf("Retain(%s) = %v, %v", obj, got, err)
+		}
+	}
+	if _, err := config.Load(writeConfig(t, strings.Replace(minimal(t), `  ready: "true"`, `  ready: "true"`+"\n  retain: self.(", 1))); err == nil {
+		t.Error("a retain that does not compile loads")
+	}
+}
+
+func TestValues(t *testing.T) {
+	c, err := config.Load(writeConfig(t, minimal(t)+`values:
+  overlay:
+    spec.count: {minimum: 1, maximum: 3}
+  distinct: [spec.name]
+  mutate: [spec.count]
+  fixtures:
+    fixture.yaml: [data.label]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Values.Overlay["spec.count"]["maximum"] != float64(3) || c.Values.Distinct[0] != "spec.name" || c.Values.Mutate[0] != "spec.count" {
+		t.Errorf("values = %+v", c.Values)
+	}
+	if got := c.Values.Fixtures[c.Fixtures[0]]; len(got) != 1 || got[0] != "data.label" {
+		t.Errorf("fixtures = %v", c.Values.Fixtures)
+	}
+	if _, err := config.Load(writeConfig(t, minimal(t)+"values: {fixtures: {other.yaml: [data.x]}}\n")); err == nil || !strings.Contains(err.Error(), "other.yaml") {
+		t.Errorf("a fixture the config does not list: err = %v", err)
+	}
 }

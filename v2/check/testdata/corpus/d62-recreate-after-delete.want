@@ -1,0 +1,1 @@
+# D62: A delete and recreate of one slot gives the new CR a child of the same name, which passes.

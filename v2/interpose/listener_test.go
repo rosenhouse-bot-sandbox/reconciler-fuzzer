@@ -3,6 +3,7 @@ package interpose_test
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -39,7 +40,9 @@ func (e *events) calls() []trace.Call {
 	defer e.mu.Unlock()
 	var calls []trace.Call
 	for _, ev := range e.list {
-		calls = append(calls, *ev.Call)
+		if ev.Call != nil {
+			calls = append(calls, *ev.Call)
+		}
 	}
 	return calls
 }
@@ -464,6 +467,59 @@ func TestAnEndedFaultPicksNothing(t *testing.T) {
 	}
 }
 
+func TestAWriteWhoseClientLeftRecordsTheServersAnswer(t *testing.T) {
+	arrived, release := make(chan struct{}), make(chan struct{})
+	created := respond("application/json", createdBody)
+	l, recorded := listen(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(arrived)
+		<-release
+		created.ServeHTTP(w, r)
+	}))
+	ctx, cancel := context.WithCancel(context.Background())
+	req, _ := http.NewRequestWithContext(ctx, "POST", l.URL()+"/api/v1/namespaces/ns1/configmaps", nil)
+	go func() {
+		<-arrived
+		cancel()
+		time.Sleep(20 * time.Millisecond)
+		close(release)
+	}()
+
+	if _, err := http.DefaultClient.Do(req); err == nil {
+		t.Fatal("The request succeeded, want it canceled.")
+	}
+
+	if got := recorded.waitCalls(t, 1)[0]; got.Status != http.StatusCreated || got.ResultUID != "u-1" {
+		t.Errorf("Recorded status %d, uid %q, want 201, u-1.", got.Status, got.ResultUID)
+	}
+}
+
+func TestADropResponseWhoseClientLeftRecordsTheServersAnswer(t *testing.T) {
+	arrived, release := make(chan struct{}), make(chan struct{})
+	created := respond("application/json", createdBody)
+	l, recorded := listen(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(arrived)
+		<-release
+		created.ServeHTTP(w, r)
+	}))
+	fault(t, l, plan.Fault{DropResponse: true})
+	ctx, cancel := context.WithCancel(context.Background())
+	req, _ := http.NewRequestWithContext(ctx, "POST", l.URL()+"/api/v1/namespaces/ns1/configmaps", nil)
+	go func() {
+		<-arrived
+		cancel()
+		time.Sleep(20 * time.Millisecond)
+		close(release)
+	}()
+
+	if _, err := http.DefaultClient.Do(req); err == nil {
+		t.Fatal("The request succeeded, want it canceled.")
+	}
+
+	if got := recorded.waitCalls(t, 1)[0]; got.Status != http.StatusCreated || got.ResultUID != "u-1" || !got.Unknown() {
+		t.Errorf("Recorded %+v, want the unknown-outcome 201 with uid u-1.", got)
+	}
+}
+
 func TestADelayEndsWhenTheClientGoesAway(t *testing.T) {
 	var reached atomic.Int32
 	l, recorded := listen(t, counting(&reached))
@@ -510,6 +566,8 @@ func TestFaultValidates(t *testing.T) {
 		{Error: &plan.Error{Code: 500}, Drop: true},
 		{Error: &plan.Error{Code: 500}, Delay: duration(time.Second)},
 		{Delay: duration(time.Second), Drop: true},
+		{Drop: true, DropResponse: true},
+		{DropResponse: true, KillAfter: true},
 	} {
 		if _, err := l.Fault(f); err == nil {
 			t.Errorf("Fault(%+v) succeeded, want an error.", f)
@@ -563,5 +621,101 @@ func TestCloseWaitsForInFlightRequests(t *testing.T) {
 	}
 	if _, err := http.Get(l.URL() + "/api/v1/pods"); err == nil {
 		t.Error("The listener answered after Close.")
+	}
+}
+
+func TestWatchesGetStreamsAndRecordTheirEnd(t *testing.T) {
+	l, recorded := listen(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("{}\n"))
+	}))
+
+	do(t, l, "GET", "/api/v1/configmaps?watch=true")
+	do(t, l, "GET", "/api/v1/configmaps")
+	do(t, l, "GET", "/api/v1/namespaces/ns1/configmaps?watch=true")
+
+	recorded.waitCalls(t, 3)
+	recorded.mu.Lock()
+	defer recorded.mu.Unlock()
+	var got []string
+	for _, e := range recorded.list {
+		switch {
+		case e.Call != nil:
+			got = append(got, fmt.Sprintf("call %s stream %d", e.Call.Verb, e.Call.Stream))
+		case e.WatchEnd != nil:
+			got = append(got, fmt.Sprintf("end %s %s stream %d", e.WatchEnd.Caller, e.WatchEnd.System, e.WatchEnd.Stream))
+		}
+	}
+	want := []string{"call watch stream 1", "end controller kube stream 1", "call list stream 0", "call watch stream 2", "end controller kube stream 2"}
+	if !slices.Equal(got, want) {
+		t.Errorf("Recorded %q, want %q.", got, want)
+	}
+}
+
+func TestADropResponseCommitsAndAbortsTheConnection(t *testing.T) {
+	var reached atomic.Int32
+	l, recorded := listen(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached.Add(1)
+		respond("application/json", createdBody).ServeHTTP(w, r)
+	}))
+	fault(t, l, plan.Fault{DropResponse: true})
+
+	if resp, err := http.Post(l.URL()+"/api/v1/namespaces/ns1/configmaps", "application/json", nil); err == nil {
+		resp.Body.Close()
+		t.Fatalf("Got status %d, want a transport error.", resp.StatusCode)
+	}
+
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	calls := recorded.calls()
+	if len(calls) != 1 {
+		t.Fatalf("Recorded %d calls, want 1.", len(calls))
+	}
+	if got := calls[0]; got.Status != http.StatusCreated || got.Injected != trace.DropResponse || !got.Unknown() ||
+		got.ResultName != "cm-x7k2p" || got.ResultUID != "u-1" || got.ResultRV != "42" {
+		t.Errorf("Recorded %+v, want the upstream's 201 and result, injected by dropResponse.", got)
+	}
+	if reached.Load() != 1 {
+		t.Errorf("The upstream saw %d requests, want 1.", reached.Load())
+	}
+}
+
+func TestAKillAfterKillsAfterRecordingAndBeforeAborting(t *testing.T) {
+	l, recorded := listen(t, respond("application/json", createdBody))
+	var killed atomic.Bool
+	l.SetKill(func(context.Context) error {
+		if calls := recorded.calls(); len(calls) != 1 || calls[0].Injected != trace.KillAfter || calls[0].ResultUID != "u-1" {
+			t.Errorf("At the kill, recorded %+v, want the killAfter call with its result.", calls)
+		}
+		time.Sleep(20 * time.Millisecond)
+		killed.Store(true)
+		return nil
+	})
+	fault(t, l, plan.Fault{KillAfter: true})
+
+	if resp, err := http.Post(l.URL()+"/api/v1/namespaces/ns1/configmaps", "application/json", nil); err == nil {
+		resp.Body.Close()
+		t.Fatalf("Got status %d, want a transport error.", resp.StatusCode)
+	}
+	if !killed.Load() {
+		t.Error("The client saw the abort before the kill returned.")
+	}
+}
+
+func TestUnknownOutcomeFaultsSkipWatches(t *testing.T) {
+	for _, f := range []plan.Fault{{DropResponse: true, Nth: 1}, {KillAfter: true, Nth: 1}} {
+		t.Run(f.Effect(), func(t *testing.T) {
+			l, _ := listen(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("{}\n")) }))
+			l.SetKill(func(context.Context) error { return nil })
+			fault(t, l, f)
+
+			do(t, l, "GET", "/api/v1/configmaps?watch=true")
+			// A reused connection would make the client retry the list.
+			fresh := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+			if resp, err := fresh.Get(l.URL() + "/api/v1/configmaps"); err == nil {
+				resp.Body.Close()
+				t.Fatalf("The list after the watch got status %d, want a transport error.", resp.StatusCode)
+			}
+		})
 	}
 }
