@@ -70,6 +70,26 @@ jobs:
       - name: envtest tests
         run: make test-envtest
 
+  # v2's envtest tests, including the toy's bug gate.
+  v2-envtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Cache envtest control-plane binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            bin/envtest
+            bin/setup-envtest
+          key: envtest-${{ runner.os }}-${{ hashFiles('Makefile') }}
+      - name: v2 envtest tests
+        run: make test-v2-envtest
+
   # The bug matrix of DESIGN.md §9.1: two envtest runs per seeded bug, under it
   # and without it, and one of b0.json. The committed docs/bug-matrix.md must
   # match. It takes about four minutes.

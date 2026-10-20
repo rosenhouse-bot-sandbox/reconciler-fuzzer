@@ -1,0 +1,12 @@
+# A comment-only document is skipped.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: one
+---
+apiVersion: toy.reconciler-fuzzer/v1
+kind: Widget
+metadata:
+  name: two
+  namespace: elsewhere
