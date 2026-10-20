@@ -1,0 +1,11 @@
+# The toy's v2 config with no fixture string changeFixture may set.
+launch:
+  binary: none
+  rbac: [../../../targets/toy-widget/rbac/role.yaml]
+crds: [../../../targets/toy-widget/crds/]
+primary:
+  kind: toy.reconciler-fuzzer/v1/Widget
+  sample: ../../../targets/toy-widget/widget.yaml
+  ready: "true"
+fixtures: [../../../targets/toy-widget/widget-config.yaml]
+timeouts: {stable: 2s}

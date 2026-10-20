@@ -1,5 +1,0 @@
-{"seed": 63, "target": "external-secrets", "ops": [
-  {"i": 0, "t": "create", "obj": {"apiVersion": "external-secrets.io/v1", "kind": "ExternalSecret", "metadata": {"name": "example"}, "spec": {"refreshPolicy": "OnChange", "refreshInterval": "1h0m0s", "secretStoreRef": {"kind": "SecretStore", "name": "fake"}, "target": {"name": "example-secret"}, "data": [{"secretKey": "token", "remoteRef": {"key": "/token"}}]}}},
-  {"i": 1, "t": "updateFixture", "kind": "external-secrets.io/v1/SecretStore", "name": "fake", "patch": {"spec": {"provider": {"fake": {"data": [{"key": "/token", "value": "changed"}, {"key": "/other", "value": "other-value"}]}}}}},
-  {"i": 2, "t": "update", "patch": {"spec": {"data": [{"secretKey": "token", "remoteRef": {"key": "/other"}}]}}},
-  {"i": 3, "t": "delete"}]}

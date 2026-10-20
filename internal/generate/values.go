@@ -40,7 +40,7 @@ func valuesOf(s *schema) (*rapid.Generator[any], error) {
 	}
 	if s.IntOrString && (s.Type == "" || s.Type == "string" && s.Pattern == "") {
 		return nil, errors.New("the schema takes an integer or a string (x-kubernetes-int-or-string) and does not say which: " +
-			"give generate.overlay type: integer, or type: string with a pattern or an enum")
+			"give values.overlay type: integer, or type: string with a pattern or an enum")
 	}
 	switch s.Type {
 	case "boolean":

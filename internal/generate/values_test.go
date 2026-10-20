@@ -6,7 +6,11 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"pgregory.net/rapid"
+
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 )
 
 func parseSchema(t *testing.T, declared string) *schema {
@@ -166,27 +170,24 @@ func TestSchemasThatSayTooLittleAreConfigurationErrors(t *testing.T) {
 }
 
 func TestAMapFieldIsDrawn(t *testing.T) {
-	loaded := loadTarget(t, rulesTarget)
-	loaded.Generate.Mutate = []string{"spec.config"}
-	g := newGenerator(t, loaded, Options{})
+	cfg := loadConfig(t, rulesConfig)
+	cfg.Values.Mutate = []string{"spec.config"}
 	word := regexp.MustCompile(`^[a-z0-9]{1,12}$`)
 	keyed := 0
-	rapid.Check(t, func(rt *rapid.T) {
-		for _, drawn := range generatedAt(g.sequence(rt), loaded.Sample, "spec", "config") {
-			config, isMap := drawn.(map[string]any)
-			if !isMap || len(config) > 3 {
-				rt.Fatalf("spec.config is %#v, want a map of at most the CRD's 3 keys.", drawn)
-			}
-			for key, value := range config {
-				if text, isString := value.(string); !word.MatchString(key) || !isString || len(text) > 8 {
-					rt.Fatalf("spec.config holds %q: %#v, want a word keying a string of at most 8 runes.", key, value)
-				}
-			}
-			if len(config) > 0 {
-				keyed++
+	for _, drawn := range generatedAt(t, cfg, "spec", "config") {
+		config, isMap := drawn.(map[string]any)
+		if !isMap || len(config) > 3 {
+			t.Fatalf("spec.config is %#v, want a map of at most the CRD's 3 keys.", drawn)
+		}
+		for key, value := range config {
+			if text, isString := value.(string); !word.MatchString(key) || !isString || len(text) > 8 {
+				t.Fatalf("spec.config holds %q: %#v, want a word keying a string of at most 8 runes.", key, value)
 			}
 		}
-	})
+		if len(config) > 0 {
+			keyed++
+		}
+	}
 	if keyed == 0 {
 		t.Error("No draw put a key in spec.config.")
 	}
@@ -203,7 +204,7 @@ func TestAnIntOrStringNamesTheOverlayThatSaysWhichItIs(t *testing.T) {
 			if err == nil {
 				t.Fatal("valuesOf guessed which form an int-or-string takes.")
 			}
-			for _, want := range []string{"x-kubernetes-int-or-string", "generate.overlay", "type: integer", "type: string", "pattern", "enum"} {
+			for _, want := range []string{"x-kubernetes-int-or-string", "values.overlay", "type: integer", "type: string", "pattern", "enum"} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("valuesOf reported %q, which does not mention %q.", err, want)
 				}
@@ -219,8 +220,8 @@ func TestAnIntOrStringFollowsItsOverlay(t *testing.T) {
 		allowed func(any) bool
 	}{
 		{map[string]any{"type": "integer", "minimum": 1, "maximum": 3}, func(value any) bool {
-			whole, isInteger := value.(int64)
-			return isInteger && whole >= 1 && whole <= 3
+			whole, isNumber := value.(float64)
+			return isNumber && whole >= 1 && whole <= 3
 		}},
 		{map[string]any{"type": "string", "pattern": percent.String()}, func(value any) bool {
 			text, isString := value.(string)
@@ -228,22 +229,46 @@ func TestAnIntOrStringFollowsItsOverlay(t *testing.T) {
 		}},
 	} {
 		t.Run(testCase.overlay["type"].(string), func(t *testing.T) {
-			loaded := loadTarget(t, rulesTarget)
-			loaded.Generate.Mutate = []string{"spec.surge"}
-			loaded.Generate.Overlay = map[string]map[string]any{"spec.surge": testCase.overlay}
-			g := newGenerator(t, loaded, Options{})
-			drawn := 0
-			rapid.Check(t, func(rt *rapid.T) {
-				for _, surge := range generatedAt(g.sequence(rt), loaded.Sample, "spec", "surge") {
-					if !testCase.allowed(surge) {
-						rt.Fatalf("spec.surge is %#v, which the overlay %v does not allow.", surge, testCase.overlay)
-					}
-					drawn++
+			cfg := loadConfig(t, rulesConfig)
+			cfg.Values.Mutate = []string{"spec.surge"}
+			cfg.Values.Overlay = map[string]map[string]any{"spec.surge": testCase.overlay}
+			drawn := generatedAt(t, cfg, "spec", "surge")
+			for _, surge := range drawn {
+				if !testCase.allowed(surge) {
+					t.Fatalf("spec.surge is %#v, which the overlay %v does not allow.", surge, testCase.overlay)
 				}
-			})
-			if drawn == 0 {
+			}
+			if len(drawn) == 0 {
 				t.Error("No draw changed spec.surge.")
 			}
 		})
 	}
+}
+
+// generatedAt are the values that the creates and updates of 100 plans
+// write at path, where they differ from the sample's.
+func generatedAt(t *testing.T, cfg *config.Config, path ...string) []any {
+	t.Helper()
+	g := newGenerator(t, cfg)
+	kept, _, _ := unstructured.NestedFieldNoCopy(g.sample.Object, path...)
+	var values []any
+	for seed := uint64(1); seed <= 100; seed++ {
+		p, err := g.Plan(seed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, a := range actions([]*plan.Plan{p}) {
+			raw := a.Object
+			if a.Do == plan.Update {
+				raw = a.Patch
+			} else if a.Do != plan.Create {
+				continue
+			}
+			value, found, err := unstructured.NestedFieldNoCopy(decode(t, raw), path...)
+			if found && err == nil && value != nil && !equalJSON(value, kept) {
+				values = append(values, value)
+			}
+		}
+	}
+	return values
 }

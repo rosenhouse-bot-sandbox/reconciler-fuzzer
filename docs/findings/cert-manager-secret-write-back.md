@@ -208,6 +208,8 @@ replaced the first row's Certificate. Each cell counts the runs that kept the ke
 
 ## How reconciler-fuzzer found it
 
+This section is old-tree history: its hunt and `sequence.json` format predate the v2 cutover.
+
 reconciler-fuzzer ran cert-manager against envtest, which has no garbage collector. reconciler-fuzzer's own
 collector deletes dependents with UID and resourceVersion preconditions, within 1 s of the
 owner's deletion. Hunt seed 1043 recreates a `Never` Certificate with ECDSA and other

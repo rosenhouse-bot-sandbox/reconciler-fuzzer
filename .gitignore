@@ -1,6 +1,6 @@
 # Build output and tool binaries (see Makefile LOCALBIN).
 bin/
-# Run output (DESIGN.md §11).
+# Hunt output of make hunt-<name>.
 reconciler-fuzzer-out/
 # Go test artifacts.
 *.test
@@ -8,10 +8,7 @@ reconciler-fuzzer-out/
 # Worktrees and locks that subagents create for isolated work.
 .claude/worktrees/
 .claude/envtest.lock
-# Build output of the spike modules.
-docs/spikes/cert-manager-envtest/cert-manager-envtest
-docs/spikes/external-secrets-envtest/external-secrets-envtest
-
+# Build output of the spike module.
+docs/spikes/kwok-stage-envtest/kwok-stage-envtest
 # rapid writes a reproduction file beside a failing property test.
 **/testdata/rapid/
-docs/spikes/kwok-stage-envtest/kwok-stage-envtest

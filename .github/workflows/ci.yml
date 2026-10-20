@@ -1,16 +1,14 @@
-# CI for reconciler-fuzzer: lint, unit tests, and envtest tests on every PR and
-# on push to main. See DESIGN.md §10 (M0 acceptance) and §11 (test tiers, lint).
+# Lint, unit, envtest, generated and example tiers on every pull request and
+# push to main. DESIGN.md §16 names the targets.
 name: CI
 
 on:
   pull_request:
   push:
     branches: [main]
-  # Also runnable by hand, to re-run a tier without pushing.
   workflow_dispatch:
 
-# One run per ref at a time. A new push to a PR cancels its in-flight CI run;
-# pushes to main never cancel a run in progress.
+# A new push to a pull request cancels its run. Pushes to main never do.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -19,7 +17,6 @@ permissions:
   contents: read
 
 jobs:
-  # gofmt and go vet (§11 "Lint").
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -28,14 +25,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: gofmt check
-        run: make fmt
-      - name: go vet
-        run: make vet
-      - name: Generated files are current
-        run: make verify-generate
+      - run: make fmt
+      - run: make vet
+      - run: make verify-generate
 
-  # Unit tier: no API server (§11 "Test tiers").
+  # The unit tests include the size test and the bug-matrix check.
   unit:
     runs-on: ubuntu-latest
     steps:
@@ -44,34 +38,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Unit tests
-        run: make test
+      - run: make test
 
-  # §11 budgets the envtest tier at ten minutes, and the timeout adds the cold
-  # download of the envtest binaries that a cache miss pays for.
   envtest:
-    runs-on: ubuntu-latest
-    timeout-minutes: 12
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: Cache envtest control-plane binaries
-        uses: actions/cache@v4
-        with:
-          path: |
-            bin/envtest
-            bin/setup-envtest
-          # Keyed on the Makefile, which pins ENVTEST_K8S_VERSION: a version
-          # bump changes the Makefile's hash and so invalidates the cache.
-          key: envtest-${{ runner.os }}-${{ hashFiles('Makefile') }}
-      - name: envtest tests
-        run: make test-envtest
-
-  # v2's envtest tests, including the toy's bug gate.
-  v2-envtest:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -80,6 +49,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      # The Makefile pins ENVTEST_K8S_VERSION, so its hash keys the cache.
       - name: Cache envtest control-plane binaries
         uses: actions/cache@v4
         with:
@@ -87,11 +57,9 @@ jobs:
             bin/envtest
             bin/setup-envtest
           key: envtest-${{ runner.os }}-${{ hashFiles('Makefile') }}
-      - name: v2 envtest tests
-        run: make test-v2-envtest
+      - run: make test-envtest
 
-  # The toy's generated plans: 20 seeds with faults under B0, and one shrink.
-  v2-generated:
+  generated:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -107,129 +75,9 @@ jobs:
             bin/envtest
             bin/setup-envtest
           key: envtest-${{ runner.os }}-${{ hashFiles('Makefile') }}
-      - name: v2 generated plans
-        run: make test-v2-generated
+      - run: make test-generated
 
-  # The bug matrix of DESIGN.md §9.1: two envtest runs per seeded bug, under it
-  # and without it, and one of b0.json. The committed docs/bug-matrix.md must
-  # match. It takes about four minutes.
-  bug-matrix:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: Cache envtest control-plane binaries
-        uses: actions/cache@v4
-        with:
-          path: |
-            bin/envtest
-            bin/setup-envtest
-          key: envtest-${{ runner.os }}-${{ hashFiles('Makefile') }}
-      - name: The bug matrix is current
-        env:
-          TMPDIR: ${{ runner.temp }}/bug-matrix
-        run: |
-          mkdir -p "$TMPDIR"
-          make verify-bug-matrix
-      # The matrix leaves a directory there only for a run that erred.
-      - name: Keep the files of a run that erred
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: bug-matrix-run
-          path: ${{ runner.temp }}/bug-matrix/reconciler-fuzzer-matrix-*/
-          if-no-files-found: ignore
-
-  # The cert-manager adoption example of DESIGN.md §10 (M5): generated sequences
-  # on the seeds the Makefile fixes. §11 budgets the tier at twelve minutes, and
-  # the timeout adds the cold clone and build of the controller, about 90
-  # seconds, that a cache miss pays for.
   example:
-    runs-on: ubuntu-latest
-    timeout-minutes: 14
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: Cache envtest control-plane binaries
-        uses: actions/cache@v4
-        with:
-          path: |
-            bin/envtest
-            bin/setup-envtest
-          key: envtest-${{ runner.os }}-${{ hashFiles('Makefile') }}
-      - name: Read the cert-manager pin
-        id: pin
-        run: echo "version=$(make --no-print-directory cert-manager-version)" >>"$GITHUB_OUTPUT"
-      # The clone is read only while building, so only the build's output is
-      # worth keeping. The stamp is what tells make the binary is current.
-      - name: Cache the cert-manager controller
-        uses: actions/cache@v4
-        with:
-          path: |
-            bin/cert-manager-controller
-            bin/cert-manager-${{ steps.pin.outputs.version }}.built
-          key: cert-manager-${{ runner.os }}-${{ steps.pin.outputs.version }}
-      - name: The cert-manager example and its negative control
-        run: make test-example
-      # A failing run's evidence is the product of the failure (§5.7, §11).
-      - name: Keep the failing run's evidence
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: reconciler-fuzzer-out-cert-manager
-          path: reconciler-fuzzer-out/
-          if-no-files-found: ignore
-
-  # The external-secrets adoption example of DESIGN.md §10 (M7), on the same
-  # fixed seeds. The tier measures about ten minutes, and the timeout adds the
-  # cold clone and build of the controller, about 150 seconds, that a cache miss
-  # pays for.
-  example-external-secrets:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: Cache envtest control-plane binaries
-        uses: actions/cache@v4
-        with:
-          path: |
-            bin/envtest
-            bin/setup-envtest
-          key: envtest-${{ runner.os }}-${{ hashFiles('Makefile') }}
-      - name: Read the external-secrets pin
-        id: pin
-        run: echo "version=$(make --no-print-directory external-secrets-version)" >>"$GITHUB_OUTPUT"
-      - name: Cache the external-secrets controller
-        uses: actions/cache@v4
-        with:
-          path: |
-            bin/external-secrets
-            bin/external-secrets-${{ steps.pin.outputs.version }}.built
-          key: external-secrets-${{ runner.os }}-${{ steps.pin.outputs.version }}
-      - name: The external-secrets example and its negative control
-        run: make test-example-external-secrets
-      - name: Keep the failing run's evidence
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: reconciler-fuzzer-out-external-secrets
-          path: reconciler-fuzzer-out/
-          if-no-files-found: ignore
-
-  # v2's examples (v2/DESIGN.md §16): committed plans, the seeds file and a
-  # negative control each.
-  v2-example:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -252,6 +100,7 @@ jobs:
       - name: Read the ${{ matrix.example }} pin
         id: pin
         run: echo "version=$(make --no-print-directory ${{ matrix.example }}-version)" >>"$GITHUB_OUTPUT"
+      # The stamp tells make the cached binary is current.
       - name: Cache the ${{ matrix.example }} controller
         uses: actions/cache@v4
         with:
@@ -259,12 +108,11 @@ jobs:
             bin/${{ matrix.example == 'cert-manager' && 'cert-manager-controller' || 'external-secrets' }}
             bin/${{ matrix.example }}-${{ steps.pin.outputs.version }}.built
           key: ${{ matrix.example }}-${{ runner.os }}-${{ steps.pin.outputs.version }}
-      - name: The v2 ${{ matrix.example }} example and its negative control
-        run: make test-v2-example-${{ matrix.example }}
+      - run: make test-example-${{ matrix.example }}
       - name: Keep the failing run's evidence
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: reconciler-fuzzer-out-v2-${{ matrix.example }}
+          name: reconciler-fuzzer-out-${{ matrix.example }}
           path: reconciler-fuzzer-out/
           if-no-files-found: ignore

@@ -493,7 +493,7 @@ func TestB16UsesStatusUpdateInsteadOfPatch(t *testing.T) {
 	}
 }
 
-// refuseTheFirstChildCreate is the fault the sequence b11-fault.json injects,
+// refuseTheFirstChildCreate is the fault plans/b11-fault.json injects,
 // as the fake API server: one refused ConfigMap create and no more.
 func refuseTheFirstChildCreate() interceptor.Funcs {
 	refused := false

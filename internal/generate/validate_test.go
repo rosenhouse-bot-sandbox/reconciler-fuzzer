@@ -7,7 +7,6 @@ import (
 	"math"
 	"regexp"
 	"slices"
-	"testing"
 	"unicode/utf8"
 )
 
@@ -176,40 +175,4 @@ func equalJSON(a, b any) bool {
 	encodedA, errA := json.Marshal(a)
 	encodedB, errB := json.Marshal(b)
 	return errA == nil && errB == nil && string(encodedA) == string(encodedB)
-}
-
-func TestValidateReadsTheToysSchema(t *testing.T) {
-	widget := primarySchemaOf(t, toyTarget)
-	for _, testCase := range []struct {
-		name   string
-		count  any
-		accept bool
-	}{
-		{"in range", int64(3), true},
-		{"the maximum", int64(10), true},
-		{"over the maximum", int64(11), false},
-		{"under the minimum", int64(-1), false},
-		{"not an integer", "3", false},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			cr := map[string]any{"spec": map[string]any{"count": testCase.count}}
-			err := validate(widget, cr, "")
-			if accepted := err == nil; accepted != testCase.accept {
-				t.Errorf("validate(count=%#v) returned %v, want accepted=%t.", testCase.count, err, testCase.accept)
-			}
-		})
-	}
-}
-
-func TestValidateReadsTheOverlaidPattern(t *testing.T) {
-	dnsNames := primarySchemaOf(t, certManagerTarget).Properties["spec"].Properties["dnsNames"]
-	if err := validate(dnsNames, []any{"www.example.test"}, "spec.dnsNames"); err != nil {
-		t.Errorf("validate rejected a name the overlay's pattern allows: %v.", err)
-	}
-	if err := validate(dnsNames, []any{"www.example.invalid"}, "spec.dnsNames"); err == nil {
-		t.Error("validate accepted a name the overlay's pattern forbids.")
-	}
-	if err := validate(dnsNames, []any{}, "spec.dnsNames"); err == nil {
-		t.Error("validate accepted an empty list, which the overlay's minItems forbids.")
-	}
 }

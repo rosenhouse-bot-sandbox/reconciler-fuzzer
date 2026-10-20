@@ -1,36 +1,12 @@
 # reconciler-fuzzer
 
-reconciler-fuzzer finds bugs in Kubernetes controllers. It runs your controller on your machine, against
-a real kube-apiserver and etcd from envtest, and records every request your controller makes.
-Each run applies a random sequence of ops, drawn from a seed. The ops:
+reconciler-fuzzer finds bugs in Kubernetes controllers. It runs your controller on your machine
+against envtest's kube-apiserver and etcd. It follows a plan of steps: CR changes, faults on the
+controller's API requests, restarts, and damage to objects the controller created. It records
+every request and object version in a trace. Then it judges the trace with five checks: Converge,
+Crash, Clean, Restore and Unique ([DESIGN.md §12](DESIGN.md#12-checks)).
 
-- create, update and delete your custom resources (CRs)
-- restart your controller
-- delete objects your controller manages
-- inject API errors and delays
-
-reconciler-fuzzer checks that your controller converges, goes quiet, cleans up after a deleted CR, and
-recreates the objects that reconciler-fuzzer deletes. It also checks properties you declare. When a check
-fails, reconciler-fuzzer minimizes a drawn sequence to the ops the failure needs, and writes a report.
-
-You write no test code. One `target.yaml` describes your controller.
-
-## Limitations
-
-- Your controller runs on your machine, not in a Pod, even against a cluster. It cannot reach a
-  Pod or a Service.
-- No admission or conversion webhook of yours runs. Keep your controller and your CRs on the
-  version your CRD stores, and keep drawn CRs
-  [within what your webhooks admit](docs/targets.md#generated-values).
-- reconciler-fuzzer generates sequences only for a custom resource whose CRD your target lists.
-  If your controller reconciles a built-in kind, such as a Service,
-  [write the sequences](docs/targets.md#sequences-you-write) yourself.
-- envtest runs no Pod, so a Deployment, a Job or a PersistentVolumeClaim never becomes ready.
-  If your controller waits on one, run reconciler-fuzzer
-  [against a cluster](docs/targets.md#against-a-cluster), such as kind.
-- reconciler-fuzzer tests namespaced kinds only, in one namespace per run. It misses a child your
-  controller leaks into another namespace, and it cannot supply an object your controller
-  reads from another namespace ([#38](https://github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/issues/38)).
+You write no test code. One YAML config describes your controller.
 
 ## Install
 
@@ -42,221 +18,167 @@ index=https://raw.githubusercontent.com/kubernetes-sigs/controller-tools/v0.22.0
 export KUBEBUILDER_ASSETS="$(setup-envtest use 1.37.0 --index $index -p path)"
 ```
 
-`setup-envtest` downloads etcd and kube-apiserver. Run the last three lines again in each new
-shell. reconciler-fuzzer has no release yet, so `@latest` installs the tip of main.
+`setup-envtest` downloads etcd and kube-apiserver. Set `KUBEBUILDER_ASSETS` in each new shell.
+Building takes Go 1.26.0 or later. Set `GOTOOLCHAIN=auto` if your Go is older.
 
-Building reconciler-fuzzer takes Go 1.26.0 or later. Releases from Go 1.21 on download it for you. Many CI
-images set `GOTOOLCHAIN=local`, which stops the download, and `go install` fails with
-`requires go >= 1.26.0`. Install a newer Go, or run the commands with `GOTOOLCHAIN=auto`.
+From a checkout, the Makefile installs the same control plane under `bin/`:
 
-`reconciler-fuzzer --help` lists the commands, and `reconciler-fuzzer run --help` lists the flags.
+```sh
+make setup
+export KUBEBUILDER_ASSETS=$(make -s assets-path)
+```
 
 ## Quick start
 
-This repository holds a toy controller with bugs you can switch on. Clone it with
-`git clone https://github.com/rosenhouse-bot-sandbox/reconciler-fuzzer`, and run this in the clone. The build takes a
-minute or two the first time, and the runs about half a minute:
+The toy controller in [targets/toy-widget](targets/toy-widget) turns each Widget into ConfigMaps.
+Its `--bug=N` flag switches on bug N. From a clone:
 
 ```sh
+go install ./cmd/reconciler-fuzzer
 go build -o bin/toy-widget ./targets/toy-widget
-reconciler-fuzzer run --target targets/toy-widget/target.yaml --seed 1 --runs 3
+reconciler-fuzzer run --config targets/toy-widget/config.yaml \
+  --plan targets/toy-widget/plans/b3.json --out reconciler-fuzzer-out/b3-nobug
 ```
 
+`plans/b3.json` is the plan that catches bug 3. It creates a Widget and then deletes it. With no
+bug, the run prints this and exits 0:
+
 ```
-run 1: seed 1, generated
-run 2: seed 2, generated
-run 2: P1 is not evaluated at the checkpoint after op 7 (settle): a fault was active there, or the target was still owed time to recover from one, so it may not yet have repaired what P1 reads
-run 3: seed 3, generated
-run 4: baseline
-every run passed.
+No findings.
 ```
 
-Each run starts the toy in a new namespace and applies a sequence of ops, drawn from the run's
-seed. Run 2 drew a fault, so P1 skips a checkpoint where the toy may still be recovering. Run 4
-is [the baseline](#the-baseline). The toy is correct, so every run passes.
-
-Now switch on bug B3, which leaves a ConfigMap without an ownerReference. `--launch-arg` passes
-an extra flag to the controller. `replay` runs a sequence file rather than a drawn sequence.
-This one creates a Widget and deletes it:
+Bug 3 leaves the first ConfigMap without an owner reference, so it outlives its Widget:
 
 ```sh
-reconciler-fuzzer replay --target targets/toy-widget/target.yaml --launch-arg --bug=3 targets/toy-widget/sequences/b3.json
+reconciler-fuzzer run --config targets/toy-widget/config.yaml \
+  --plan targets/toy-widget/plans/b3.json --launch-arg --bug=3 --out reconciler-fuzzer-out/b3
 ```
 
+It exits 1 and prints this, with a new namespace and time on each run:
+
+````
+# Findings
+
+## Clean: left resources behind
+
+Step 1, at 14.814449459s.
+
 ```
-run 1: seed 20260920, sequence targets/toy-widget/sequences/b3.json
-run 1: G3 the v1/ConfigMap widget-0 was still there 10s (timeouts.delete) after widget, the last CR it may belong to, was deleted, orphaned: it carries no ownerReference to the CR
-  at 2026-09-30T19:50:43.395112151Z; 1 version, the first v1/ConfigMap widget-0
-  the evidence is in reconciler-fuzzer-out/20260930T195026Z-20260920/run-1
+configmaps rf-cd767d99/widget-0 (rule 4, slot a)
 ```
+````
 
-reconciler-fuzzer exits 1, and `report.md` in the evidence directory says what failed. All looks well
-until the Widget is deleted and its ConfigMap stays. envtest has no garbage collector, so an
-envtest suite misses this bug unless it checks each ownerReference. reconciler-fuzzer emulates the garbage
-collector and checks every object your controller manages in every run.
-
-## Your own controller
-
-[docs/examples.md](docs/examples.md) runs reconciler-fuzzer on two real controllers, cert-manager and
-external-secrets.
-
-### With Claude Code
-
-For a kubebuilder project, the [adopt-reconciler-fuzzer](skills/adopt-reconciler-fuzzer/SKILL.md)
-skill writes `target.yaml` and runs reconciler-fuzzer until it tests your controller. After the
-install, copy the skill into your repository:
+`--seed n` draws a plan from the config instead. `hunt` runs many seeds, replays each new
+finding, and shrinks its plan:
 
 ```sh
-mkdir -p .claude/skills
-cp -r "$(go env GOMODCACHE)/github.com/rosenhouse-bot-sandbox/reconciler-fuzzer@$(reconciler-fuzzer version | cut -d' ' -f2)/skills/adopt-reconciler-fuzzer" .claude/skills/
-chmod -R u+w .claude/skills/adopt-reconciler-fuzzer
+reconciler-fuzzer run --config targets/toy-widget/config.yaml --seed 6 --out reconciler-fuzzer-out/seed-6
+reconciler-fuzzer hunt --config targets/toy-widget/config.yaml --seeds 3 \
+  --launch-arg --bug=3 --out reconciler-fuzzer-out/hunt
 ```
 
-Then ask Claude Code to set up reconciler-fuzzer, or run `/adopt-reconciler-fuzzer`.
+A toy run takes half a minute or more, and `hunt` replays and shrinks each finding, so this
+hunt takes several minutes. It writes `summary.md`, which lists each finding with its seed,
+reproduction rate and shrunk plan.
 
-### Write target.yaml
+## Writing a config
 
-A target is one YAML file. This is the toy's:
+[DESIGN.md §13](DESIGN.md#13-config) lists every key. A minimal `fuzz/config.yaml` for a
+kubebuilder project:
 
-<!-- embed: targets/toy-widget/target.yaml -->
 ```yaml
-# reconciler-fuzzer reads crds, sample, fixtures and rbac relative to this file, and
-# launch.binary relative to the directory it runs in.
-name: toy-widget
-version: dev                       # Reports print it.
-crds:                              # reconciler-fuzzer installs the CRDs in these files and directories.
-  - crds/
-# reconciler-fuzzer creates, changes and deletes CRs of this kind.
-primary: toy.reconciler-fuzzer/v1/Widget
-sample: widget.yaml                # Each drawn sequence creates a variant of this CR first.
-manages:                           # The controller creates objects of these kinds.
-  - v1/ConfigMap
-rbac:
-  - rbac/role.yaml
 launch:
-  binary: bin/toy-widget
-  args:
-    - --kubeconfig=$KUBECONFIG     # reconciler-fuzzer writes a kubeconfig for its proxy.
-    - --label-from=widget-config
-    - --bug=0                      # A later --bug wins, so --launch-arg --bug=3 switches on B3.
+  binary: ../bin/manager                   # your controller, built
+  args: [--health-probe-bind-address=0, --metrics-bind-address=0]
   env:
-    WATCH_NAMESPACE: $NAMESPACE    # reconciler-fuzzer replaces $NAMESPACE with each run's namespace.
-fixtures:                          # The controller reads these objects and owns none.
-  - config.yaml
-ready: >-                          # This CEL holds once the controller has converged.
-  has(status.observedGeneration) && status.observedGeneration == metadata.generation
-  && has(status.ready) && status.ready == spec.count
-properties:                        # These checks are your own.
-  - id: P1
-    description: status.ready never exceeds the number of ConfigMaps present.
-    # A property also runs where no CR exists, so the CEL guards status.ready.
-    cel: '!has(status.ready) || status.ready <= managed.filter(o, o.kind == "ConfigMap").size()'
-timeouts:                          # The toy converges in milliseconds.
-  settle: 5s
-  stable: 2s
-  delete: 10s
-thresholds:
-  # G6 fails a controller that repeats a failing request more than errloop
-  # times. controller-runtime's backoff repeats one 10 times in a 5s settle.
-  errloop: 5
+    KUBECONFIG: ${systems.kube.kubeconfig}   # the harness writes this file
+    WATCH_NAMESPACE: ${systems.kube.namespace}
+  rbac: [../config/rbac/role.yaml]         # the controller runs with only these rules
+crds: [../config/crd/bases/]
+primary:
+  kind: example.com/v1/Widget              # group/version/kind of the CR you fuzz
+  sample: widget.yaml                      # a valid CR; generated CRs start from it
+  ready: >-
+    has(self.status) && has(self.status.observedGeneration)
+    && self.status.observedGeneration == self.metadata.generation
+fixtures: [settings.yaml]                  # objects created before step 0
+timeouts: {settle: 30s, stable: 3s}
 ```
 
-Beyond what its comments say:
+- Paths resolve against the config file's directory.
+- `args` turns off the scaffold's fixed ports, so runs cannot clash on them. If it has
+  webhooks, set `ENABLE_WEBHOOKS: "false"` in `env`.
+- `ready` is CEL over the CR. It must be true only once the controller has acted on the
+  current spec, so compare an `observedGeneration` with `metadata.generation`.
+- `stable` is how long the controller must stay quiet before a step counts as settled.
+- `launch.rbac` also tells generation which requests a fault can pick.
+- `values` steers generated CRs: `overlay` narrows the CRD schema, `distinct` fields differ
+  across a plan's CRs, `mutate` names the fields updates change, and `fixtures` names the
+  fixture strings `changeFixture` sets.
 
-- `manages` names each kind as `group/version/Kind`, or `v1/Kind` for the core group. reconciler-fuzzer
-  checks only objects of these kinds.
-- reconciler-fuzzer replaces `$KUBECONFIG` and `$NAMESPACE` in `launch.args` and `launch.env`. Turn off
-  leader election, and bind each listener to a free port, such as `127.0.0.1:0`.
-- `ready` is CEL over the CR's `metadata`, `spec` and `status`. The default compares
-  `status.observedGeneration` with `metadata.generation`.
-- A property's `managed` holds the objects that the CR owns, and those that no CR owns.
-
-For a CR whose `Ready` condition carries `observedGeneration`, use this `ready`:
-
-```yaml
-ready: >-
-  has(status.conditions) && status.conditions.exists(c, c.type == "Ready"
-  && c.status == "True" && has(c.observedGeneration)
-  && c.observedGeneration == metadata.generation)
-```
-
-[docs/reference.md](docs/reference.md) lists every key with its default.
-[docs/targets.md](docs/targets.md) says how to choose the values, such as `timeouts` for a slow
-controller.
-
-### Run it
-
-reconciler-fuzzer resolves `launch.binary` from the directory it runs in, so run it from your repository
-root:
-
-```sh
-reconciler-fuzzer run --target target.yaml --runs 5
-```
-
-reconciler-fuzzer prints each run's seed. `--seed` draws the same sequences again, as long as reconciler-fuzzer, your
-CRDs and `target.yaml` are unchanged.
-
-### The baseline
-
-Drawn sequences may miss a managed kind, or never update a CR that has settled. So after the
-drawn runs, reconciler-fuzzer runs the baseline. It creates your sample, and deletes the first
-object of each managed kind, which your controller must recreate. It then changes each field
-that generation may change, one at a time, and your controller must settle after each change.
-`--no-baseline` leaves the baseline out.
-
-To test what generation does not draw, write a sequence.
-`reconciler-fuzzer run --target target.yaml sequences/*.json` runs your sequences.
-[docs/targets.md](docs/targets.md#sequences-you-write) says how to write them.
+[examples/cert-manager](examples/cert-manager/config.yaml) and
+[examples/external-secrets](examples/external-secrets/config.yaml) are real configs.
 
 ## Reading a failure
 
-reconciler-fuzzer exits 0 when every run passes, 1 when a check fails, and 2 when it could not test your
-controller. On exit 2, the message says why, and
-[docs/failures.md](docs/failures.md#when-reconciler-fuzzer-exits-2) lists the usual causes.
-
-When a run fails, reconciler-fuzzer prints the check that failed:
-[G1](docs/checks.md#g1-bounded-reconciliation) to [G7](docs/checks.md#g7-self-healing), or a
-property's ID, such as P1. [docs/checks.md](docs/checks.md) says what each check requires, what
-usually fails it, and what its message means. reconciler-fuzzer then minimizes a drawn
-sequence, which can take minutes, and prints the run's evidence directory. Start with
-`report.md` there. It says what failed, quotes what the check read, and gives the command that
-replays it. [docs/failures.md](docs/failures.md) says what each file holds.
-
-## Running in CI
-
-In CI, `go install` reconciler-fuzzer at a commit of main, not `@latest`, and keep it
-[out of your go.mod](docs/ci.md#keep-reconciler-fuzzer-out-of-your-gomod).
-
-Run fixed seeds on a pull request, and fresh seeds nightly:
+[docs/failures.md](docs/failures.md) explains each finding and what to change when a run exits 2.
+The `--out` directory holds `report.md`, the `plan.json` that ran, `trace.jsonl` and
+`controller.log`. `judge` rejudges a stored trace, and `shrink` shrinks a failing plan to
+`shrunk.json`:
 
 ```sh
-# On a pull request:
-reconciler-fuzzer run --target target.yaml --seed 23 --runs 5 --deadline 10m --out reconciler-fuzzer-out
-# Nightly:
-reconciler-fuzzer run --target target.yaml --runs 20 --deadline 30m --out reconciler-fuzzer-out
+reconciler-fuzzer judge --trace reconciler-fuzzer-out/b3
+reconciler-fuzzer shrink --config targets/toy-widget/config.yaml \
+  --plan reconciler-fuzzer-out/b3/plan.json --launch-arg --bug=3 --out reconciler-fuzzer-out/b3-shrunk
 ```
 
-[Size `--deadline`](docs/ci.md#deadlines) to your controller. Upload `reconciler-fuzzer-out/`,
-so that you can replay a failure. Anyone who can read the repository can then read it, and
-reconciler-fuzzer [redacts only](docs/failures.md#the-evidence) the values of a Secret's
-`data` and annotations.
+## CI
 
-[docs/ci.md](docs/ci.md) holds a GitHub Actions workflow to copy. It also says how to pin
-reconciler-fuzzer in a tools module, and how to run reconciler-fuzzer from `go test`.
+Every command exits 0 with no findings, 1 with findings, and 2 on a usage or harness error.
+`hunt` exits 1 on any find, even after a failed seed.
+A minimal GitHub Actions job:
 
-## Development and internals
+```yaml
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with: {go-version: stable}
+      - run: |
+          go install github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/cmd/reconciler-fuzzer@latest
+          go install sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.25.2
+          index=https://raw.githubusercontent.com/kubernetes-sigs/controller-tools/v0.22.0/envtest-releases.yaml
+          echo "KUBEBUILDER_ASSETS=$(setup-envtest use 1.37.0 --index $index -p path)" >> "$GITHUB_ENV"
+      - run: go build -o bin/manager ./cmd/manager
+      - run: |
+          for plan in fuzz/plans/*.json; do
+            reconciler-fuzzer run --config fuzz/config.yaml --plan "$plan" --out "out/$(basename $plan)" || exit
+          done
+          for seed in 1 2 3; do
+            reconciler-fuzzer run --config fuzz/config.yaml --seed "$seed" --out "out/seed-$seed" || exit
+          done
+```
 
-- `make setup` installs the envtest control plane, and `make help` lists every target.
-- `make test`, `make test-envtest`, `make test-example` and `make test-example-external-secrets`
-  are the tiers CI runs on every PR.
-- `make hunt-cert-manager` and `make hunt-external-secrets` hunt for bugs in the pinned
-  controllers for `HUNT_MINUTES` (default 120), over up to `HUNT_RUNS` (default 1000) seeds
-  from `HUNT_SEED` (default 1000) on.
-- [DESIGN.md](DESIGN.md) governs the code and docs. Its
-  [§6](DESIGN.md#6-generic-invariants) states each check exactly.
-- [docs/bug-matrix.md](docs/bug-matrix.md) shows which check catches each bug in the toy
-  controller.
+Commit each plan that once found a bug, so the job keeps checking it.
 
-## License
+This repository's own tiers are make targets ([DESIGN.md §16](DESIGN.md#16-gates-examples-and-testing)).
+`make help` lists them. [docs/bug-matrix.md](docs/bug-matrix.md) lists the toy's bugs and the
+check that catches each.
 
-Apache-2.0. See [LICENSE](LICENSE).
+## Terms
+
+[DESIGN.md §1](DESIGN.md#1-terms) defines the design's terms, such as plan, step and slot.
+The README also uses these:
+
+| Term | Meaning |
+| --- | --- |
+| Target | The controller under test, with its config. |
+| CR | A custom resource. The config's `primary.kind` names the CRs a plan changes. |
+| Fixture | An object the harness creates before step 0, such as a ConfigMap the controller reads. |
+| envtest | A kube-apiserver and etcd with no other controllers, from controller-runtime. |
+| Seed | A number that fixes a generated plan, not its timing. |
+| Sample | The CR in `primary.sample`. Generated CRs start from it. |
+| `ready` | CEL over a CR that is true once the controller has acted on its spec. |
+| `stable` | How long the controller must stay quiet for a step to settle. |

@@ -1,5 +1,5 @@
 # The fixture: cert-manager signs from an Issuer, and no CRD schema can invent
-# a valid issuerRef (DESIGN.md §8.1).
+# a valid issuerRef.
 apiVersion: cert-manager.io/v1
 kind: Issuer
 metadata:

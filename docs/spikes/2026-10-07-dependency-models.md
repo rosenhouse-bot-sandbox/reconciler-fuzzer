@@ -1,8 +1,10 @@
 # Spike: a model of a dependency's controller under envtest
 
+This spike predates the v2 cutover. Its G-numbers name the old tree's checks, and its paths name the old tree's files.
+
 Date: 2026-10-07. An adopter's controller creates child CRs of another project's kind and
 waits for that project's controller to mark them Ready. Under envtest nothing moves them,
-so [G4](../checks.md#g4-convergence) fails. The adoption skill sends an adopter to kind
+so G4, convergence, fails. The adoption skill sends an adopter to kind
 for a kind that runs Pods, and names no third-party kind. The adopter asked whether a
 model of the other controller, drawn from its CRD and docs, could stand in for it, and be
 told to misbehave.
@@ -138,7 +140,7 @@ packages the spike imports bring no controller-runtime, and do bring kustomize, 
 Prometheus client, OpenTelemetry, cel-go and sprig. kwok draws a stage's weight and its
 jitter from the global `math/rand` with no seed, and a `Now` template stamps the clock.
 A replay would not repeat them, a shrink could not keep a candidate that fails the same
-check, and [G5](../checks.md#g5-restart-stable) would blame the difference on the target.
+check, and G5, restart-stable, would blame the difference on the target.
 
 ## What it means for the design
 
@@ -182,7 +184,7 @@ A dependency plugs in here:
 
 | Concern | Where | Pattern to copy |
 |---|---|---|
-| Declaration | `internal/target`, `docs/reference.md` | `fixtures`, `manages`, `ready` |
+| Declaration | `internal/target`, the target.yaml reference | `fixtures`, `manages`, `ready` |
 | Identity | `collectorConfig` in `internal/cluster/collector.go` | the collector's UserAgent |
 | Running the model | `internal/run/run.go` starts the collector per run | `internal/cluster/collector.go` |
 | Its log | `writeRecordings` in `internal/run/run.go`, the recordings list in `internal/report/markdown.go` and `docs/failures.md` | `collector.jsonl` |
@@ -191,7 +193,7 @@ A dependency plugs in here:
 | Shrinking | `weaken` in `internal/run/shrink.go` halves a fault's `until` | the `fault` op |
 | The envtest warning | `envtestLimit` in `cmd/reconciler-fuzzer/cli.go` | D57 |
 | Contract checks | `properties` today, a generic check later | P1 of both examples |
-| The skill | step 2 of `skills/adopt-reconciler-fuzzer/SKILL.md`, or a second skill | `.claude/skills/add-invariant/SKILL.md` |
+| The skill | step 2 of `skills/adopt-reconciler-fuzzer/SKILL.md`, or a second skill | the add-invariant skill |
 
 The declaration might read:
 
