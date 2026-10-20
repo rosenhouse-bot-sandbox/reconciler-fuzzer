@@ -633,7 +633,9 @@ func TestWatchesGetStreamsAndRecordTheirEnd(t *testing.T) {
 	do(t, l, "GET", "/api/v1/configmaps")
 	do(t, l, "GET", "/api/v1/namespaces/ns1/configmaps?watch=true")
 
-	recorded.waitCalls(t, 3)
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
 	recorded.mu.Lock()
 	defer recorded.mu.Unlock()
 	var got []string
