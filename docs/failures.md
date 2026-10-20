@@ -1,143 +1,172 @@
 # Reading a failure
 
-[checks.md](checks.md) says what each check's message means. This page says what each file
-holds, and what to change when reconciler-fuzzer exits 2.
+`run` prints `report.md` and exits 1 when it has findings. This page says
+what each finding means and what to look at first. DESIGN.md §10 and §12
+define the clauses and checks.
 
-## The summary
+## The output directory
 
-Once reconciler-fuzzer has read or drawn its sequences, it makes `reconciler-fuzzer-out/<timestamp>-<seed>/` and
-writes `summary.json` and `summary.md` there. It rewrites them as each run starts and when the
-invocation ends. They list each planned run: its seed, how it ended, the faults the proxy
-applied, the times your controller exited, and what the checks could not judge. `summary.json`
-also holds each run's sequence as reconciler-fuzzer drew or read it. Its `schema` changes when a field
-changes meaning or goes away.
+`run --out <out>` writes:
 
-A run that was under way when reconciler-fuzzer was killed reads `unfinished`. A run that had already
-failed reads `violation`, even while reconciler-fuzzer was still minimizing its sequence. Its `run-<n>/`
-then holds no report, and `summary.md` says whether `run-<n>/` holds the failing run's evidence
-or a partial run of the minimized sequence.
+| File | What it holds |
+| --- | --- |
+| `plan.json` | The plan that ran. With `--seed`, it is the drawn plan. |
+| `trace.jsonl` | Every request, action, phase and controller start and exit (DESIGN.md §4). |
+| `report.md` | The findings and notes. |
+| `controller.log` | The controller's output. |
+| `kubeconfig` | The envtest API server's kubeconfig. The server is gone after the run. |
 
-## The evidence
+`hunt --out <out>` writes one `seed-<n>` directory per seed that found
+something new, and `summary.md`. Each seed directory holds a run's files,
+`replay-<i>` runs, the failing `shrink-<c>-<r>` candidates, and
+`shrunk.json`. `summary.md` has one row per distinct finding: seed, check,
+summary, replays that reproduced it, and the shrunk plan. It also lists
+seeds whose run failed.
 
-As soon as a drawn run fails, reconciler-fuzzer prints the check, as in
-`run 1: G3 failed, and minimizing its 12 ops can take minutes.` Then it minimizes the
-sequence: it removes each op the failure does not need. Each removal it tries replays a whole
-run. Where your controller fails with no CR at all, the minimized sequence lacks even the
-`create`.
+## report.md
 
-A passing run leaves only its entry in the summary. A failing run writes its evidence in
-`run-<n>/`:
+Each finding is one section:
 
-- `report.md` says what failed, gives the command that reproduces it, and quotes the sequence
-  and the evidence.
-- `report.json` holds the same, for a machine.
-- `sequence.json` holds the sequence that the rest of the directory is evidence of. reconciler-fuzzer
-  minimizes a drawn sequence before it reports, so this is the minimized one, unless the
-  deadline or an interrupt cut minimizing short. `summary.json` keeps the sequence as drawn.
-- `sequence.shrunk.json` holds a smaller failing sequence that reconciler-fuzzer found but did not run
-  again for its evidence, because the deadline or an interrupt came first. It exists only then.
-- `requests.jsonl` holds every request your controller made, as the proxy saw it.
-- `objects.jsonl` holds every version of every object reconciler-fuzzer observed.
-- `collector.jsonl` holds each delete that reconciler-fuzzer's garbage collector tried on envtest: when,
-  the object, each owner and why it counts as gone, and the result: `deleted`, `not found`,
-  `conflict` or `error`. A finalizer can still hold an object marked `deleted`. `not found` says
-  the object was already gone. `conflict` says the object changed after the collector read it,
-  and the line's `error` names the precondition that failed: the UID or the resourceVersion.
-  The result `error` covers every other failure. Where the line's `error` then names
-  `context canceled`, reconciler-fuzzer stopped the collector while the delete was in flight. The
-  collector's deletes never pass the proxy, so `requests.jsonl` lacks them. The last lines can
-  race reconciler-fuzzer's own cleanup as the run ends. The file is empty where the collector tried no
-  delete, and absent on a cluster with a garbage collector of its own.
-- `target.log` holds your controller's own output.
-- `kubeconfig` is the kubeconfig your controller was given. It points at the proxy rather than
-  the API server, and names the run's namespace.
+````
+## Restore: did not restore damaged resources
 
-`objects.jsonl` writes each value of a Secret's `data` and annotations as a marker, such as
-`[redacted 6 bytes hmac-sha256:8c7ef51307f40278]`. Equal values share a marker within one
-invocation, so you can see which value changed without learning it. reconciler-fuzzer hides nothing else.
-It writes a Secret's labels, your sample, your CRs and other objects, the `--launch-arg` values
-and your controller's log as they are. Keep credentials out of them before you share
-`reconciler-fuzzer-out/`.
-
-## What a report quotes
-
-A report quotes the last twenty requests and the last twenty object versions that the check
-looked at. It says how many it looked at, and names the file that holds them all. A
-[G4](checks.md#g4-convergence) or a [property](checks.md#properties) also quotes the objects
-your controller managed where it failed, over the kinds your target declares. That table has
-its own bound of twenty, and gives each object's metadata only. `objects.jsonl` holds each
-version whole.
-
-## Restarts and crash loops
-
-Once a settle wait has converged, reconciler-fuzzer restarts a controller that exits, as a kubelet would:
-at once, then after 10s, doubling up to 5 minutes. Before that, an exit ends the invocation
-with exit 2. The run prints a note for each exit, and quotes the line your controller wrote as
-it stopped.
-
-A settle wait does not converge while your controller waits to restart, nor before it has been
-back for `stable` since it last started. Your controller is back once it requests a resource
-outside leader election. reconciler-fuzzer takes a controller that reads a Lease with a get to elect a
-leader, and counts it back only once it wins its lease. reconciler-fuzzer has no other sign.
-
-- After a `restart` op, your controller has `settle` to come back, and `settle` past its return
-  to converge.
-- A controller that crashes again within `stable` of each return never converges, even where it
-  wrote its converged state first. [G4](checks.md#g4-convergence) reports it and quotes the
-  last exit.
-- After an exit during a fault, or while your controller recovers from one, reconciler-fuzzer restarts
-  your controller and gives it `settle` past its return to converge.
-- While a fault is active, only the first exit during each op gets `settle` past its return. A
-  later exit during the op gets it only where the next op lands before your controller has had
-  `settle` past its return. Otherwise the wait can end before your controller restarts. A wait
-  can also end before a restarted controller has won its lease back.
-- reconciler-fuzzer applies no op while your controller waits to restart after an exit during a fault. A
-  controller that keeps crashing under a fault therefore fails [G4](checks.md#g4-convergence)
-  once the fault stops, or once the teardown clears it.
-
-`--launch-arg --bug=12` makes the toy divide by its Widget's count once it has written its
-status. `targets/toy-widget/sequences/b12.json` sets a count of 0, and the toy crashes after
-each start:
+Step 1, at 16.907430335s.
 
 ```
-run 1: the target exited during op 1 (update) with exit status 2 after writing "panic: runtime error: integer divide by zero [recovered, repanicked]"
-run 1: the target exited during op 1 (update) with exit status 2 after writing "panic: runtime error: integer divide by zero [recovered, repanicked]"
-run 1: P1 is not evaluated at the checkpoint after op 1 (update): the target was waiting to restart, so it may not yet have acted on what P1 reads
-run 1: G4 the settle wait after op 1 (update) expired with no fault active: in 5.038s (timeouts.settle is 5s), ready held from 12ms on, but the target was waiting to restart; the target exited 2 times since it last converged, last with exit status 2 after writing "panic: runtime error: integer divide by zero [recovered, repanicked]"
-  at 2026-09-24T00:57:57.490964784Z; 15 requests, the first get /api 200; 5 versions, the first toy.reconciler-fuzzer/v1/Widget widget; the target managed 0 objects of the kinds it declares
+configmaps rf-da5dd4dd/widget-0 (rule 1, slot a)
+```
+````
+
+The heading is the check and its summary. The first line names the step,
+counting from 0, and the time since the run started. `Before step 0` means
+during startup. The runner appends two steps to every plan:
+`Step N (delete all)` and `Step N+1 (restart)`.
+A `Labels:` line may follow. The block lists the detail lines.
+
+A `# Notes` section follows the findings. A note says what the trace could
+not decide: an action that failed, a fault that picked no request, or a
+step the trace ended too early to judge. Notes do not fail a run. A fault
+that picked no request tested nothing, so a plan with such notes may need
+a different fault.
+
+Hunt and shrink match findings by check, summary and kind, so a replay
+need not fail at the same step or on the same names.
+
+## Checks
+
+### Converge: did not settle (clause k)
+
+The settle condition did not hold by the step's deadline. `k` is the first
+unmet clause of DESIGN.md §10. The details list every unmet clause at the
+deadline. The toy with `--bug=2` gives:
+
+````
+## Converge: did not settle (clause 1)
+
+Step 0, at 11.953863534s.
+
+```
+widgets.toy.reconciler-fuzzer rf-6d6981a4/widget is not ready
+model gc has work pending
+the controller made 226 changed writes in (9.953863534s, 11.953863534s]; first it changed configmaps rf-6d6981a4/widget-0-5dt88 with create at 9.9584852s
+the controller made 238 writes in (9.953863534s, 11.953863534s], over the budget of 4
+```
+````
+
+Look at the clause first:
+
+| Clause | Meaning | Look at |
+| --- | --- | --- |
+| 1 | A CR is not `ready`. | The CR's last status in `trace.jsonl`, and `ready` in the config. |
+| 2 | A CR is still being deleted. | Its finalizers, and why the controller did not remove them. |
+| 3 | The controller is down, or restarted within `stable`. | `controller.log`, and any Crash finding. |
+| 4 | The controller made no successful request since it started. | Its startup in `controller.log`, and its RBAC. |
+| 5 | The controller did not look at an object a `damage` or `changeFixture` changed. | Its watches and the kinds it reads. |
+| 6 | A model, such as `gc`, has work pending. | What the model waits on. Churn under clause 7 often keeps it busy. |
+| 7 | The controller kept changing objects, or went over the `budgets`. | The first changed write the detail names: it shows what the controller fights over. |
+
+`did not stay settled (clause k)` means the condition held once, then
+failed again within `stable`.
+
+The `backoff-bound` label means `timeouts.backoffCap` set the deadline,
+because the fault period was longer. A controller whose retry backoff
+exceeds the cap fails there. Raise the cap if that backoff is intended.
+
+### Crash: the controller exited
+
+The controller exited without the harness stopping it. The summary counts
+the exits in the step. The details hold the first exit status and the tail
+of its output, often a panic.
+
+A Crash before step 0 whose output is a flag or usage error means the
+controller never started. Fix `launch.args` or `launch.env`. Converge
+clause 4 findings follow from it.
+
+### Clean: left resources behind
+
+A controller resource outlived its owning CR. Each line names the
+resource, the owner rule of DESIGN.md §11 that tied it to a CR (1:
+ownerReferences; 4: the CRs live at its creation), and that CR's slot:
+
+```
+configmaps rf-9485af8b/widget-0 (rule 4, slot a)
 ```
 
-## Interrupts
+A rule 4 line usually means the resource lacks an ownerReference, so
+garbage collection could not delete it. A resource that should outlive its
+CR needs `primary.retain`.
 
-SIGINT, SIGTERM, SIGHUP and a terminal's Ctrl-C all stop reconciler-fuzzer cleanly. reconciler-fuzzer abandons the
-run under way, stops your controller and the control plane, and deletes the run's namespace.
-`reconciler-fuzzer run` and `reconciler-fuzzer replay` name the unfinished run's directory. A run that failed before
-the interrupt still says why. Then reconciler-fuzzer dies of the signal, a few seconds after it arrived. A
-second signal kills reconciler-fuzzer at once and leaves those processes running, as SIGKILL does.
+### Restore
 
-GitHub Actions cancels a job by sending the step's shell SIGINT and, 7.5s later, SIGTERM. The
-shell passes neither on, so the CI recipe runs reconciler-fuzzer with `exec`.
+The step changed no CR or fixture, but the controller's resources differ
+from the previous step's end.
 
-## When reconciler-fuzzer exits 2
+- `did not restore damaged resources`: a damaged resource was not
+  recreated.
+- `replaced resources`: an undamaged resource was replaced, or a new one
+  appeared.
+- `changed resources`: an undamaged resource's body changed. Each line
+  names the fields that differ.
 
-Exit 2 means reconciler-fuzzer could not test your controller, and the message says why. These are the
-usual causes and what to change.
+### Unique: duplicate resources
 
-- `KUBEBUILDER_ASSETS` names the directory holding `etcd` and `kube-apiserver`. Install them as
-  the [README](../README.md#install) shows, or point `--kubeconfig` at a cluster.
-- A key target.yaml does not take fails with its line, as in `line 6: timeouts.setle is not a
-  key; did you mean settle?`.
-- `launch.binary` is relative to the directory you run reconciler-fuzzer in. `crds`, `sample`,
-  `fixtures` and `rbac` are relative to target.yaml.
-- A controller that stops before its first settle wait converges ends the invocation, whether a
-  flag, a taken port or the first CR stopped it. reconciler-fuzzer quotes the line it wrote that says why:
-  the line a panic opens with, the line above a flag's usage text, or the last line above any
-  stack trace. `target.log` in the run directory holds the rest.
-- If reconciler-fuzzer had created the CR and your controller had requested a resource before it stopped,
-  the CR may have crashed it. The message then names the run's `sequence.json` for
-  `reconciler-fuzzer replay`.
-- A controller that binds a fixed port, such as a health probe on `:8081`, collides with a
-  second invocation of itself. Give it a [free port](targets.md#launch) in `launch.args`, or
-  with `--launch-arg`.
-- reconciler-fuzzer exits 2, rather than reporting a find, when [the deadline](ci.md#deadlines)
-  ends a run or stops reconciler-fuzzer before its last run.
+Two live controller resources share a kind, namespace, owning CR and role
+(DESIGN.md §11).
+
+## When a run exits 2
+
+Exit 2 means a usage or harness error: the run judged nothing. The error
+names its cause. A run that started leaves its partial trace in `--out`. Common causes:
+
+| Error | Fix |
+| --- | --- |
+| `starting envtest: ... etcd: no such file or directory` | Set `KUBEBUILDER_ASSETS` to `$(make -s assets-path)`. |
+| `starting <binary>: ... no such file or directory` | Build the controller to `launch.binary`. |
+| `creating fixture ...` | Fix the fixture, or install the CRD it needs under `crds`. |
+| `launch args: ...` or `launch env <name>: ...` | Use only `${systems.kube.kubeconfig}`, `namespace` and `url`. |
+
+`hunt` notes a seed whose run failed in `summary.md`, and goes on. It
+exits 2 when a seed failed and nothing was found, and 1 on any find.
+
+## Next steps
+
+Replay a failure:
+
+```
+reconciler-fuzzer run --config config.yaml --plan <out>/plan.json --out replay
+```
+
+Judge a trace again after changing `ready`, `retain`, `stable` or the
+budgets, without rerunning:
+
+```
+reconciler-fuzzer judge --trace <out> --config config.yaml
+```
+
+Shrink a failing plan to a smaller plan that gives the same finding:
+
+```
+reconciler-fuzzer shrink --config config.yaml --plan <out>/plan.json --out shrink
+```
+
+`shrink` writes `shrunk.json` and `summary.md` under `--out`.

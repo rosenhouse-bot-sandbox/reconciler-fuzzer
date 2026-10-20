@@ -1,7 +1,5 @@
-# The nightly tier of DESIGN.md §10 (M5, M7): each adopted example on seeds
-# reconciler-fuzzer draws for itself, and the kind tier of §11. It is separate
-# from CI so that a find never blocks a merge, and it keeps the summaries and a
-# failing run's evidence.
+# Hunts each example on fresh seeds. It runs apart from CI, so a find never
+# blocks a merge.
 name: Nightly
 
 on:
@@ -9,32 +7,27 @@ on:
     - cron: '17 7 * * *'
   workflow_dispatch:
 
-# cert-manager binds a fixed healthz port (DESIGN.md §15, D28), so a dispatch
-# waits for the scheduled run rather than racing it.
+# A dispatch waits for the scheduled run rather than overlap it.
 concurrency:
   group: nightly
   cancel-in-progress: false
 
 permissions:
   contents: read
-  # A find is reported as an issue, since nobody watches a red badge.
   issues: write
 
 jobs:
-  example:
+  hunt:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
-      # One example finding something must not cancel the other.
       fail-fast: false
       matrix:
         include:
           - example: cert-manager
             binary: cert-manager-controller
-            tier: test-example-nightly
           - example: external-secrets
             binary: external-secrets
-            tier: test-example-external-secrets-nightly
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v5
@@ -58,145 +51,55 @@ jobs:
             bin/${{ matrix.binary }}
             bin/${{ matrix.example }}-${{ steps.pin.outputs.version }}.built
           key: ${{ matrix.example }}-${{ runner.os }}-${{ steps.pin.outputs.version }}
-      - name: The ${{ matrix.example }} example on drawn seeds
-        id: example
-        run: make ${{ matrix.tier }}
-      # The negative control writes its summary a level further down.
-      - name: Show what the drawn seeds exercised
+      # make exits 2 on any failure, so the hunt's own exit code, 1 on a find
+      # and 2 on an error, comes from exit-status. Without that file, make
+      # failed before the hunt ran.
+      - name: Hunt ${{ matrix.example }}
+        id: hunt
+        run: |
+          make hunt-${{ matrix.example }} || true
+          status=$(cat reconciler-fuzzer-out/hunt-${{ matrix.example }}/exit-status 2>/dev/null || echo 2)
+          echo "status=$status" >>"$GITHUB_OUTPUT"
+          exit "$status"
+      - name: Show the hunt's summary
         if: always()
-        run: cat reconciler-fuzzer-out/*/summary.md >>"$GITHUB_STEP_SUMMARY" || true
-      # A find is only actionable with the run it came from (§5.7, §11).
-      - name: Keep the summaries and a failing run's evidence
+        run: cat reconciler-fuzzer-out/hunt-${{ matrix.example }}/summary.md >>"$GITHUB_STEP_SUMMARY" || true
+      - name: Keep the hunt's output
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: reconciler-fuzzer-out-${{ matrix.example }}
           path: reconciler-fuzzer-out/
           if-no-files-found: ignore
-
-      # Only the tier failing is a find. A checkout or a cache that fell over is
-      # not, and an issue claiming a seed to replay would be false. summary.json
-      # says whether a run failed a check (outcome: violation, exit 1) or hit a
-      # harness error (exit 2, or no output at all). The label distinguishes them.
-      #
-      # One open issue per example carries that example's finds, so a run that
-      # keeps failing comments rather than filing again, and the two legs of the
-      # matrix never race to file one issue between them. The label is the key:
-      # `in:title` searches a full-text index, which can miss and then file a
-      # duplicate every night.
+      # One open issue per example and verdict collects the reports, so a hunt
+      # that keeps failing comments instead of filing again. The label is the
+      # key, because an in:title search can miss.
       - name: Report the failure
-        if: failure() && steps.example.conclusion == 'failure'
+        if: failure() && steps.hunt.conclusion == 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           EXAMPLE: ${{ matrix.example }}
-          FIND_LABEL: nightly-find-${{ matrix.example }}
-          ERROR_LABEL: nightly-error-${{ matrix.example }}
-          TIER: ${{ matrix.tier }}
+          STATUS: ${{ steps.hunt.outputs.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          verdict=error
-          summary=$(find reconciler-fuzzer-out -name summary.json -print -quit 2>/dev/null || true)
-          if [ -n "$summary" ]; then
-            outcome=$(jq -r '.outcome // empty' "$summary")
-            if [ "$outcome" = "violation" ]; then
-              verdict=find
-            fi
-          fi
-          if [ "$verdict" = "find" ]; then
-            LABEL="$FIND_LABEL"
-            TITLE="Nightly: the $EXAMPLE example found something"
-            DESC="A find from the nightly $EXAMPLE run"
+          if [ "$STATUS" = 1 ]; then
+            LABEL="nightly-find-$EXAMPLE"
+            TITLE="Nightly: the $EXAMPLE hunt found something"
+            DESC="A find from the nightly $EXAMPLE hunt"
           else
-            LABEL="$ERROR_LABEL"
-            TITLE="Nightly: the $EXAMPLE example hit an error"
-            DESC="An error from the nightly $EXAMPLE run"
+            LABEL="nightly-error-$EXAMPLE"
+            TITLE="Nightly: the $EXAMPLE hunt hit an error"
+            DESC="An error from the nightly $EXAMPLE hunt"
           fi
           body=$(cat <<EOF
           🤖 Created by Claude 🤖
 
-          The nightly run of \`make $TIER\` failed on $(date -u +%Y-%m-%d).
-          It draws its own seeds, so the run log names the seed that found this and
-          \`reconciler-fuzzer replay\` reproduces it.
+          \`make hunt-$EXAMPLE\` exited $STATUS on $(date -u +%Y-%m-%d).
 
-          - The run, and the failing sequence's evidence as the \`reconciler-fuzzer-out-$EXAMPLE\` artifact: $RUN_URL
-          - \`gh run download $GITHUB_RUN_ID --name reconciler-fuzzer-out-$EXAMPLE --dir reconciler-fuzzer-out\` restores the paths that the replay command in report.md names.
-
-          ---
-          _Generated by [Claude Code](https://claude.ai/code)_
-          EOF
-          )
-          gh label create "$LABEL" --description "$DESC" --color B60205 --force
-          open=$(gh issue list --state open --label "$LABEL" --json number --jq '.[0].number // empty')
-          if [ -n "$open" ]; then
-            gh issue comment "$open" --body "$body"
-          else
-            gh issue create --title "$TITLE" --label "$LABEL" --body "$body"
-          fi
-
-  # The kind tier of DESIGN.md §11 runs the toy against a cluster with the
-  # controller manager that envtest lacks.
-  kind:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-      # Only the runs failing is a find. Creating the cluster pulls from Docker
-      # Hub, which can fail on its own.
-      - name: Create the kind cluster
-        run: make kind-cluster build
-      - name: The toy against kind
-        id: kind
-        run: make test-kind-runs
-      - name: Keep the summaries and a failing run's evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: reconciler-fuzzer-out-kind
-          path: reconciler-fuzzer-out/
-          if-no-files-found: ignore
-      - name: Report the failure
-        if: failure() && steps.kind.conclusion == 'failure'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          FIND_LABEL: nightly-find-kind
-          ERROR_LABEL: nightly-error-kind
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          verdict=error
-          summary=$(find reconciler-fuzzer-out -name summary.json -print -quit 2>/dev/null || true)
-          if [ -n "$summary" ]; then
-            outcome=$(jq -r '.outcome // empty' "$summary")
-            if [ "$outcome" = "violation" ]; then
-              verdict=find
-            fi
-          fi
-          if [ "$verdict" = "find" ]; then
-            LABEL="$FIND_LABEL"
-            TITLE="Nightly: the kind tier found something"
-            DESC="A find from the nightly kind tier"
-          else
-            LABEL="$ERROR_LABEL"
-            TITLE="Nightly: the kind tier hit an error"
-            DESC="An error from the nightly kind tier"
-          fi
-          body=$(cat <<EOF
-          🤖 Created by Claude 🤖
-
-          The toy failed the nightly kind tier on $(date -u +%Y-%m-%d).
-          Its seeds are fixed, so the run log names the sequence and the seed, and
-          \`reconciler-fuzzer replay\` reproduces it against a kind cluster.
-
-          - The run, and the failing run's evidence as the \`reconciler-fuzzer-out-kind\` artifact: $RUN_URL
-          - \`gh run download $GITHUB_RUN_ID --name reconciler-fuzzer-out-kind --dir reconciler-fuzzer-out\` restores the sequence that the replay command in report.md names. Point its \`--kubeconfig\` at a cluster from \`make kind-cluster\`.
-
-          ---
-          _Generated by [Claude Code](https://claude.ai/code)_
+          - Run: $RUN_URL
+          - Fetch its output: \`gh run download $GITHUB_RUN_ID --name reconciler-fuzzer-out-$EXAMPLE --dir reconciler-fuzzer-out\`
+          - Replay a failing seed: run \`make build $EXAMPLE\` and \`export KUBEBUILDER_ASSETS=\$(make -s assets-path)\`, then \`./bin/reconciler-fuzzer run --config examples/$EXAMPLE/config.yaml --plan reconciler-fuzzer-out/hunt-$EXAMPLE/seed-<n>/plan.json --out replay\`. summary.md names the failing seeds and each shrunk plan, which replays the same way.
           EOF
           )
           gh label create "$LABEL" --description "$DESC" --color B60205 --force

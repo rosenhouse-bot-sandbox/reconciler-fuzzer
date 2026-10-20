@@ -1,7 +1,0 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: widget-config
-data:
-  label: red
-  app.properties: a=b

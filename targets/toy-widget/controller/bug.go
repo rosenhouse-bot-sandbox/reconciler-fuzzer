@@ -6,7 +6,7 @@ import (
 )
 
 // Bug selects the seeded bug the controller runs with. Zero is the correct
-// controller, and each of B1 to B15 breaks it in one way.
+// controller, and each other Bug breaks it in one way.
 type Bug int
 
 const (

@@ -15,7 +15,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 
-	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/target"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/targets/toy-widget/controller"
 )
 
@@ -135,20 +135,15 @@ func TestManagerOptionsWatchEveryNamespaceWithoutWatchNamespace(t *testing.T) {
 	}
 }
 
-// B1's hold is what makes its children land after the checkpoint that reads
-// its premature status and inside the quiet window that follows, so it is
-// timed against the T_stable the target declares (DESIGN.md §9.1).
-func TestTheB1HoldLandsTheChildrenInTheQuietWindow(t *testing.T) {
-	declared, err := target.Load("target.yaml")
+// B1 holds its premature status past one stable period, so Converge sees
+// it settle, and lands its children within the confirm window.
+func TestTheB1HoldLandsTheChildrenInTheConfirmWindow(t *testing.T) {
+	c, err := config.Load("config.yaml")
 	if err != nil {
-		t.Fatalf("Loading the toy's declaration failed: %v", err)
+		t.Fatal(err)
 	}
-
-	stable := declared.Timeouts.Stable
-
-	if b1Hold <= stable || b1Hold >= 2*stable {
-		t.Errorf("B1 holds its premature status for %v against a T_stable of %v, want §9.1's T_stable < hold < 2 × T_stable.",
-			b1Hold, stable)
+	if stable := c.Timeouts.Stable; b1Hold <= stable || b1Hold >= 2*stable {
+		t.Errorf("B1 holds for %v against a stable of %v, want stable < hold < 2 × stable.", b1Hold, stable)
 	}
 }
 

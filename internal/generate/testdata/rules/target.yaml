@@ -1,9 +1,0 @@
-# A CRD whose validation rules the schema alone does not state. Nothing
-# launches this target.
-name: rules
-crds:
-  - crd.yaml
-primary: rules.reconciler-fuzzer/v1/Gadget
-sample: gadget.yaml
-launch:
-  binary: bin/none

@@ -1,301 +1,315 @@
 package main
 
 import (
+	"bytes"
 	"context"
-	"io"
+	"encoding/json"
+	"errors"
 	"os"
-	"os/exec"
-	"os/signal"
 	"path/filepath"
+	"reflect"
 	"strings"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/check"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/run"
-	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/target"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace/tracetest"
 )
 
-// asFuzzer has the test binary run as reconciler-fuzzer, over a session that
-// runs until it is interrupted, so that a test signals a process other than its
-// own.
-const asFuzzer = "RECONCILER_FUZZER_TEST_AS_FUZZER"
+const toyConfig = "../../targets/toy-widget/config.yaml"
 
-// closedFile is where that reconciler-fuzzer records that it closed its
-// session, and closeTakes how long closing takes.
-const (
-	closedFile = "RECONCILER_FUZZER_TEST_CLOSED_FILE"
-	closeTakes = "RECONCILER_FUZZER_TEST_CLOSE_TAKES"
-)
+const group = "toy.reconciler-fuzzer"
 
-func TestMain(m *testing.M) {
-	if os.Getenv(asFuzzer) != "" {
-		c := newCLI(os.Stdout, os.Stderr)
-		c.newGenerator = countingGenerator(nil)
-		c.open = func(options, *target.Target) (session, error) { return untilInterrupted{}, nil }
-		os.Exit(c.interruptible(os.Args[1:]))
-	}
-	os.Exit(m.Run())
-}
+var widget = tracetest.Ref(group+"/widgets", "ns", "widget")
 
-type untilInterrupted struct{}
-
-func (untilInterrupted) vet(*target.Target) error { return nil }
-
-func (untilInterrupted) prepare(context.Context, *target.Target) error { return nil }
-
-func (untilInterrupted) execute(ctx context.Context, _ *target.Target, _ run.Sequence, dir string, _ run.Checker) (run.Result, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return run.Result{}, err
-	}
-	<-ctx.Done()
-	return run.Result{}, ctx.Err()
-}
-
-func (untilInterrupted) close() error {
-	takes, _ := time.ParseDuration(os.Getenv(closeTakes))
-	time.Sleep(takes)
-	return os.WriteFile(os.Getenv(closedFile), nil, 0o644)
-}
-
-// fuzzerProcess is the test binary running as reconciler-fuzzer, in a process
-// group of its own.
-type fuzzerProcess struct {
-	cmd            *exec.Cmd
-	exited         <-chan struct{}
-	closed         string
-	out            string
-	stdout, stderr *output
-	lines          chan string
-	// readers are the ends of reconciler-fuzzer's output pipes that the test
-	// reads.
-	readers []*os.File
-	reading sync.WaitGroup
-}
-
-// output keeps what reconciler-fuzzer wrote to one stream, and passes each line
-// on.
-type output struct {
-	mu      sync.Mutex
-	written strings.Builder
-	partial string
-	lines   chan<- string
-}
-
-func (o *output) Write(p []byte) (int, error) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	o.written.Write(p)
-	o.partial += string(p)
-	for {
-		line, rest, found := strings.Cut(o.partial, "\n")
-		if !found {
-			return len(p), nil
-		}
-		o.lines <- line
-		o.partial = rest
+func readyWidget() map[string]any {
+	return map[string]any{
+		"metadata": map[string]any{"name": "widget", "generation": 1},
+		"spec":     map[string]any{"count": 1},
+		"status":   map[string]any{"observedGeneration": 1, "ready": 1},
 	}
 }
 
-func (o *output) String() string {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return o.written.String()
+func cliOutput(args ...string) (code int, stdout, stderr string) {
+	var out, errOut bytes.Buffer
+	code = cli(args, &out, &errOut)
+	return code, out.String(), errOut.String()
 }
 
-// startFuzzer starts reconciler-fuzzer under the shell's prefix, if
-// any, which can set how it starts out handling signals.
-func startFuzzer(t *testing.T, takes time.Duration, prefix ...string) *fuzzerProcess {
-	t.Helper()
-	self, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
+func TestUsageErrors(t *testing.T) {
+	cases := map[string][]string{
+		"no command":        {},
+		"unknown command":   {"fuzz"},
+		"unknown flag":      {"judge", "--config", toyConfig, "--trace", "t", "--verbose"},
+		"missing trace":     {"judge", "--config", toyConfig},
+		"extra args":        {"judge", "--config", toyConfig, "--trace", "t", "more"},
+		"run missing out":   {"run", "--config", toyConfig, "--plan", "p.json"},
+		"run missing plan":  {"run", "--config", toyConfig, "--out", "dir"},
+		"run plan and seed": {"run", "--config", toyConfig, "--plan", "p.json", "--seed", "1", "--out", "dir"},
+		"run bad seed":      {"run", "--config", toyConfig, "--seed", "x", "--out", "dir"},
+		"judge out":         {"judge", "--trace", "t", "--out", "dir"},
+		"hunt plan":         {"hunt", "--config", toyConfig, "--seeds", "2", "--plan", "p.json", "--out", "dir"},
+		"hunt no seeds":     {"hunt", "--config", toyConfig, "--out", "dir"},
+		"hunt missing out":  {"hunt", "--config", toyConfig, "--seeds", "2"},
+		"hunt overflow":     {"hunt", "--config", toyConfig, "--from", "5", "--seeds", "18446744073709551615", "--out", "dir"},
+		"shrink no plan":    {"shrink", "--config", toyConfig, "--out", "dir"},
+		"run extra args":    {"run", "--config", toyConfig, "--plan", "p.json", "--out", "dir", "more"},
 	}
-	lines := make(chan string, 1000)
-	f := &fuzzerProcess{closed: filepath.Join(t.TempDir(), "closed"), out: t.TempDir(),
-		stdout: &output{lines: lines}, stderr: &output{lines: lines}, lines: lines}
-	args := append(prefix, self, "run", "--target", toyTargetYAML, "--out", f.out, "--runs", "3")
-	f.cmd = exec.Command(args[0], args[1:]...)
-	f.cmd.Env = append(os.Environ(), asFuzzer+"=1", closedFile+"="+f.closed, closeTakes+"="+takes.String())
-	f.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	stdout, stderr := f.pipe(t, f.stdout), f.pipe(t, f.stderr)
-	f.cmd.Stdout, f.cmd.Stderr = stdout, stderr
-	err = f.cmd.Start()
-	_, _ = stdout.Close(), stderr.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-	exited := make(chan struct{})
-	go func() {
-		defer close(exited)
-		_ = f.cmd.Wait()
-		f.reading.Wait()
-	}()
-	f.exited = exited
-	t.Cleanup(func() {
-		_ = f.cmd.Process.Kill()
-		<-exited
-	})
-	return f
-}
-
-// pipe passes what reconciler-fuzzer writes to one stream on to out.
-func (f *fuzzerProcess) pipe(t *testing.T, out *output) *os.File {
-	t.Helper()
-	reader, writer, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.readers = append(f.readers, reader)
-	f.reading.Go(func() { _, _ = io.Copy(out, reader) })
-	return writer
-}
-
-// stopReading closes the pipes reconciler-fuzzer writes to, as a Ctrl-C does to
-// the tee that reads them.
-func (f *fuzzerProcess) stopReading() {
-	for _, reader := range f.readers {
-		_ = reader.Close()
-	}
-}
-
-// waitFor waits for reconciler-fuzzer to print a line holding want.
-func (f *fuzzerProcess) waitFor(t *testing.T, want string) {
-	t.Helper()
-	deadline := time.After(time.Minute)
-	for {
-		select {
-		case line := <-f.lines:
-			if strings.Contains(line, want) {
-				return
-			}
-		case <-deadline:
-			t.Fatalf("reconciler-fuzzer never printed %q.\nstdout:\n%s\nstderr:\n%s", want, f.stdout, f.stderr)
-		}
-	}
-}
-
-// signal sends sig to reconciler-fuzzer, or to its process group as a
-// terminal's Ctrl-C does.
-func (f *fuzzerProcess) signal(t *testing.T, sig syscall.Signal, group bool) {
-	t.Helper()
-	pid := f.cmd.Process.Pid
-	if group {
-		pid = -pid
-	}
-	if err := syscall.Kill(pid, sig); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// exit waits for reconciler-fuzzer to exit, and returns how it did.
-func (f *fuzzerProcess) exit(t *testing.T, within time.Duration) syscall.WaitStatus {
-	t.Helper()
-	select {
-	case <-f.exited:
-	case <-time.After(within):
-		t.Fatalf("reconciler-fuzzer was still running %v after the signal.\nstderr:\n%s", within, f.stderr)
-	}
-	return f.cmd.ProcessState.Sys().(syscall.WaitStatus)
-}
-
-func (f *fuzzerProcess) closedItsSession() bool {
-	_, err := os.Stat(f.closed)
-	return err == nil
-}
-
-// A signal interrupts reconciler-fuzzer, which stops what it started and then
-// dies of that signal, so that a shell, make or timeout sees what happened.
-func TestASignalStopsReconcilerFuzzerAndThenKillsIt(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		signal syscall.Signal
-		group  bool
-	}{
-		{"SIGTERM", syscall.SIGTERM, false},
-		{"a terminal's Ctrl-C", syscall.SIGINT, true},
-		{"SIGHUP", syscall.SIGHUP, false},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			if signal.Ignored(test.signal) {
-				t.Skipf("The tests run ignoring %v, and so would reconciler-fuzzer.", test.signal)
-			}
-			f := startFuzzer(t, 0)
-			f.waitFor(t, "run 1:")
-
-			f.signal(t, test.signal, test.group)
-
-			status := f.exit(t, 10*time.Second)
-			if !status.Signaled() || status.Signal() != test.signal {
-				t.Errorf("reconciler-fuzzer ended with %v, want death by %v.", status, test.signal)
-			}
-			if !f.closedItsSession() {
-				t.Error("reconciler-fuzzer never closed its session.")
-			}
-			stderr := f.stderr.String()
-			for _, want := range []string{"reconciler-fuzzer: an interrupt arrived", "run 1: an interrupt stopped the run"} {
-				if !strings.Contains(stderr, want) {
-					t.Errorf("reconciler-fuzzer printed\n%s\nwhich does not say %q.", stderr, want)
-				}
-			}
-			written := readSummary(t, f.out)
-			if written.Outcome != "interrupted" || written.ExitCode != 128+int(test.signal) || written.Runs[0].Outcome != "interrupted" {
-				t.Errorf("The summary says %s, exit %d, and run 1 %s, want run 1 interrupted and exit %d.",
-					written.Outcome, written.ExitCode, written.Runs[0].Outcome, 128+int(test.signal))
+	for name, args := range cases {
+		t.Run(name, func(t *testing.T) {
+			code, stdout, stderr := cliOutput(args...)
+			if code != 2 || !strings.Contains(stderr, "usage:") || stdout != "" {
+				t.Errorf("cli(%q) = %d, stdout %q, stderr %q; want 2 and usage on stderr", args, code, stdout, stderr)
 			}
 		})
 	}
 }
 
-// reconciler-fuzzer 2>&1 | tee log: an interrupt kills tee too, and
-// reconciler-fuzzer writes on. SIGTERM stands in for a Ctrl-C, which a
-// background job starts out ignoring.
-func TestAnInterruptOutlivesTheReaderOfItsOutput(t *testing.T) {
-	f := startFuzzer(t, 0)
-	f.waitFor(t, "run 1:")
-	f.stopReading()
-
-	f.signal(t, syscall.SIGTERM, true)
-
-	status := f.exit(t, 10*time.Second)
-	if !status.Signaled() || status.Signal() != syscall.SIGTERM {
-		t.Errorf("reconciler-fuzzer ended with %v, want death by SIGTERM.", status)
+func TestUsageNamesTheMissingFlag(t *testing.T) {
+	if code, _, stderr := cliOutput("run", "--config", toyConfig, "--out", "dir"); code != 2 || !strings.Contains(stderr, "exactly one of --plan and --seed") {
+		t.Errorf("cli = %d, stderr %q; want 2 naming --plan and --seed", code, stderr)
 	}
-	if !f.closedItsSession() {
-		t.Error("reconciler-fuzzer never closed its session.")
+	if code, _, stderr := cliOutput("shrink", "--config", toyConfig, "--out", "dir"); code != 2 || !strings.Contains(stderr, "--plan is required") {
+		t.Errorf("cli = %d, stderr %q; want 2 naming --plan", code, stderr)
 	}
 }
 
-func TestASecondSignalKillsReconcilerFuzzerAtOnce(t *testing.T) {
-	f := startFuzzer(t, time.Hour)
-	f.waitFor(t, "run 1:")
-	f.signal(t, syscall.SIGTERM, false)
-	f.waitFor(t, "reconciler-fuzzer: an interrupt arrived")
-
-	f.signal(t, syscall.SIGTERM, false)
-
-	status := f.exit(t, 10*time.Second)
-	if !status.Signaled() || status.Signal() != syscall.SIGTERM {
-		t.Errorf("reconciler-fuzzer ended with %v, want death by SIGTERM.", status)
+// fakeRun replaces run.Run with one that records its options and gives
+// findings to the plans that hold a delete.
+func fakeRun(t *testing.T) *[]run.Options {
+	var got []run.Options
+	runPlan = func(_ context.Context, o run.Options) (check.Report, error) {
+		got = append(got, o)
+		for _, step := range o.Plan.Steps {
+			for _, a := range step.Actions {
+				if a.Do == plan.Delete {
+					return check.Report{Findings: []check.Finding{{Check: "Clean", Summary: "a ConfigMap stays"}}}, os.MkdirAll(o.Out, 0o755)
+				}
+			}
+		}
+		return check.Report{}, os.MkdirAll(o.Out, 0o755)
 	}
-	if f.closedItsSession() {
-		t.Error("reconciler-fuzzer closed its session, and the second signal came first.")
+	t.Cleanup(func() { runPlan = run.Run })
+	return &got
+}
+
+func TestRunDrawsThePlanOfASeed(t *testing.T) {
+	got := fakeRun(t)
+	out := t.TempDir()
+	if err := os.WriteFile(filepath.Join(out, "report.md"), []byte("No findings.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr := cliOutput("run", "--config", toyConfig, "--seed", "3", "--out", out, "--launch-arg", "--bug=3")
+	if code == 2 || stdout != "No findings.\n" || len(*got) != 1 {
+		t.Fatalf("cli = %d, stdout %q, stderr %q, runs %d", code, stdout, stderr, len(*got))
+	}
+	o := (*got)[0]
+	if o.Plan == nil || o.Plan.Seed != 3 || len(o.Plan.Steps) < 3 || o.PlanPath != "" || o.LaunchArgs[0] != "--bug=3" {
+		t.Errorf("run.Options = %+v, want the plan of seed 3.", o)
 	}
 }
 
-// nohup starts a program ignoring SIGHUP, and a shell starts a background job
-// ignoring SIGINT. reconciler-fuzzer leaves those alone.
-func TestASignalReconcilerFuzzerWasStartedIgnoringStaysIgnored(t *testing.T) {
-	f := startFuzzer(t, 0, "/bin/sh", "-c", `trap "" HUP INT; exec "$@"`, "sh")
-	f.waitFor(t, "run 1:")
+func TestHuntRunsTheSeedsAndPrintsTheSummary(t *testing.T) {
+	got := fakeRun(t)
+	out := t.TempDir()
+	code, stdout, stderr := cliOutput("hunt", "--config", toyConfig, "--seeds", "3", "--from", "5", "--out", out, "--launch-arg", "--bug=9")
+	var seeds []uint64
+	for _, o := range *got {
+		if o.ConfigPath != toyConfig || o.LaunchArgs[0] != "--bug=9" {
+			t.Fatalf("run.Options = %+v.", o)
+		}
+		if filepath.Dir(o.Out) == out {
+			seeds = append(seeds, o.Plan.Seed)
+		}
+	}
+	if !reflect.DeepEqual(seeds, []uint64{5, 6, 7}) {
+		t.Errorf("hunt ran seeds %v, want 5 to 7.", seeds)
+	}
+	summary, _ := os.ReadFile(filepath.Join(out, "summary.md"))
+	if code != 1 || stdout != string(summary) || !strings.Contains(stdout, "over 3 seeds") || !strings.Contains(stdout, "a ConfigMap stays") {
+		t.Errorf("cli = %d, stdout %q, stderr %q; want 1 and the summary", code, stdout, stderr)
+	}
+}
 
-	f.signal(t, syscall.SIGHUP, false)
-	f.signal(t, syscall.SIGINT, false)
-	f.signal(t, syscall.SIGTERM, false)
+func TestHuntExits2WhenEverySeedFails(t *testing.T) {
+	runPlan = func(context.Context, run.Options) (check.Report, error) {
+		return check.Report{}, errors.New("no controller")
+	}
+	t.Cleanup(func() { runPlan = run.Run })
+	code, stdout, stderr := cliOutput("hunt", "--config", toyConfig, "--seeds", "2", "--out", t.TempDir())
+	if code != 2 || !strings.Contains(stdout, "seed 2: no controller") || !strings.Contains(stderr, "2 of 2 seeds failed") {
+		t.Errorf("cli = %d, stdout %q, stderr %q; want 2 and the failed seeds", code, stdout, stderr)
+	}
+}
 
-	status := f.exit(t, 10*time.Second)
-	if !status.Signaled() || status.Signal() != syscall.SIGTERM {
-		t.Errorf("reconciler-fuzzer ended with %v, want death by SIGTERM: it was started ignoring SIGHUP and SIGINT.", status)
+func TestHuntExits1WhenASeedFindsAndAnotherFails(t *testing.T) {
+	runPlan = func(_ context.Context, o run.Options) (check.Report, error) {
+		if filepath.Base(o.Out) == "seed-1" {
+			return check.Report{}, errors.New("no controller")
+		}
+		return check.Report{Findings: []check.Finding{{Check: "Clean"}}}, os.MkdirAll(o.Out, 0o755)
+	}
+	t.Cleanup(func() { runPlan = run.Run })
+	code, _, stderr := cliOutput("hunt", "--config", toyConfig, "--seeds", "2", "--out", t.TempDir())
+	if code != 1 || !strings.Contains(stderr, "1 of 2 seeds failed") {
+		t.Errorf("cli = %d, stderr %q; want 1 and the failed seed", code, stderr)
+	}
+}
+
+func TestHuntCutShortByAnInterruptStillReportsItsFinds(t *testing.T) {
+	runPlan = func(ctx context.Context, o run.Options) (check.Report, error) {
+		if filepath.Base(o.Out) == "seed-2" {
+			if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
+				return check.Report{}, err
+			}
+			<-ctx.Done()
+			return check.Report{}, ctx.Err()
+		}
+		return check.Report{Findings: []check.Finding{{Check: "Clean"}}}, os.MkdirAll(o.Out, 0o755)
+	}
+	t.Cleanup(func() { runPlan = run.Run })
+	code, stdout, stderr := cliOutput("hunt", "--config", toyConfig, "--seeds", "3", "--out", t.TempDir())
+	if code != 1 || !strings.Contains(stdout, "over 1 seeds") || !strings.Contains(stderr, "context canceled") {
+		t.Errorf("cli = %d, stdout %q, stderr %q; want 1 and the find of seed 1", code, stdout, stderr)
+	}
+}
+
+func TestHuntLogsEachRun(t *testing.T) {
+	fakeRun(t)
+	_, _, stderr := cliOutput("hunt", "--config", toyConfig, "--seeds", "2", "--out", t.TempDir())
+	if !strings.Contains(stderr, "seed 1: ") || !strings.Contains(stderr, "seed 2: ") {
+		t.Errorf("stderr is %q, want a line for each seed", stderr)
+	}
+}
+
+func TestJudgeRefusesAConfigOfAnotherPrimary(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "trace.jsonl")
+	rec, err := trace.NewRecorder(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.Record(tracetest.Run("cert-manager.io", "certificates"))
+	if err := rec.Close(); err != nil {
+		t.Fatal(err)
+	}
+	code, _, stderr := cliOutput("judge", "--config", toyConfig, "--trace", path)
+	if code != 2 || !strings.Contains(stderr, "certificates") || !strings.Contains(stderr, "widgets") {
+		t.Errorf("cli = %d, stderr %q; want 2 naming both primaries", code, stderr)
+	}
+}
+
+func TestShrinkWritesTheShrunkPlan(t *testing.T) {
+	fakeRun(t)
+	out := t.TempDir()
+	code, stdout, stderr := cliOutput("shrink", "--config", toyConfig, "--plan", "../../targets/toy-widget/plans/b13.json", "--out", out)
+	shrunk, err := plan.Load(filepath.Join(out, "shrunk.json"))
+	if code != 1 || err != nil || !strings.Contains(stdout, "shrunk.json") {
+		t.Fatalf("cli = %d, stdout %q, stderr %q, %v", code, stdout, stderr, err)
+	}
+	if len(shrunk.Steps) != 2 {
+		t.Errorf("b13 shrinks to %+v, want its create and delete.", shrunk)
+	}
+}
+
+func TestJudgeHarnessErrors(t *testing.T) {
+	code, _, stderr := cliOutput("judge", "--config", toyConfig, "--trace", filepath.Join(t.TempDir(), "missing.jsonl"))
+	if code != 2 || !strings.Contains(stderr, "missing.jsonl") {
+		t.Errorf("cli = %d, stderr %q; want 2 naming the trace", code, stderr)
+	}
+}
+
+func TestRunPassesOptionsAndPrintsTheReport(t *testing.T) {
+	out := t.TempDir()
+	var got run.Options
+	runPlan = func(_ context.Context, o run.Options) (check.Report, error) {
+		got = o
+		return check.Report{Findings: make([]check.Finding, 2)}, os.WriteFile(filepath.Join(o.Out, "report.md"), []byte("# Findings\n"), 0o644)
+	}
+	t.Cleanup(func() { runPlan = run.Run })
+	code, stdout, stderr := cliOutput("run", "--config", "c.yaml", "--plan", "p.json", "--out", out, "--launch-arg", "--bug=3", "--launch-arg", "-v")
+	want := run.Options{ConfigPath: "c.yaml", PlanPath: "p.json", Out: out, LaunchArgs: []string{"--bug=3", "-v"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("run.Options = %+v, want %+v", got, want)
+	}
+	if code != 1 || stdout != "# Findings\n" {
+		t.Errorf("cli = %d, stdout %q, stderr %q; want 1 and the report", code, stdout, stderr)
+	}
+}
+
+func TestRunHarnessError(t *testing.T) {
+	code, _, stderr := cliOutput("run", "--config", toyConfig, "--plan", filepath.Join(t.TempDir(), "missing.json"), "--out", t.TempDir())
+	if code != 2 || !strings.Contains(stderr, "missing.json") {
+		t.Errorf("cli = %d, stderr %q; want 2 naming the plan", code, stderr)
+	}
+}
+
+func TestJudgeReportsACrash(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "trace.jsonl")
+	rec, err := trace.NewRecorder(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.Record(tracetest.Run(group, "widgets"))
+	rec.Record(tracetest.Version(widget, "u1", "1", readyWidget()))
+	rec.Record(tracetest.Start(1))
+	rec.Record(tracetest.Phase(0, trace.FaultPeriod))
+	rec.Record(tracetest.EndFaults(0, rec.Now()+time.Second, false))
+	rec.Record(tracetest.Exit("exit status 2", false, "panic: boom"))
+	rec.Record(tracetest.Phase(0, trace.TimedOut))
+	if err := rec.Close(); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr := cliOutput("judge", "--config", toyConfig, "--trace", filepath.Dir(path))
+	if code != 1 || !strings.Contains(stdout, "## Crash: the controller exited 1 time") || !strings.Contains(stdout, "panic: boom") {
+		t.Errorf("cli = %d, stdout %q, stderr %q; want 1 and a Crash finding", code, stdout, stderr)
+	}
+}
+
+// cleanTrace writes a trace that settles under the toy config, and whose run
+// event records ready.
+func cleanTrace(t *testing.T, ready string) string {
+	var b tracetest.Builder
+	run := tracetest.Run(group, "widgets")
+	run.Run.Ready, run.Run.Stable, run.Run.Reads, run.Run.Writes = ready, 2*time.Second, 2, 4
+	updated := tracetest.Call(trace.Controller, "update", widget, 200, "2")
+	b.Add(run, tracetest.Start(1), tracetest.Phase(0, trace.FaultPeriod)).
+		At(100*time.Millisecond).Add(tracetest.Call(trace.Harness, "create", widget, 201, "1"), tracetest.Version(widget, "u1", "1", map[string]any{"spec": map[string]any{"count": 1}})).
+		At(500*time.Millisecond).Add(updated, tracetest.Version(widget, "u1", "2", readyWidget())).
+		At(time.Second).Add(tracetest.EndFaults(0, 10*time.Second, false)).
+		At(3 * time.Second).Add(tracetest.Phase(0, trace.Settled)).
+		At(5 * time.Second).Add(tracetest.Phase(0, trace.Confirmed))
+	var lines bytes.Buffer
+	for _, e := range b.Events() {
+		line, err := json.Marshal(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines.Write(append(line, '\n'))
+	}
+	path := filepath.Join(t.TempDir(), "trace.jsonl")
+	if err := os.WriteFile(path, lines.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestJudgeCleanTrace(t *testing.T) {
+	code, stdout, stderr := cliOutput("judge", "--config", toyConfig, "--trace", cleanTrace(t, ""))
+	if code != 0 || stdout != "No findings.\n" {
+		t.Errorf("cli = %d, stdout %q, stderr %q; want 0 and no findings", code, stdout, stderr)
+	}
+}
+
+func TestJudgeReadsTheSpecFromTheTraceUnlessGivenAConfig(t *testing.T) {
+	path := cleanTrace(t, "false")
+	if code, stdout, stderr := cliOutput("judge", "--trace", path); code != 1 || !strings.Contains(stdout, "is not ready") {
+		t.Errorf("cli = %d, stdout %q, stderr %q; want 1 under the trace's ready", code, stdout, stderr)
+	}
+	if code, stdout, stderr := cliOutput("judge", "--trace", path, "--config", toyConfig); code != 0 {
+		t.Errorf("cli = %d, stdout %q, stderr %q; want 0 under the config's ready", code, stdout, stderr)
 	}
 }

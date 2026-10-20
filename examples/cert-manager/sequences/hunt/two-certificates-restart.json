@@ -1,8 +1,0 @@
-{"seed": 63, "target": "cert-manager", "ops": [
-  {"i": 0, "t": "create", "obj": {"apiVersion": "cert-manager.io/v1", "kind": "Certificate", "metadata": {"name": "example"}, "spec": {"secretName": "example-tls", "commonName": "example.test", "dnsNames": ["example.test"], "issuerRef": {"kind": "Issuer", "name": "selfsigned"}}}, "noSettle": true},
-  {"i": 1, "t": "create", "obj": {"apiVersion": "cert-manager.io/v1", "kind": "Certificate", "metadata": {"name": "example-2"}, "spec": {"secretName": "example-tls-2", "commonName": "example.test", "dnsNames": ["example.test"], "issuerRef": {"kind": "Issuer", "name": "selfsigned"}}}, "noSettle": true},
-  {"i": 2, "t": "restart"},
-  {"i": 3, "t": "settle"},
-  {"i": 4, "t": "recreate", "obj": {"apiVersion": "cert-manager.io/v1", "kind": "Certificate", "metadata": {"name": "example"}, "spec": {"secretName": "example-tls", "commonName": "example.test", "dnsNames": ["example.test"], "issuerRef": {"kind": "Issuer", "name": "selfsigned"}}}},
-  {"i": 5, "t": "delete", "cr": "example-2"},
-  {"i": 6, "t": "delete"}]}

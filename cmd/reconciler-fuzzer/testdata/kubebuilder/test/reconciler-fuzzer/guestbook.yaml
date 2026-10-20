@@ -1,7 +1,0 @@
-apiVersion: webapp.example.com/v1
-kind: Guestbook
-metadata:
-  name: guestbook
-spec:
-  message: hello
-  pages: 3

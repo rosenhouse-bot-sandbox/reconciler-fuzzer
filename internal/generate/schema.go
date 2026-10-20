@@ -9,10 +9,9 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	gvkschema "k8s.io/apimachinery/pkg/runtime/schema"
 	"pgregory.net/rapid"
 
-	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/target"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
 )
 
 // schema is the part of a CRD's OpenAPI v3 schema the generator reads. What
@@ -72,66 +71,48 @@ func overlaid(root map[string]any, overlays map[string]map[string]any) (*schema,
 	for _, dotted := range slices.Sorted(maps.Keys(overlays)) {
 		overlay := overlays[dotted]
 		if unread := unreadKeywords(overlay, ""); len(unread) > 0 {
-			return nil, fmt.Errorf("generate.overlay %s: reconciler-fuzzer does not read %s; it reads %s",
+			return nil, fmt.Errorf("values.overlay %s: reconciler-fuzzer does not read %s; it reads %s",
 				dotted, strings.Join(unread, ", "), strings.Join(keywords, ", "))
 		}
 		node, err := schemaNode(root, strings.Split(dotted, "."))
 		if err != nil {
-			return nil, fmt.Errorf("generate.overlay %s: %w", dotted, err)
+			return nil, fmt.Errorf("values.overlay %s: %w", dotted, err)
 		}
 		mergeInto(node, overlay)
 	}
 	return asSchema(root)
 }
 
-// crdPlural returns the plural resource name from the target's CRDs for a GVK,
-// or empty if no CRD defines it.
-func crdPlural(t *target.Target, gvk gvkschema.GroupVersionKind) (string, error) {
-	documents, err := target.ReadCRDs(t.CRDs)
+// primaryCRD finds the primary kind's openAPIV3Schema and plural among the
+// config's CRDs.
+func primaryCRD(cfg *config.Config) (map[string]any, string, error) {
+	documents, err := readManifests(cfg.CRDs)
 	if err != nil {
-		return "", err
+		return nil, "", fmt.Errorf("reading the CRDs: %w", err)
 	}
+	kind := cfg.Primary.Kind
 	for _, document := range documents {
 		spec, _ := document["spec"].(map[string]any)
 		names, _ := spec["names"].(map[string]any)
-		if spec["group"] != gvk.Group || names["kind"] != gvk.Kind {
+		if spec["group"] != kind.Group || names["kind"] != kind.Kind {
 			continue
 		}
 		plural, _ := names["plural"].(string)
-		return plural, nil
-	}
-	return "", nil
-}
-
-// openAPISchema finds the primary CR's openAPIV3Schema among the target's CRDs.
-func openAPISchema(t *target.Target) (map[string]any, error) {
-	documents, err := target.ReadCRDs(t.CRDs)
-	if err != nil {
-		return nil, err
-	}
-	for _, document := range documents {
-		spec, _ := document["spec"].(map[string]any)
-		names, _ := spec["names"].(map[string]any)
-		if spec["group"] != t.Primary.Group || names["kind"] != t.Primary.Kind {
-			continue
-		}
 		versions, _ := spec["versions"].([]any)
 		for _, entry := range versions {
 			version, _ := entry.(map[string]any)
-			if version["name"] != t.Primary.Version {
+			if version["name"] != kind.Version {
 				continue
 			}
 			node, _ := version["schema"].(map[string]any)
 			root, _ := node["openAPIV3Schema"].(map[string]any)
 			if root == nil {
-				return nil, fmt.Errorf("the CRD of %s carries no schema for %s",
-					t.Primary.Kind, t.Primary.Version)
+				return nil, "", fmt.Errorf("the CRD of %s carries no schema for %s", kind.Kind, kind.Version)
 			}
-			return root, nil
+			return root, plural, nil
 		}
 	}
-	return nil, fmt.Errorf("the target's CRDs describe no %s/%s %s",
-		t.Primary.Group, t.Primary.Version, t.Primary.Kind)
+	return nil, "", fmt.Errorf("the CRDs describe no %s", kind)
 }
 
 // keywords are the schema keywords the generator reads.
@@ -208,18 +189,18 @@ func asSchema(root map[string]any) (*schema, error) {
 }
 
 // mutableFields are the paths the generator may change: the allowlist in
-// generate.mutate, or every path under spec where it is absent. Without the
+// values.mutate, or every path under spec where it is absent. Without the
 // allowlist, it also says which spec paths it leaves alone and why.
-func mutableFields(t *target.Target, s *schema) ([]field, []string, error) {
-	if len(t.Generate.Mutate) == 0 {
-		fields, leftAlone := specFields(s, t.Sample.Object)
+func mutableFields(mutate []string, s *schema, sample map[string]any) ([]field, []string, error) {
+	if len(mutate) == 0 {
+		fields, leftAlone := specFields(s, sample)
 		return fields, leftAlone, nil
 	}
 	var fields []field
-	for _, dotted := range slices.Compact(slices.Sorted(slices.Values(t.Generate.Mutate))) {
+	for _, dotted := range slices.Compact(slices.Sorted(slices.Values(mutate))) {
 		mutable, err := mutableField(s, dotted)
 		if err != nil {
-			return nil, nil, fmt.Errorf("generate.mutate %s: %w", dotted, err)
+			return nil, nil, fmt.Errorf("values.mutate %s: %w", dotted, err)
 		}
 		fields = append(fields, mutable)
 	}

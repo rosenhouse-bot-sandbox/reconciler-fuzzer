@@ -1,6 +1,0 @@
-{"seed": 63, "target": "cert-manager", "ops": [
-  {"i": 0, "t": "create", "obj": {"apiVersion": "cert-manager.io/v1", "kind": "Certificate", "metadata": {"name": "example"}, "spec": {"secretName": "example-tls", "commonName": "example.test", "dnsNames": ["example.test"], "issuerRef": {"kind": "Issuer", "name": "selfsigned"}}}},
-  {"i": 1, "t": "update", "patch": {"spec": {"dnsNames": ["example.test", "www.example.test"], "privateKey": {"rotationPolicy": "Always"}}}, "noSettle": true},
-  {"i": 2, "t": "restart"},
-  {"i": 3, "t": "settle"},
-  {"i": 4, "t": "delete"}]}

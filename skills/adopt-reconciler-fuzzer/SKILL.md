@@ -2,6 +2,7 @@
 name: adopt-reconciler-fuzzer
 description: Sets up reconciler-fuzzer for the Kubernetes controller of a kubebuilder project. Writes target.yaml and a sample custom resource, builds the controller, runs reconciler-fuzzer until it tests the controller, and reports what it finds. Use when the user wants to fuzz their kubebuilder operator or controller, or to adopt or try reconciler-fuzzer in their repository.
 ---
+Outdated: this skill describes the old tree; M2 (#111) rewrites it.
 
 # Adopt reconciler-fuzzer
 
