@@ -1,0 +1,31 @@
+{
+  "steps": [
+    {
+      "period": "1s",
+      "actions": [
+        {
+          "do": "create",
+          "slot": "a"
+        }
+      ],
+      "faults": [
+        {
+          "system": "cloud",
+          "match": {
+            "verb": "create",
+            "resource": "buckets"
+          },
+          "nth": 1,
+          "killAfter": true
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "do": "restart"
+        }
+      ]
+    }
+  ]
+}

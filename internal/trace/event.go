@@ -85,11 +85,31 @@ type Run struct {
 	Owners map[string]string `json:"owners,omitempty"`
 	// Owns lists the primary's owns entries, owning-CR rule 3.
 	Owns []Owns `json:"owns,omitempty"`
+	// Halted is the config's primary.halted CEL, or empty.
+	Halted string `json:"halted,omitempty"`
+	// Systems lists the fake services.
+	Systems []System `json:"systems,omitempty"`
+}
+
+// System is one fake service as the checks need it. Role, Ready and Gone
+// are CEL over one of its resources, or empty.
+type System struct {
+	Name  string `json:"name"`
+	API   string `json:"api"`
+	Role  string `json:"role,omitempty"`
+	Ready string `json:"ready,omitempty"`
+	Gone  string `json:"gone,omitempty"`
+	// Ignore lists the top-level body fields Restore does not compare.
+	Ignore     []string      `json:"ignore,omitempty"`
+	Poll       time.Duration `json:"poll,omitempty"`
+	Dependency *Dependency   `json:"dependency,omitempty"`
 }
 
 // Owns is one primary.owns entry with its kind's resource. Name and
-// Namespace are CEL over the CR.
+// Namespace are CEL over the CR. System is empty for kube; a fake's Kind
+// holds only its collection as Resource.
 type Owns struct {
+	System    string `json:"system,omitempty"`
 	Kind      Kind   `json:"kind"`
 	Name      string `json:"name"`
 	Namespace string `json:"namespace,omitempty"`
@@ -164,6 +184,8 @@ type Fault struct {
 	Index int    `json:"index"`
 	Ended bool   `json:"ended,omitempty"`
 	What  string `json:"what"`
+	// System is the fault's system. Empty is kube.
+	System string `json:"system,omitempty"`
 	// Model names the model that took a stuck or slowDelete fault.
 	Model string `json:"model,omitempty"`
 	// Hold names the kind whose watch events a holdWatch fault holds.
@@ -201,6 +223,8 @@ type Call struct {
 	// Stream numbers a watch within its listener, so its WatchEnd can name
 	// it.
 	Stream uint64 `json:"stream,omitempty"`
+	// Unmapped says the system's API map could not place the request.
+	Unmapped bool `json:"unmapped,omitempty"`
 }
 
 // Unknown outcome effects: the server committed the request, and the caller

@@ -1,0 +1,20 @@
+{
+  "steps": [
+    {
+      "actions": [
+        {
+          "do": "create",
+          "slot": "a"
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "do": "delete",
+          "slot": "a"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+apiVersion: toy.reconciler-fuzzer/v1
+kind: Bucket
+metadata:
+  name: bucket
+spec:
+  region: eu

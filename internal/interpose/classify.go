@@ -16,6 +16,9 @@ type Request struct {
 	Ref         trace.Ref
 	Subresource string
 	Watch       bool
+	// RequestName is a create's requested name, read by an API map.
+	RequestName string
+	Unmapped    bool
 }
 
 // namespaceSubresources follow a namespace name instead of scoping a resource.

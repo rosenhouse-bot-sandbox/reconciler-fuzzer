@@ -1,0 +1,38 @@
+# config.yaml with --halt: a Bucket stops after a create of unknown outcome,
+# which primary.halted counts as done.
+launch:
+  binary: ../../../bin/toy-bucket
+  args:
+    - --halt
+    - --bug=0                      # A later --launch-arg --bug=N wins.
+  env:
+    KUBECONFIG: ${systems.kube.kubeconfig}
+    WATCH_NAMESPACE: ${systems.kube.namespace}
+    CLOUD_ENDPOINT: ${systems.cloud.url}
+  rbac:
+    - ../rbac/role.yaml
+crds:
+  - ../crds/
+primary:
+  kind: toy.reconciler-fuzzer/v1/Bucket
+  sample: ../bucket.yaml
+  ready: >-
+    has(self.status) && has(self.status.observedGeneration) && self.status.observedGeneration == self.metadata.generation
+    && has(self.status.ready) && self.status.ready
+  halted: >-
+    has(self.status) && has(self.status.conditions)
+    && self.status.conditions.exists(c, c.type == 'CreatePending' && c.status == 'True')
+systems:
+  - name: cloud
+    process: {command: [../../../bin/crudfake, --config, ../cloud.yaml]}
+    api: crud
+    owner: self.labels['k8s-uid']
+    ready: self.state == 'READY'
+    gone: self.state == 'DELETING'
+    dependency: {required: true}
+    poll: 1s
+timeouts:
+  settle: 10s
+  stable: 2s
+values:
+  mutate: [spec.region]

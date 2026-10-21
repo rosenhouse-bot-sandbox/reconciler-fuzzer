@@ -36,6 +36,10 @@ var update = flag.Bool("update", false, "write ../../docs/bug-matrix.md")
 
 const bugMatrixPath = "../../docs/bug-matrix.md"
 
+// bucketSection starts the part of docs/bug-matrix.md that
+// targets/toy-bucket renders.
+const bucketSection = "\n## Bucket toy\n"
+
 func TestBugMatrixIsCurrent(t *testing.T) {
 	var all []string
 	for _, config := range configs {
@@ -46,15 +50,31 @@ func TestBugMatrixIsCurrent(t *testing.T) {
 		all = append(all, names...)
 	}
 	want := renderBugMatrix(all)
+	got, err := os.ReadFile(bugMatrixPath)
+	head, bucket := splitBugMatrix(string(got))
 	if *update {
-		if err := os.WriteFile(bugMatrixPath, []byte(want), 0o644); err != nil {
+		if err := os.WriteFile(bugMatrixPath, []byte(want+bucket), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		return
 	}
-	got, err := os.ReadFile(bugMatrixPath)
-	if err != nil || string(got) != want {
+	if err != nil || head != want {
 		t.Errorf("docs/bug-matrix.md is stale. Run 'make bug-matrix'.")
+	}
+}
+
+// splitBugMatrix splits md before the bucket toy's section.
+func splitBugMatrix(md string) (head, bucket string) {
+	if i := strings.Index(md, bucketSection); i >= 0 {
+		return md[:i], md[i:]
+	}
+	return md, ""
+}
+
+func TestSplitBugMatrixKeepsTheBucketSection(t *testing.T) {
+	head, bucket := splitBugMatrix("# Bug matrix\n\n| B0 |\n\n## Bucket toy\n\n| B30 |\n")
+	if head != "# Bug matrix\n\n| B0 |\n" || bucket != "\n## Bucket toy\n\n| B30 |\n" {
+		t.Errorf("split into %q and %q", head, bucket)
 	}
 }
 
@@ -108,7 +128,7 @@ func renderBugMatrix(plans []string) string {
 	})
 	var b strings.Builder
 	b.WriteString("# Bug matrix\n\n" +
-		"This file is generated from targets/toy-widget/gate_test.go by `make bug-matrix`.\n" +
+		"This file is generated from targets/toy-widget/gate_test.go and targets/toy-bucket/gate_test.go by `make bug-matrix`.\n" +
 		"`make test-envtest` proves each row: the plan, run against the bug, reports the check's finding at that step, or no finding for check none.\n\n" +
 		"| Bug | Description | Plan | Check | Step |\n|---|---|---|---|---|\n")
 	fmt.Fprintf(&b, "| B0 | %s | all %d committed plans | none | |\n", bugs[0], len(plans))

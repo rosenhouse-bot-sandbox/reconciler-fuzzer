@@ -42,6 +42,8 @@ type Generator struct {
 	fixtures []fixture
 	// models are the resources of the model kinds, which model faults match.
 	models []gvk.GroupResource
+	// fakes are the fake services' names.
+	fakes []string
 	// track is the longest dependency track, which a model fault's period
 	// adds.
 	track  time.Duration
@@ -120,6 +122,12 @@ func build(cfg *config.Config) (*Generator, error) {
 	if err := g.readModels(cfg); err != nil {
 		return nil, err
 	}
+	for _, f := range cfg.Fakes() {
+		g.fakes = append(g.fakes, f.Name)
+		if f.Dependency != nil {
+			g.track = max(g.track, f.Dependency.Track)
+		}
+	}
 	g.plans = rapid.Custom(g.plan)
 	return g, nil
 }
@@ -161,7 +169,7 @@ func readObject(path string) (map[string]any, error) {
 }
 
 func (g *Generator) addResource(gr gvk.GroupResource) {
-	if !trace.Ignored(trace.Call{Ref: trace.Ref{Group: gr.Group, Resource: gr.Resource}}) && !slices.Contains(g.resources, gr) {
+	if !trace.Ignored(trace.Call{Ref: trace.Ref{System: "kube", Group: gr.Group, Resource: gr.Resource}}) && !slices.Contains(g.resources, gr) {
 		g.resources = append(g.resources, gr)
 	}
 }
@@ -296,7 +304,7 @@ func (g *Generator) step(t *rapid.T, at state) plan.Step {
 	switch {
 	case uniform(t, 10, "single") < 3:
 		singles := []plan.Do{plan.Restart, plan.Kill, ""}
-		if len(g.resources) > 1 {
+		if g.damageable() {
 			singles = append(singles, plan.Damage)
 		}
 		switch do := sampled(t, singles, "single"); do {
@@ -356,7 +364,7 @@ func (g *Generator) action(t *rapid.T, at state) plan.Action {
 			legal = append(legal, plan.Update)
 		}
 	}
-	if len(g.resources) > 1 {
+	if g.damageable() {
 		legal = append(legal, plan.Damage)
 	}
 	if len(g.fixtures) > 0 {
@@ -413,13 +421,22 @@ func (g *Generator) delete(t *rapid.T, at state, slot string) plan.Action {
 	return a
 }
 
+// damageable says whether a kube resource or a fake can take damage.
+func (g *Generator) damageable() bool { return len(g.resources) > 1 || len(g.fakes) > 0 }
+
 // damage deletes an object of a drawn resource, of a live slot when one is.
+// With fakes, half the draws, or all without a kube resource, target a
+// fake drawn uniformly.
 func (g *Generator) damage(t *rapid.T, at state) plan.Action {
-	return g.damageOf(t, at, sampled(t, g.resources[1:], "resource"))
+	if len(g.fakes) > 0 && (len(g.resources) == 1 || uniform(t, 2, "damage a fake") == 0) {
+		return g.damageOf(t, at, plan.Target{System: sampled(t, g.fakes, "fake")})
+	}
+	gr := sampled(t, g.resources[1:], "resource")
+	return g.damageOf(t, at, plan.Target{Group: gr.Group, Resource: gr.Resource})
 }
 
-func (g *Generator) damageOf(t *rapid.T, at state, gr gvk.GroupResource) plan.Action {
-	a := plan.Action{Do: plan.Damage, Target: &plan.Target{Group: gr.Group, Resource: gr.Resource}}
+func (g *Generator) damageOf(t *rapid.T, at state, target plan.Target) plan.Action {
+	a := plan.Action{Do: plan.Damage, Target: &target}
 	if live := at.live(); len(live) > 0 {
 		a.Slot = sampled(t, live, "slot")
 	}
@@ -433,6 +450,9 @@ func (g *Generator) damageOf(t *rapid.T, at state, gr gvk.GroupResource) plan.Ac
 // SlowDelete takes a delete of a live CR, whose dependencies' deletion it
 // holds; a later step may create the slot again. Otherwise a restart.
 func (g *Generator) traffic(t *rapid.T, at state, f plan.Fault) plan.Action {
+	if f.System != "" {
+		return g.fakeTraffic(t, at, f)
+	}
 	gr := gvk.GroupResource{Group: f.Match.Group, Resource: f.Match.Resource}
 	live := len(at.live()) > 0
 	switch {
@@ -445,11 +465,27 @@ func (g *Generator) traffic(t *rapid.T, at state, f plan.Fault) plan.Action {
 	case f.ModelFault():
 		return plan.Action{Do: plan.Restart}
 	case slices.Contains(g.resources[1:], gr):
-		return g.damageOf(t, at, gr)
+		return g.damageOf(t, at, plan.Target{Group: gr.Group, Resource: gr.Resource})
 	case gr == g.resources[0] && len(at.live()) > 0 && len(g.fields) > 0:
 		return g.update(t, at, sampled(t, at.live(), "slot"))
 	}
 	return plan.Action{Do: plan.Restart}
+}
+
+// fakeTraffic is an action that exercises a fault on a fake. A delete or
+// slowDelete takes a delete of a live CR. Stuck, a create or any verb
+// takes a create, which makes a new resource. Without a CR to delete or a
+// slot to create, or for another verb, it takes damage of the fake, which
+// the controller repairs.
+func (g *Generator) fakeTraffic(t *rapid.T, at state, f plan.Fault) plan.Action {
+	deletes := f.SlowDelete || f.Match.Verb == "delete"
+	switch creates := f.Stuck || f.Match.Verb == "create" || f.Match.Verb == ""; {
+	case deletes && len(at.live()) > 0:
+		return g.delete(t, at, sampled(t, at.live(), "slot"))
+	case (creates || deletes) && len(at.free()) > 0:
+		return g.create(t, at, sampled(t, at.free(), "slot"))
+	}
+	return g.damageOf(t, at, plan.Target{System: f.System})
 }
 
 // nths favor the first match and every match, which a step's few requests
@@ -505,8 +541,12 @@ func (g *Generator) addRequests() {
 
 // fault draws a request and one of five request effects. With models, it
 // draws one of seven effects instead, and the last two are stuck and
-// slowDelete on a model kind drawn uniformly.
+// slowDelete on a model kind drawn uniformly. With fakes, half the draws
+// are a fake fault instead.
 func (g *Generator) fault(t *rapid.T) plan.Fault {
+	if len(g.fakes) > 0 && uniform(t, 2, "fault on a fake") == 0 {
+		return g.fakeFault(t)
+	}
 	total := 0
 	for _, r := range g.requests {
 		total += r.weight
@@ -537,6 +577,41 @@ func (g *Generator) fault(t *rapid.T) plan.Fault {
 		gr := sampled(t, g.models, "model")
 		f = plan.Fault{Match: plan.Match{Group: gr.Group, Resource: gr.Resource}, Stuck: effect == 5, SlowDelete: effect == 6}
 	}
+	return f
+}
+
+// fakeVerbs are the crud map's verbs, each drawn equally.
+var fakeVerbs = []string{"create", "get", "list", "update", "patch", "delete"}
+
+// fakeFault draws a fake uniformly, then one of seven effects: five request
+// effects on the first or every request, of a verb or of any verb, or
+// stuck or slowDelete on every collection. A controller may use few of the
+// verbs, so half the request faults match any.
+func (g *Generator) fakeFault(t *rapid.T) plan.Fault {
+	f := plan.Fault{System: sampled(t, g.fakes, "fake")}
+	switch effect := uniform(t, 7, "effect"); effect {
+	case 5:
+		f.Stuck = true
+		return f
+	case 6:
+		f.SlowDelete = true
+		return f
+	case 0:
+		f.Error = &plan.Error{Code: sampled(t, []int{500, 503, 409}, "code")}
+	case 1:
+		delay := plan.Duration(g.stable / time.Duration(sampled(t, []int{4, 2, 1}, "delay")))
+		f.Delay = &delay
+	case 2:
+		f.Drop = true
+	case 3:
+		f.DropResponse = true
+	case 4:
+		f.KillAfter = true
+	}
+	if uniform(t, 2, "any verb") == 0 {
+		f.Match.Verb = sampled(t, fakeVerbs, "verb")
+	}
+	f.Nth = uniform(t, 2, "nth")
 	return f
 }
 

@@ -1,0 +1,25 @@
+{
+  "steps": [
+    {
+      "period": "4s",
+      "actions": [
+        {
+          "do": "create",
+          "slot": "a"
+        }
+      ],
+      "faults": [
+        {
+          "system": "cloud",
+          "match": {
+            "verb": "create",
+            "resource": "buckets"
+          },
+          "error": {
+            "code": 503
+          }
+        }
+      ]
+    }
+  ]
+}

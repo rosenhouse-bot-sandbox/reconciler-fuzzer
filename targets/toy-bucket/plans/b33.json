@@ -1,0 +1,19 @@
+{
+  "steps": [
+    {
+      "period": "2s",
+      "actions": [
+        {
+          "do": "create",
+          "slot": "a"
+        }
+      ],
+      "faults": [
+        {
+          "system": "cloud",
+          "stuck": true
+        }
+      ]
+    }
+  ]
+}

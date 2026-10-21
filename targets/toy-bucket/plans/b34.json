@@ -1,0 +1,23 @@
+{
+  "steps": [
+    {
+      "actions": [
+        {
+          "do": "create",
+          "slot": "a"
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "do": "damage",
+          "slot": "a",
+          "target": {
+            "system": "cloud"
+          }
+        }
+      ]
+    }
+  ]
+}

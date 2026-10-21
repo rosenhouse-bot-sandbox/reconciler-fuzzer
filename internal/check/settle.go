@@ -3,10 +3,12 @@ package check
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"time"
 
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/owner"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 )
 
@@ -32,7 +34,7 @@ func unmetClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 	var unmets []unmet
 	live := ix.Live(s.PrimaryGroup, s.PrimaryResource, t)
 	for _, cr := range live {
-		unmets = append(unmets, crClauses(cr, s)...)
+		unmets = append(unmets, crClauses(ix, cr, t, s)...)
 	}
 
 	since, up := ix.Up(t)
@@ -60,7 +62,7 @@ func unmetClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 // so that clause 7 sees the controller's reaction.
 func lookClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 	step, found := latestStep(ix, t)
-	if !found || step.Reached[trace.EndFaults] && t >= lapse(step, s) {
+	if !found || step.Reached[trace.EndFaults] && t >= lapse(ix, step, s) {
 		return nil
 	}
 	var unmets []unmet
@@ -90,9 +92,19 @@ func latestStep(ix *trace.Index, t time.Duration) (trace.StepSpan, bool) {
 	return latest, found
 }
 
-// lapse is when clause 5 stops holding step to its changes: 1.5 poll
-// intervals of the Kubernetes system, which is Stable, after end faults.
-func lapse(step trace.StepSpan, s Spec) time.Duration { return step.EndFaults + s.Stable*3/2 }
+// lapse is when clause 5 stops holding step to its changes: 1.5 times the
+// longest poll interval of the changed objects' systems after end faults.
+// Faults change no object, so their systems do not count.
+func lapse(ix *trace.Index, step trace.StepSpan, s Spec) time.Duration {
+	poll := s.Stable
+	if changed := changes(ix, step.Step); len(changed) > 0 {
+		poll = 0
+		for _, e := range changed {
+			poll = max(poll, s.poll(e.Action.Ref.System))
+		}
+	}
+	return step.EndFaults + poll*3/2
+}
 
 // changes are the step's damage and changeFixture actions that changed an
 // object without error.
@@ -111,8 +123,9 @@ func looksAt(c trace.Call, ref trace.Ref) bool {
 	return (succeeded(c) || c.Status == 404) && !c.Unknown() && c.Ref.Covers(ref)
 }
 
-// crClauses says whether cr is ready and not being deleted.
-func crClauses(cr trace.Version, s Spec) []unmet {
+// crClauses says whether cr is done at t, ready or halted, and not being
+// deleted.
+func crClauses(ix *trace.Index, cr trace.Version, t time.Duration, s Spec) []unmet {
 	name, k := describe(cr.Ref), kind(cr.Ref)
 	var body map[string]any
 	if err := json.Unmarshal(cr.Body, &body); err != nil {
@@ -123,19 +136,57 @@ func crClauses(cr trace.Version, s Spec) []unmet {
 	}
 	if ready, err := s.Ready(body); err != nil {
 		return []unmet{{1, k, fmt.Sprintf("%s: ready: %v", name, err)}}
-	} else if !ready {
+	} else if !ready && !halted(ix, cr, body, t, s) {
 		return []unmet{{1, k, name + " is not ready"}}
 	}
 	return nil
 }
 
-// quietClauses holds the controller to no changed write and to its budgets
-// over (t-Stable, t]. A changed write sent by t counts even if its response
-// ends later, because the observer may record its version first.
+// halted reports whether s.Halted accepts cr's body and the controller
+// made a call of unknown outcome, by t, on cr or on an instance cr owns: by
+// rules 1 to 3, or by rule 4 as the one CR alive at its creation.
+func halted(ix *trace.Index, cr trace.Version, body map[string]any, t time.Duration, s Spec) bool {
+	if s.Halted == nil {
+		return false
+	}
+	if ok, err := s.Halted(body); err != nil || !ok {
+		return false
+	}
+	var w *owner.World
+	return slices.ContainsFunc(ix.Calls(trace.Controller, -1, t), func(e trace.Event) bool {
+		c := e.Call
+		switch {
+		case !c.Unknown():
+			return false
+		case c.Object() == cr.Ref:
+			return true
+		case c.ResultUID == "":
+			return false
+		}
+		if w == nil {
+			w = owner.New(ix, s.Owners)
+		}
+		i, found := w.Instance(c.ResultUID)
+		if !found {
+			return false
+		}
+		o := w.Owner(i, t)
+		return slices.Equal(o.CRs, []string{cr.UID})
+	})
+}
+
+// quietClauses holds the controller to no changed write over (t-Stable, t],
+// and to its budgets over each system's poll interval up to t. A changed
+// write sent by t counts even if its response ends later, because the
+// observer may record its version first.
 func quietClauses(ix *trace.Index, t time.Duration, s Spec, crs int) []unmet {
 	var changed []trace.Event
-	reads, writes := 0, 0
-	for _, e := range ix.Calls(trace.Controller, t-s.Stable, math.MaxInt64) {
+	reads, writes := map[string]int{}, map[string]int{}
+	window := s.Stable
+	for _, poll := range s.Polls {
+		window = max(window, poll)
+	}
+	for _, e := range ix.Calls(trace.Controller, t-window, math.MaxInt64) {
 		if !judged(e) {
 			continue
 		}
@@ -145,17 +196,20 @@ func quietClauses(ix *trace.Index, t time.Duration, s Spec, crs int) []unmet {
 			}
 			continue
 		}
+		system := e.Call.Ref.System
+		inPoll := e.At > t-s.poll(system)
 		switch verb := e.Call.Verb; {
-		case verb == "get" || verb == "list":
-			reads++
+		case (verb == "get" || verb == "list") && inPoll:
+			reads[system]++
 		case trace.Mutating(verb):
-			writes++
-			if ix.Changed(e) {
+			if inPoll {
+				writes[system]++
+			}
+			if e.At > t-s.Stable && ix.Changed(e) {
 				changed = append(changed, e)
 			}
 		}
 	}
-	window := fmt.Sprintf("(%v, %v]", t-s.Stable, t)
 	var unmets []unmet
 	if len(changed) > 0 {
 		first := changed[0].Call
@@ -163,16 +217,32 @@ func quietClauses(ix *trace.Index, t time.Duration, s Spec, crs int) []unmet {
 		if ref.Name == "" {
 			ref.Name = first.ResultName
 		}
-		unmets = append(unmets, unmet{7, kind(ref), fmt.Sprintf("the controller made %d changed writes in %s; first it changed %s with %s at %v",
-			len(changed), window, describe(ref), first.Verb, changed[0].At)})
+		unmets = append(unmets, unmet{7, kind(ref), fmt.Sprintf("the controller made %d changed writes in (%v, %v]; first it changed %s with %s at %v",
+			len(changed), t-s.Stable, t, describe(ref), first.Verb, changed[0].At)})
 	}
-	if budget := s.Budgets.Reads * crs; reads > budget {
-		unmets = append(unmets, unmet{7, "", fmt.Sprintf("the controller made %d gets and lists in %s, over the budget of %d", reads, window, budget)})
+	for _, system := range slices.Sorted(maps.Keys(reads)) {
+		if budget := s.Budgets.Reads * crs; reads[system] > budget {
+			unmets = append(unmets, unmet{7, "", fmt.Sprintf("the controller made %d gets and lists%s in %s, over the budget of %d", reads[system], of(system), s.pollWindow(system, t), budget)})
+		}
 	}
-	if budget := s.Budgets.Writes * crs; writes > budget {
-		unmets = append(unmets, unmet{7, "", fmt.Sprintf("the controller made %d writes in %s, over the budget of %d", writes, window, budget)})
+	for _, system := range slices.Sorted(maps.Keys(writes)) {
+		if budget := s.Budgets.Writes * crs; writes[system] > budget {
+			unmets = append(unmets, unmet{7, "", fmt.Sprintf("the controller made %d writes%s in %s, over the budget of %d", writes[system], of(system), s.pollWindow(system, t), budget)})
+		}
 	}
 	return unmets
+}
+
+// of names a fake, and is empty for kube.
+func of(system string) string {
+	if system == "kube" {
+		return ""
+	}
+	return " of " + system
+}
+
+func (s Spec) pollWindow(system string, t time.Duration) string {
+	return fmt.Sprintf("(%v, %v]", t-s.poll(system), t)
 }
 
 // judged says whether a clause counts the call.
@@ -180,8 +250,12 @@ func judged(e trace.Event) bool { return !trace.Ignored(*e.Call) }
 
 func succeeded(c trace.Call) bool { return c.Status >= 200 && c.Status <= 299 }
 
-// describe names an object as "resource.group namespace/name".
+// describe names an object as "resource.group namespace/name", and a
+// fake's as "system collection id".
 func describe(ref trace.Ref) string {
+	if ref.System != "kube" && ref.System != "" {
+		return ref.System + " " + ref.Resource + " " + ref.Name
+	}
 	kind := ref.Resource
 	if ref.Group != "" {
 		kind += "." + ref.Group
@@ -199,7 +273,7 @@ func describe(ref trace.Ref) string {
 func FirstSettled(ix *trace.Index, from, to time.Duration, s Spec) (time.Duration, bool) {
 	candidates := []time.Duration{from}
 	for _, step := range ix.Steps() {
-		if t := lapse(step, s); from <= t && t <= to {
+		if t := lapse(ix, step, s); from <= t && t <= to {
 			candidates = append(candidates, t)
 		}
 	}

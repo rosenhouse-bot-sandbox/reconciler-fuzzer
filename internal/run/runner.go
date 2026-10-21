@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/kube"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/system"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
@@ -101,7 +102,7 @@ func (e *execution) step(ctx context.Context, n int, step plan.Step) error {
 	started, err := e.faultPeriod(ctx, n, step, start)
 	for i, f := range started {
 		f.end()
-		e.Recorder.Record(trace.Event{Fault: &trace.Fault{Step: n, Index: i, Ended: true, What: step.Faults[i].String(), Model: f.model}})
+		e.Recorder.Record(trace.Event{Fault: &trace.Fault{Step: n, Index: i, Ended: true, What: step.Faults[i].String(), System: step.Faults[i].System, Model: f.model}})
 	}
 	if err != nil && !errors.Is(err, errSlotTaken) {
 		return err
@@ -111,17 +112,39 @@ func (e *execution) step(ctx context.Context, n int, step plan.Step) error {
 		return err
 	}
 	endFaults := e.Recorder.Now()
-	var maxPoll time.Duration
-	if slices.ContainsFunc(step.Actions, func(a plan.Action) bool { return a.Do == plan.Damage || a.Do == plan.ChangeFixture }) {
-		// The Kubernetes system's poll interval is stable.
-		maxPoll = e.Config.Timeouts.Stable
-	}
-	deadline, backoffBound := Deadline(endFaults, time.Since(start), maxPoll, e.Config.Timeouts)
+	deadline, backoffBound := Deadline(endFaults, time.Since(start), e.maxPoll(step), e.Config.Timeouts)
 	e.Recorder.Record(trace.Event{Phase: &trace.Phase{Step: n, Name: trace.EndFaults, Deadline: deadline, BackoffBound: backoffBound}})
 	if err := e.settle(ctx, n, deadline); err != nil {
 		return err
 	}
 	return taken
+}
+
+// maxPoll is the longest poll interval of the systems the step's faults,
+// damage and changeFixture actions name, and of every fake when the step
+// changes a CR, since the controller then polls its fakes.
+func (e *execution) maxPoll(step plan.Step) time.Duration {
+	var systems []string
+	for _, f := range step.Faults {
+		systems = append(systems, f.System)
+	}
+	for _, a := range step.Actions {
+		switch a.Do {
+		case plan.Damage:
+			systems = append(systems, a.Target.System)
+		case plan.ChangeFixture:
+			systems = append(systems, kube.Name)
+		case plan.Create, plan.Update, plan.Delete:
+			for _, s := range e.Config.Fakes() {
+				systems = append(systems, s.Name)
+			}
+		}
+	}
+	var longest time.Duration
+	for _, name := range systems {
+		longest = max(longest, e.Config.Poll(name))
+	}
+	return longest
 }
 
 // startedFault is a fault to end, and the model that took it.
@@ -139,7 +162,7 @@ func (e *execution) faultPeriod(ctx context.Context, n int, step plan.Step, star
 		if err != nil {
 			return started, fmt.Errorf("steps[%d].faults[%d]: %w", n, i, err)
 		}
-		e.Recorder.Record(trace.Event{Fault: &trace.Fault{Step: n, Index: i, What: f.String(), Model: model}})
+		e.Recorder.Record(trace.Event{Fault: &trace.Fault{Step: n, Index: i, What: f.String(), System: f.System, Model: model}})
 		end, err := target.Fault(f)
 		if err != nil {
 			return started, fmt.Errorf("steps[%d].faults[%d]: %w", n, i, err)
@@ -176,7 +199,7 @@ func (e *execution) target(f plan.Fault) (target FaultTarget, model string, err 
 	}
 	system := f.System
 	if system == "" {
-		system = "kube"
+		system = kube.Name
 	}
 	target, known := e.Listeners[system]
 	if !known {
@@ -245,10 +268,17 @@ func (e *execution) act(ctx context.Context, a plan.Action) (*trace.Ref, error) 
 		if !found {
 			return nil, errNoMatch
 		}
-		if a.Patch != nil {
-			return &ref, e.Cluster.Patch(ctx, ref, a.Patch)
+		var actor Actor = e.Cluster
+		if a.Do == plan.Damage {
+			var known bool
+			if actor, known = e.Actors[ref.System]; !known {
+				return nil, fmt.Errorf("no system %q takes damage", ref.System)
+			}
 		}
-		err := e.Cluster.Delete(ctx, ref, "")
+		if a.Patch != nil {
+			return &ref, actor.Patch(ctx, ref, a.Patch)
+		}
+		err := actor.Delete(ctx, ref, "")
 		if errors.Is(err, system.ErrGone) {
 			return nil, fmt.Errorf("%w: %w", errNoMatch, err)
 		}
@@ -289,6 +319,9 @@ func (e *execution) settle(ctx context.Context, n int, deadline time.Duration) e
 		if first {
 			span, _ := e.ix.Step(n)
 			from = span.EndFaults
+		}
+		if err := e.failed(); err != nil {
+			return err
 		}
 		if _, ok := e.FirstSettled(e.ix, from, min(now, deadline)); ok {
 			e.phase(n, trace.Settled)

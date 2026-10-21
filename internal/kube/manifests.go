@@ -176,7 +176,7 @@ func ruleKinds(roles []rbacv1.Role, clusterRoles []rbacv1.ClusterRole) []schema.
 		for _, group := range rule.APIGroups {
 			for _, resource := range rule.Resources {
 				gr := schema.GroupResource{Group: group, Resource: resource}
-				ignored := trace.Ignored(trace.Call{Ref: trace.Ref{Group: group, Resource: resource}})
+				ignored := trace.Ignored(trace.Call{Ref: trace.Ref{System: Name, Group: group, Resource: resource}})
 				if group == "*" || resource == "*" || strings.Contains(resource, "/") || ignored || slices.Contains(kinds, gr) {
 					continue
 				}

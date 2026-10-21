@@ -29,7 +29,7 @@ type Config struct {
 	Budgets  Budgets
 	Timeouts Timeouts
 
-	ready, retain func(self map[string]any) (bool, error)
+	ready, retain, halted func(self map[string]any) (bool, error)
 }
 
 // Values say how the generator draws CRs and fixture changes. Paths are
@@ -69,26 +69,72 @@ type Primary struct {
 	Retain string
 	// Owns are owning-CR rule 3: fields of the CR that name its resources.
 	Owns []Owns
+	// Halted is CEL over self, the CR. Where it holds after an
+	// unknown-outcome call for the CR, Converge counts the CR as done. It
+	// is empty when unset.
+	Halted string
 }
 
 // Owns is one primary.owns entry. Name and Namespace are CEL over self, the
 // CR, and yield strings.
 type Owns struct {
-	Kind schema.GroupVersionKind
-	Name string
+	// System and Collection name a fake's resources, written
+	// <system>:<collection>; Kind is then empty.
+	System, Collection string
+	Kind               schema.GroupVersionKind
+	Name               string
 	// Namespace is empty when unset: the resource is in the CR's namespace,
 	// or cluster-scoped.
 	Namespace string
 }
 
-// System is one systems entry. Until fake services land, the only name is
-// kube.
+// System is one systems entry: kube, which takes only Owner, or a fake
+// service, which has a Process.
 type System struct {
 	Name string
 	// Owner is owning-CR rule 2: CEL over self, one of the system's
 	// resources, that yields its CR's UID, namespace/name or name. It is
 	// empty when unset.
 	Owner string
+	// Process is nil for kube.
+	Process *Process
+	// API names the fake's API map: crud.
+	API string
+	// Role, Ready and Gone are CEL over one of the fake's resources, or
+	// empty. Ready is required with Dependency.
+	Role, Ready, Gone string
+	Dependency        *Dependency
+	// Poll defaults to Timeouts.Stable.
+	Poll time.Duration
+}
+
+// Process runs a fake service in the config file's directory.
+type Process struct {
+	// Command's first word, when it holds a slash, is an absolute path.
+	Command []string
+	Dir     string
+}
+
+// Poll is the poll interval of the fake named system, or else
+// Timeouts.Stable.
+func (c *Config) Poll(system string) time.Duration {
+	for _, s := range c.Fakes() {
+		if s.Name == system {
+			return s.Poll
+		}
+	}
+	return c.Timeouts.Stable
+}
+
+// Fakes returns the systems entries with a process.
+func (c *Config) Fakes() []System {
+	var fakes []System
+	for _, s := range c.Systems {
+		if s.Process != nil {
+			fakes = append(fakes, s)
+		}
+	}
+	return fakes
 }
 
 // ReadyCondition is the only stage: the model sets the Ready condition True
@@ -120,8 +166,8 @@ type Dependency struct {
 	Track time.Duration
 }
 
-// Budgets cap the controller's requests per live CR per stable period, not
-// per poll period: the Kubernetes system has no poll.
+// Budgets cap the controller's requests to each system per live CR per
+// poll period of that system. Kube's poll period is Timeouts.Stable.
 // Reads count gets and lists. Writes count mutating requests, no-op writes
 // included.
 type Budgets struct {
@@ -155,6 +201,7 @@ type declaration struct {
 		Sample string `json:"sample"`
 		Ready  string `json:"ready"`
 		Retain string `json:"retain"`
+		Halted string `json:"halted"`
 		Owns   []struct {
 			Kind      string `json:"kind"`
 			Name      string `json:"name"`
@@ -163,14 +210,11 @@ type declaration struct {
 	} `json:"primary"`
 	Fixtures []string `json:"fixtures"`
 	Models   []struct {
-		Kind       string         `json:"kind"`
-		Stages     string         `json:"stages"`
-		Status     map[string]any `json:"status"`
-		After      string         `json:"after"`
-		Dependency *struct {
-			Required *bool  `json:"required"`
-			Track    string `json:"track"`
-		} `json:"dependency"`
+		Kind       string              `json:"kind"`
+		Stages     string              `json:"stages"`
+		Status     map[string]any      `json:"status"`
+		After      string              `json:"after"`
+		Dependency *declaredDependency `json:"dependency"`
 	} `json:"models"`
 	Values struct {
 		Overlay  map[string]map[string]any `json:"overlay"`
@@ -179,8 +223,17 @@ type declaration struct {
 		Fixtures map[string][]string       `json:"fixtures"`
 	} `json:"values"`
 	Systems []struct {
-		Name  string `json:"name"`
-		Owner string `json:"owner"`
+		Name    string `json:"name"`
+		Owner   string `json:"owner"`
+		Process *struct {
+			Command []string `json:"command"`
+		} `json:"process"`
+		API        string              `json:"api"`
+		Role       string              `json:"role"`
+		Ready      string              `json:"ready"`
+		Gone       string              `json:"gone"`
+		Dependency *declaredDependency `json:"dependency"`
+		Poll       string              `json:"poll"`
 	} `json:"systems"`
 	Budgets struct {
 		Reads  *int `json:"reads"`
@@ -191,6 +244,11 @@ type declaration struct {
 		Stable     string `json:"stable"`
 		BackoffCap string `json:"backoffCap"`
 	} `json:"timeouts"`
+}
+
+type declaredDependency struct {
+	Required *bool  `json:"required"`
+	Track    string `json:"track"`
 }
 
 // Load reads the file strictly: an unknown key is an error that names its
@@ -263,11 +321,10 @@ func load(path string) (*Config, error) {
 		}
 	}
 
-	if c.Primary.Owns, err = owns(d); err != nil {
-		return nil, err
-	}
-	if c.Systems, err = systems(d); err != nil {
-		return nil, err
+	if c.Primary.Halted = d.Primary.Halted; c.Primary.Halted != "" {
+		if c.halted, err = CompileReady(c.Primary.Halted); err != nil {
+			return nil, fmt.Errorf("primary.halted: %w", err)
+		}
 	}
 
 	c.Values = Values{Overlay: d.Values.Overlay, Distinct: d.Values.Distinct, Mutate: d.Values.Mutate, Fixtures: map[string][]string{}}
@@ -323,7 +380,78 @@ func load(path string) (*Config, error) {
 		}
 		*t.value = parsed
 	}
+
+	if c.Systems, err = systems(d, dir, c.Timeouts.Stable); err != nil {
+		return nil, err
+	}
+	if c.Primary.Owns, err = owns(d, c.Fakes()); err != nil {
+		return nil, err
+	}
+	if err := c.checkLaunchVars(); err != nil {
+		return nil, err
+	}
 	return c, nil
+}
+
+// launchVars are the keys each system's Endpoints.Vars holds.
+var launchVars = map[string][]string{"kube": {"kubeconfig", "namespace", "url"}, "fake": {"url"}}
+
+// checkLaunchVars refuses a launch arg or env value whose ${key} names no
+// system or no key of one.
+func (c *Config) checkLaunchVars() error {
+	vars := map[string]string{}
+	for _, key := range launchVars["kube"] {
+		vars["systems.kube."+key] = ""
+	}
+	for _, f := range c.Fakes() {
+		for _, key := range launchVars["fake"] {
+			vars["systems."+f.Name+"."+key] = ""
+		}
+	}
+	check := func(where, value string) error {
+		for _, key := range keys(value) {
+			if _, known := vars[key]; known {
+				continue
+			}
+			system, rest, ok := strings.Cut(strings.TrimPrefix(key, "systems."), ".")
+			switch {
+			case !strings.HasPrefix(key, "systems.") || !ok:
+				return fmt.Errorf("%s: unknown key %s", where, key)
+			case system != "kube" && !slices.ContainsFunc(c.Fakes(), func(f System) bool { return f.Name == system }):
+				return fmt.Errorf("%s: no system %s", where, system)
+			default:
+				return fmt.Errorf("%s: system %s has no %s", where, system, rest)
+			}
+		}
+		return nil
+	}
+	for i, arg := range c.Launch.Args {
+		if err := check(fmt.Sprintf("launch args[%d]", i), arg); err != nil {
+			return err
+		}
+	}
+	for name, value := range c.Launch.Env {
+		if err := check("launch env "+name, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// keys returns each ${key} in s.
+func keys(s string) []string {
+	var found []string
+	for {
+		_, rest, ok := strings.Cut(s, "${")
+		if !ok {
+			return found
+		}
+		key, after, closed := strings.Cut(rest, "}")
+		if !closed {
+			return found
+		}
+		found, s = append(found, key), after
+	}
 }
 
 func models(d declaration, primary schema.GroupVersionKind) ([]Model, error) {
@@ -352,29 +480,53 @@ func models(d declaration, primary schema.GroupVersionKind) ([]Model, error) {
 		if m.After, err = time.ParseDuration(declared.After); err != nil || m.After < 0 {
 			return nil, fmt.Errorf("%s.after %q: want a duration of 0 or more", key, declared.After)
 		}
-		if dep := declared.Dependency; dep != nil {
-			m.Dependency = &Dependency{Required: dep.Required == nil || *dep.Required}
-			if dep.Track != "" {
-				if m.Dependency.Track, err = time.ParseDuration(dep.Track); err != nil || m.Dependency.Track <= 0 {
-					return nil, fmt.Errorf("%s.dependency.track %q: want a positive duration", key, dep.Track)
-				}
-			}
+		if m.Dependency, err = dependency(key, declared.Dependency); err != nil {
+			return nil, err
 		}
 		models = append(models, m)
 	}
 	return models, nil
 }
 
-func owns(d declaration) ([]Owns, error) {
+func dependency(key string, declared *declaredDependency) (*Dependency, error) {
+	if declared == nil {
+		return nil, nil
+	}
+	dep := &Dependency{Required: declared.Required == nil || *declared.Required}
+	if declared.Track != "" {
+		var err error
+		if dep.Track, err = time.ParseDuration(declared.Track); err != nil || dep.Track <= 0 {
+			return nil, fmt.Errorf("%s.dependency.track %q: want a positive duration", key, declared.Track)
+		}
+	}
+	return dep, nil
+}
+
+func owns(d declaration, fakes []System) ([]Owns, error) {
 	var owns []Owns
 	for i, declared := range d.Primary.Owns {
 		key := fmt.Sprintf("primary.owns[%d]", i)
 		if declared.Kind == "" {
 			return nil, fmt.Errorf("%s.kind is required", key)
 		}
-		kind, err := parseGVK(declared.Kind)
-		if err != nil {
-			return nil, fmt.Errorf("%s.kind %q: %w", key, declared.Kind, err)
+		var o Owns
+		if system, collection, isFake := strings.Cut(declared.Kind, ":"); isFake {
+			if !systemName.MatchString(collection) {
+				return nil, fmt.Errorf("%s.kind %s: want <system>:<collection>, with a collection matching %s", key, declared.Kind, systemName)
+			}
+			if !slices.ContainsFunc(fakes, func(s System) bool { return s.Name == system }) {
+				return nil, fmt.Errorf("%s.kind %s: systems declares no fake %s", key, declared.Kind, system)
+			}
+			if declared.Namespace != "" {
+				return nil, fmt.Errorf("%s.namespace: a fake's resources have no namespace", key)
+			}
+			o.System, o.Collection = system, collection
+		} else {
+			kind, err := parseGVK(declared.Kind)
+			if err != nil {
+				return nil, fmt.Errorf("%s.kind %q: %w", key, declared.Kind, err)
+			}
+			o.Kind = kind
 		}
 		if declared.Name == "" {
 			return nil, fmt.Errorf("%s.name is required", key)
@@ -387,29 +539,84 @@ func owns(d declaration) ([]Owns, error) {
 				return nil, fmt.Errorf("%s.namespace: %w", key, err)
 			}
 		}
-		owns = append(owns, Owns{Kind: kind, Name: declared.Name, Namespace: declared.Namespace})
+		o.Name, o.Namespace = declared.Name, declared.Namespace
+		owns = append(owns, o)
 	}
 	return owns, nil
 }
 
-func systems(d declaration) ([]System, error) {
+var systemName = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+
+func systems(d declaration, dir string, stable time.Duration) ([]System, error) {
 	var systems []System
 	for i, declared := range d.Systems {
 		key := fmt.Sprintf("systems[%d]", i)
-		if declared.Name != "kube" {
-			return nil, fmt.Errorf("%s.name %s: the only system is kube until fake services land", key, declared.Name)
-		}
 		if slices.ContainsFunc(systems, func(s System) bool { return s.Name == declared.Name }) {
 			return nil, fmt.Errorf("%s.name %s: another system has this name", key, declared.Name)
 		}
-		if declared.Owner != "" {
-			if _, err := CompileString(declared.Owner); err != nil {
-				return nil, fmt.Errorf("%s.owner: %w", key, err)
+		s := System{Name: declared.Name, Owner: declared.Owner, API: declared.API, Role: declared.Role, Ready: declared.Ready, Gone: declared.Gone}
+		for _, expr := range []struct {
+			key, expr string
+			compile   func(string) error
+		}{
+			{"owner", s.Owner, compileString}, {"role", s.Role, compileString},
+			{"ready", s.Ready, compileBool}, {"gone", s.Gone, compileBool},
+		} {
+			if expr.expr == "" {
+				continue
+			}
+			if err := expr.compile(expr.expr); err != nil {
+				return nil, fmt.Errorf("%s.%s: %w", key, expr.key, err)
 			}
 		}
-		systems = append(systems, System{Name: declared.Name, Owner: declared.Owner})
+		if declared.Name == "kube" {
+			if declared.Process != nil || declared.API != "" || declared.Role != "" || declared.Ready != "" || declared.Gone != "" ||
+				declared.Dependency != nil || declared.Poll != "" {
+				return nil, fmt.Errorf("%s: kube takes only name and owner", key)
+			}
+			systems = append(systems, s)
+			continue
+		}
+		if !systemName.MatchString(declared.Name) {
+			return nil, fmt.Errorf("%s.name %s: want a name matching %s", key, declared.Name, systemName)
+		}
+		if declared.Process == nil || len(declared.Process.Command) == 0 || declared.Process.Command[0] == "" {
+			return nil, fmt.Errorf("%s.process.command is required", key)
+		}
+		command := slices.Clone(declared.Process.Command)
+		if strings.Contains(command[0], "/") {
+			command[0] = resolve(dir, command[0])
+		}
+		s.Process = &Process{Command: command, Dir: dir}
+		if s.API != "crud" {
+			return nil, fmt.Errorf("%s.api %q: the only API map is crud", key, s.API)
+		}
+		var err error
+		if s.Dependency, err = dependency(key, declared.Dependency); err != nil {
+			return nil, err
+		}
+		if s.Dependency != nil && s.Ready == "" {
+			return nil, fmt.Errorf("%s.dependency needs ready", key)
+		}
+		s.Poll = stable
+		if declared.Poll != "" {
+			if s.Poll, err = time.ParseDuration(declared.Poll); err != nil || s.Poll <= 0 {
+				return nil, fmt.Errorf("%s.poll %q: want a positive duration", key, declared.Poll)
+			}
+		}
+		systems = append(systems, s)
 	}
 	return systems, nil
+}
+
+func compileString(expr string) error {
+	_, err := CompileString(expr)
+	return err
+}
+
+func compileBool(expr string) error {
+	_, err := CompileReady(expr)
+	return err
 }
 
 func resolve(dir, path string) string {
@@ -472,6 +679,14 @@ func (c *Config) Retain(cr map[string]any) (bool, error) {
 		return false, nil
 	}
 	return c.retain(cr)
+}
+
+// Halted evaluates Primary.Halted over cr. It is false when Halted is empty.
+func (c *Config) Halted(cr map[string]any) (bool, error) {
+	if c.halted == nil {
+		return false, nil
+	}
+	return c.halted(cr)
 }
 
 // Expand replaces each ${key} in s with vars[key]. An unknown key is an

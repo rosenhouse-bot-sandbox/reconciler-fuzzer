@@ -17,6 +17,8 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/check"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/crud"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/fake"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/interpose"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/kube"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/launch"
@@ -50,6 +52,9 @@ var (
 	_ Process     = (*launch.Binary)(nil)
 	_ Cluster     = (*kube.Kube)(nil)
 	_ FaultTarget = (*interpose.Listener)(nil)
+	_ Actor       = (*kube.Kube)(nil)
+	_ Actor       = (*fake.Fake)(nil)
+	_ ModelTarget = (*fake.Fake)(nil)
 )
 
 // FirstSettled is the earliest time in [from, to] at which the settle
@@ -66,7 +71,9 @@ type Runner struct {
 	// request faults go.
 	Listeners map[string]FaultTarget
 	// Models take the model faults, stuck and slowDelete.
-	Models       []ModelTarget
+	Models []ModelTarget
+	// Actors maps a system name to what damages its objects.
+	Actors       map[string]Actor
 	FirstSettled FirstSettled
 	// Sample is the primary sample's body, which a create without an
 	// object uses.
@@ -74,6 +81,23 @@ type Runner struct {
 	// Select resolves a damage or changeFixture target. owner.World.Select
 	// implements it.
 	Select Select
+	// Failed returns the error of a failed system, such as a fake that
+	// exited. Nil means none can fail.
+	Failed func() error
+}
+
+func (r *Runner) failed() error {
+	if r.Failed == nil {
+		return nil
+	}
+	return r.Failed()
+}
+
+// Actor changes a system's objects as the harness. *kube.Kube and
+// *fake.Fake implement it.
+type Actor interface {
+	Patch(ctx context.Context, ref trace.Ref, patch []byte) error
+	Delete(ctx context.Context, ref trace.Ref, propagation plan.Propagation) error
 }
 
 // Select resolves target at t among the live instances creator made, owned
@@ -155,8 +179,8 @@ func Run(ctx context.Context, o Options) (check.Report, error) {
 	return report, nil
 }
 
-// execute starts the Kubernetes system, the models and the controller, runs
-// the plan and stops them.
+// execute starts the Kubernetes system, the fake services, the models and
+// the controller, runs the plan and stops them.
 func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, sample map[string]any, rec *trace.Recorder) (err error) {
 	watch, seen := modelKinds(cfg.Models)
 	k := kube.New(kube.Options{
@@ -169,14 +193,34 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 		return err
 	}
 	defer func() { err = errors.Join(err, k.Stop(context.WithoutCancel(ctx))) }()
+	vars := map[string]map[string]string{kube.Name: endpoints.Vars}
+	controllerListeners := map[string]*interpose.Listener{kube.Name: endpoints.Controller}
+	actors := map[string]Actor{kube.Name: k}
+	var targets []ModelTarget
+	var fakes []*fake.Fake
+	for _, s := range cfg.Fakes() {
+		api, err := apiMap(s)
+		if err != nil {
+			return err
+		}
+		f := fake.New(fake.Options{
+			Name: s.Name, Command: s.Process.Command, Dir: s.Process.Dir, API: api, SeenAll: s.Dependency != nil,
+		})
+		defer func() { err = errors.Join(err, f.Stop(context.WithoutCancel(ctx))) }()
+		fakeEndpoints, err := f.Start(ctx, env)
+		if err != nil {
+			return fmt.Errorf("starting fake %s: %w", s.Name, err)
+		}
+		vars[s.Name], controllerListeners[s.Name], actors[s.Name] = fakeEndpoints.Vars, fakeEndpoints.Controller, f
+		targets, fakes = append(targets, f), append(fakes, f)
+	}
 	systems := model.New(k)
-	var stages []ModelTarget
 	for _, m := range cfg.Models {
 		stage, err := model.NewStage(k, m)
 		if err != nil {
 			return err
 		}
-		systems, stages = append(systems, stage), append(stages, stage)
+		systems, targets = append(systems, stage), append(targets, stage)
 	}
 	for _, m := range systems {
 		if stopper, ok := m.(system.Stopper); ok {
@@ -186,27 +230,10 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 			return fmt.Errorf("starting model %s: %w", m.Name(), err)
 		}
 	}
-	primary, err := k.Ref(cfg.Primary.Kind, "")
+	run, err := runEvent(cfg, k, len(p.Steps))
 	if err != nil {
 		return err
 	}
-	models, err := traceModels(cfg.Models, k.Ref)
-	if err != nil {
-		return err
-	}
-	owners, owns, err := owner.Sources(cfg, func(gvk schema.GroupVersionKind) (string, bool, error) {
-		ref, err := k.Ref(gvk, "")
-		return ref.Resource, ref.Namespace != "", err
-	})
-	if err != nil {
-		return err
-	}
-	run := trace.Event{Run: &trace.Run{
-		Namespace: k.Namespace(), Primary: primary, PlanSteps: len(p.Steps),
-		Ready: cfg.Primary.Ready, Stable: cfg.Timeouts.Stable, Reads: cfg.Budgets.Reads, Writes: cfg.Budgets.Writes,
-		Retain: cfg.Primary.Retain, Models: models, StatusKinds: k.StatusKinds(),
-		Owners: owners, Owns: owns,
-	}}
 	rec.Record(run)
 	spec, err := check.SpecFor(cfg, trace.NewIndex([]trace.Event{run}))
 	if err != nil {
@@ -218,7 +245,7 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 		return err
 	}
 	defer func() { err = errors.Join(err, log.Close()) }()
-	launchOptions, err := expandLaunch(cfg.Launch, o.LaunchArgs, endpoints.Vars)
+	launchOptions, err := expandLaunch(cfg.Launch, o.LaunchArgs, vars)
 	if err != nil {
 		return err
 	}
@@ -230,7 +257,11 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 		rec.Record(trace.Event{Proc: &trace.Proc{Event: trace.Exit, PID: e.PID, Exit: e.Status, HarnessCaused: e.HarnessCaused, StderrTail: e.Tail}})
 	}
 	controller := launch.New(launchOptions)
-	endpoints.Controller.SetKill(controller.Kill)
+	listeners := map[string]FaultTarget{}
+	for name, l := range controllerListeners {
+		l.SetKill(controller.Kill)
+		listeners[name] = l
+	}
 	defer func() {
 		err = errors.Join(err, controller.Supervise(false), controller.Stop(context.WithoutCancel(ctx)))
 	}()
@@ -242,12 +273,20 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 		Recorder:  rec,
 		Cluster:   k,
 		Process:   controller,
-		Listeners: map[string]FaultTarget{kube.Name: endpoints.Controller},
-		Models:    stages,
+		Listeners: listeners,
+		Models:    targets,
+		Actors:    actors,
 		FirstSettled: func(ix *trace.Index, from, to time.Duration) (time.Duration, bool) {
 			return check.FirstSettled(ix, from, to, spec)
 		},
 		Sample: sample,
+		Failed: func() error {
+			var errs []error
+			for _, f := range fakes {
+				errs = append(errs, f.Err())
+			}
+			return errors.Join(errs...)
+		},
 		Select: func(ix *trace.Index, creator trace.Caller, target plan.Target, slot string, t time.Duration) (trace.Ref, bool) {
 			return owner.New(ix, spec.Owners).Select(creator, target, slot, t)
 		},
@@ -256,6 +295,39 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 		return err
 	}
 	return runner.Execute(ctx, p)
+}
+
+// apiMap returns the map s.API names.
+func apiMap(s config.System) (fake.API, error) {
+	if s.API == crud.Name {
+		return crud.New(s.Name), nil
+	}
+	return nil, fmt.Errorf("system %s: unknown api %q", s.Name, s.API)
+}
+
+// runEvent describes the run for the checks.
+func runEvent(cfg *config.Config, k *kube.Kube, planSteps int) (trace.Event, error) {
+	primary, err := k.Ref(cfg.Primary.Kind, "")
+	if err != nil {
+		return trace.Event{}, err
+	}
+	models, err := traceModels(cfg.Models, k.Ref)
+	if err != nil {
+		return trace.Event{}, err
+	}
+	owners, owns, err := owner.Sources(cfg, func(gvk schema.GroupVersionKind) (string, bool, error) {
+		ref, err := k.Ref(gvk, "")
+		return ref.Resource, ref.Namespace != "", err
+	})
+	if err != nil {
+		return trace.Event{}, err
+	}
+	return trace.Event{Run: &trace.Run{
+		Namespace: k.Namespace(), Primary: primary, PlanSteps: planSteps,
+		Ready: cfg.Primary.Ready, Stable: cfg.Timeouts.Stable, Reads: cfg.Budgets.Reads, Writes: cfg.Budgets.Writes,
+		Retain: cfg.Primary.Retain, Models: models, StatusKinds: k.StatusKinds(),
+		Owners: owners, Owns: owns, Halted: cfg.Primary.Halted, Systems: owner.Systems(cfg),
+	}}, nil
 }
 
 // modelKinds returns the kinds the observer watches for the models, and the
@@ -291,20 +363,26 @@ func traceModels(models []config.Model, ref func(schema.GroupVersionKind, string
 	return described, nil
 }
 
+// ownsKinds returns the kube kinds of the owns entries.
 func ownsKinds(owns []config.Owns) []schema.GroupVersionKind {
 	var kinds []schema.GroupVersionKind
 	for _, o := range owns {
+		if o.System != "" {
+			continue
+		}
 		kinds = append(kinds, o.Kind)
 	}
 	return kinds
 }
 
 // expandLaunch expands ${systems.<name>.<key>} in the launch args, with
-// extra appended, and in the env.
-func expandLaunch(l config.Launch, extra []string, kubeVars map[string]string) (launch.Options, error) {
+// extra appended, and in the env. systemVars maps a system to its Vars.
+func expandLaunch(l config.Launch, extra []string, systemVars map[string]map[string]string) (launch.Options, error) {
 	vars := map[string]string{}
-	for key, value := range kubeVars {
-		vars["systems."+kube.Name+"."+key] = value
+	for system, values := range systemVars {
+		for key, value := range values {
+			vars["systems."+system+"."+key] = value
+		}
 	}
 	o := launch.Options{Path: l.Binary, Env: map[string]string{}}
 	for _, arg := range append(slices.Clone(l.Args), extra...) {

@@ -76,6 +76,10 @@ List the kinds it watches, reads and creates. For each, note who sets its status
   `status.observedGeneration` or replica counts that follow the spec. Tell the user that
   reconciler-fuzzer cannot test this controller yet.
 
+List the external HTTP APIs it calls, such as a cloud's. Each needs a fake service (step 4).
+The controller must take the API's endpoint from a flag or an environment variable, and speak
+plain HTTP to it. If it cannot, tell the user.
+
 One config tests one primary kind. If there are several, ask which to start with.
 
 ## 3. Choose a directory
@@ -122,7 +126,8 @@ Fill each key from the project:
 
 - `launch.args` and `env`: drop each flag and variable the controller does not read. `0` turns
   off fixed ports, so runs cannot clash. Only `${systems.kube.kubeconfig}`, `namespace` and
-  `url` expand. Pass the kubeconfig as a flag if the controller does not read `KUBECONFIG`.
+  `url`, and each fake's `${systems.<name>.url}`, expand. Pass the kubeconfig as a flag if the
+  controller does not read `KUBECONFIG`.
 - `launch.rbac`: the Roles and ClusterRoles the controller runs with. Generation draws faults
   from the requests they grant. For another namespace, use a ClusterRole, or a Role with
   `metadata.namespace`.
@@ -156,6 +161,44 @@ Fill each key from the project:
 - `budgets` and `timeouts`: leave them out at first. Raise `timeouts.settle` for a slow
   controller, and `stable` for one that requeues with a delay by design. Ask the user first.
 
+### External APIs
+
+Put each external API behind a fake service, a `systems:` entry that the harness runs:
+
+```yaml
+launch:
+  env: {CLOUD_ENDPOINT: "${systems.cloud.url}"}
+systems:
+  - name: cloud
+    process: {command: [crudfake, --config, cloud.yaml]}
+    api: crud
+    owner: self.labels['k8s-uid']
+    role: self.labels['role']
+    ready: self.state == 'READY'
+    gone: self.state == 'DELETING'
+    dependency: {required: true}
+    poll: 1s
+```
+
+- For a REST JSON API, use `crudfake`, which `go install
+  github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/cmd/crudfake@latest` installs. Its file
+  maps each collection to `unique` fields, the states `pending`, `ready` and `deleting`, and
+  `createDelay` and `deleteDelay`. `<module>/targets/toy-bucket/cloud.yaml` is one. The
+  controller must use `POST /<c>`, `GET /<c>?<field>=<value>` and `/<c>/<id>`; if it uses other
+  paths, tell the user.
+- Otherwise the user writes a fake that serves the `/_fake/` contract of the README's "Fake
+  services" section and the `crud` map's paths. Its bodies need a string `id` it never reuses
+  and a `version` that changes with each change. An API that reuses ids, such as one keyed by
+  name, needs a fake that adds a suffix. Ask before writing one.
+- Point the controller's endpoint at `${systems.<name>.url}`, never at the real API.
+- `owner` is CEL over one of the fake's resources that yields its CR's UID or name, such as a
+  tag or label the controller sets. Without it, Clean judges the resource only by the CRs alive
+  at its creation, and Honest ignores it.
+- `role` is CEL that tells apart resources one CR owns on purpose. Without it, Unique fails a CR
+  with two resources in one collection.
+- `ready` and `gone` are CEL over a resource. `dependency` needs `ready`. `poll` is how often the
+  controller reads the API; it lengthens each step's deadline.
+
 ## 5. Write the sample
 
 Copy a CR from `config/samples/` or the docs beside `config.yaml`. Drop `metadata.namespace`.
@@ -181,7 +224,11 @@ Write `plans/create.json`. It creates the sample, updates it, and deletes it:
 
 With a model, add a step whose fault keeps it not ready, such as
 `{"actions": [...], "period": "3s", "faults": [{"match": {"group": "gadgets.example.com",
-"resource": "gadgets"}, "stuck": true}]}`. `<module>/targets/toy-widget/plans/` holds more.
+"resource": "gadgets"}, "stuck": true}]}`. With a fake, add a step that drops the response
+to the first create, such as `{"actions": [...], "period": "1s", "faults": [{"system": "cloud",
+"match": {"verb": "create", "resource": "buckets"}, "nth": 1, "dropResponse": true}]}`, and one
+that damages a resource, `{"do": "damage", "slot": "a", "target": {"system": "cloud"}}`.
+`<module>/targets/toy-widget/plans/` and `<module>/targets/toy-bucket/plans/` hold more.
 Run it from the config's directory, in the background, and act on the exit code:
 
 ```sh
@@ -204,9 +251,14 @@ controller:
 | Converge | A drawn value is one a webhook would refuse. | Narrow `values.overlay`. |
 | Honest, `reported ready with no dependency` | The CR can be ready without that kind, or does not own it. | Set `required: false` in the first case. In the second, add `owns` or `owner`, or drop `dependency`. |
 | Clean | The controller keeps resources by design. | Set `primary.retain`. |
+| Unique, on a fake | The CR owns several resources in one collection by design. | Set the system's `role`. |
+| Converge, with a CR that halted after a create of unknown outcome | The controller stops on purpose and waits for a person. | Set `primary.halted` to CEL over its halted condition. |
 
 Every other finding is a bug in the controller. Never hide one to make a check pass, and ask
 the user when in doubt. On a finding, stop and report it (step 11).
+
+A note `unmapped request` means the `crud` map could not read a request to a fake, so no check
+judged it. Tell the user which paths the controller uses.
 
 **Exit 0**: no findings. Go on.
 

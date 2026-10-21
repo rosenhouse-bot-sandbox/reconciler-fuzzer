@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/crud"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 )
@@ -23,13 +24,15 @@ type Instance struct {
 	Ref trace.Ref
 	UID string
 	// Created is the At of its first version. Gone is the At of its delete
-	// version, or zero while it lives.
+	// version, or of the first its system's gone CEL accepts, or zero while
+	// it lives.
 	Created time.Duration
 	Gone    time.Duration
 	// Creator is the caller of the create, or the 201 apply, whose response
 	// carried UID, or trace.Cluster.
 	Creator trace.Caller
-	// Role is the generateName prefix, or else the name.
+	// Role is its system's role CEL over its first body. Without one, a
+	// kube instance's is its generateName prefix, or else its name.
 	Role string
 }
 
@@ -55,6 +58,9 @@ type Rules struct {
 	Owners map[string]func(self map[string]any) (string, error)
 	// Owns are rule 3.
 	Owns []OwnsRule
+	// Roles and Gone map a fake's name to its role and gone CEL.
+	Roles map[string]func(self map[string]any) (string, error)
+	Gone  map[string]func(self map[string]any) (bool, error)
 }
 
 // OwnsRule is one primary.owns entry over a CR's body.
@@ -65,9 +71,13 @@ type OwnsRule struct {
 	Namespace func(cr map[string]any) (string, error)
 }
 
-// Compile builds Rules from a Run event's owners and owns.
-func Compile(owners map[string]string, owns []trace.Owns) (Rules, error) {
-	rules := Rules{Owners: map[string]func(map[string]any) (string, error){}}
+// Compile builds Rules from a Run event's owners, owns and systems.
+func Compile(owners map[string]string, owns []trace.Owns, systems []trace.System) (Rules, error) {
+	rules := Rules{
+		Owners: map[string]func(map[string]any) (string, error){},
+		Roles:  map[string]func(map[string]any) (string, error){},
+		Gone:   map[string]func(map[string]any) (bool, error){},
+	}
 	for system, expr := range owners {
 		eval, err := config.CompileString(expr)
 		if err != nil {
@@ -75,8 +85,21 @@ func Compile(owners map[string]string, owns []trace.Owns) (Rules, error) {
 		}
 		rules.Owners[system] = eval
 	}
+	for _, s := range systems {
+		var err error
+		if s.Role != "" {
+			if rules.Roles[s.Name], err = config.CompileString(s.Role); err != nil {
+				return Rules{}, fmt.Errorf("role of system %s: %w", s.Name, err)
+			}
+		}
+		if s.Gone != "" {
+			if rules.Gone[s.Name], err = config.CompileReady(s.Gone); err != nil {
+				return Rules{}, fmt.Errorf("gone of system %s: %w", s.Name, err)
+			}
+		}
+	}
 	for _, o := range owns {
-		rule := OwnsRule{System: "kube", Group: o.Kind.Group, Resource: o.Kind.Resource}
+		rule := OwnsRule{System: cmp.Or(o.System, "kube"), Group: o.Kind.Group, Resource: o.Kind.Resource}
 		var err error
 		if rule.Name, err = config.CompileString(o.Name); err != nil {
 			return Rules{}, fmt.Errorf("owns %s name: %w", o.Kind.Kind, err)
@@ -105,6 +128,10 @@ func Sources(c *config.Config, resource func(schema.GroupVersionKind) (string, b
 	}
 	var owns []trace.Owns
 	for _, o := range c.Primary.Owns {
+		if o.System != "" {
+			owns = append(owns, trace.Owns{System: o.System, Kind: trace.Kind{Resource: o.Collection}, Name: o.Name})
+			continue
+		}
 		r, namespaced, err := resource(o.Kind)
 		if err != nil {
 			return nil, nil, fmt.Errorf("primary.owns kind %s: %w", o.Kind.Kind, err)
@@ -118,6 +145,22 @@ func Sources(c *config.Config, resource func(schema.GroupVersionKind) (string, b
 		})
 	}
 	return owners, owns, nil
+}
+
+// Systems returns c's fakes for the run event, with their API map's Ignore.
+func Systems(c *config.Config) []trace.System {
+	var systems []trace.System
+	for _, f := range c.Fakes() {
+		s := trace.System{Name: f.Name, API: f.API, Role: f.Role, Ready: f.Ready, Gone: f.Gone, Poll: f.Poll}
+		if f.API == crud.Name {
+			s.Ignore = crud.Ignore
+		}
+		if f.Dependency != nil {
+			s.Dependency = &trace.Dependency{Required: f.Dependency.Required, Track: f.Dependency.Track}
+		}
+		systems = append(systems, s)
+	}
+	return systems
 }
 
 // Key is the owner's CR set as a map key, so a change of rule keeps it.
@@ -177,7 +220,7 @@ func New(ix *trace.Index, rules Rules) *World {
 		if c, found := creates[i.UID]; found && names(c, i.Ref) {
 			i.Creator = c.Caller
 		}
-		i.Role = role(w.versions[i.UID][0].Version)
+		i.Role = w.role(w.versions[i.UID][0].Version)
 	}
 	for _, e := range actions {
 		if i, found := w.Latest(*e.Action.Ref, e.At); found {
@@ -197,10 +240,24 @@ func (w *World) addVersion(e trace.Event) {
 	}
 	if i := &w.instances[n]; i.Gone == 0 && i.Ref == v.Ref {
 		w.versions[v.UID] = append(w.versions[v.UID], e)
-		if v.Deleted {
+		if v.Deleted || w.gone(v) {
 			i.Gone = e.At
 		}
 	}
+}
+
+// gone reports whether v's system's gone CEL accepts it.
+func (w *World) gone(v *trace.Version) bool {
+	eval := w.rules.Gone[v.Ref.System]
+	if eval == nil {
+		return false
+	}
+	var self map[string]any
+	if json.Unmarshal(v.Body, &self) != nil {
+		return false
+	}
+	gone, err := eval(self)
+	return err == nil && gone
 }
 
 // names reports whether the create call c made the object ref.
@@ -212,7 +269,18 @@ func names(c trace.Call, ref trace.Ref) bool {
 	return c.Ref == ref && c.ResultName == ref.Name
 }
 
-func role(v *trace.Version) string {
+// role is the system's role CEL over v, or else, on kube, its generateName
+// or name.
+func (w *World) role(v *trace.Version) string {
+	if eval := w.rules.Roles[v.Ref.System]; eval != nil {
+		var self map[string]any
+		_ = json.Unmarshal(v.Body, &self)
+		role, _ := eval(self) // A role that fails to evaluate is empty.
+		return role
+	}
+	if v.Ref.System != "kube" {
+		return ""
+	}
 	var body struct {
 		Metadata struct {
 			GenerateName string `json:"generateName"`
@@ -470,7 +538,7 @@ func (w *World) Select(creator trace.Caller, target plan.Target, slot string, t 
 	}
 	nth := max(target.Nth, 1)
 	for _, i := range w.instances {
-		if !i.Live(t) || i.Creator != creator || i.Ref.System != system || i.Ref.Resource != target.Resource ||
+		if !i.Live(t) || i.Creator != creator || i.Ref.System != system || !matches(target.Resource, i.Ref.Resource) ||
 			!matches(target.Group, i.Ref.Group) || !matches(target.Namespace, i.Ref.Namespace) || !matches(target.Name, i.Ref.Name) || !matches(target.Role, i.Role) {
 			continue
 		}

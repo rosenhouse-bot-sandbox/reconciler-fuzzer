@@ -110,22 +110,27 @@ const (
 
 // dependencies are the instances of m's kind at t whose rule 1 to 3 owning CR
 // is uid: the live ones not being deleted, and the gone ones the controller
-// last saw live and nothing has replaced.
+// last saw live and nothing has replaced. An instance counts from its first
+// version, or from the controller's first sight of it if that is earlier.
 func (h *honesty) dependencies(uid string, m Model, t time.Duration) []owner.Instance {
 	var owned []owner.Instance
 	for _, i := range h.w.All() {
-		if i.Ref.Group != m.Kind.Group || i.Ref.Resource != m.Kind.Resource || i.Created > t {
+		created := i.Created
+		if seens := h.ix.Seen(trace.Controller, i.UID); len(seens) > 0 {
+			created = min(created, seens[0].At)
+		}
+		if !m.covers(i.Ref) || created > t {
 			continue
 		}
-		if !i.Live(t) {
+		if i.Gone != 0 && i.Gone <= t {
 			seen, found := lastSeen(h.ix.Seen(trace.Controller, i.UID), t)
-			if latest, _ := h.w.Latest(i.Ref, t); !found || seen.Seen.Deleted || latest.UID != i.UID {
+			if latest, _ := h.w.Latest(i.Ref, t); !found || seen.Seen.Deleted || !i.Live(seen.At) || latest.UID != i.UID {
 				continue
 			}
 		} else if deleting(h.w.Body(i, t)) {
 			continue
 		}
-		if cr, named := h.w.Owner(i, t).Named(); named && cr == uid {
+		if cr, named := h.w.Owner(i, max(t, i.Created)).Named(); named && cr == uid {
 			owned = append(owned, i)
 		}
 	}
@@ -245,7 +250,7 @@ func (h *honesty) excused(uid string, from, to time.Duration) bool {
 
 func (h *honesty) allOf(m Model) []owner.Instance {
 	return slices.DeleteFunc(h.w.All(), func(i owner.Instance) bool {
-		return i.Ref.Group != m.Kind.Group || i.Ref.Resource != m.Kind.Resource
+		return !m.covers(i.Ref)
 	})
 }
 

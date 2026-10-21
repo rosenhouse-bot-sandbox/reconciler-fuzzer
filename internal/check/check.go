@@ -3,6 +3,7 @@
 package check
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,11 +37,20 @@ type Spec struct {
 	StatusKinds []trace.Kind
 	// Owners are owning-CR rules 2 and 3, from the config or the Run event.
 	Owners owner.Rules
+	// Halted is nil when the config sets no primary.halted.
+	Halted func(cr map[string]any) (bool, error)
+	// Polls maps each fake to its poll interval.
+	Polls map[string]time.Duration
+	// Ignore maps a fake to the body fields Restore does not compare.
+	Ignore map[string][]string
 }
 
 // Model is a stage model's kind as the checks judge it.
 type Model struct {
-	Kind trace.Kind
+	// System is empty for kube. A fake's Model has an empty Kind, which
+	// matches each of its collections.
+	System string
+	Kind   trace.Kind
 	// Ready says whether an object of the kind is ready.
 	Ready func(obj map[string]any) (bool, error)
 	// Dependency is nil unless Honest judges the kind.
@@ -48,7 +58,7 @@ type Model struct {
 }
 
 // SpecFor builds a Spec from c, or from the trace's Run event when c is nil.
-// The primary resource always comes from the Run event.
+// The primary resource and the status kinds always come from the Run event.
 func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 	run, ok := ix.Run()
 	if !ok {
@@ -63,6 +73,9 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 		if c.Primary.Retain != "" {
 			s.Retain = c.Retain
 		}
+		if c.Primary.Halted != "" {
+			s.Halted = c.Halted
+		}
 		var err error
 		if s.Models, err = configModels(c.Models, run.Models); err != nil {
 			return Spec{}, err
@@ -71,7 +84,11 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 		if err != nil {
 			return Spec{}, fmt.Errorf("the config's owners: %w", err)
 		}
-		if s.Owners, err = owner.Compile(owners, owns); err != nil {
+		systems := owner.Systems(c)
+		if err := s.addSystems(systems); err != nil {
+			return Spec{}, fmt.Errorf("the config's systems: %w", err)
+		}
+		if s.Owners, err = owner.Compile(owners, owns, systems); err != nil {
 			return Spec{}, fmt.Errorf("the config's owners: %w", err)
 		}
 		return s, nil
@@ -89,6 +106,11 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 			return Spec{}, fmt.Errorf("the trace's retain: %w", err)
 		}
 	}
+	if run.Halted != "" {
+		if s.Halted, err = config.CompileReady(run.Halted); err != nil {
+			return Spec{}, fmt.Errorf("the trace's halted: %w", err)
+		}
+	}
 	for _, m := range run.Models {
 		ready, err := config.CompileReady(m.Ready)
 		if err != nil {
@@ -96,10 +118,58 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 		}
 		s.Models = append(s.Models, Model{Kind: m.Kind, Ready: ready, Dependency: m.Dependency})
 	}
-	if s.Owners, err = owner.Compile(run.Owners, run.Owns); err != nil {
+	if err := s.addSystems(run.Systems); err != nil {
+		return Spec{}, fmt.Errorf("the trace's systems: %w", err)
+	}
+	if s.Owners, err = owner.Compile(run.Owners, run.Owns, run.Systems); err != nil {
 		return Spec{}, fmt.Errorf("the trace's owners: %w", err)
 	}
 	return s, nil
+}
+
+// addSystems sets Polls and Ignore, and adds a Model for each dependency
+// fake.
+func (s *Spec) addSystems(fakes []trace.System) error {
+	s.Polls = map[string]time.Duration{}
+	for _, fake := range fakes {
+		s.Polls[fake.Name] = fake.Poll
+		if len(fake.Ignore) > 0 {
+			if s.Ignore == nil {
+				s.Ignore = map[string][]string{}
+			}
+			s.Ignore[fake.Name] = fake.Ignore
+		}
+		if fake.Dependency == nil {
+			continue
+		}
+		ready, err := config.CompileReady(fake.Ready)
+		if err != nil {
+			return fmt.Errorf("ready of %s: %w", fake.Name, err)
+		}
+		s.Models = append(s.Models, Model{System: fake.Name, Ready: ready, Dependency: fake.Dependency})
+	}
+	return nil
+}
+
+// poll is a fake's poll interval, or else Stable.
+func (s Spec) poll(system string) time.Duration {
+	if p, found := s.Polls[system]; found {
+		return p
+	}
+	return s.Stable
+}
+
+// covers reports whether ref is of m's kind: on m's system, and of its
+// resource when Kind sets one.
+func (m Model) covers(ref trace.Ref) bool {
+	return ref.System == cmp.Or(m.System, "kube") && (m.Kind.Resource == "" || m.Kind.Group == ref.Group && m.Kind.Resource == ref.Resource)
+}
+
+// modelled reports whether a stage model writes the status of ref's kind.
+func (s Spec) modelled(ref trace.Ref) bool {
+	return ref.System == "kube" && slices.ContainsFunc(s.Models, func(m Model) bool {
+		return m.System == "" && m.Kind.Group == ref.Group && m.Kind.Resource == ref.Resource
+	})
 }
 
 // recordedResource maps an owns kind to the run event's resource for it, or
@@ -176,13 +246,28 @@ func Judge(ix *trace.Index, s Spec) Report {
 	findings = append(findings, Unique(ix, s)...)
 	findings = append(findings, Honest(ix, s)...)
 	findings = append(findings, Backoff(ix, s)...)
-	notes = append(append(actionErrors(ix), unpicked(ix)...), notes...)
+	notes = append(append(append(actionErrors(ix), unpicked(ix, s)...), notes...), unmapped(ix)...)
 	return Report{Findings: findings, Notes: notes}
 }
 
+// unmapped notes each distinct request of the controller that its system's
+// API map could not place.
+func unmapped(ix *trace.Index) []string {
+	var notes []string
+	for _, e := range ix.Calls(trace.Controller, -1, math.MaxInt64) {
+		if c := e.Call; c.Unmapped {
+			if note := fmt.Sprintf("%s: unmapped request %s %s", c.Ref.System, c.Method, c.Path); !slices.Contains(notes, note) {
+				notes = append(notes, note)
+			}
+		}
+	}
+	return notes
+}
+
 // unpicked notes each request fault that altered no controller request
-// while it was active, and each model fault whose model held no object.
-func unpicked(ix *trace.Index) []string {
+// while it was active, and each stage-model fault whose model held no
+// object.
+func unpicked(ix *trace.Index, s Spec) []string {
 	starts := map[[2]int]trace.Event{}
 	var notes []string
 	for _, e := range ix.Events() {
@@ -196,15 +281,22 @@ func unpicked(ix *trace.Index) []string {
 			continue
 		}
 		switch {
-		case f.Model != "" && !held(ix, *f, starts[key].At, e.At):
+		case f.Model != "" && !s.fake(f.Model) && !held(ix, *f, starts[key].At, e.At):
 			notes = append(notes, fmt.Sprintf("%s, fault %d (%s) held no object.", stepName(ix, f.Step), f.Index, f.What))
 		case f.Model == "" && !slices.ContainsFunc(ix.Calls(trace.Controller, starts[key].At, math.MaxInt64), func(c trace.Event) bool {
-			return c.At-c.Call.Latency <= e.At && c.Call.Injected != "" && strings.HasPrefix(f.What, c.Call.Injected)
+			return c.At-c.Call.Latency <= e.At && c.Call.Ref.System == cmp.Or(f.System, "kube") &&
+				c.Call.Injected != "" && strings.HasPrefix(f.What, c.Call.Injected)
 		}):
 			notes = append(notes, fmt.Sprintf("%s, fault %d (%s) picked no request.", stepName(ix, f.Step), f.Index, f.What))
 		}
 	}
 	return notes
+}
+
+// fake reports whether a fault's model is a fake service.
+func (s Spec) fake(model string) bool {
+	_, found := s.Polls[model]
+	return found
 }
 
 // held reports whether f's model wrote, in (from, to], a version that f

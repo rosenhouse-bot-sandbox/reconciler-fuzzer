@@ -3,7 +3,7 @@
 reconciler-fuzzer finds bugs in Kubernetes controllers. It runs your controller on your machine
 against envtest's kube-apiserver and etcd. It follows a plan of steps: CR changes, faults on the
 controller's API requests, restarts, and damage to objects the controller created. It records
-every request and object version in a trace. Then it judges the trace with seven checks: Converge,
+every request and object version in a trace, including requests to fake HTTP services. Then it judges the trace with seven checks: Converge,
 Crash, Clean, Restore, Unique, Honest and Backoff ([DESIGN.md §12](DESIGN.md#12-checks)).
 
 You write no test code. One YAML config describes your controller.
@@ -132,7 +132,7 @@ primary:
     - {kind: rbac.authorization.k8s.io/v1/ClusterRole, name: "self.metadata.name + '-reader'"}
     - {kind: v1/Secret, name: self.spec.secretName, namespace: "'shared'"}
 systems:
-  - name: kube                             # the only system for now
+  - name: kube                             # takes only owner
     owner: self.metadata.labels['example.com/owner-uid']   # a label on the child names the CR
 ```
 
@@ -169,6 +169,56 @@ models:
   `report.md` names the kind and suggests a `models:` entry for it.
 
 [targets/toy-widget/gadget](targets/toy-widget/gadget) runs the toy with a Gadget model.
+
+### Fake services
+
+A controller that calls an HTTP API, such as a cloud's, calls a fake service instead. A
+`systems:` entry runs the fake, and the controller gets its URL. In
+[targets/toy-bucket](targets/toy-bucket), each Bucket CR owns one bucket in `crudfake`, the
+harness's JSON server:
+
+```yaml
+launch:
+  env: {CLOUD_ENDPOINT: "${systems.cloud.url}"}   # the fake, through the controller's listener
+systems:
+  - name: cloud
+    process: {command: [../../bin/crudfake, --config, cloud.yaml]}
+    api: crud                                # the API map that reads its requests
+    owner: self.labels['k8s-uid']            # CEL over a bucket that names its CR
+    ready: self.state == 'READY'
+    gone: self.state == 'DELETING'
+    dependency: {required: true}             # Honest judges the CR's buckets
+    poll: 1s                                 # how often the controller reads a bucket
+```
+
+```yaml
+# cloud.yaml
+collections:
+  buckets: {unique: [name], pending: CREATING, ready: READY, deleting: DELETING, createDelay: 300ms, deleteDelay: 300ms}
+```
+
+- Every check judges buckets as it judges Kubernetes objects. Clean fails a leaked bucket, and
+  Unique a second bucket of one CR. Restore fails a bucket the controller never recreates after
+  `damage`, and Honest a CR that reports ready while its bucket is `CREATING`.
+- `crudfake` serves `POST /<c>`, `GET /<c>?<field>=<value>` and `GET`, `PUT`, `PATCH` and
+  `DELETE /<c>/<id>`. A new resource is `pending` for `createDelay`, then `ready`. `DELETE` sets
+  `deleting`, and the resource leaves after `deleteDelay`. A repeated `unique` field answers 409,
+  and an unknown id 404.
+- A plan faults the fake with `"system": "cloud"`: any request fault, such as
+  `{"system": "cloud", "match": {"verb": "create", "resource": "buckets"}, "nth": 1, "dropResponse": true}`,
+  and `stuck` or `slowDelete`. `damage` takes `"target": {"system": "cloud"}`.
+- `primary.halted` is CEL over the CR. It counts a CR as done after a request of unknown outcome,
+  for a controller that stops on purpose. [targets/toy-bucket/halted](targets/toy-bucket/halted/config.yaml)
+  uses it.
+- Any program can be a fake. The harness runs it in the config's directory and sets
+  `RECONCILER_FUZZER_ADDR`, where it serves its API and the fake contract: `GET /_fake/resources`
+  answers `{"collections": [<c>], "pending": <bool>, "resources": [{"collection": <c>, "body":
+  <object>}]}`, `POST /_fake/faults` takes `{"effect": "stuck" | "slowDelete", "collection": <c>,
+  "id": <id>}` and answers 201 with `{"id": <fault>}`, or 400 for an unknown collection, and
+  `DELETE /_fake/faults/<fault>` ends the fault. The controller cannot reach `/_fake/`.
+- With `api: crud`, the fake's paths follow `crudfake`'s. Each body has a string `id`, never
+  reused, and a `version`, a number or string that changes with every change. A listing the
+  harness cannot read fails the run.
 
 ### Examples
 
@@ -220,7 +270,7 @@ jobs:
 Commit each plan that once found a bug, so the job keeps checking it.
 
 This repository's own tiers are make targets ([DESIGN.md §16](DESIGN.md#16-gates-examples-and-testing)).
-`make help` lists them. [docs/bug-matrix.md](docs/bug-matrix.md) lists the toy's bugs and the
+`make help` lists them. [docs/bug-matrix.md](docs/bug-matrix.md) lists the toys' bugs and the
 check that catches each.
 
 ## Terms
@@ -238,3 +288,5 @@ The README also uses these:
 | Sample | The CR in `primary.sample`. Generated CRs start from it. |
 | `ready` | CEL over a CR that is true once the controller has acted on its spec. |
 | `stable` | How long the controller must stay quiet for a step to settle. |
+| `crudfake` | The harness's JSON server, a fake service for a REST JSON API. |
+| Unknown outcome | A request that reached the server, but whose response the caller never saw. |

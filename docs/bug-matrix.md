@@ -1,6 +1,6 @@
 # Bug matrix
 
-This file is generated from targets/toy-widget/gate_test.go by `make bug-matrix`.
+This file is generated from targets/toy-widget/gate_test.go and targets/toy-bucket/gate_test.go by `make bug-matrix`.
 `make test-envtest` proves each row: the plan, run against the bug, reports the check's finding at that step, or no finding for check none.
 
 | Bug | Description | Plan | Check | Step |
@@ -38,3 +38,23 @@ This file is generated from targets/toy-widget/gate_test.go by `make bug-matrix`
 | B28 | Leaves a Grant's ClusterRole to garbage collection, which ignores its namespaced owner. | grant/b28 | Clean | 1 |
 | B29 | Never releases a Tenant's children while the Tenant is being deleted, so only a Foreground delete wedges. | tenant/b29 | Converge | 1 |
 | B29 | Never releases a Tenant's children while the Tenant is being deleted, so only a Foreground delete wedges. | tenant/b29-background | none | |
+
+## Bucket toy
+
+Each Bucket owns one bucket in the `crudfake` system `cloud` (targets/toy-bucket).
+
+| Bug | Description | Plan | Check | Step |
+|---|---|---|---|---|
+| B0 | The correct controller. | all 8 committed plans | none | |
+| B0 | The correct controller. With --halt, it stops after a create of unknown outcome. | halted/halt | none | |
+| B0 | The correct controller. With --halt and no primary.halted, it never settles. | halted/halt | Converge | 0 |
+| B30 | Leaks the bucket on CR delete. | b30 | Clean | 1 |
+| B31 | Retries a create of unknown outcome under a new random name and keeps both buckets. | b31 | Unique | 0 |
+| B31 | Retries a create of unknown outcome under a new random name and keeps both buckets. | b31 | Clean | 2 |
+| B31 | Retries a create of unknown outcome under a new random name and keeps both buckets. | b31 | Honest | 0 |
+| B32 | Names its bucket with a per-process nonce, so a restart after the create makes a second one. | b32 | Unique | 0 |
+| B32 | Names its bucket with a per-process nonce, so a restart after the create makes a second one. | b32 | Clean | 2 |
+| B32 | Names its bucket with a per-process nonce, so a restart after the create makes a second one. | b32 | Honest | 0 |
+| B33 | Reports ready right after the create, while the bucket is CREATING. | b33 | Honest | 0 |
+| B34 | Never recreates a missing bucket. | b34 | Restore | 1 |
+| B35 | Retries a 503 every 10 ms, past the rate limiter. | b35 | Backoff | 0 |
