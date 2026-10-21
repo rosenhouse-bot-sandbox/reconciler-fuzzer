@@ -26,10 +26,17 @@ func TestMain(m *testing.M) {
 
 func TestGate(t *testing.T) {
 	for _, g := range gate {
-		t.Run(fmt.Sprintf("%s catches B%d", g.name(), g.bug), func(t *testing.T) {
+		verb := "catches"
+		if g.finding == "" {
+			verb = "passes"
+		}
+		t.Run(fmt.Sprintf("%s %s B%d", g.name(), verb, g.bug), func(t *testing.T) {
 			t.Parallel()
-			_, report := runPlan(t, g.configPath(), g.plan, g.bug)
-			if !hasFinding(report, g.finding, g.step, g.detail) {
+			findings, report := runPlan(t, g.configPath(), g.plan, g.bug)
+			if g.finding == "" && findings != 0 {
+				t.Errorf("Found %d, want no findings. report.md:\n%s", findings, report)
+			}
+			if g.finding != "" && !hasFinding(report, g.finding, g.step, g.detail) {
 				t.Errorf("Want a finding %q at step %d that says %q. report.md:\n%s", g.finding, g.step, g.detail, report)
 			}
 		})

@@ -81,6 +81,18 @@ type Run struct {
 	Models []Model `json:"models,omitempty"`
 	// StatusKinds lists the installed CRDs with a status subresource.
 	StatusKinds []Kind `json:"statusKinds,omitempty"`
+	// Owners maps a system's name to its owner CEL, owning-CR rule 2.
+	Owners map[string]string `json:"owners,omitempty"`
+	// Owns lists the primary's owns entries, owning-CR rule 3.
+	Owns []Owns `json:"owns,omitempty"`
+}
+
+// Owns is one primary.owns entry with its kind's resource. Name and
+// Namespace are CEL over the CR.
+type Owns struct {
+	Kind      Kind   `json:"kind"`
+	Name      string `json:"name"`
+	Namespace string `json:"namespace,omitempty"`
 }
 
 // Kind names a kind both ways: by group, version and Kind, and by resource.

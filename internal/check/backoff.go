@@ -18,7 +18,7 @@ func Backoff(ix *trace.Index, s Spec) []Finding {
 	var order []findingKey
 	steps := ix.Steps()
 	holds := holdWatches(ix)
-	w := owner.New(ix)
+	w := owner.New(ix, s.Owners)
 	for _, e := range backoffEvents(ix, s) {
 		if v := e.Version; v != nil {
 			for r := range runs {
@@ -79,7 +79,7 @@ func crsLive(w *owner.World, from, to time.Duration) int {
 	return n
 }
 
-// ownedByAnother reports whether ref's instance at t has a rule-1 owning
+// ownedByAnother reports whether ref's instance at t has a rule 1 to 3 owning
 // CR other than cr, so that cr's generation does not bear on it.
 func ownedByAnother(w *owner.World, ref trace.Ref, cr string, t time.Duration) bool {
 	i, found := w.Latest(ref, t)
@@ -89,8 +89,8 @@ func ownedByAnother(w *owner.World, ref trace.Ref, cr string, t time.Duration) b
 	if w.Primary(i) {
 		return i.UID != cr
 	}
-	o := w.Owner(i, t)
-	return o.Rule == 1 && o.CRs[0] != cr
+	owner, named := w.Owner(i, t).Named()
+	return named && owner != cr
 }
 
 const (

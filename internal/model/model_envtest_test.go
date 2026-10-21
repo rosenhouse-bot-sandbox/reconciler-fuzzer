@@ -126,7 +126,7 @@ func TestModelsAgainstEnvtest(t *testing.T) {
 		if _, err := harness.CoreV1().ConfigMaps("doomed").Create(ctx, inside, metav1.CreateOptions{}); err != nil {
 			t.Fatal(err)
 		}
-		if err := k.Delete(ctx, namespace); err != nil {
+		if err := k.Delete(ctx, namespace, ""); err != nil {
 			t.Fatal(err)
 		}
 		waitGone(t, namespace)

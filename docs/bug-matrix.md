@@ -1,11 +1,11 @@
 # Bug matrix
 
 This file is generated from targets/toy-widget/gate_test.go by `make bug-matrix`.
-`make test-envtest` proves each row: the plan, run against the bug, reports the check's finding at that step.
+`make test-envtest` proves each row: the plan, run against the bug, reports the check's finding at that step, or no finding for check none.
 
 | Bug | Description | Plan | Check | Step |
 |---|---|---|---|---|
-| B0 | The correct controller. | all 39 in plans/ and gadget/plans/ | none | |
+| B0 | The correct controller. | all 46 committed plans | none | |
 | B1 | Reports children ready before it creates them. | b1 | Converge | 0 |
 | B2 | Creates children with generated names, so it duplicates them. | b2 | Converge | 0 |
 | B3 | Leaves child 0 without an owner reference. | b3 | Clean | 1 |
@@ -33,3 +33,8 @@ This file is generated from targets/toy-widget/gate_test.go by `make bug-matrix`
 | B23 | Gives up on cleanup for good when its Gadget outlives the delete, so the finalizer stays. | gadget/b23 | Converge | 1 |
 | B24 | Never recreates a missing Gadget once it reported it ready. | gadget/b24 | Restore | 1 |
 | B25 | Retries a forbidden Gadget status patch every 10 ms while the Gadget has Ready False. | gadget/b25 | Backoff | 1 |
+| B26 | Gives a Tenant's ClusterRole no owner reference, so it outlives the Tenant. | tenant/b26 | Clean | 1 |
+| B27 | Forgets a Grant's ConfigMap in rf-shared when the finalizer cleans up. | grant/b27 | Clean | 1 |
+| B28 | Leaves a Grant's ClusterRole to garbage collection, which ignores its namespaced owner. | grant/b28 | Clean | 1 |
+| B29 | Never releases a Tenant's children while the Tenant is being deleted, so only a Foreground delete wedges. | tenant/b29 | Converge | 1 |
+| B29 | Never releases a Tenant's children while the Tenant is being deleted, so only a Foreground delete wedges. | tenant/b29-background | none | |

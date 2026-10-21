@@ -1,0 +1,6 @@
+apiVersion: cluster.reconciler-fuzzer/v1
+kind: Realm
+metadata:
+  name: realm
+spec:
+  size: 1

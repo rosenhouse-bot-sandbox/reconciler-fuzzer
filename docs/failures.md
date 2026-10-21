@@ -106,14 +106,18 @@ clause 4 findings follow from it.
 
 A controller resource outlived its owning CR. Each line names the
 resource, the owner rule of DESIGN.md §11 that tied it to a CR (1:
-ownerReferences; 4: the CRs live at its creation), and that CR's slot:
+ownerReferences; 2: `systems[].owner`; 3: `primary.owns`; 4: the CRs live
+at its creation), and that CR's slot:
 
 ```
 configmaps rf-9485af8b/widget-0 (rule 4, slot a)
 ```
 
 A rule 4 line usually means the resource lacks an ownerReference, so
-garbage collection could not delete it. A resource that should outlive its
+garbage collection could not delete it. A rule 1 line on a cluster-scoped
+resource with a namespaced owner means garbage collection ignores that
+invalid ownerReference. A rule 2 or 3 line usually means a finalizer
+forgot the resource. A resource that should outlive its
 CR needs `primary.retain`.
 
 ### Restore

@@ -68,6 +68,7 @@ func TestSaveRoundTrips(t *testing.T) {
 			Faults:  []Fault{{Match: Match{Verb: "patch", Resource: "widgets"}, Delay: &delay}, {Nth: 1, Error: &Error{Code: 500, RetryAfter: Duration(time.Second)}}},
 			Actions: []Action{{At: Duration(20 * time.Millisecond), Do: Update, Slot: "a", Patch: json.RawMessage(`{"spec":{"count":2}}`)}},
 		},
+		{Actions: []Action{{Do: Delete, Slot: "a", Propagation: Foreground}}},
 	}}
 	path := filepath.Join(t.TempDir(), "plan.json")
 	if err := Save(path, p); err != nil {
@@ -153,6 +154,9 @@ func TestValidate(t *testing.T) {
 		"two samples":           {[]Step{{Actions: []Action{create, {Do: Create, Slot: "b"}}}}, "steps[0].actions[1]: create of slot \"b\" gives its CR the name of slot \"a\"'s CR"},
 		"two names":             {[]Step{{Actions: []Action{named("a", "w"), named("b", "w")}}}, "create of slot \"b\" gives its CR the name"},
 		"malformed object":      {[]Step{{Actions: []Action{{Do: Create, Slot: "a", Object: json.RawMessage(`[`)}}}}, "decoding object"},
+		"orphan propagation":    {[]Step{{Actions: []Action{create, {Do: Delete, Slot: "a", Propagation: "Orphan"}}}}, "steps[0].actions[1]: delete propagation \"Orphan\" is not Foreground"},
+		"create propagation":    {[]Step{{Actions: []Action{{Do: Create, Slot: "a", Propagation: Foreground}}}}, "steps[0].actions[0]: create takes no propagation"},
+		"damage propagation":    {[]Step{{Actions: []Action{{Do: Damage, Target: cms, Propagation: Foreground}}}}, "steps[0].actions[0]: damage takes no propagation"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -180,10 +184,11 @@ func TestValidateAccepts(t *testing.T) {
 	generated := json.RawMessage(`{"metadata":{"generateName":"w-"}}`)
 	p := &Plan{Steps: []Step{
 		{Actions: []Action{named("b", "w"), {Do: Delete, Slot: "b"}, named("c", "w"), named("d", "x"),
-			{Do: Create, Slot: "e", Object: generated}, {Do: Create, Slot: "f", Object: generated}}},
+			{Do: Create, Slot: "e", Object: generated}, {Do: Create, Slot: "f", Object: generated},
+			{Do: Create, Slot: "g", Object: json.RawMessage(`{"metadata":{"name":"x","namespace":"other"}}`)}}},
 		{Actions: []Action{{Do: Create, Slot: "a"}, {Do: Update, Slot: "a", Patch: json.RawMessage(`{"spec":{}}`)}}},
 		{Period: Duration(time.Second), Faults: []Fault{{Drop: true}, {Delay: &delay}, {Error: &Error{Code: 409}, Nth: 2}, {System: "kube", Error: &Error{Code: 599}}},
-			Actions: []Action{{Do: Delete, Slot: "a"}, {Do: Create, Slot: "a", At: Duration(time.Millisecond)}, {Do: Restart}, {Do: Kill}}},
+			Actions: []Action{{Do: Delete, Slot: "a", Propagation: Foreground}, {Do: Create, Slot: "a", At: Duration(time.Millisecond)}, {Do: Restart}, {Do: Kill}}},
 		{Faults: []Fault{{Stuck: true, Match: gadgets}, {SlowDelete: true, Match: Match{Group: "example.com", Resource: "gadgets", Name: "g"}}}},
 		{Faults: []Fault{{DropResponse: true}, {KillAfter: true, Nth: 1}}, Actions: []Action{
 			{Do: Damage, Target: cms}, {Do: Damage, Slot: "a", Target: cms, Patch: json.RawMessage(`{"data":{}}`)},

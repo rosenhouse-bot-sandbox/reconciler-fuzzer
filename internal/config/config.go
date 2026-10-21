@@ -25,6 +25,7 @@ type Config struct {
 	Fixtures []string
 	Values   Values
 	Models   []Model
+	Systems  []System
 	Budgets  Budgets
 	Timeouts Timeouts
 
@@ -66,6 +67,28 @@ type Primary struct {
 	// Retain is CEL over self, a deleted CR. Where it holds, Clean allows
 	// the CR's resources to stay. It is empty when unset.
 	Retain string
+	// Owns are owning-CR rule 3: fields of the CR that name its resources.
+	Owns []Owns
+}
+
+// Owns is one primary.owns entry. Name and Namespace are CEL over self, the
+// CR, and yield strings.
+type Owns struct {
+	Kind schema.GroupVersionKind
+	Name string
+	// Namespace is empty when unset: the resource is in the CR's namespace,
+	// or cluster-scoped.
+	Namespace string
+}
+
+// System is one systems entry. Until fake services land, the only name is
+// kube.
+type System struct {
+	Name string
+	// Owner is owning-CR rule 2: CEL over self, one of the system's
+	// resources, that yields its CR's UID, namespace/name or name. It is
+	// empty when unset.
+	Owner string
 }
 
 // ReadyCondition is the only stage: the model sets the Ready condition True
@@ -132,6 +155,11 @@ type declaration struct {
 		Sample string `json:"sample"`
 		Ready  string `json:"ready"`
 		Retain string `json:"retain"`
+		Owns   []struct {
+			Kind      string `json:"kind"`
+			Name      string `json:"name"`
+			Namespace string `json:"namespace"`
+		} `json:"owns"`
 	} `json:"primary"`
 	Fixtures []string `json:"fixtures"`
 	Models   []struct {
@@ -150,6 +178,10 @@ type declaration struct {
 		Mutate   []string                  `json:"mutate"`
 		Fixtures map[string][]string       `json:"fixtures"`
 	} `json:"values"`
+	Systems []struct {
+		Name  string `json:"name"`
+		Owner string `json:"owner"`
+	} `json:"systems"`
 	Budgets struct {
 		Reads  *int `json:"reads"`
 		Writes *int `json:"writes"`
@@ -229,6 +261,13 @@ func load(path string) (*Config, error) {
 		if c.retain, err = CompileReady(c.Primary.Retain); err != nil {
 			return nil, fmt.Errorf("primary.retain: %w", err)
 		}
+	}
+
+	if c.Primary.Owns, err = owns(d); err != nil {
+		return nil, err
+	}
+	if c.Systems, err = systems(d); err != nil {
+		return nil, err
 	}
 
 	c.Values = Values{Overlay: d.Values.Overlay, Distinct: d.Values.Distinct, Mutate: d.Values.Mutate, Fixtures: map[string][]string{}}
@@ -324,6 +363,53 @@ func models(d declaration, primary schema.GroupVersionKind) ([]Model, error) {
 		models = append(models, m)
 	}
 	return models, nil
+}
+
+func owns(d declaration) ([]Owns, error) {
+	var owns []Owns
+	for i, declared := range d.Primary.Owns {
+		key := fmt.Sprintf("primary.owns[%d]", i)
+		if declared.Kind == "" {
+			return nil, fmt.Errorf("%s.kind is required", key)
+		}
+		kind, err := parseGVK(declared.Kind)
+		if err != nil {
+			return nil, fmt.Errorf("%s.kind %q: %w", key, declared.Kind, err)
+		}
+		if declared.Name == "" {
+			return nil, fmt.Errorf("%s.name is required", key)
+		}
+		if _, err := CompileString(declared.Name); err != nil {
+			return nil, fmt.Errorf("%s.name: %w", key, err)
+		}
+		if declared.Namespace != "" {
+			if _, err := CompileString(declared.Namespace); err != nil {
+				return nil, fmt.Errorf("%s.namespace: %w", key, err)
+			}
+		}
+		owns = append(owns, Owns{Kind: kind, Name: declared.Name, Namespace: declared.Namespace})
+	}
+	return owns, nil
+}
+
+func systems(d declaration) ([]System, error) {
+	var systems []System
+	for i, declared := range d.Systems {
+		key := fmt.Sprintf("systems[%d]", i)
+		if declared.Name != "kube" {
+			return nil, fmt.Errorf("%s.name %s: the only system is kube until fake services land", key, declared.Name)
+		}
+		if slices.ContainsFunc(systems, func(s System) bool { return s.Name == declared.Name }) {
+			return nil, fmt.Errorf("%s.name %s: another system has this name", key, declared.Name)
+		}
+		if declared.Owner != "" {
+			if _, err := CompileString(declared.Owner); err != nil {
+				return nil, fmt.Errorf("%s.owner: %w", key, err)
+			}
+		}
+		systems = append(systems, System{Name: declared.Name, Owner: declared.Owner})
+	}
+	return systems, nil
 }
 
 func resolve(dir, path string) string {

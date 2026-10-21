@@ -50,12 +50,13 @@ var ErrUnsupported = errors.New("unsupported fault")
 // Options configure the system. Paths are absolute.
 type Options struct {
 	CRDs []string
-	// RBAC holds Role and ClusterRole manifests. Roles bind in the run
-	// namespace and ClusterRoles cluster-wide, to the controller's
-	// ServiceAccount.
+	// RBAC holds Role and ClusterRole manifests. A Role binds in its
+	// namespace, or else the run namespace, and a ClusterRole cluster-wide,
+	// to the controller's ServiceAccount.
 	RBAC []string
-	// Fixtures are objects the harness creates in the run namespace before
-	// the controller starts.
+	// Fixtures are objects the harness creates before the controller
+	// starts. A namespaced fixture without a namespace goes in the run
+	// namespace.
 	Fixtures []string
 	// Watch lists kinds the observer watches from the start. It adds any
 	// other kind a listener sees a request for.
@@ -96,9 +97,11 @@ func New(o Options) *Kube { return &Kube{o: o} }
 
 func (k *Kube) Name() string { return Name }
 
-// Start brings up envtest with the CRDs, creates the namespace and identity,
-// opens the controller and harness listeners, starts the observer and
-// creates the fixtures through the harness listener. Endpoints.Vars holds
+// Start brings up envtest with the CRDs, creates the run namespace, starts
+// the observer, and opens the harness listener. Through it, it creates the
+// Namespace fixtures and then each other namespace a fixture or Role names.
+// It then creates the identity, opens the controller listener and creates
+// the other fixtures through the harness listener. Endpoints.Vars holds
 // kubeconfig, a file that points at the controller listener and names the
 // namespace, namespace, and url, the controller listener's address.
 func (k *Kube) Start(ctx context.Context, env *system.Env) (system.Endpoints, error) {
@@ -143,10 +146,6 @@ func (k *Kube) start(ctx context.Context, env *system.Env) (system.Endpoints, er
 	if _, err := clientset.CoreV1().Namespaces().Create(ctx, namespace, metav1.CreateOptions{}); err != nil {
 		return system.Endpoints{}, fmt.Errorf("creating namespace %s: %w", k.namespace, err)
 	}
-	identity, err := createIdentity(ctx, clientset, admin, k.namespace, roles, clusterRoles)
-	if err != nil {
-		return system.Endpoints{}, err
-	}
 
 	cached := memory.NewMemCacheClient(clientset.Discovery())
 	k.mapper = restmapper.NewDeferredDiscoveryRESTMapper(cached)
@@ -164,15 +163,13 @@ func (k *Kube) start(ctx context.Context, env *system.Env) (system.Endpoints, er
 		return system.Endpoints{}, err
 	}
 	k.record = env.Record
-	var seen []schema.GroupResource
-	for _, gvk := range k.o.Seen {
+	setup, err := planSetup(k.namespace, roles, fixtures, func(gvk schema.GroupVersionKind) (bool, error) {
 		mapping, err := k.mapping(gvk)
 		if err != nil {
-			return system.Endpoints{}, err
+			return false, err
 		}
-		seen = append(seen, mapping.Resource.GroupResource())
-	}
-	controller, err := k.listen(trace.Controller, identity, seen...)
+		return mapping.Scope.Name() == meta.RESTScopeNameNamespace, nil
+	})
 	if err != nil {
 		return system.Endpoints{}, err
 	}
@@ -184,14 +181,13 @@ func (k *Kube) start(ctx context.Context, env *system.Env) (system.Endpoints, er
 	if err != nil {
 		return system.Endpoints{}, err
 	}
-	kubeconfig := filepath.Join(env.Dir, "kubeconfig")
-	if err := writeKubeconfig(kubeconfig, controller.URL(), k.namespace); err != nil {
-		return system.Endpoints{}, err
-	}
 
 	kinds := slices.Clone(k.o.Watch)
 	for _, fixture := range fixtures {
 		kinds = append(kinds, fixture.GroupVersionKind())
+	}
+	if len(setup.missing) > 0 {
+		kinds = append(kinds, corev1.SchemeGroupVersion.WithKind("Namespace"))
 	}
 	for _, gvk := range kinds {
 		mapping, err := k.mapping(gvk)
@@ -207,10 +203,41 @@ func (k *Kube) start(ctx context.Context, env *system.Env) (system.Endpoints, er
 	for _, gr := range ruleKinds(roles, clusterRoles) {
 		k.observer.watch(gr)
 	}
-	for _, fixture := range fixtures {
-		if _, err := k.Create(ctx, fixture.Object); err != nil {
-			return system.Endpoints{}, fmt.Errorf("creating fixture %s %s: %w", fixture.GetKind(), fixture.GetName(), err)
+	if err := k.createFixtures(ctx, setup.namespaces); err != nil {
+		return system.Endpoints{}, err
+	}
+	for _, name := range setup.missing {
+		_, err := clientset.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			_, err = k.Create(ctx, map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": name}})
 		}
+		if err != nil {
+			return system.Endpoints{}, fmt.Errorf("creating namespace %s: %w", name, err)
+		}
+	}
+
+	identity, err := createIdentity(ctx, clientset, admin, k.namespace, roles, clusterRoles)
+	if err != nil {
+		return system.Endpoints{}, err
+	}
+	var seen []schema.GroupResource
+	for _, gvk := range k.o.Seen {
+		mapping, err := k.mapping(gvk)
+		if err != nil {
+			return system.Endpoints{}, err
+		}
+		seen = append(seen, mapping.Resource.GroupResource())
+	}
+	controller, err := k.listen(trace.Controller, identity, seen...)
+	if err != nil {
+		return system.Endpoints{}, err
+	}
+	kubeconfig := filepath.Join(env.Dir, "kubeconfig")
+	if err := writeKubeconfig(kubeconfig, controller.URL(), k.namespace); err != nil {
+		return system.Endpoints{}, err
+	}
+	if err := k.createFixtures(ctx, setup.fixtures); err != nil {
+		return system.Endpoints{}, err
 	}
 	for _, obj := range k.o.Warm {
 		if err := k.warm(ctx, direct, obj); err != nil {
@@ -222,6 +249,15 @@ func (k *Kube) start(ctx context.Context, env *system.Env) (system.Endpoints, er
 		Harness:    harness,
 		Vars:       map[string]string{"kubeconfig": kubeconfig, "namespace": k.namespace, "url": controller.URL()},
 	}, nil
+}
+
+func (k *Kube) createFixtures(ctx context.Context, fixtures []*unstructured.Unstructured) error {
+	for _, fixture := range fixtures {
+		if _, err := k.Create(ctx, fixture.Object); err != nil {
+			return fmt.Errorf("creating fixture %s %s: %w", fixture.GetKind(), fixture.GetName(), err)
+		}
+	}
+	return nil
 }
 
 func (k *Kube) warm(ctx context.Context, client dynamic.Interface, obj map[string]any) error {
@@ -384,9 +420,10 @@ func (k *Kube) Patch(ctx context.Context, ref trace.Ref, patch []byte) error {
 	return k.awaitVersion(ctx, ref, patched.GetResourceVersion())
 }
 
-// Delete deletes through the harness listener. It returns system.ErrGone
-// when the object is missing or was replaced before the delete.
-func (k *Kube) Delete(ctx context.Context, ref trace.Ref) error {
+// Delete deletes through the harness listener, with propagation unless it is
+// empty. It returns system.ErrGone when the object is missing or was
+// replaced before the delete.
+func (k *Kube) Delete(ctx context.Context, ref trace.Ref, propagation plan.Propagation) error {
 	resource, err := k.resource(ref)
 	if err != nil {
 		return err
@@ -399,7 +436,12 @@ func (k *Kube) Delete(ctx context.Context, ref trace.Ref) error {
 		return err
 	}
 	uid := current.GetUID()
-	err = resource.Delete(ctx, ref.Name, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}})
+	options := metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}}
+	if propagation != "" {
+		policy := metav1.DeletionPropagation(propagation)
+		options.PropagationPolicy = &policy
+	}
+	err = resource.Delete(ctx, ref.Name, options)
 	if apierrors.IsNotFound(err) || apierrors.IsConflict(err) {
 		return system.ErrGone
 	}

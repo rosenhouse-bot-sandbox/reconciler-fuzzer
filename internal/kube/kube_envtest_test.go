@@ -20,6 +20,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/system"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 )
@@ -76,8 +77,8 @@ func TestKube(t *testing.T) {
 	recorded := &events{}
 	k := New(Options{
 		CRDs:     []string{toy + "crds"},
-		RBAC:     []string{toy + "rbac/role.yaml"},
-		Fixtures: []string{toy + "widget-config.yaml"},
+		RBAC:     []string{toy + "rbac/role.yaml", "testdata/role-elsewhere.yaml"},
+		Fixtures: []string{toy + "widget-config.yaml", "testdata/scoped-fixtures.yaml"},
 		Watch:    []schema.GroupVersionKind{widgetGVK},
 		Seen:     []schema.GroupVersionKind{widgetGVK},
 		Warm:     []map[string]any{{"apiVersion": "toy.reconciler-fuzzer/v1", "kind": "Widget", "metadata": map[string]any{"name": "warm"}, "spec": map[string]any{"count": int64(1)}}},
@@ -142,6 +143,83 @@ func TestKube(t *testing.T) {
 			return c != nil && c.Caller == trace.Harness && c.Verb == "create" && c.Ref.Resource == "configmaps" &&
 				c.ResultName == "widget-config" && c.ResultRV == fixture.ResourceVersion
 		})
+	})
+
+	t.Run("the harness creates fixtures in other namespaces and cluster scope", func(t *testing.T) {
+		admin := kubernetes.NewForConfigOrDie(k.admin)
+		for namespace, name := range map[string]string{"rf-far": "far", "rf-declared": "declared"} {
+			if _, err := admin.CoreV1().ConfigMaps(namespace).Get(ctx, name, metav1.GetOptions{}); err != nil {
+				t.Errorf("Getting fixture %s/%s: %v", namespace, name, err)
+			}
+		}
+		if _, err := admin.RbacV1().ClusterRoles().Get(ctx, "rf-fixture", metav1.GetOptions{}); err != nil {
+			t.Errorf("Getting the ClusterRole fixture: %v", err)
+		}
+		for _, name := range []string{"rf-far", "rf-declared", "rf-roles"} {
+			recorded.await(t, "harness create of namespace "+name, func(e trace.Event) bool {
+				c := e.Call
+				return c != nil && c.Caller == trace.Harness && c.Verb == "create" && c.Ref.Resource == "namespaces" && c.ResultName == name
+			})
+		}
+	})
+
+	t.Run("a Role binds in its own namespace", func(t *testing.T) {
+		config, _ := clientcmd.BuildConfigFromFlags("", endpoints.Vars["kubeconfig"])
+		controller := kubernetes.NewForConfigOrDie(config).CoreV1()
+		if _, err := controller.ConfigMaps("rf-roles").Get(ctx, "missing", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+			t.Errorf("Getting a configmap in rf-roles = %v, want not found.", err)
+		}
+		if _, err := controller.ConfigMaps("rf-far").Get(ctx, "far", metav1.GetOptions{}); !apierrors.IsForbidden(err) {
+			t.Errorf("Getting a configmap in rf-far = %v, want forbidden.", err)
+		}
+	})
+
+	t.Run("a foreground delete leaves a blocked owner terminating", func(t *testing.T) {
+		ownerRef, err := k.Create(ctx, map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "owner"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		admin := kubernetes.NewForConfigOrDie(k.admin)
+		owner, err := admin.CoreV1().ConfigMaps(ns).Get(ctx, "owner", metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		block := true
+		child := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "child", OwnerReferences: []metav1.OwnerReference{{
+			APIVersion: "v1", Kind: "ConfigMap", Name: "owner", UID: owner.UID, BlockOwnerDeletion: &block,
+		}}}}
+		if _, err := admin.CoreV1().ConfigMaps(ns).Create(ctx, child, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := k.Delete(ctx, ownerRef, plan.Foreground); err != nil {
+			t.Fatal(err)
+		}
+		got, err := admin.CoreV1().ConfigMaps(ns).Get(ctx, "owner", metav1.GetOptions{})
+		if err != nil || got.DeletionTimestamp == nil || !slices.Contains(got.Finalizers, metav1.FinalizerDeleteDependents) {
+			t.Errorf("After a foreground delete the owner is %+v, %v.", got.ObjectMeta, err)
+		}
+	})
+
+	t.Run("a cluster-scoped object goes through create, patch, delete and wait gone", func(t *testing.T) {
+		ref, err := k.Create(ctx, map[string]any{"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRole", "metadata": map[string]any{"name": "rf-scoped"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, err := k.Ref(schema.GroupVersionKind{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRole"}, "rf-scoped")
+		if err != nil || ref != want || ref.Namespace != "" {
+			t.Fatalf("Create returned %+v, and Ref returns %+v, %v.", ref, want, err)
+		}
+		if err := k.Patch(ctx, ref, []byte(`{"metadata":{"labels":{"patched":"yes"}}}`)); err != nil {
+			t.Fatal(err)
+		}
+		if err := k.Delete(ctx, ref, ""); err != nil {
+			t.Fatal(err)
+		}
+		waitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		if err := k.WaitGone(waitCtx, ref); err != nil {
+			t.Fatal(err)
+		}
 	})
 
 	var widget trace.Ref
@@ -234,7 +312,7 @@ func TestKube(t *testing.T) {
 		if err := k.Patch(ctx, widget, []byte(`{"metadata":{"finalizers":["test/hold"]}}`)); err != nil {
 			t.Fatal(err)
 		}
-		if err := k.Delete(ctx, widget); err != nil {
+		if err := k.Delete(ctx, widget, ""); err != nil {
 			t.Fatal(err)
 		}
 		if !recorded.holds(func(e trace.Event) bool {
@@ -250,7 +328,7 @@ func TestKube(t *testing.T) {
 		if err := k.WaitGone(waitCtx, widget); err != nil {
 			t.Fatal(err)
 		}
-		if err := k.Delete(ctx, widget); !errors.Is(err, system.ErrGone) {
+		if err := k.Delete(ctx, widget, ""); !errors.Is(err, system.ErrGone) {
 			t.Errorf("Deleting a missing widget = %v, want ErrGone.", err)
 		}
 		recorded.await(t, "deleted version", func(e trace.Event) bool {

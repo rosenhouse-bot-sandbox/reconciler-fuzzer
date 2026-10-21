@@ -59,7 +59,16 @@ type Action struct {
 	Object json.RawMessage `json:"object,omitempty"`
 	Patch  json.RawMessage `json:"patch,omitempty"`
 	Target *Target         `json:"target,omitempty"`
+	// Propagation is a delete's propagation policy. Empty is the server's
+	// default.
+	Propagation Propagation `json:"propagation,omitempty"`
 }
+
+// Propagation is a delete's propagation policy.
+type Propagation string
+
+// Foreground deletes the CR's blocking dependents before the CR.
+const Foreground Propagation = "Foreground"
 
 // Target selects one object for damage or changeFixture. It is resolved
 // when the action runs. An empty field matches any value.
@@ -68,8 +77,10 @@ type Target struct {
 	System   string `json:"system,omitempty"`
 	Group    string `json:"group,omitempty"`
 	Resource string `json:"resource"`
-	Name     string `json:"name,omitempty"`
-	Role     string `json:"role,omitempty"`
+	// Namespace is empty for any namespace, cluster scope included.
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Role      string `json:"role,omitempty"`
 	// Nth picks the nth match in creation order, counting from 1. Zero
 	// picks the first.
 	Nth int `json:"nth,omitempty"`
@@ -173,7 +184,7 @@ func Save(path string, p *Plan) error {
 // Validate reports the first malformed step, action or fault, naming its
 // position.
 func (p *Plan) Validate() error {
-	// names maps each slot that holds a CR to that CR's name, which is
+	// names maps each slot that holds a CR to that CR's namespace/name, which is
 	// sampleName for the sample and empty for a generated name. A slot an
 	// earlier delete emptied maps to emptied.
 	names := map[string]string{}
@@ -206,6 +217,12 @@ func (a Action) validate(names map[string]string) error {
 	}
 	if a.Target != nil && a.Do != Damage && a.Do != ChangeFixture {
 		return fmt.Errorf("%s takes no target", a.Do)
+	}
+	switch {
+	case a.Propagation != "" && a.Do != Delete:
+		return fmt.Errorf("%s takes no propagation", a.Do)
+	case a.Propagation != "" && a.Propagation != Foreground:
+		return fmt.Errorf("delete propagation %q is not %s", a.Propagation, Foreground)
 	}
 	switch a.Do {
 	case Create:
@@ -282,7 +299,7 @@ func (a Action) validateChange(names map[string]string) error {
 	return nil
 }
 
-// createdName is the metadata.name of object, sampleName when object is
+// createdName is the namespace/name of object, sampleName when object is
 // empty, or empty for a generated name.
 func createdName(object json.RawMessage) (string, error) {
 	if object == nil {
@@ -290,13 +307,17 @@ func createdName(object json.RawMessage) (string, error) {
 	}
 	var o struct {
 		Metadata struct {
-			Name string `json:"name"`
+			Namespace string `json:"namespace"`
+			Name      string `json:"name"`
 		} `json:"metadata"`
 	}
 	if err := json.Unmarshal(object, &o); err != nil {
 		return "", fmt.Errorf("decoding object: %w", err)
 	}
-	return o.Metadata.Name, nil
+	if o.Metadata.Name == "" {
+		return "", nil
+	}
+	return o.Metadata.Namespace + "/" + o.Metadata.Name, nil
 }
 
 func isObject(raw json.RawMessage) bool {

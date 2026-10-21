@@ -50,7 +50,7 @@ func TestInstanceLivesFromFirstVersionToDelete(t *testing.T) {
 		At(4*s, tt.Version(cmA0, "c1", "4", tt.Object("a-0"))).
 		At(5*s, tt.Deleted(cmA0, "c1", "5", tt.Object("a-0"))).
 		At(6*s, tt.Version(cmA0, "c2", "6", tt.Object("a-0")))
-	w := owner.New(tl.Index())
+	w := owner.New(tl.Index(), owner.Rules{})
 	first, second := instance(t, w, "c1"), instance(t, w, "c2")
 	if first.Ref != cmA0 || first.Created != 3*s || first.Gone != 5*s || second.Created != 6*s || second.Gone != 0 {
 		t.Fatalf("instances = %+v, %+v", first, second)
@@ -74,7 +74,7 @@ func TestBodyIsTheLatestVersionAtT(t *testing.T) {
 	tl := twoWidgets()
 	tl.At(3*s, tt.Version(cmA0, "c1", "3", map[string]any{"data": "old"})).
 		At(4*s, tt.Version(cmA0, "c1", "4", map[string]any{"data": "new"}))
-	w := owner.New(tl.Index())
+	w := owner.New(tl.Index(), owner.Rules{})
 	i := instance(t, w, "c1")
 	if got := string(w.Body(i, 3500*time.Millisecond)); got != `{"data":"old"}` {
 		t.Fatalf("body = %s", got)
@@ -97,7 +97,7 @@ func TestCreatorIsTheCallerWhoseCreateCarriedTheUID(t *testing.T) {
 	tl.At(3*s, tt.Create(ctl, cmA0, "c1", "3"), tt.Version(cmA0, "c1", "3", tt.Object("a-0"))).
 		At(4*s, unknown, tt.Version(cmGen, "u-gen", "4", tt.Generated("a-", "a-x7k2"))).
 		At(5*s, other, failed, tt.Version(rs, "u-rs", "5", tt.Object("r")), tt.Version(pod, "u-pod", "6", tt.Object("p")))
-	w := owner.New(tl.Index())
+	w := owner.New(tl.Index(), owner.Rules{})
 	for uid, want := range map[string]trace.Caller{"c1": ctl, "u-gen": ctl, "ua": trace.Harness, "u-rs": trace.Cluster, "u-pod": trace.Cluster} {
 		if got := instance(t, w, uid).Creator; got != want {
 			t.Errorf("creator of %s = %s, want %s", uid, got, want)
@@ -112,7 +112,7 @@ func TestCreatorOfAnApplyIsItsCaller(t *testing.T) {
 	update.Call.Verb, update.Call.Status = "patch", 200
 	tl := twoWidgets()
 	tl.At(3*s, apply, tt.Version(cmA0, "c1", "3", tt.Object("a-0")), update, tt.Version(cmGen, "c2", "4", tt.Generated("a-", "a-x7k2")))
-	w := owner.New(tl.Index())
+	w := owner.New(tl.Index(), owner.Rules{})
 	if got := instance(t, w, "c1").Creator; got != ctl {
 		t.Errorf("creator after a 201 patch = %s", got)
 	}
@@ -125,7 +125,7 @@ func TestCreatorNeedsTheCreateToNameTheObject(t *testing.T) {
 	elsewhere := tt.Create(ctl, tt.Ref("configmaps", "other", "a-0"), "c1", "3")
 	tl := twoWidgets()
 	tl.At(3*s, elsewhere, tt.Version(cmA0, "c1", "3", tt.Object("a-0")))
-	if got := instance(t, owner.New(tl.Index()), "c1").Creator; got != trace.Cluster {
+	if got := instance(t, owner.New(tl.Index(), owner.Rules{}), "c1").Creator; got != trace.Cluster {
 		t.Fatalf("creator = %s", got)
 	}
 }
@@ -133,7 +133,7 @@ func TestCreatorNeedsTheCreateToNameTheObject(t *testing.T) {
 func TestRoleIsGenerateNameOrName(t *testing.T) {
 	tl := twoWidgets()
 	tl.At(3*s, tt.Version(cmA0, "c1", "3", tt.Object("a-0")), tt.Version(cmGen, "c2", "4", tt.Generated("a-", "a-x7k2")))
-	w := owner.New(tl.Index())
+	w := owner.New(tl.Index(), owner.Rules{})
 	if got := instance(t, w, "c1").Role; got != "a-0" {
 		t.Errorf("named role = %q", got)
 	}
@@ -144,7 +144,7 @@ func TestRoleIsGenerateNameOrName(t *testing.T) {
 
 func ownerAt(t *testing.T, tl *tt.Timeline, uid string, at time.Duration) owner.Owner {
 	t.Helper()
-	w := owner.New(tl.Index())
+	w := owner.New(tl.Index(), owner.Rules{})
 	return w.Owner(instance(t, w, uid), at)
 }
 
@@ -209,12 +209,15 @@ func TestOwnerSurvivesAnOwnerReferenceCycle(t *testing.T) {
 	}
 }
 
-func TestOwnerKeyNamesTheRuleAndCRs(t *testing.T) {
+func TestOwnerKeyIsTheCRSet(t *testing.T) {
+	if (owner.Owner{Rule: 1, CRs: []string{"ua"}}).Key() != (owner.Owner{Rule: 3, CRs: []string{"ua"}}).Key() {
+		t.Error("Rules 1 and 3 give one CR different keys.")
+	}
 	keys := map[string]bool{}
-	for _, o := range []owner.Owner{{Rule: 1, CRs: []string{"ua"}}, {Rule: 4, CRs: []string{"ua"}}, {Rule: 4, CRs: []string{"ua", "ub"}}, {Rule: 4}} {
+	for _, o := range []owner.Owner{{Rule: 1, CRs: []string{"ua"}}, {Rule: 4, CRs: []string{"ua", "ub"}}, {Rule: 4}} {
 		keys[o.Key()] = true
 	}
-	if len(keys) != 4 || (owner.Owner{Rule: 4}).Shared() == false || (owner.Owner{Rule: 4, CRs: []string{"ua"}}).Shared() {
+	if len(keys) != 3 || (owner.Owner{Rule: 4}).Shared() == false || (owner.Owner{Rule: 4, CRs: []string{"ua"}}).Shared() {
 		t.Fatalf("keys = %v", keys)
 	}
 }
@@ -223,7 +226,7 @@ func TestSlotIsTheSlotWhoseCreateMadeTheCR(t *testing.T) {
 	tl := twoWidgets()
 	tl.At(3*s, tt.Deleted(widgetA, "ua", "3", tt.Object("a"))).
 		At(4*s, tt.Version(widgetA, "ua2", "4", tt.Object("a")), tt.SlotAction(1, "create", "c", widgetA))
-	w := owner.New(tl.Index())
+	w := owner.New(tl.Index(), owner.Rules{})
 	for uid, want := range map[string]string{"ua": "a", "ub": "b", "ua2": "c", "unknown": ""} {
 		if got := w.Slot(uid); got != want {
 			t.Errorf("slot of %s = %q, want %q", uid, got, want)
@@ -248,7 +251,7 @@ func children() *tt.Timeline {
 }
 
 func TestSelectPicksTheNthMatchInCreationOrder(t *testing.T) {
-	w := owner.New(children().Index())
+	w := owner.New(children().Index(), owner.Rules{})
 	cases := []struct {
 		creator trace.Caller
 		target  plan.Target
@@ -262,6 +265,8 @@ func TestSelectPicksTheNthMatchInCreationOrder(t *testing.T) {
 		{ctl, plan.Target{Resource: "configmaps", Role: "a-1"}, "", "a-1"},
 		{ctl, plan.Target{System: "kube", Resource: "configmaps", Name: "b-0"}, "", "b-0"},
 		{trace.Harness, plan.Target{Resource: "configmaps"}, "", "fixture"},
+		{trace.Harness, plan.Target{Resource: "configmaps", Namespace: "ns"}, "", "fixture"},
+		{trace.Harness, plan.Target{Resource: "configmaps", Namespace: "other"}, "", ""},
 		{ctl, plan.Target{Resource: "configmaps", Nth: 2}, "b", ""},
 		{ctl, plan.Target{Resource: "configmaps", Group: "apps"}, "", ""},
 		{ctl, plan.Target{System: "vault", Resource: "configmaps"}, "", ""},
@@ -279,7 +284,7 @@ func TestSelectSkipsGoneInstancesAndTheSlotsGoneCR(t *testing.T) {
 	tl := children()
 	tl.At(7*s, tt.Deleted(tt.Ref("configmaps", "ns", "a-0"), "c-a0", "x", tt.Object("a-0"))).
 		At(8*s, tt.Deleted(widgetB, "ub", "y", tt.Object("b")))
-	w := owner.New(tl.Index())
+	w := owner.New(tl.Index(), owner.Rules{})
 	if ref, _ := w.Select(ctl, plan.Target{Resource: "configmaps"}, "", 7*s); ref.Name != "a-1" {
 		t.Errorf("Select = %+v, want a-1", ref)
 	}

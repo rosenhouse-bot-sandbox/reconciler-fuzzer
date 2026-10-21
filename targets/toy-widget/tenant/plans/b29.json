@@ -1,0 +1,31 @@
+{
+  "steps": [
+    {
+      "actions": [
+        {
+          "do": "create",
+          "slot": "a",
+          "object": {
+            "apiVersion": "toy.reconciler-fuzzer/v1",
+            "kind": "Tenant",
+            "metadata": {
+              "name": "tenant"
+            },
+            "spec": {
+              "quota": 1
+            }
+          }
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "do": "delete",
+          "slot": "a",
+          "propagation": "Foreground"
+        }
+      ]
+    }
+  ]
+}

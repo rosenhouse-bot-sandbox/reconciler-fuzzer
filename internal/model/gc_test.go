@@ -160,6 +160,53 @@ func TestGCNeverCollectsAClusterScopedDependentOfANamespacedKind(t *testing.T) {
 	assertOps(t, ops, nil)
 }
 
+func TestGCKeepsAForegroundOwnerThatAClusterScopedDependentBlocks(t *testing.T) {
+	owner := deleting(configMap("owner", "o"), metav1.FinalizerDeleteDependents)
+	dependent := node("n", "n", blocking(ownedBy("ConfigMap", "owner", "o")))
+	ops, _ := collect(context.Background(), []object{owner, dependent}, &fakeCluster{})
+	assertOps(t, ops, nil)
+}
+
+func TestGCOrphansAClusterScopedDependentOfANamespacedOwner(t *testing.T) {
+	owner := deleting(configMap("owner", "o"), metav1.FinalizerOrphanDependents)
+	dependent := node("n", "n", blocking(ownedBy("ConfigMap", "owner", "o")))
+	ops, _ := collect(context.Background(), []object{owner, dependent}, &fakeCluster{})
+	assertOps(t, ops, []op{patch(dependent, map[string]any{"ownerReferences": []metav1.OwnerReference{}})})
+}
+
+func TestGCCollectsANamespacedDependentWhoseOwnerIsInAnotherNamespace(t *testing.T) {
+	for _, finalizer := range []string{metav1.FinalizerDeleteDependents, metav1.FinalizerOrphanDependents} {
+		owner := inNamespace(deleting(configMap("owner", "o"), finalizer), "elsewhere")
+		dependent := configMap("child", "c", blocking(ownedBy("ConfigMap", "owner", "o")))
+		c := &fakeCluster{}
+		c.put("ConfigMap", "elsewhere", "owner", "o", finalizer).DeletionTimestamp = owner.DeletionTimestamp
+		ops, _ := collect(context.Background(), []object{owner, dependent}, c)
+		assertOps(t, ops, []op{deletion(dependent)})
+
+		ops, _ = collect(context.Background(), []object{owner}, c)
+		assertOps(t, ops, []op{patch(owner, map[string]any{"finalizers": []string{}})})
+	}
+}
+
+func TestGCHandlesANamespacedDependentOfAClusterScopedOwner(t *testing.T) {
+	c := &fakeCluster{}
+	owner := deleting(node("owner", "o"), metav1.FinalizerDeleteDependents)
+	c.put("Node", "", "owner", "o", metav1.FinalizerDeleteDependents).DeletionTimestamp = owner.DeletionTimestamp
+	dependent := configMap("child", "c", blocking(ownedBy("Node", "owner", "o")))
+	ops, _ := collect(context.Background(), []object{owner, dependent}, c)
+	assertOps(t, ops, []op{deletion(dependent)})
+
+	owner.Finalizers = []string{metav1.FinalizerOrphanDependents}
+	c.put("Node", "", "owner", "o", owner.Finalizers...).DeletionTimestamp = owner.DeletionTimestamp
+	ops, _ = collect(context.Background(), []object{owner, dependent}, c)
+	assertOps(t, ops, []op{patch(dependent, map[string]any{"ownerReferences": []metav1.OwnerReference{}})})
+}
+
+func inNamespace(o object, namespace string) object {
+	o.ref.Namespace, o.Namespace = namespace, namespace
+	return o
+}
+
 func TestGCCollectsAClusterScopedDependentOfAGoneClusterScopedOwner(t *testing.T) {
 	dependent := node("n", "n", ownedBy("Node", "a", "a"))
 	ops, _ := collect(context.Background(), []object{dependent}, &fakeCluster{})

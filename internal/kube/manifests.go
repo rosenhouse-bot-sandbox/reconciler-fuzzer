@@ -55,9 +55,6 @@ func readRBAC(paths []string) ([]rbacv1.Role, []rbacv1.ClusterRole, error) {
 				if err := yaml.UnmarshalStrict(document, &role); err != nil {
 					return nil, nil, fmt.Errorf("%s: %w", path, err)
 				}
-				if role.Namespace != "" {
-					return nil, nil, fmt.Errorf("%s: the Role %s sets metadata.namespace, but roles bind in the run namespace", path, role.Name)
-				}
 				roles = append(roles, role)
 			case "ClusterRole":
 				var clusterRole rbacv1.ClusterRole
@@ -74,6 +71,46 @@ func readRBAC(paths []string) ([]rbacv1.Role, []rbacv1.ClusterRole, error) {
 		}
 	}
 	return roles, clusterRoles, nil
+}
+
+// setup is what Start creates before the controller starts, in order.
+type setup struct {
+	// namespaces are the Namespace fixtures.
+	namespaces []*unstructured.Unstructured
+	// missing names each other namespace that a namespaced fixture or a
+	// Role names.
+	missing  []string
+	fixtures []*unstructured.Unstructured
+}
+
+func planSetup(runNamespace string, roles []rbacv1.Role, fixtures []*unstructured.Unstructured, namespaced func(schema.GroupVersionKind) (bool, error)) (setup, error) {
+	var s setup
+	var named []string
+	for _, fixture := range fixtures {
+		gvk := fixture.GroupVersionKind()
+		if gvk.Group == "" && gvk.Kind == "Namespace" {
+			s.namespaces = append(s.namespaces, fixture)
+			continue
+		}
+		s.fixtures = append(s.fixtures, fixture)
+		scoped, err := namespaced(gvk)
+		if err != nil {
+			return setup{}, err
+		}
+		if scoped {
+			named = append(named, fixture.GetNamespace())
+		}
+	}
+	for _, role := range roles {
+		named = append(named, role.Namespace)
+	}
+	for _, namespace := range named {
+		declared := slices.ContainsFunc(s.namespaces, func(n *unstructured.Unstructured) bool { return n.GetName() == namespace })
+		if namespace != "" && namespace != runNamespace && !declared && !slices.Contains(s.missing, namespace) {
+			s.missing = append(s.missing, namespace)
+		}
+	}
+	return s, nil
 }
 
 // readObjects decodes every document of paths as an object.

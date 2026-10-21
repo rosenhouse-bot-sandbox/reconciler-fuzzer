@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/owner"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 )
 
@@ -33,6 +34,8 @@ type Spec struct {
 	Models []Model
 	// StatusKinds are the installed CRDs with a status subresource.
 	StatusKinds []trace.Kind
+	// Owners are owning-CR rules 2 and 3, from the config or the Run event.
+	Owners owner.Rules
 }
 
 // Model is a stage model's kind as the checks judge it.
@@ -61,8 +64,17 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 			s.Retain = c.Retain
 		}
 		var err error
-		s.Models, err = configModels(c.Models, run.Models)
-		return s, err
+		if s.Models, err = configModels(c.Models, run.Models); err != nil {
+			return Spec{}, err
+		}
+		owners, owns, err := owner.Sources(c, recordedResource(run))
+		if err != nil {
+			return Spec{}, fmt.Errorf("the config's owners: %w", err)
+		}
+		if s.Owners, err = owner.Compile(owners, owns); err != nil {
+			return Spec{}, fmt.Errorf("the config's owners: %w", err)
+		}
+		return s, nil
 	}
 	if run.Ready == "" || run.Stable <= 0 || run.Reads <= 0 || run.Writes <= 0 {
 		return Spec{}, errors.New("the trace's run event records no ready, stable and budgets; pass a config")
@@ -84,7 +96,23 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 		}
 		s.Models = append(s.Models, Model{Kind: m.Kind, Ready: ready, Dependency: m.Dependency})
 	}
+	if s.Owners, err = owner.Compile(run.Owners, run.Owns); err != nil {
+		return Spec{}, fmt.Errorf("the trace's owners: %w", err)
+	}
 	return s, nil
+}
+
+// recordedResource maps an owns kind to the run event's resource for it, or
+// else a guess. It counts every kind as namespaced, since the run refused a
+// namespace on a cluster-scoped kind.
+func recordedResource(run trace.Run) func(schema.GroupVersionKind) (string, bool, error) {
+	return func(gvk schema.GroupVersionKind) (string, bool, error) {
+		if i := slices.IndexFunc(run.Owns, func(r trace.Owns) bool { return r.Kind.Group == gvk.Group && r.Kind.Kind == gvk.Kind }); i >= 0 {
+			return run.Owns[i].Kind.Resource, true, nil
+		}
+		plural, _ := meta.UnsafeGuessKindToResource(gvk)
+		return plural.Resource, true, nil
+	}
 }
 
 // configModels takes each model's ready and dependency from the config, and

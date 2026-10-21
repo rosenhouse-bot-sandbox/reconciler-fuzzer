@@ -183,7 +183,7 @@ func (g *Generator) readFixtures(cfg *config.Config) error {
 			if len(paths) == 0 {
 				continue
 			}
-			f := fixture{target: plan.Target{Group: gvr.Group, Resource: gvr.Resource, Name: object.GetName()}}
+			f := fixture{target: plan.Target{Group: gvr.Group, Resource: gvr.Resource, Namespace: object.GetNamespace(), Name: object.GetName()}}
 			for _, dotted := range paths {
 				f.paths = append(f.paths, strings.Split(dotted, "."))
 			}
@@ -335,7 +335,7 @@ func (g *Generator) burst(t *rapid.T, at state) []plan.Action {
 	if len(g.fields) > 0 && rapid.Bool().Draw(t, "updates") {
 		actions = []plan.Action{g.update(t, at, slot), g.update(t, at, slot)}
 	} else {
-		actions = []plan.Action{g.delete(at, slot), g.create(t, at, slot)}
+		actions = []plan.Action{g.delete(t, at, slot), g.create(t, at, slot)}
 	}
 	offsets := []int{uniform(t, 51, "at"), uniform(t, 51, "at")}
 	slices.Sort(offsets)
@@ -368,7 +368,7 @@ func (g *Generator) action(t *rapid.T, at state) plan.Action {
 	case plan.Update:
 		return g.update(t, at, sampled(t, at.live(), "slot"))
 	case plan.Delete:
-		return g.delete(at, sampled(t, at.live(), "slot"))
+		return g.delete(t, at, sampled(t, at.live(), "slot"))
 	case plan.Damage:
 		return g.damage(t, at)
 	case plan.ChangeFixture:
@@ -403,9 +403,14 @@ func (g *Generator) update(t *rapid.T, at state, slot string) plan.Action {
 	return plan.Action{Do: plan.Restart}
 }
 
-func (g *Generator) delete(at state, slot string) plan.Action {
+// delete deletes the slot's CR, with Foreground propagation 1 time in 4.
+func (g *Generator) delete(t *rapid.T, at state, slot string) plan.Action {
 	at[slot] = nil
-	return plan.Action{Do: plan.Delete, Slot: slot}
+	a := plan.Action{Do: plan.Delete, Slot: slot}
+	if uniform(t, 4, "propagation") == 0 {
+		a.Propagation = plan.Foreground
+	}
+	return a
 }
 
 // damage deletes an object of a drawn resource, of a live slot when one is.
@@ -436,7 +441,7 @@ func (g *Generator) traffic(t *rapid.T, at state, f plan.Fault) plan.Action {
 	case f.Stuck && len(at.free()) > 0:
 		return g.create(t, at, sampled(t, at.free(), "slot"))
 	case f.SlowDelete && live:
-		return g.delete(at, sampled(t, at.live(), "slot"))
+		return g.delete(t, at, sampled(t, at.live(), "slot"))
 	case f.ModelFault():
 		return plan.Action{Do: plan.Restart}
 	case slices.Contains(g.resources[1:], gr):

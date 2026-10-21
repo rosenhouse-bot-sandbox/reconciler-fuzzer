@@ -109,7 +109,7 @@ type view struct {
 }
 
 func newView(ix *trace.Index, s Spec) *view {
-	v := &view{ix: ix, s: s, w: owner.New(ix), owners: map[string]owner.Owner{}}
+	v := &view{ix: ix, s: s, w: owner.New(ix, s.Owners), owners: map[string]owner.Owner{}}
 	for _, step := range ix.Steps() {
 		if v.settled(step) {
 			v.steps = append(v.steps, step)

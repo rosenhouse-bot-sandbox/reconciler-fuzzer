@@ -25,7 +25,7 @@ func Honest(ix *trace.Index, s Spec) []Finding {
 	if len(deps) == 0 {
 		return nil
 	}
-	h := &honesty{ix: ix, s: s, w: owner.New(ix), steps: ix.Steps(), found: map[findingKey]*Finding{}}
+	h := &honesty{ix: ix, s: s, w: owner.New(ix, s.Owners), steps: ix.Steps(), found: map[findingKey]*Finding{}}
 	order, crs := crVersions(ix, s)
 	for _, uid := range order {
 		versions := crs[uid]
@@ -108,7 +108,7 @@ const (
 	stayedReady  = "stayed ready after seeing its dependency not ready"
 )
 
-// dependencies are the instances of m's kind at t whose rule-1 owning CR
+// dependencies are the instances of m's kind at t whose rule 1 to 3 owning CR
 // is uid: the live ones not being deleted, and the gone ones the controller
 // last saw live and nothing has replaced.
 func (h *honesty) dependencies(uid string, m Model, t time.Duration) []owner.Instance {
@@ -125,7 +125,7 @@ func (h *honesty) dependencies(uid string, m Model, t time.Duration) []owner.Ins
 		} else if deleting(h.w.Body(i, t)) {
 			continue
 		}
-		if o := h.w.Owner(i, t); o.Rule == 1 && o.CRs[0] == uid {
+		if cr, named := h.w.Owner(i, t).Named(); named && cr == uid {
 			owned = append(owned, i)
 		}
 	}
@@ -214,7 +214,7 @@ func (h *honesty) judgeTrack(uid string, versions []trace.Event, deps []Model, e
 					h.ix.Opaque(trace.Controller, dep.Ref, seen.At, at) {
 					continue
 				}
-				if o := h.w.Owner(dep, seen.At); o.Rule != 1 || o.CRs[0] != uid {
+				if cr, named := h.w.Owner(dep, seen.At).Named(); !named || cr != uid {
 					continue
 				}
 				h.add(at, stayedReady, kind(dep.Ref), fmt.Sprintf("%s: %s seen not ready at %v", h.slot(uid), describe(dep.Ref), seen.At))

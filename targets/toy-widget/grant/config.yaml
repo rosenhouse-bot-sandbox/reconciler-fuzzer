@@ -1,0 +1,33 @@
+# The toy with --grant: a Grant's finalizer deletes its ClusterRole and its
+# ConfigMap in rf-shared. Paths resolve against this file's directory.
+launch:
+  binary: ../../../bin/toy-widget
+  args:
+    - --grant
+    - --mirror-namespace=rf-shared
+    - --bug=0                      # A later --launch-arg --bug=N wins.
+  env:
+    KUBECONFIG: ${systems.kube.kubeconfig}
+    WATCH_NAMESPACE: ${systems.kube.namespace}
+  rbac:
+    - role.yaml
+crds:
+  - ../crds/
+primary:
+  kind: toy.reconciler-fuzzer/v1/Grant
+  sample: grant.yaml
+  ready: >-
+    has(self.status) && has(self.status.observedGeneration) && self.status.observedGeneration == self.metadata.generation
+    && has(self.status.ready) && self.status.ready
+fixtures:
+  - grant-config.yaml
+systems:
+  - name: kube
+    owner: "self.metadata.labels['toy.reconciler-fuzzer/grant-uid']"
+timeouts:
+  settle: 5s
+  stable: 2s
+values:
+  mutate: [spec.level]
+  fixtures:
+    grant-config.yaml: [data.label]

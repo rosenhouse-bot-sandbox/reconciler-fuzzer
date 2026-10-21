@@ -362,6 +362,14 @@ func TestChangeFixtureSetsAWordAtAValuesFixturesPath(t *testing.T) {
 	}
 }
 
+func TestChangeFixtureTargetsTheFixturesNamespace(t *testing.T) {
+	for _, a := range actions(plans(t, "../../targets/toy-widget/grant/config.yaml", 100)) {
+		if want := (plan.Target{Resource: "configmaps", Namespace: "rf-shared", Name: "grant-config"}); a.Do == plan.ChangeFixture && *a.Target != want {
+			t.Fatalf("changeFixture targets %+v, want %+v.", a.Target, want)
+		}
+	}
+}
+
 func TestWithoutValuesFixturesNoPlanChangesAFixture(t *testing.T) {
 	for _, a := range actions(plans(t, noFixtureValues, 100)) {
 		if a.Do == plan.ChangeFixture {
@@ -432,5 +440,39 @@ func TestAFaultOnThePrimaryComesWithAnUpdate(t *testing.T) {
 	}
 	if updates == 0 {
 		t.Error("No step holds a fault on the primary with an update alone.")
+	}
+}
+
+func TestAboutAQuarterOfDeletesAreForeground(t *testing.T) {
+	counts := map[plan.Propagation]int{}
+	for _, a := range actions(plans(t, toyConfig, 200)) {
+		if a.Do == plan.Delete {
+			counts[a.Propagation]++
+		} else if a.Propagation != "" {
+			t.Errorf("A %s carries propagation %q.", a.Do, a.Propagation)
+		}
+	}
+	all := counts[""] + counts[plan.Foreground]
+	if share := float64(counts[plan.Foreground]) / float64(all); share < 0.15 || share > 0.35 || len(counts) != 2 {
+		t.Errorf("Deletes have propagations %v, want about 1 in 4 Foreground.", counts)
+	}
+}
+
+func TestAClusterScopedPrimaryDrawsObjectsWithoutANamespace(t *testing.T) {
+	sizes := map[any]bool{}
+	for _, a := range actions(plans(t, "testdata/cluster/config.yaml", 50)) {
+		if a.Do != plan.Create {
+			continue
+		}
+		object := decode(t, a.Object)
+		metadata := object["metadata"].(map[string]any)
+		if _, set := metadata["namespace"]; set {
+			t.Errorf("A create of a cluster-scoped Realm names a namespace: %s.", a.Object)
+		}
+		spec, _ := object["spec"].(map[string]any)
+		sizes[spec["size"]] = true
+	}
+	if len(sizes) < 2 {
+		t.Errorf("Creates drew sizes %v, want several.", sizes)
 	}
 }
