@@ -363,3 +363,11 @@ func TestWriteCall(t *testing.T) {
 		t.Fatal("WriteCall found a call for a version no response carried")
 	}
 }
+
+func TestLiveIsOfKubeKinds(t *testing.T) {
+	var b tt.Builder
+	b.At(1*s).Add(tt.Version(cm, "uc", "1", nil), tt.Version(trace.Ref{System: "cloud", Resource: "configmaps", Name: "c"}, "uf", "1", nil))
+	if live := b.Index().Live("", "configmaps", 2*s); len(live) != 1 || live[0].UID != "uc" {
+		t.Fatalf("Live = %+v", live)
+	}
+}

@@ -52,6 +52,16 @@ type Options struct {
 	// events when a get, a list, a watch event or a write's result shows
 	// them to Caller.
 	Seen []schema.GroupResource
+	// API maps the system's requests. Nil is Kubernetes.
+	API API
+	// SeenAll records Seen events for every object a response shows.
+	SeenAll bool
+	// Shown hears every object a 2xx response carries, unknown outcomes
+	// included. Only an API map calls it.
+	Shown func(Object)
+	// Refuse matches requests the listener answers 404 without forwarding.
+	// It needs an API.
+	Refuse func(*http.Request) bool
 }
 
 // Listener serves plain HTTP on 127.0.0.1. Watch responses stream through
@@ -192,8 +202,7 @@ func (l *Listener) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	defer l.inFlight.Done()
 
-	req := Classify(r)
-	req.Ref.System = l.o.System
+	req := l.classify(r)
 	rec := &recorder{
 		ResponseWriter: w,
 		listener:       l,
@@ -202,17 +211,23 @@ func (l *Listener) serve(w http.ResponseWriter, r *http.Request) {
 			Caller: l.o.Caller, Method: r.Method, Path: r.URL.Path,
 			Verb: req.Verb, APIVersion: req.APIVersion, Ref: req.Ref,
 			Subresource: req.Subresource, Watch: req.Watch,
+			RequestName: req.RequestName, Unmapped: req.Unmapped,
 		},
+		req:    req,
 		decode: mutating(req.Verb),
-		seen:   l.seen[schema.GroupResource{Group: req.Ref.Group, Resource: req.Ref.Resource}] && showing(req.Verb),
+		seen:   showing(req.Verb) && (l.o.API != nil || l.sees(req.Ref)),
 	}
 	if req.Watch {
 		rec.call.Stream = l.streams.Add(1)
 	}
-	if req.Verb == "create" {
-		rec.call.RequestName = requestedName(r)
-	}
 	defer rec.finish()
+	if l.o.Refuse != nil && l.o.Refuse(r) {
+		contentType, body := l.o.API.Error(http.StatusNotFound, "reconciler-fuzzer refuses "+r.URL.Path+" on this listener")
+		rec.Header().Set("Content-Type", contentType)
+		rec.WriteHeader(http.StatusNotFound)
+		rec.Write(body)
+		return
+	}
 
 	f := l.pick(req)
 	if f != nil {
@@ -221,7 +236,7 @@ func (l *Listener) serve(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case f == nil:
 	case f.fault.Error != nil:
-		writeStatus(rec, *f.fault.Error, req, r.URL.Path)
+		l.writeError(rec, *f.fault.Error, req, r.URL.Path)
 		return
 	case f.fault.Drop:
 		drop(w)
@@ -233,6 +248,25 @@ func (l *Listener) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	l.reverse.ServeHTTP(rec, upstream(r, rec.decode))
+}
+
+func (l *Listener) classify(r *http.Request) Request {
+	if l.o.API != nil {
+		req := l.o.API.Classify(r)
+		req.Ref.System = l.o.System
+		return req
+	}
+	req := Classify(r)
+	req.Ref.System = l.o.System
+	if req.Verb == "create" {
+		req.RequestName = requestedName(r)
+	}
+	return req
+}
+
+// sees reports whether the listener records Seen events of ref's kind.
+func (l *Listener) sees(ref trace.Ref) bool {
+	return ref.Resource != "" && (l.o.SeenAll || l.seen[schema.GroupResource{Group: ref.Group, Resource: ref.Resource}])
 }
 
 // upstream keeps a write going after its client leaves, since the server
@@ -310,14 +344,16 @@ type recorder struct {
 	listener *Listener
 	start    time.Time
 	call     trace.Call
+	req      Request
 	decode   bool
 	body     *bytes.Buffer
 	recorded bool
 
-	// seen says the response can show objects of a Seen kind. A watch
-	// hands each write to frames and waits until it is decoded. Any other
-	// response holds its body in seenBody until its Seen events are
-	// recorded.
+	// seen says the response can show objects of a Seen kind, or under
+	// an API map that it can show objects. A watch hands each write to
+	// frames and waits until it is decoded. Any other response holds its
+	// body in seenBody until its Seen events are recorded. An API map's
+	// mapped 2xx response always holds its body there.
 	seen     bool
 	seenBody *bytes.Buffer
 	frames   *feed
@@ -327,6 +363,13 @@ type recorder struct {
 func (rec *recorder) WriteHeader(status int) {
 	rec.call.Status = status
 	header := rec.Header()
+	if rec.listener.o.API != nil {
+		if status >= 200 && status < 300 && !rec.call.Unmapped {
+			rec.seenBody = &bytes.Buffer{}
+		}
+		rec.ResponseWriter.WriteHeader(status)
+		return
+	}
 	if rec.decode && status >= 200 && status < 300 && decodable(header.Get("Content-Type")) {
 		rec.body = &bytes.Buffer{}
 	}
@@ -358,7 +401,9 @@ func (rec *recorder) Write(p []byte) (int, error) {
 			return len(p), nil
 		}
 		p, rec.seenBody = rec.seenBody.Bytes(), nil
-		rec.recordOpaque()
+		if rec.seen && rec.listener.sees(rec.call.Ref) {
+			rec.recordOpaque()
+		}
 	}
 	if rec.frames != nil {
 		rec.frames.write(p, rec.decoded)
@@ -372,7 +417,12 @@ func (rec *recorder) finish() {
 	if rec.body != nil && rec.body.Len() <= MaxResultBody {
 		rec.readResult(rec.Header().Get("Content-Encoding"))
 	}
-	if rec.seenBody != nil {
+	switch {
+	case rec.seenBody == nil:
+	case rec.listener.o.API != nil:
+		rec.readObjects(rec.Header().Get("Content-Encoding"))
+		rec.ResponseWriter.Write(rec.seenBody.Bytes())
+	default:
 		rec.readSeen(rec.Header().Get("Content-Encoding"))
 		rec.ResponseWriter.Write(rec.seenBody.Bytes())
 	}
@@ -423,6 +473,32 @@ func (rec *recorder) readResult(encoding string) {
 	rec.call.ResultName = meta.Name
 	rec.call.ResultUID = string(meta.UID)
 	rec.call.ResultRV = meta.ResourceVersion
+}
+
+// readObjects shows each object an API map reads, records a Seen of each
+// of a Seen kind, and takes a write's result from the first.
+func (rec *recorder) readObjects(encoding string) {
+	o := rec.listener.o
+	var objects []Object
+	if body := decompress(bytes.NewReader(rec.seenBody.Bytes()), encoding); body != nil {
+		if data, err := io.ReadAll(body); err == nil {
+			objects = o.API.Objects(rec.req, data)
+		}
+	}
+	if objects == nil && rec.seen && rec.listener.sees(rec.call.Ref) {
+		rec.recordOpaque()
+	}
+	if len(objects) > 0 && mutating(rec.call.Verb) {
+		rec.call.ResultName, rec.call.ResultUID, rec.call.ResultRV = objects[0].Ref.Name, objects[0].UID, objects[0].RV
+	}
+	for _, object := range objects {
+		if o.Shown != nil {
+			o.Shown(object)
+		}
+		if rec.seen && rec.listener.sees(object.Ref) && o.Record != nil {
+			o.Record(trace.Event{Seen: &trace.Seen{Caller: rec.call.Caller, Ref: object.Ref, UID: object.UID, RV: object.RV}})
+		}
+	}
 }
 
 type objectMeta struct {
@@ -603,19 +679,36 @@ func decodable(contentType string) bool {
 	return m == "application/json" || m == protobufType
 }
 
+func (l *Listener) writeError(w http.ResponseWriter, e plan.Error, r Request, path string) {
+	if l.o.API == nil {
+		writeStatus(w, e, r, path)
+		return
+	}
+	contentType, body := l.o.API.Error(e.Code, fmt.Sprintf("reconciler-fuzzer fault: %s %s", r.Verb, path))
+	w.Header().Set("Content-Type", contentType)
+	setRetryAfter(w, e)
+	w.WriteHeader(e.Code)
+	w.Write(body)
+}
+
+func setRetryAfter(w http.ResponseWriter, e plan.Error) {
+	if seconds := retryAfter(e); seconds > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(seconds))
+	}
+}
+
+func retryAfter(e plan.Error) int { return int(math.Ceil(time.Duration(e.RetryAfter).Seconds())) }
+
 // writeStatus answers with a metav1.Status, which a client decodes whatever
 // content type it asked for.
 func writeStatus(w http.ResponseWriter, e plan.Error, r Request, path string) {
-	retryAfter := int(math.Ceil(time.Duration(e.RetryAfter).Seconds()))
 	resource := schema.GroupResource{Group: r.Ref.Group, Resource: r.Ref.Resource}
-	status := apierrors.NewGenericServerResponse(e.Code, r.Verb, resource, r.Ref.Name, "", retryAfter, false).ErrStatus
+	status := apierrors.NewGenericServerResponse(e.Code, r.Verb, resource, r.Ref.Name, "", retryAfter(e), false).ErrStatus
 	status.TypeMeta = metav1.TypeMeta{Kind: "Status", APIVersion: "v1"}
 	status.Message = fmt.Sprintf("reconciler-fuzzer fault: %s %s", r.Verb, path)
 	body, _ := json.Marshal(status)
 	w.Header().Set("Content-Type", "application/json")
-	if retryAfter > 0 {
-		w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
-	}
+	setRetryAfter(w, e)
 	w.WriteHeader(e.Code)
 	w.Write(body)
 }

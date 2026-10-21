@@ -26,8 +26,8 @@ HUNT_SEEDS ?= 20
 HUNT_FROM ?= $(shell date +%s)
 HUNT_TIMEOUT ?= 40m
 HUNT_OUT := reconciler-fuzzer-out
-# The toy's generated tier runs apart from the envtest tier.
-GENERATED = TestGeneratedPlansWithFaultsPassB0|TestAGeneratedFailingPlanShrinks
+# The toys' generated tiers run apart from the envtest tier.
+GENERATED = TestGeneratedPlansWithFaultsPassB0|TestAGeneratedFailingPlanShrinks|TestGeneratedBucketPlansWithCloudFaultsPassB0
 
 # Project-local tool and asset directories. Both are git-ignored.
 LOCALBIN := $(CURDIR)/bin
@@ -57,15 +57,15 @@ help:
 	@echo "Targets:"
 	@echo "  setup                             Download modules and install the envtest control plane."
 	@echo "  assets-path                       Print the KUBEBUILDER_ASSETS directory and nothing else."
-	@echo "  build                             Build bin/reconciler-fuzzer and bin/toy-widget."
-	@echo "  generate                          Write the toy's deepcopy code and CRD YAML."
+	@echo "  build                             Build bin/reconciler-fuzzer, bin/crudfake and the toys."
+	@echo "  generate                          Write the toys' deepcopy code and CRD YAML."
 	@echo "  verify-generate                   Fail if a generated file is stale."
 	@echo "  fmt                               Fail if any file needs gofmt."
 	@echo "  vet                               Run go vet, envtest files included."
 	@echo "  test                              Run the unit tests, the size test and the bug-matrix check."
 	@echo "  test-envtest                      Run the envtest tests, the toy's gate included."
-	@echo "  test-generated                    Run the toy's generated plans under B0, and shrink one under B3."
-	@echo "  bug-matrix                        Rewrite docs/bug-matrix.md from the toy's gate table."
+	@echo "  test-generated                    Run the toys' generated plans under B0, and shrink one under B3."
+	@echo "  bug-matrix                        Rewrite docs/bug-matrix.md from the toys' gate tables."
 	@echo "  test-example-cert-manager         Run the cert-manager plans, seeds and negative control."
 	@echo "  test-example-external-secrets     Run the external-secrets plans, seeds and negative control."
 	@echo "  hunt-cert-manager                 Hunt cert-manager on HUNT_SEEDS seeds from HUNT_FROM, for at most HUNT_TIMEOUT."
@@ -97,17 +97,23 @@ assets-path: $(SETUP_ENVTEST)
 .PHONY: build
 build:
 	go build -o bin/reconciler-fuzzer ./cmd/reconciler-fuzzer
+	go build -o bin/crudfake ./cmd/crudfake
 	go build -o bin/toy-widget ./targets/toy-widget
+	go build -o bin/toy-bucket ./targets/toy-bucket
 
 .PHONY: generate
 generate:
 	go run sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_GEN_VERSION) \
 		object paths=./targets/toy-widget/api/... \
 		crd paths=./targets/toy-widget/api/... output:crd:artifacts:config=targets/toy-widget/crds
+	go run sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_GEN_VERSION) \
+		object paths=./targets/toy-bucket/api/... \
+		crd paths=./targets/toy-bucket/api/... output:crd:artifacts:config=targets/toy-bucket/crds
 
 .PHONY: verify-generate
 verify-generate: generate
-	@stale=$$(git status --porcelain -- targets/toy-widget/api/v1/zz_generated.deepcopy.go targets/toy-widget/crds); \
+	@stale=$$(git status --porcelain -- targets/toy-widget/api/v1/zz_generated.deepcopy.go targets/toy-widget/crds \
+		targets/toy-bucket/api/v1/zz_generated.deepcopy.go targets/toy-bucket/crds); \
 	if [ -n "$$stale" ]; then \
 		echo "Generated files are out of date. Run 'make generate' and commit the result:"; \
 		echo "$$stale"; \
@@ -137,11 +143,12 @@ test-envtest: setup
 
 .PHONY: test-generated
 test-generated: setup
-	KUBEBUILDER_ASSETS="$$($(ENVTEST_USE))" go test -tags envtest -count=1 -p 2 -parallel 3 -timeout 50m -run '$(GENERATED)' ./targets/toy-widget
+	KUBEBUILDER_ASSETS="$$($(ENVTEST_USE))" go test -tags envtest -count=1 -p 2 -parallel 3 -timeout 50m -run '$(GENERATED)' ./targets/toy-widget ./targets/toy-bucket
 
 .PHONY: bug-matrix
 bug-matrix:
 	go test -count=1 -run TestBugMatrixIsCurrent ./targets/toy-widget -args -update
+	go test -count=1 -run TestBugMatrixIsCurrent ./targets/toy-bucket -args -update
 
 # Each example runs its plans and the seeds its seeds file lists, then its
 # negative control. EXAMPLE_SEEDS replaces the seeds file.

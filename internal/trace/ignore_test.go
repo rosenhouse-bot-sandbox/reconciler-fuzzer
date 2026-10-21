@@ -31,3 +31,12 @@ func TestIgnored(t *testing.T) {
 		}
 	}
 }
+
+func TestIgnoredListsOnlyKubeKinds(t *testing.T) {
+	if trace.Ignored(trace.Call{Ref: trace.Ref{System: "cloud", Resource: "events"}}) {
+		t.Error("a fake's events collection is ignored")
+	}
+	if !trace.Ignored(trace.Call{Ref: trace.Ref{System: "cloud"}, Unmapped: true}) {
+		t.Error("an unmapped request is judged")
+	}
+}

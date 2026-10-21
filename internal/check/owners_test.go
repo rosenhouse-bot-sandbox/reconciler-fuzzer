@@ -203,7 +203,7 @@ func TestBackoffRunDoesNotBreakOnAnotherCRsGenerationByRule2(t *testing.T) {
 		return tt.Start(1)
 	})
 	judged := spec
-	rules, err := owner.Compile(ownerLabel, nil)
+	rules, err := owner.Compile(ownerLabel, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

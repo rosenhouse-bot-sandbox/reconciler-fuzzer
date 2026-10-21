@@ -1,13 +1,13 @@
 package trace
 
 // Ignored reports whether c is on the published list of requests no check
-// judges: Events, Leases, TokenReviews, the access-review kinds and
-// non-resource URLs.
+// judges: Events, Leases, TokenReviews, the access-review kinds,
+// non-resource URLs and unmapped requests.
 func Ignored(c Call) bool {
 	if c.Ref.Resource == "" {
 		return true
 	}
-	return ignoredResources[groupResource{c.Ref.Group, c.Ref.Resource}]
+	return c.Ref.System == "kube" && ignoredResources[groupResource{c.Ref.Group, c.Ref.Resource}]
 }
 
 type groupResource struct{ group, resource string }

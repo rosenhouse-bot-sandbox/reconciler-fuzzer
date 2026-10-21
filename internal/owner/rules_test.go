@@ -18,7 +18,7 @@ var (
 
 func compile(t *testing.T, owners map[string]string, owns ...trace.Owns) owner.Rules {
 	t.Helper()
-	rules, err := owner.Compile(owners, owns)
+	rules, err := owner.Compile(owners, owns, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,13 +48,13 @@ func naming(name, child string) map[string]any {
 }
 
 func TestCompileRefusesBadCEL(t *testing.T) {
-	if _, err := owner.Compile(map[string]string{"kube": "self.("}, nil); err == nil {
+	if _, err := owner.Compile(map[string]string{"kube": "self.("}, nil, nil); err == nil {
 		t.Error("a bad owner compiles")
 	}
-	if _, err := owner.Compile(nil, []trace.Owns{{Kind: configMaps, Name: "1 + 2"}}); err == nil {
+	if _, err := owner.Compile(nil, []trace.Owns{{Kind: configMaps, Name: "1 + 2"}}, nil); err == nil {
 		t.Error("a bad name compiles")
 	}
-	if _, err := owner.Compile(nil, []trace.Owns{{Kind: configMaps, Name: "'x'", Namespace: "self.("}}); err == nil {
+	if _, err := owner.Compile(nil, []trace.Owns{{Kind: configMaps, Name: "'x'", Namespace: "self.("}}, nil); err == nil {
 		t.Error("a bad namespace compiles")
 	}
 }

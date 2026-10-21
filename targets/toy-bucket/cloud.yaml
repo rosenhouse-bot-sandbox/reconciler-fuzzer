@@ -1,0 +1,2 @@
+collections:
+  buckets: {unique: [name], pending: CREATING, ready: READY, deleting: DELETING, createDelay: 300ms, deleteDelay: 300ms}

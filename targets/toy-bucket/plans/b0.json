@@ -1,0 +1,32 @@
+{
+  "steps": [
+    {
+      "actions": [
+        {
+          "do": "create",
+          "slot": "a"
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "do": "update",
+          "slot": "a",
+          "patch": {
+            "spec": {
+              "region": "us"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "do": "restart"
+        }
+      ]
+    }
+  ]
+}

@@ -435,11 +435,28 @@ func TestSystems(t *testing.T) {
 
 func TestSystemsRefuseMistakes(t *testing.T) {
 	for systems, want := range map[string]string{
-		"[{name: s3}]":                   "systems[0].name s3: the only system is kube until fake services land",
-		"[{name: kube}, {name: kube}]":   "systems[1].name kube",
-		"[{name: kube, owner: '1 + 2'}]": "systems[0].owner",
-		"[{name: kube, ownr: self.x}]":   "did you mean owner",
-		"[{name: kube, process: x}]":     "systems[0] takes name and owner",
+		"[{name: kube}, {name: kube}]":                             "systems[1].name kube",
+		"[{name: kube, owner: '1 + 2'}]":                           "systems[0].owner",
+		"[{name: kube, ownr: self.x}]":                             "did you mean owner",
+		"[{name: kube, process: {command: [x]}}]":                  "systems[0]: kube takes only name and owner",
+		"[{name: kube, poll: 1s}]":                                 "systems[0]: kube takes only name and owner",
+		"[{name: s3}]":                                             "systems[0].process.command is required",
+		"[{name: s3, api: crud, process: {}}]":                     "systems[0].process.command is required",
+		"[{name: s3, api: crud, process: {command: ['']}}]":        "systems[0].process.command is required",
+		"[{name: S3, api: crud, process: {command: [x]}}]":         "systems[0].name S3: want",
+		"[{name: s3, process: {command: [x]}}]":                    "systems[0].api \"\": the only API map is crud",
+		"[{name: s3, api: rest, process: {command: [x]}}]":         "systems[0].api \"rest\"",
+		"[" + fake + ", " + fake + "]":                             "systems[1].name cloud: another system has this name",
+		"[" + with("role: '1 + 2'") + "]":                          "systems[0].role",
+		"[" + with("ready: \"'x'\"") + "]":                         "systems[0].ready",
+		"[" + with("gone: \"'x'\"") + "]":                          "systems[0].gone",
+		"[" + with("owner: '1'") + "]":                             "systems[0].owner",
+		"[" + with("dependency: {}") + "]":                         "systems[0].dependency needs ready",
+		"[" + with("ready: 'true', dependency: {track: 0s}") + "]": "systems[0].dependency.track",
+		"[" + with("poll: 0s") + "]":                               "systems[0].poll",
+		"[" + with("poll: soon") + "]":                             "systems[0].poll",
+		"[" + with("process: {command: [x], comand: [y]}") + "]":   "did you mean command",
+		"[" + with("dependency: {requird: true}") + "]":            "did you mean required",
 	} {
 		_, err := config.Load(writeConfig(t, minimal(t)+"systems: "+systems+"\n"))
 		if err == nil || !strings.Contains(err.Error(), want) {
@@ -448,9 +465,129 @@ func TestSystemsRefuseMistakes(t *testing.T) {
 	}
 }
 
+const fake = "{name: cloud, api: crud, process: {command: [x]}}"
+
+// with is fake with more keys. A later key replaces an earlier one.
+func with(keys string) string {
+	return strings.TrimSuffix(fake, "}") + ", " + keys + "}"
+}
+
+func TestFakeSystem(t *testing.T) {
+	c, err := config.Load(writeConfig(t, minimal(t)+`timeouts: {stable: 2s}
+systems:
+- name: cloud-1
+  api: crud
+  process: {command: [../bin/crudfake, --config, cloud.yaml]}
+  owner: self.labels['k8s-uid']
+  role: self.labels['role']
+  ready: self.state == 'ready'
+  gone: self.state == 'deleting'
+  dependency: {track: 1s}
+  poll: 500ms
+- {name: other, api: crud, process: {command: [crudfake]}}
+- {name: third, api: crud, process: {command: [crudfake]}, ready: "true", dependency: {required: false}}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(c.Primary.Sample)
+	cloud, other, third := c.Systems[0], c.Systems[1], c.Systems[2]
+	want := config.System{
+		Name: "cloud-1", Owner: "self.labels['k8s-uid']", API: "crud",
+		Process: &config.Process{Command: []string{filepath.Join(dir, "../bin/crudfake"), "--config", "cloud.yaml"}, Dir: dir},
+		Role:    "self.labels['role']", Ready: "self.state == 'ready'", Gone: "self.state == 'deleting'",
+		Dependency: &config.Dependency{Required: true, Track: time.Second}, Poll: 500 * time.Millisecond,
+	}
+	if !reflect.DeepEqual(cloud, want) {
+		t.Errorf("cloud = %+v, want %+v", cloud, want)
+	}
+	if other.Process.Command[0] != "crudfake" || other.Process.Dir != dir || other.Poll != 2*time.Second || other.Dependency != nil {
+		t.Errorf("other = %+v", other)
+	}
+	if third.Dependency == nil || third.Dependency.Required {
+		t.Errorf("third dependency = %+v", third.Dependency)
+	}
+	if fakes := c.Fakes(); len(fakes) != 3 || fakes[0].Name != "cloud-1" {
+		t.Errorf("fakes = %+v", fakes)
+	}
+}
+
+func TestHalted(t *testing.T) {
+	c, err := config.Load(writeConfig(t, strings.Replace(minimal(t), `  ready: "true"`, `  ready: "true"`+"\n  halted: has(self.halted)", 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Primary.Halted != "has(self.halted)" {
+		t.Errorf("halted = %q", c.Primary.Halted)
+	}
+	for obj, want := range map[string]bool{`{"halted": 1}`: true, `{}`: false} {
+		var self map[string]any
+		if err := json.Unmarshal([]byte(obj), &self); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := c.Halted(self); got != want || err != nil {
+			t.Errorf("Halted(%s) = %v, %v", obj, got, err)
+		}
+	}
+	unset, err := config.Load(writeConfig(t, minimal(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := unset.Halted(map[string]any{}); got || err != nil {
+		t.Errorf("unset Halted = %v, %v", got, err)
+	}
+	if _, err := config.Load(writeConfig(t, strings.Replace(minimal(t), `  ready: "true"`, `  ready: "true"`+"\n  halted: \"'x'\"", 1))); err == nil || !strings.Contains(err.Error(), "primary.halted") {
+		t.Errorf("a string halted: err = %v", err)
+	}
+}
+
+func TestFakeOwns(t *testing.T) {
+	primary := func(owns string) string {
+		return strings.Replace(minimal(t), `  ready: "true"`, `  ready: "true"`+"\n  owns: ["+owns+"]", 1) + "systems: [" + fake + "]\n"
+	}
+	c, err := config.Load(writeConfig(t, primary("{kind: 'cloud:buckets', name: self.status.bucketID}")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []config.Owns{{System: "cloud", Collection: "buckets", Name: "self.status.bucketID"}}; !reflect.DeepEqual(c.Primary.Owns, want) {
+		t.Errorf("owns = %+v", c.Primary.Owns)
+	}
+	for owns, want := range map[string]string{
+		"{kind: 'nosuch:buckets', name: self.x}":                   "primary.owns[0].kind nosuch:buckets: systems declares no fake nosuch",
+		"{kind: 'kube:buckets', name: self.x}":                     "systems declares no fake kube",
+		"{kind: 'cloud:Buckets', name: self.x}":                    "primary.owns[0].kind cloud:Buckets: want",
+		"{kind: 'cloud:', name: self.x}":                           "primary.owns[0].kind cloud:: want",
+		"{kind: 'cloud:buckets', name: self.x, namespace: \"''\"}": "primary.owns[0].namespace: a fake's resources have no namespace",
+	} {
+		if _, err := config.Load(writeConfig(t, primary(owns))); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v, want one containing %q", owns, err, want)
+		}
+	}
+}
+
 func TestUnknownPrimaryKeyListsOwns(t *testing.T) {
 	_, err := config.Load(writeConfig(t, strings.Replace(minimal(t), `  ready: "true"`, `  ready: "true"`+"\n  zzzzzz: x", 1)))
-	if err == nil || !strings.Contains(err.Error(), "retain and owns") {
+	if err == nil || !strings.Contains(err.Error(), "retain, halted and owns") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+func TestLaunchVarsNameDeclaredSystems(t *testing.T) {
+	launch := func(value string) string {
+		return strings.Replace(minimal(t), "launch:\n", "launch:\n  env: {X: '"+value+"'}\n", 1) + "systems: [" + fake + "]\n"
+	}
+	for _, ok := range []string{"${systems.kube.kubeconfig}", "${systems.cloud.url}", "plain"} {
+		if _, err := config.Load(writeConfig(t, launch(ok))); err != nil {
+			t.Errorf("%s: %v", ok, err)
+		}
+	}
+	for value, want := range map[string]string{
+		"${systems.clod.url}":   "launch env X: no system clod",
+		"${systems.cloud.port}": "launch env X: system cloud has no port",
+		"${other}":              "launch env X: unknown key other",
+	} {
+		if _, err := config.Load(writeConfig(t, launch(value))); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v, want one containing %q", value, err, want)
+		}
 	}
 }

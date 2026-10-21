@@ -134,6 +134,7 @@ func newFixture(t *testing.T, firstSettled FirstSettled) *fixture {
 		Cluster:      f.cluster,
 		Process:      fakeProcess{f.process},
 		Listeners:    map[string]FaultTarget{"kube": fakeTarget{calls: f.faults}},
+		Actors:       map[string]Actor{"kube": f.cluster},
 		FirstSettled: firstSettled,
 		Sample:       map[string]any{"kind": "Widget", "metadata": map[string]any{"name": "sample"}},
 	}
@@ -773,5 +774,120 @@ func TestExecuteRecordsAFaultsStartBeforeItsModelWrites(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, []string{"fault", "write"}) {
 		t.Errorf("events = %q, want the fault's start first", got)
+	}
+}
+
+// fakeActor logs the damage a fake service takes.
+type fakeActor struct{ *calls }
+
+func (a fakeActor) Patch(_ context.Context, ref trace.Ref, patch []byte) error {
+	a.add("patch %s %s", ref.Name, patch)
+	return nil
+}
+
+func (a fakeActor) Delete(_ context.Context, ref trace.Ref, _ plan.Propagation) error {
+	a.add("delete %s", ref.Name)
+	return nil
+}
+
+func TestExecuteRoutesDamageToTheTargetsSystem(t *testing.T) {
+	f := newFixture(t, nil)
+	cloud := &calls{}
+	f.runner.Actors["cloud"] = fakeActor{cloud}
+	bucket := trace.Ref{System: "cloud", Resource: "buckets", Name: "buckets-1"}
+	selecting(f, map[string]trace.Ref{"": bucket, "secrets": {System: "kube", Resource: "secrets", Name: "fixture"}})
+	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{
+		{Do: plan.Damage, Target: &plan.Target{System: "cloud"}},
+		{Do: plan.Damage, Target: &plan.Target{System: "cloud"}, Patch: json.RawMessage(`{"size":2}`)},
+		{Do: plan.ChangeFixture, Target: &plan.Target{Resource: "secrets", Name: "fixture"}},
+	}}}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cloud.all(), []string{"delete buckets-1", `patch buckets-1 {"size":2}`}; !reflect.DeepEqual(got, want) {
+		t.Errorf("cloud calls = %q, want %q", got, want)
+	}
+	if got, want := f.cluster.all(), []string{"delete fixture"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("cluster calls = %q, want %q", got, want)
+	}
+}
+
+func TestExecuteRefusesDamageOnASystemWithNoActor(t *testing.T) {
+	f := newFixture(t, nil)
+	selecting(f, map[string]trace.Ref{"": {System: "vault", Resource: "secrets", Name: "s"}})
+	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{{Do: plan.Damage, Target: &plan.Target{System: "vault"}}}}}}
+	if err := f.runner.Execute(context.Background(), p); err == nil || !strings.Contains(err.Error(), "vault") {
+		t.Fatalf("Execute = %v, want an error naming vault", err)
+	}
+}
+
+func TestExecuteGivesTheDeadlineTheLongestPollOfTheStepsSystems(t *testing.T) {
+	f := newFixture(t, nil)
+	const cloudPoll = 200 * time.Millisecond
+	f.runner.Config.Systems = []config.System{{Name: "cloud", Process: &config.Process{}, Poll: cloudPoll}}
+	f.runner.Listeners["cloud"] = fakeTarget{calls: &calls{}}
+	f.runner.Actors["cloud"] = fakeActor{&calls{}}
+	f.runner.Models = []ModelTarget{fakeModel{fakeTarget{calls: &calls{}}, "cloud", ""}}
+	selecting(f, map[string]trace.Ref{"": {System: "cloud", Resource: "buckets", Name: "b"}, "configmaps": {System: "kube", Resource: "configmaps", Name: "c"}})
+	p := &plan.Plan{Steps: []plan.Step{
+		{Actions: []plan.Action{{Do: plan.Restart}}},
+		{Faults: []plan.Fault{{Match: plan.Match{Resource: "configmaps"}, Drop: true}}},
+		{Faults: []plan.Fault{{System: "cloud", Drop: true}}},
+		{Faults: []plan.Fault{{System: "cloud", Stuck: true}}},
+		{Actions: []plan.Action{{Do: plan.Damage, Target: &plan.Target{System: "cloud"}}}},
+		{Actions: []plan.Action{{Do: plan.Damage, Target: &plan.Target{Resource: "configmaps"}}}},
+		{Actions: []plan.Action{{Do: plan.Create, Slot: "a", Object: widget("w")}}},
+	}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	events := f.rec.Events()
+	for step, poll := range []time.Duration{0, timeouts.Stable, cloudPoll, cloudPoll, cloudPoll, timeouts.Stable, cloudPoll, cloudPoll} {
+		start, _ := find(events, step, trace.FaultPeriod)
+		endFaults, _ := find(events, step, trace.EndFaults)
+		want, _ := Deadline(endFaults.At, endFaults.At-start.At, poll, timeouts)
+		if got := endFaults.Phase.Deadline; (got - want).Abs() > 5*time.Millisecond {
+			t.Errorf("step %d deadline = %v, want about %v", step, got, want)
+		}
+	}
+}
+
+func TestExecuteStopsWhenASystemFailsMidSettle(t *testing.T) {
+	f := newFixture(t, func(*trace.Index, time.Duration, time.Duration) (time.Duration, bool) { return 0, false })
+	failAt := time.Now().Add(100 * time.Millisecond)
+	f.runner.Failed = func() error {
+		if time.Now().After(failAt) {
+			return errors.New("fake cloud exited")
+		}
+		return nil
+	}
+	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{{Do: plan.Create, Slot: "a", Object: widget("w")}}}}}
+	err := f.runner.Execute(context.Background(), p)
+	if err == nil || !strings.Contains(err.Error(), "fake cloud exited") {
+		t.Fatalf("Execute = %v, want the system's error", err)
+	}
+	if _, found := find(f.rec.Events(), 0, trace.TimedOut); found {
+		t.Error("step 0 waited out its deadline")
+	}
+}
+
+func TestExecuteRecordsEachFaultsSystem(t *testing.T) {
+	f := newFixture(t, nil)
+	f.runner.Listeners["cloud"] = fakeTarget{calls: &calls{}}
+	p := &plan.Plan{Steps: []plan.Step{{Faults: []plan.Fault{{System: "cloud", Drop: true}}}}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, e := range f.rec.Events() {
+		if e.Fault != nil {
+			n++
+			if e.Fault.System != "cloud" {
+				t.Errorf("fault event %+v, want system cloud", *e.Fault)
+			}
+		}
+	}
+	if n != 2 {
+		t.Errorf("%d fault events, want 2", n)
 	}
 }

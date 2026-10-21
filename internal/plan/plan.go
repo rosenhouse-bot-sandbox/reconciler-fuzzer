@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -71,7 +72,8 @@ type Propagation string
 const Foreground Propagation = "Foreground"
 
 // Target selects one object for damage or changeFixture. It is resolved
-// when the action runs. An empty field matches any value.
+// when the action runs. An empty field matches any value. Resource is
+// required on kube.
 type Target struct {
 	// System defaults to "kube".
 	System   string `json:"system,omitempty"`
@@ -88,8 +90,8 @@ type Target struct {
 
 // Fault starts with the fault period and ends with it. A request fault acts
 // on one system's controller listener. A model fault, Stuck or SlowDelete,
-// acts on the stage model of the kind Match names. Exactly one effect is
-// set.
+// acts on the stage model of the kind Match names, or on a fake service.
+// Exactly one effect is set.
 type Fault struct {
 	// System defaults to "kube".
 	System string `json:"system,omitempty"`
@@ -269,7 +271,16 @@ func (a Action) validate(names map[string]string) error {
 }
 
 func (a Action) validateChange(names map[string]string) error {
-	if a.Target == nil || a.Target.Resource == "" {
+	if a.Target == nil {
+		return fmt.Errorf("%s needs a target with a resource", a.Do)
+	}
+	if err := validSystem(a.Target.System); err != nil {
+		return err
+	}
+	switch {
+	case a.Do == ChangeFixture && !onKube(a.Target.System):
+		return errors.New("changeFixture targets only kube")
+	case onKube(a.Target.System) && a.Target.Resource == "":
 		return fmt.Errorf("%s needs a target with a resource", a.Do)
 	}
 	if a.Patch != nil && !isObject(a.Patch) {
@@ -326,8 +337,8 @@ func isObject(raw json.RawMessage) bool {
 }
 
 // Validate requires exactly one effect, an error code from 400 to 599, a
-// known system and a non-negative nth. A model fault needs a resource and
-// takes no verb, subresource or nth.
+// system name and a non-negative nth. A model fault takes no verb,
+// subresource or nth, and on kube needs a resource.
 func (f Fault) Validate() error {
 	effects := 0
 	for _, set := range []bool{f.Error != nil, f.Delay != nil, f.Drop, f.DropResponse, f.KillAfter, f.Stuck, f.SlowDelete} {
@@ -340,7 +351,7 @@ func (f Fault) Validate() error {
 	}
 	if f.ModelFault() {
 		switch effect := f.Effect(); {
-		case f.Match.Resource == "":
+		case onKube(f.System) && f.Match.Resource == "":
 			return fmt.Errorf("%s needs a match with a resource", effect)
 		case f.Match.Verb != "" || f.Match.Subresource != "":
 			return fmt.Errorf("%s matches objects, so it takes no verb or subresource", effect)
@@ -351,14 +362,25 @@ func (f Fault) Validate() error {
 	if f.Error != nil && (f.Error.Code < 400 || f.Error.Code > 599) {
 		return fmt.Errorf("error code %d is not from 400 to 599", f.Error.Code)
 	}
-	if f.System != "" && f.System != "kube" {
-		return fmt.Errorf("unknown system %q", f.System)
+	if err := validSystem(f.System); err != nil {
+		return err
 	}
 	if f.Nth < 0 {
 		return errors.New("nth is negative")
 	}
 	return nil
 }
+
+var systemName = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+
+func validSystem(system string) error {
+	if system != "" && !systemName.MatchString(system) {
+		return fmt.Errorf("system %q is not a system name", system)
+	}
+	return nil
+}
+
+func onKube(system string) bool { return system == "" || system == "kube" }
 
 // Effect names what the fault does, as a call's injected field does.
 func (f Fault) Effect() string {

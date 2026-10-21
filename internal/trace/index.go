@@ -17,8 +17,9 @@ type Index struct {
 	procs  []Event
 	// actions holds the Action events of each step.
 	actions map[int][]Event
-	// versions holds each object's Version events by kind.
-	versions map[groupResource]map[Ref][]Event
+	// versions holds each object's Version events by kind: a Ref with no
+	// namespace or name.
+	versions map[Ref]map[Ref][]Event
 	// firstRV is the first event, a version or a response, to hold each
 	// object's resourceVersion.
 	firstRV map[objectRV]Event
@@ -49,7 +50,7 @@ func NewIndex(events []Event) *Index {
 		steps:     map[int]*StepSpan{},
 		calls:     map[Caller][]Event{},
 		actions:   map[int][]Event{},
-		versions:  map[groupResource]map[Ref][]Event{},
+		versions:  map[Ref]map[Ref][]Event{},
 		firstRV:   map[objectRV]Event{},
 		writeCall: map[objectRV]Event{},
 		byRV:      map[objectRV]Event{},
@@ -144,7 +145,7 @@ func (ix *Index) addCall(e Event) {
 
 func (ix *Index) addVersion(e Event) {
 	v := e.Version
-	kind := groupResource{v.Ref.Group, v.Ref.Resource}
+	kind := Ref{System: v.Ref.System, Group: v.Ref.Group, Resource: v.Ref.Resource}
 	if ix.versions[kind] == nil {
 		ix.versions[kind] = map[Ref][]Event{}
 	}
@@ -241,11 +242,11 @@ func after(events []Event, t time.Duration) int {
 	return sort.Search(len(events), func(i int) bool { return events[i].At > t })
 }
 
-// Live returns the latest version at t of each object of group and resource
-// that exists at t, ordered by Ref.
+// Live returns the latest version at t of each kube object of group and
+// resource that exists at t, ordered by Ref.
 func (ix *Index) Live(group, resource string, t time.Duration) []Version {
 	var live []Version
-	for _, versions := range ix.versions[groupResource{group, resource}] {
+	for _, versions := range ix.versions[Ref{System: "kube", Group: group, Resource: resource}] {
 		n := after(versions, t)
 		if n == 0 || versions[n-1].Version.Deleted {
 			continue

@@ -367,3 +367,15 @@ func TestHonestSkipsAGoneDependencyItsCRReplaced(t *testing.T) {
 	r.Update(gadgetModel, gadgetA, gadget(r, true)).See(ctl, gadgetA).Ready(widgetA)
 	requireNone(t, honest(t, r))
 }
+
+func TestHonestJudgesADependencyTheControllerSawBeforeTheObserver(t *testing.T) {
+	r := newRun(1)
+	r.Spec.Models = []trace.Model{{Kind: trace.Kind{Group: "toy", Version: "v1", Kind: "Gadget", Resource: "gadgets"},
+		Ready: config.ReadyConditionCEL, Dependency: &trace.Dependency{Required: true}}}
+	r.Begin()
+	r.CreateCR("a", widgetA)
+	r.Add(tt.Create(ctl, gadgetA, "ug", "50"), tt.Seen(ctl, gadgetA, "ug", "50"))
+	r.UpdateInFlight(ctl, widgetA, tt.CR("a", true), 50*ms)
+	r.Add(tt.Version(gadgetA, "ug", "50", gadget(r, false)))
+	requireFinding(t, honest(t, r), "Honest", 0, beforeSeeing, "kube/toy/gadgets", "slot a", "gadgets.toy ns/a seen not ready")
+}

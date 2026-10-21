@@ -20,6 +20,9 @@ func unknownKey(data []byte) error {
 }
 
 func keyIn(node *yamlv3.Node, declared reflect.Type, path string) error {
+	if declared.Kind() == reflect.Pointer {
+		declared = declared.Elem()
+	}
 	switch {
 	case declared.Kind() == reflect.Slice && node.Kind == yamlv3.SequenceNode:
 		for i, item := range node.Content {

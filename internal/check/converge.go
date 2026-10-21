@@ -89,8 +89,7 @@ func unmodelledKinds(ix *trace.Index, t time.Duration, s Spec) []string {
 	}
 	var lines []string
 	for k := range read {
-		modelled := slices.ContainsFunc(s.Models, func(m Model) bool { return m.Kind.Group == k.Group && m.Kind.Resource == k.Resource })
-		if written[k] || modelled || k.Group == s.PrimaryGroup && k.Resource == s.PrimaryResource || !slices.ContainsFunc(ix.Live(k.Group, k.Resource, t), noStatus) {
+		if written[k] || s.modelled(trace.Ref{System: "kube", Group: k.Group, Resource: k.Resource}) || k.Group == s.PrimaryGroup && k.Resource == s.PrimaryResource || !slices.ContainsFunc(ix.Live(k.Group, k.Resource, t), noStatus) {
 			continue
 		}
 		gvk := k.Version + "/" + k.Kind

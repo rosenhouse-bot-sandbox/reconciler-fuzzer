@@ -44,10 +44,16 @@ during startup. The runner appends two steps to every plan:
 A `Labels:` line may follow. The block lists the detail lines.
 
 A `# Notes` section follows the findings. A note says what the trace could
-not decide: an action that failed, a fault that picked no request, or a
-step the trace ended too early to judge. Notes do not fail a run. A fault
-that picked no request tested nothing, so a plan with such notes may need
-a different fault.
+not decide: an action that failed, a fault that picked no request, a
+step the trace ended too early to judge, or an unmapped request. Notes do
+not fail a run. A fault that picked no request tested nothing, so a plan
+with such notes may need a different fault.
+
+`cloud: unmapped request POST /v2/buckets/b-1/acl` means the system's API
+map could not place a controller request on a resource. No check judges
+that request, so a leak or duplicate it causes goes unseen. The `crud` map
+places only `/<collection>` and `/<collection>/<id>` (DESIGN.md §5). Serve
+the API at those paths, or put it behind another fake service.
 
 Hunt and shrink match findings by check, summary and kind, so a replay
 need not fail at the same step or on the same names.
@@ -111,6 +117,7 @@ at its creation), and that CR's slot:
 
 ```
 configmaps rf-9485af8b/widget-0 (rule 4, slot a)
+buckets buckets-1 (rule 2, slot a)
 ```
 
 A rule 4 line usually means the resource lacks an ownerReference, so
@@ -137,6 +144,26 @@ from the previous step's end.
 Two live controller resources share a kind, namespace, owning CR and role
 (DESIGN.md §11).
 
+### Honest
+
+A CR reported ready while a dependency was not, as the controller's own
+reads showed it. Each line names the CR's slot and the dependency:
+
+- `reported ready before seeing its dependency ready`: `not seen` means
+  the controller never read the dependency after its last write to it;
+  `seen not ready` means its last read showed it not ready.
+- `reported ready with no dependency`: under `dependency.required`, the
+  CR owned none.
+- `stayed ready after seeing its dependency not ready`: the CR stayed
+  ready longer than `track`.
+
+### Backoff: retried a failing request in a tight loop
+
+The controller repeated a failing request with gaps under 100 ms. The line
+names the verb, the object, the status and the calls. Retry through a rate
+limiter, such as controller-runtime's default, rather than a short
+`RequeueAfter`.
+
 ## When a run exits 2
 
 Exit 2 means a usage or harness error: the run judged nothing. The error
@@ -147,7 +174,8 @@ names its cause. A run that started leaves its partial trace in `--out`. Common 
 | `starting envtest: ... etcd: no such file or directory` | Set `KUBEBUILDER_ASSETS` to `$(make -s assets-path)`. |
 | `starting <binary>: ... no such file or directory` | Build the controller to `launch.binary`. |
 | `creating fixture ...` | Fix the fixture, or install the CRD it needs under `crds`. |
-| `launch args: ...` or `launch env <name>: ...` | Use only `${systems.kube.kubeconfig}`, `namespace` and `url`. |
+| `launch args: ...` or `launch env <name>: ...` | Use only `${systems.kube.kubeconfig}`, `namespace` and `url`, and a fake's `${systems.<name>.url}`. |
+| `fake <name> exited ...` | Read `<out>/<name>.log`. Fix the `systems[].process` command or the fake's own config. |
 
 `hunt` notes a seed whose run failed in `summary.md`, and goes on. It
 exits 2 when a seed failed and nothing was found, and 1 on any find.
