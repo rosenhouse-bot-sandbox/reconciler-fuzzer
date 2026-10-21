@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -16,7 +15,8 @@ func TestRenderBugMatrix(t *testing.T) {
 	for _, want := range []string{
 		"| Bug | Description | Plan | Check | Step |\n|---|---|---|---|---|\n",
 		"| B3 | Leaves child 0 without an owner reference. | b3 | Clean | 1 |\n",
-		"| B0 | The correct controller. | all 2 in plans/ | none | |\n",
+		"| B0 | The correct controller. | all 2 in plans/ and gadget/plans/ | none | |\n",
+		"| B17 | Reports its Gadget ready without reading the Gadget's status. | gadget/b17 | Honest | 0 |\n",
 	} {
 		if !strings.Contains(md, want) {
 			t.Errorf("Want %q in:\n%s", want, md)
@@ -35,11 +35,15 @@ var update = flag.Bool("update", false, "write ../../docs/bug-matrix.md")
 const bugMatrixPath = "../../docs/bug-matrix.md"
 
 func TestBugMatrixIsCurrent(t *testing.T) {
-	plans, err := filepath.Glob("plans/*.json")
-	if err != nil {
-		t.Fatal(err)
+	var all []string
+	for _, config := range configs {
+		names, err := plans(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		all = append(all, names...)
 	}
-	want := renderBugMatrix(plans)
+	want := renderBugMatrix(all)
 	if *update {
 		if err := os.WriteFile(bugMatrixPath, []byte(want), 0o644); err != nil {
 			t.Fatal(err)
@@ -79,23 +83,32 @@ var bugs = map[int]string{
 	14: "Does not watch the label source, so a changed label reaches no child.",
 	15: "Names children after the kind, so two Widgets share them.",
 	16: "Writes status with Update, which its RBAC does not allow.",
+	17: "Reports its Gadget ready without reading the Gadget's status.",
+	18: "Drops a Widget's Gadget events once it saw the Gadget not ready, so it never notices recovery.",
+	19: "Never reports its Gadget not ready once it was ready.",
+	20: "Creates no Gadget and reports it ready.",
+	21: "Updates its Gadget on every reconcile and requeues after 100 ms.",
+	22: "Orphans its Gadget on delete instead of deleting it.",
+	23: "Gives up on cleanup for good when its Gadget outlives the delete, so the finalizer stays.",
+	24: "Never recreates a missing Gadget once it reported it ready.",
+	25: "Retries a forbidden Gadget status patch every 10 ms while the Gadget has Ready False.",
 }
 
-// renderBugMatrix renders the gate table, plus a B0 row for plans.
+// renderBugMatrix renders the gate table, plus a B0 row for every plan.
 func renderBugMatrix(plans []string) string {
 	rows := slices.Clone(gate)
 	slices.SortFunc(rows, func(a, b gateRow) int {
-		return cmp.Or(cmp.Compare(a.bug, b.bug), strings.Compare(a.plan, b.plan))
+		return cmp.Or(cmp.Compare(a.bug, b.bug), strings.Compare(a.name(), b.name()))
 	})
 	var b strings.Builder
 	b.WriteString("# Bug matrix\n\n" +
 		"This file is generated from targets/toy-widget/gate_test.go by `make bug-matrix`.\n" +
 		"`make test-envtest` proves each row: the plan, run against the bug, reports the check's finding at that step.\n\n" +
 		"| Bug | Description | Plan | Check | Step |\n|---|---|---|---|---|\n")
-	fmt.Fprintf(&b, "| B0 | %s | all %d in plans/ | none | |\n", bugs[0], len(plans))
+	fmt.Fprintf(&b, "| B0 | %s | all %d in plans/ and gadget/plans/ | none | |\n", bugs[0], len(plans))
 	for _, g := range rows {
 		check, _, _ := strings.Cut(g.finding, ":")
-		fmt.Fprintf(&b, "| B%d | %s | %s | %s | %d |\n", g.bug, bugs[g.bug], g.plan, check, g.step)
+		fmt.Fprintf(&b, "| B%d | %s | %s | %s | %d |\n", g.bug, bugs[g.bug], g.name(), check, g.step)
 	}
 	return b.String()
 }

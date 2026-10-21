@@ -26,10 +26,19 @@ const (
 	B14
 	B15
 	B16
+	B17
+	B18
+	B19
+	B20
+	B21
+	B22
+	B23
+	B24
+	B25
 )
 
 // MaxBug is the highest seeded bug ID.
-const MaxBug = int(B16)
+const MaxBug = int(B25)
 
 // defaultB1Hold is Reconciler.B1Hold's value when left unset.
 const defaultB1Hold = 3 * time.Second

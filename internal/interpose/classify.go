@@ -88,6 +88,8 @@ func verb(method string, r Request) string {
 	return strings.ToLower(method)
 }
 
+func reading(verb string) bool { return verb == "get" || verb == "list" || verb == "watch" }
+
 func mutating(verb string) bool {
 	switch verb {
 	case "create", "update", "patch", "delete", "deletecollection":

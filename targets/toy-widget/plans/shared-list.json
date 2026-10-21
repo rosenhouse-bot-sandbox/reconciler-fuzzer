@@ -1,0 +1,96 @@
+{
+  "steps": [
+    {
+      "actions": [
+        {
+          "do": "create",
+          "slot": "a",
+          "object": {
+            "apiVersion": "toy.reconciler-fuzzer/v1",
+            "kind": "Widget",
+            "metadata": {
+              "name": "widget-a"
+            },
+            "spec": {
+              "count": 1
+            }
+          }
+        },
+        {
+          "do": "create",
+          "slot": "b",
+          "object": {
+            "apiVersion": "toy.reconciler-fuzzer/v1",
+            "kind": "Widget",
+            "metadata": {
+              "name": "widget-b"
+            },
+            "spec": {
+              "count": 1
+            }
+          }
+        },
+        {
+          "do": "create",
+          "slot": "c",
+          "object": {
+            "apiVersion": "toy.reconciler-fuzzer/v1",
+            "kind": "Widget",
+            "metadata": {
+              "name": "widget-c"
+            },
+            "spec": {
+              "count": 1
+            }
+          }
+        },
+        {
+          "do": "create",
+          "slot": "d",
+          "object": {
+            "apiVersion": "toy.reconciler-fuzzer/v1",
+            "kind": "Widget",
+            "metadata": {
+              "name": "widget-d"
+            },
+            "spec": {
+              "count": 1
+            }
+          }
+        }
+      ]
+    },
+    {
+      "period": "3s",
+      "faults": [
+        {
+          "match": {
+            "verb": "list",
+            "resource": "configmaps"
+          },
+          "error": {
+            "code": 500
+          }
+        }
+      ],
+      "actions": [
+        {
+          "do": "delete",
+          "slot": "a"
+        },
+        {
+          "do": "delete",
+          "slot": "b"
+        },
+        {
+          "do": "delete",
+          "slot": "c"
+        },
+        {
+          "do": "delete",
+          "slot": "d"
+        }
+      ]
+    }
+  ]
+}

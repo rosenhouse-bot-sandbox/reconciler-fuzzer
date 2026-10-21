@@ -4,6 +4,8 @@ package model
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,7 +16,9 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/kube"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/system"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 )
@@ -133,10 +137,17 @@ func TestModelsAgainstEnvtest(t *testing.T) {
 			caller trace.Caller
 			verb   string
 		}{{trace.GC, "delete"}, {trace.GC, "patch"}, {trace.Namespaces, "delete"}, {trace.Namespaces, "update"}} {
-			if recorded.count(func(e trace.Event) bool {
+			// A call is recorded when its response ends, which can follow the
+			// version the observer recorded.
+			deadline := time.Now().Add(5 * time.Second)
+			for recorded.count(func(e trace.Event) bool {
 				return e.Call != nil && e.Call.Caller == write.caller && e.Call.Verb == write.verb && e.Call.Status < 300
 			}) == 0 {
-				t.Errorf("Recorded no successful %s by %s.", write.verb, write.caller)
+				if time.Now().After(deadline) {
+					t.Errorf("Recorded no successful %s by %s.", write.verb, write.caller)
+					break
+				}
+				time.Sleep(20 * time.Millisecond)
 			}
 		}
 		deadline := time.Now().Add(5 * time.Second)
@@ -158,4 +169,64 @@ func recordedEvents(e *events) []trace.Event {
 		events[i] = ev
 	}
 	return events
+}
+
+func TestAStageMakesAGadgetReadyThenStuckThenRecovered(t *testing.T) {
+	ctx := context.Background()
+	recorded := &events{}
+	gvk := schema.GroupVersionKind{Group: "test.reconciler-fuzzer", Version: "v1", Kind: "Gadget"}
+	k := kube.New(kube.Options{CRDs: []string{"testdata/crds"}, Watch: []schema.GroupVersionKind{gvk}})
+	if _, err := k.Start(ctx, &system.Env{Record: recorded.record, Dir: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { k.Stop(ctx) })
+	s, err := NewStage(k, config.Model{Kind: gvk, Stage: config.ReadyCondition, After: 100 * time.Millisecond, Status: map[string]any{"phase": "Running"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Start(ctx, &system.Env{Record: recorded.record}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Stop(ctx) })
+	ready, err := config.CompileReady(config.ReadyConditionCEL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := k.Create(ctx, map[string]any{"apiVersion": "test.reconciler-fuzzer/v1", "kind": "Gadget", "metadata": map[string]any{"name": "g"}, "spec": map[string]any{"size": int64(1)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	await := func(t *testing.T, what string, want bool, message string) {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			var last trace.Version
+			for _, e := range recordedEvents(recorded) {
+				if e.Version != nil && e.Version.Ref == ref {
+					last = *e.Version
+				}
+			}
+			var obj map[string]any
+			json.Unmarshal(last.Body, &obj)
+			if got, err := ready(obj); err == nil && got == want && strings.Contains(string(last.Body), message) {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Fatalf("The gadget never became %s.", what)
+	}
+
+	await(t, "ready", true, `"phase":"Running"`)
+	end, err := s.Fault(plan.Fault{Match: plan.Match{Group: gvk.Group, Resource: "gadgets"}, Stuck: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	await(t, "stuck", false, "Stuck")
+	end()
+	await(t, "recovered", true, "fault 1 ended")
+	if recorded.count(func(e trace.Event) bool {
+		return e.Call != nil && e.Call.Caller == s.caller() && e.Call.Subresource == "status" && e.Call.Status == 200
+	}) < 3 {
+		t.Error("The stage's writes are not calls by its caller.")
+	}
 }

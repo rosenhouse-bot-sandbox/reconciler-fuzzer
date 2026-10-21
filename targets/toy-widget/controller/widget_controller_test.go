@@ -58,7 +58,7 @@ func TestDesiredChildrenFollowsTheCountItIsGiven(t *testing.T) {
 }
 
 func TestStatusForCarriesTheReadyCountAndTheGeneration(t *testing.T) {
-	next, changed := statusFor(newWidget(3), 2)
+	next, changed := statusFor(newWidget(3), 2, nil)
 
 	if want := (toyv1.WidgetStatus{Ready: 2, ObservedGeneration: 1}); next != want {
 		t.Errorf("statusFor returned %+v, want %+v", next, want)
@@ -72,15 +72,15 @@ func TestStatusForReportsAChangeOnlyWhenOneIsNeeded(t *testing.T) {
 	widget := newWidget(3)
 	widget.Status = toyv1.WidgetStatus{Ready: 3, ObservedGeneration: 1}
 
-	if _, changed := statusFor(widget, 3); changed {
+	if _, changed := statusFor(widget, 3, nil); changed {
 		t.Error("statusFor asked for a write although the status already matched.")
 	}
-	if _, changed := statusFor(widget, 2); !changed {
+	if _, changed := statusFor(widget, 2, nil); !changed {
 		t.Error("statusFor kept a stale child count.")
 	}
 
 	widget.Generation = 2
-	if _, changed := statusFor(widget, 3); !changed {
+	if _, changed := statusFor(widget, 3, nil); !changed {
 		t.Error("statusFor kept a stale observedGeneration.")
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	gvk "k8s.io/apimachinery/pkg/runtime/schema"
 	"pgregory.net/rapid"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
@@ -113,6 +114,19 @@ func primaryCRD(cfg *config.Config) (map[string]any, string, error) {
 		}
 	}
 	return nil, "", fmt.Errorf("the CRDs describe no %s", kind)
+}
+
+// pluralOf is the plural the CRDs name for kind, or empty.
+func pluralOf(crds []map[string]any, kind gvk.GroupKind) string {
+	for _, document := range crds {
+		spec, _ := document["spec"].(map[string]any)
+		names, _ := spec["names"].(map[string]any)
+		if spec["group"] == kind.Group && names["kind"] == kind.Kind {
+			plural, _ := names["plural"].(string)
+			return plural
+		}
+	}
+	return ""
 }
 
 // keywords are the schema keywords the generator reads.

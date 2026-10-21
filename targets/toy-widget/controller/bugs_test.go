@@ -30,7 +30,7 @@ func fixture(t *testing.T, bug Bug, funcs interceptor.Funcs, objects ...client.O
 	}
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithStatusSubresource(&toyv1.Widget{}).
+		WithStatusSubresource(&toyv1.Widget{}, &toyv1.Gadget{}).
 		WithObjects(objects...).
 		WithInterceptorFuncs(funcs).
 		Build()
@@ -505,5 +505,252 @@ func refuseTheFirstChildCreate() interceptor.Funcs {
 			}
 			return c.Create(ctx, obj, opts...)
 		},
+	}
+}
+
+func TestB17ReportsTheGadgetReadyWithoutReadingItsStatus(t *testing.T) {
+	widget := newWidget(1)
+	r := gadgetFixture(t, B17, interceptor.Funcs{}, widget)
+	mustReconcile(t, r, widget)
+	setGadgetReady(t, r.Client, widget, metav1.ConditionFalse)
+	mustReconcile(t, r, widget)
+
+	if ready := gadgetReadyOf(t, r, widget); ready == nil || !*ready {
+		t.Errorf("gadgetReady is %v for a Gadget that is not ready, want B17's true.", ready)
+	}
+	if gadgetGone(t, r, widget) {
+		t.Error("B17 created no Gadget.")
+	}
+}
+
+func TestB18DropsTheGadgetEventsOfAWidgetOnceItSawItsGadgetNotReady(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		bug  Bug
+		want bool
+	}{
+		{"the correct controller", 0, true},
+		{"B18", B18, false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			widget := newWidget(1)
+			r := gadgetFixture(t, testCase.bug, interceptor.Funcs{}, widget)
+			mustReconcile(t, r, widget)
+			gadget := readGadget(t, r, widget)
+			if !r.passesGadgetEvent(gadget) {
+				t.Fatal("A Gadget event was dropped before its Gadget was ever not ready.")
+			}
+
+			setGadgetReady(t, r.Client, widget, metav1.ConditionFalse)
+			mustReconcile(t, r, widget)
+
+			if passes := r.passesGadgetEvent(gadget); passes != testCase.want {
+				t.Errorf("A Gadget event passes: %t, want %t.", passes, testCase.want)
+			}
+		})
+	}
+}
+
+func TestB19NeverReportsTheGadgetNotReadyOnceItWasReady(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		bug  Bug
+		want bool
+	}{
+		{"the correct controller", 0, false},
+		{"B19", B19, true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			widget := newWidget(1)
+			r := gadgetFixture(t, testCase.bug, interceptor.Funcs{}, widget)
+			mustReconcile(t, r, widget)
+			setGadgetReady(t, r.Client, widget, metav1.ConditionTrue)
+			mustReconcile(t, r, widget)
+
+			setGadgetReady(t, r.Client, widget, metav1.ConditionFalse)
+			mustReconcile(t, r, widget)
+
+			if ready := gadgetReadyOf(t, r, widget); ready == nil || *ready != testCase.want {
+				t.Errorf("gadgetReady is %v, want %t.", ready, testCase.want)
+			}
+		})
+	}
+}
+
+func TestB20CreatesNoGadgetAndReportsItReady(t *testing.T) {
+	widget := newWidget(1)
+	r := gadgetFixture(t, B20, interceptor.Funcs{}, widget)
+	mustReconcile(t, r, widget)
+
+	if !gadgetGone(t, r, widget) {
+		t.Error("B20 created a Gadget.")
+	}
+	if ready := gadgetReadyOf(t, r, widget); ready == nil || !*ready {
+		t.Errorf("gadgetReady is %v, want B20's true.", ready)
+	}
+}
+
+func TestB21UpdatesTheGadgetOnEveryReconcileAndRequeuesSoon(t *testing.T) {
+	for _, testCase := range []struct {
+		name        string
+		bug         Bug
+		wantUpdates int
+		wantRequeue time.Duration
+	}{
+		{"the correct controller", 0, 0, 0},
+		{"B21", B21, 2, 100 * time.Millisecond},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			updates := 0
+			countGadgetUpdates := interceptor.Funcs{
+				Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+					if _, isGadget := obj.(*toyv1.Gadget); isGadget {
+						updates++
+					}
+					return c.Update(ctx, obj, opts...)
+				},
+			}
+			widget := newWidget(1)
+			r := gadgetFixture(t, testCase.bug, countGadgetUpdates, widget)
+
+			var result ctrl.Result
+			for range 2 {
+				var err error
+				if result, err = r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(widget)}); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if updates != testCase.wantUpdates {
+				t.Errorf("Two reconciles updated the Gadget %d times, want %d.", updates, testCase.wantUpdates)
+			}
+			if result.RequeueAfter != testCase.wantRequeue {
+				t.Errorf("Reconcile requeues after %v, want %v.", result.RequeueAfter, testCase.wantRequeue)
+			}
+		})
+	}
+}
+
+func TestB22OrphansTheGadgetOnDelete(t *testing.T) {
+	widget := deletingWidget(0)
+	gadget := heldGadget(t, widget)
+	gadget.Finalizers = nil
+	r := gadgetFixture(t, B22, interceptor.Funcs{}, widget, gadget)
+
+	mustReconcile(t, r, widget)
+
+	if !widgetGone(t, r, widget) {
+		t.Error("B22 kept the Widget.")
+	}
+	left := readGadget(t, r, widget)
+	if len(left.OwnerReferences) != 0 || !left.DeletionTimestamp.IsZero() {
+		t.Errorf("B22 left the Gadget with owners %v, deleting since %v; want an orphan it never deleted.", left.OwnerReferences, left.DeletionTimestamp)
+	}
+}
+
+func TestB23GivesUpOnAGadgetItsDeleteDidNotRemove(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		bug        Bug
+		wantWidget bool
+	}{
+		{"the correct controller releases the Widget once the Gadget goes", 0, false},
+		{"B23 keeps the finalizer for good", B23, true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			widget := deletingWidget(0)
+			r := gadgetFixture(t, testCase.bug, interceptor.Funcs{}, widget, heldGadget(t, widget))
+
+			mustReconcile(t, r, widget)
+			release(t, r.Client, widget)
+			mustReconcile(t, r, widget)
+
+			if !gadgetGone(t, r, widget) {
+				t.Error("The Gadget remains.")
+			}
+			if present := !widgetGone(t, r, widget); present != testCase.wantWidget {
+				t.Errorf("The Widget is present: %t, want %t.", present, testCase.wantWidget)
+			}
+		})
+	}
+}
+
+func TestB24NeverRecreatesAGadgetOnceItReportedItReady(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		bug        Bug
+		wantGadget bool
+		wantReady  bool
+	}{
+		{"the correct controller recreates it", 0, true, false},
+		{"B24 leaves it and the status alone", B24, false, true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			widget := newWidget(1)
+			r := gadgetFixture(t, testCase.bug, interceptor.Funcs{}, widget)
+			mustReconcile(t, r, widget)
+			setGadgetReady(t, r.Client, widget, metav1.ConditionTrue)
+			mustReconcile(t, r, widget)
+
+			if err := r.Delete(t.Context(), readGadget(t, r, widget)); err != nil {
+				t.Fatal(err)
+			}
+			mustReconcile(t, r, widget)
+
+			if present := !gadgetGone(t, r, widget); present != testCase.wantGadget {
+				t.Errorf("The Gadget is present: %t, want %t.", present, testCase.wantGadget)
+			}
+			if ready := gadgetReadyOf(t, r, widget); ready == nil || *ready != testCase.wantReady {
+				t.Errorf("gadgetReady is %v, want %t.", ready, testCase.wantReady)
+			}
+		})
+	}
+}
+
+func TestB25RetriesAForbiddenGadgetStatusPatchQuicklyWhileItsGadgetHasReadyFalse(t *testing.T) {
+	for _, testCase := range []struct {
+		name        string
+		bug         Bug
+		gadget      metav1.ConditionStatus
+		wantPatches int
+		wantRequeue time.Duration
+	}{
+		{"the correct controller", 0, metav1.ConditionFalse, 0, 0},
+		{"B25 on a ready Gadget", B25, metav1.ConditionTrue, 0, 0},
+		{"B25 on a Gadget with no condition", B25, "", 0, 0},
+		{"B25 on a Gadget that is not ready", B25, metav1.ConditionFalse, 1, 10 * time.Millisecond},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			patches := 0
+			forbidGadgetStatus := interceptor.Funcs{
+				SubResourcePatch: func(ctx context.Context, c client.Client, subResource string, obj client.Object,
+					patch client.Patch, opts ...client.SubResourcePatchOption) error {
+					if _, isGadget := obj.(*toyv1.Gadget); isGadget {
+						patches++
+						return apierrors.NewForbidden(toyv1.GroupVersion.WithResource("gadgets").GroupResource(), obj.GetName(), errors.New("RBAC"))
+					}
+					return c.SubResource(subResource).Patch(ctx, obj, patch, opts...)
+				},
+			}
+			widget := newWidget(1)
+			r := gadgetFixture(t, testCase.bug, forbidGadgetStatus, widget)
+			mustReconcile(t, r, widget)
+			if testCase.gadget != "" {
+				setGadgetReady(t, r.Client, widget, testCase.gadget)
+			}
+			patches = 0
+
+			result, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(widget)})
+
+			if err != nil {
+				t.Errorf("Reconcile returned %v, want nil.", err)
+			}
+			if patches != testCase.wantPatches {
+				t.Errorf("Reconcile patched the Gadget's status %d times, want %d.", patches, testCase.wantPatches)
+			}
+			if result.RequeueAfter != testCase.wantRequeue {
+				t.Errorf("Reconcile requeues after %v, want %v.", result.RequeueAfter, testCase.wantRequeue)
+			}
+		})
 	}
 }

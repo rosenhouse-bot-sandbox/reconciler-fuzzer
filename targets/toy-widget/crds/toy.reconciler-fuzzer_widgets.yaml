@@ -49,6 +49,11 @@ spec:
             type: object
           status:
             properties:
+              gadgetReady:
+                description: |-
+                  GadgetReady says whether the Widget's Gadget is ready. Only --gadget
+                  writes it.
+                type: boolean
               lastSyncTime:
                 description: |-
                   LastSyncTime is when the controller last reconciled. Only the seeded bug

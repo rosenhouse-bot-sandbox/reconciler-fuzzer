@@ -1,0 +1,18 @@
+# Nothing launches this target. Mouse's CRD names an irregular plural, and
+# Gizmo has no CRD.
+launch:
+  binary: none
+  rbac: [../../../../targets/toy-widget/rbac/role.yaml]
+crds: [../../../../targets/toy-widget/crds/, mouse-crd.yaml]
+primary:
+  kind: toy.reconciler-fuzzer/v1/Widget
+  sample: ../../../../targets/toy-widget/widget.yaml
+  ready: "true"
+timeouts: {stable: 1s}
+models:
+  - kind: models.reconciler-fuzzer/v1/Mouse
+    after: 200ms
+    dependency: {track: 1s}
+  - kind: models.reconciler-fuzzer/v1/Gizmo
+    after: 200ms
+    dependency: {track: 3s}

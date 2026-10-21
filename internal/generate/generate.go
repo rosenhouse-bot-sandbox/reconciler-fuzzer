@@ -40,8 +40,13 @@ type Generator struct {
 	// requests are what faults match, each with the weight of its draw.
 	requests []request
 	fixtures []fixture
-	stable   time.Duration
-	plans    *rapid.Generator[*plan.Plan]
+	// models are the resources of the model kinds, which model faults match.
+	models []gvk.GroupResource
+	// track is the longest dependency track, which a model fault's period
+	// adds.
+	track  time.Duration
+	stable time.Duration
+	plans  *rapid.Generator[*plan.Plan]
 }
 
 // fixture is one fixture whose strings changeFixture may set.
@@ -112,6 +117,9 @@ func build(cfg *config.Config) (*Generator, error) {
 		return nil, err
 	}
 	g.addRequests()
+	if err := g.readModels(cfg); err != nil {
+		return nil, err
+	}
 	g.plans = rapid.Custom(g.plan)
 	return g, nil
 }
@@ -221,6 +229,30 @@ func (g *Generator) readRBAC(paths []string) error {
 	return nil
 }
 
+// readModels reads each model kind's resource from its CRD, or guesses it,
+// and the longest dependency track.
+func (g *Generator) readModels(cfg *config.Config) error {
+	if len(cfg.Models) == 0 {
+		return nil
+	}
+	crds, err := readManifests(cfg.CRDs)
+	if err != nil {
+		return fmt.Errorf("reading the CRDs: %w", err)
+	}
+	for _, m := range cfg.Models {
+		gvr, _ := meta.UnsafeGuessKindToResource(m.Kind)
+		gr := gvr.GroupResource()
+		if plural := pluralOf(crds, m.Kind.GroupKind()); plural != "" {
+			gr.Resource = plural
+		}
+		g.models = append(g.models, gr)
+		if m.Dependency != nil {
+			g.track = max(g.track, m.Dependency.Track)
+		}
+	}
+	return nil
+}
+
 // Plan draws the plan for seed. The same seed draws the same plan.
 func (g *Generator) Plan(seed uint64) (p *plan.Plan, err error) {
 	defer func() {
@@ -270,7 +302,7 @@ func (g *Generator) step(t *rapid.T, at state) plan.Step {
 		switch do := sampled(t, singles, "single"); do {
 		case "":
 			step.Faults = []plan.Fault{g.fault(t)}
-			step.Actions = []plan.Action{g.traffic(t, at, step.Faults[0].Match)}
+			step.Actions = []plan.Action{g.traffic(t, at, step.Faults[0])}
 		case plan.Damage:
 			step.Actions = []plan.Action{g.damage(t, at)}
 		default:
@@ -288,6 +320,9 @@ func (g *Generator) step(t *rapid.T, at state) plan.Step {
 	}
 	if len(step.Faults) > 0 || slices.ContainsFunc(step.Actions, func(a plan.Action) bool { return a.Do == plan.Kill }) {
 		step.Period = g.period(t)
+		if len(step.Faults) > 0 && step.Faults[0].ModelFault() {
+			step.Period += plan.Duration(g.track)
+		}
 	}
 	return step
 }
@@ -386,12 +421,24 @@ func (g *Generator) damageOf(t *rapid.T, at state, gr gvk.GroupResource) plan.Ac
 	return a
 }
 
-// traffic is an action that makes the controller send requests during a
-// fault's period: a damage of the fault's resource, an update of a live CR
-// for a fault on the primary, or else a restart.
-func (g *Generator) traffic(t *rapid.T, at state, m plan.Match) plan.Action {
-	gr := gvk.GroupResource{Group: m.Group, Resource: m.Resource}
+// traffic is an action that exercises a fault during its period. A request
+// fault takes a damage of its resource, or an update of a live CR for a
+// fault on the primary. Stuck takes an update of a live CR, which gives its
+// dependencies a new generation to keep not ready, or else a create.
+// SlowDelete takes a delete of a live CR, whose dependencies' deletion it
+// holds; a later step may create the slot again. Otherwise a restart.
+func (g *Generator) traffic(t *rapid.T, at state, f plan.Fault) plan.Action {
+	gr := gvk.GroupResource{Group: f.Match.Group, Resource: f.Match.Resource}
+	live := len(at.live()) > 0
 	switch {
+	case f.Stuck && live && len(g.fields) > 0:
+		return g.update(t, at, sampled(t, at.live(), "slot"))
+	case f.Stuck && len(at.free()) > 0:
+		return g.create(t, at, sampled(t, at.free(), "slot"))
+	case f.SlowDelete && live:
+		return g.delete(at, sampled(t, at.live(), "slot"))
+	case f.ModelFault():
+		return plan.Action{Do: plan.Restart}
 	case slices.Contains(g.resources[1:], gr):
 		return g.damageOf(t, at, gr)
 	case gr == g.resources[0] && len(at.live()) > 0 && len(g.fields) > 0:
@@ -451,6 +498,9 @@ func (g *Generator) addRequests() {
 	}
 }
 
+// fault draws a request and one of five request effects. With models, it
+// draws one of seven effects instead, and the last two are stuck and
+// slowDelete on a model kind drawn uniformly.
 func (g *Generator) fault(t *rapid.T) plan.Fault {
 	total := 0
 	for _, r := range g.requests {
@@ -462,7 +512,11 @@ func (g *Generator) fault(t *rapid.T) plan.Fault {
 		n -= g.requests[i].weight
 	}
 	f := plan.Fault{Match: g.requests[i].match, Nth: sampled(t, nths, "nth")}
-	switch uniform(t, 5, "effect") {
+	effects := 5
+	if len(g.models) > 0 {
+		effects = 7
+	}
+	switch effect := uniform(t, effects, "effect"); effect {
 	case 0:
 		f.Error = &plan.Error{Code: sampled(t, []int{500, 503, 429}, "code")}
 	case 1:
@@ -472,8 +526,11 @@ func (g *Generator) fault(t *rapid.T) plan.Fault {
 		f.Drop = true
 	case 3:
 		f.DropResponse = true
-	default:
+	case 4:
 		f.KillAfter = true
+	default:
+		gr := sampled(t, g.models, "model")
+		f = plan.Fault{Match: plan.Match{Group: gr.Group, Resource: gr.Resource}, Stuck: effect == 5, SlowDelete: effect == 6}
 	}
 	return f
 }

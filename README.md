@@ -3,8 +3,8 @@
 reconciler-fuzzer finds bugs in Kubernetes controllers. It runs your controller on your machine
 against envtest's kube-apiserver and etcd. It follows a plan of steps: CR changes, faults on the
 controller's API requests, restarts, and damage to objects the controller created. It records
-every request and object version in a trace. Then it judges the trace with five checks: Converge,
-Crash, Clean, Restore and Unique ([DESIGN.md §12](DESIGN.md#12-checks)).
+every request and object version in a trace. Then it judges the trace with seven checks: Converge,
+Crash, Clean, Restore, Unique, Honest and Backoff ([DESIGN.md §12](DESIGN.md#12-checks)).
 
 You write no test code. One YAML config describes your controller.
 
@@ -115,6 +115,35 @@ timeouts: {settle: 30s, stable: 3s}
 - `values` steers generated CRs: `overlay` narrows the CRD schema, `distinct` fields differ
   across a plan's CRs, `mutate` names the fields updates change, and `fixtures` names the
   fixture strings `changeFixture` sets.
+
+### Objects another controller sets ready
+
+envtest runs no other controllers. If your controller creates an object, such as a Gadget, and
+waits for another controller to set its status, add a `models:` entry. The harness then plays
+that controller:
+
+```yaml
+models:
+  - kind: example.com/v1/Gadget
+    stages: readyCondition                   # sets Ready=True for each generation
+    after: 200ms
+    dependency: {required: true, track: 1s}
+```
+
+- `dependency` makes the Gadget a readiness dependency of the CR that owns it through
+  ownerReferences. Honest then fails a CR that reports ready before the controller saw its
+  Gadget ready. `required` (the default)
+  also fails one with no Gadget. `track: d` fails a CR that stays ready longer than `d` after
+  the controller saw its Gadget not ready.
+- Generated plans then draw two model faults. `stuck` keeps Gadgets not ready, and `slowDelete`
+  holds their deletion, until the fault period ends. A plan step writes one as
+  `{"match": {"group": "example.com", "resource": "gadgets"}, "stuck": true}`.
+- If a run fails to converge while an object of a kind nothing models has no status,
+  `report.md` names the kind and suggests a `models:` entry for it.
+
+[targets/toy-widget/gadget](targets/toy-widget/gadget) runs the toy with a Gadget model.
+
+### Examples
 
 [examples/cert-manager](examples/cert-manager/config.yaml) and
 [examples/external-secrets](examples/external-secrets/config.yaml) are real configs.

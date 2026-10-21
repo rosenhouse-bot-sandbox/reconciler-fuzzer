@@ -165,6 +165,9 @@ func compareRefs(a, b trace.Ref) int {
 		cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name))
 }
 
+// All returns every instance, live or gone, in order of first version.
+func (w *World) All() []Instance { return slices.Clone(w.instances) }
+
 // Instance returns the instance with uid.
 func (w *World) Instance(uid string) (Instance, bool) {
 	n, found := w.byUID[uid]

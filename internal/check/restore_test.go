@@ -166,3 +166,41 @@ func TestRestoreJudgesAFailedDamageAsNoDamage(t *testing.T) {
 	r.EndFaults().Settle()
 	requireFinding(t, restore(t, r), "Restore", 1, "replaced resources", "kube/configmaps", "configmaps ns/a-0 (rule 1, slot a)")
 }
+
+func TestRestoreIgnoresAModelKindsStatus(t *testing.T) {
+	for name, c := range map[string]struct {
+		body func(r *tt.Script) map[string]any
+		want string
+	}{
+		"status": {func(r *tt.Script) map[string]any {
+			body := gadget(r, true)
+			body["status"].(map[string]any)["message"] = "fault 1 ended"
+			return body
+		}, ""},
+		"spec": {func(r *tt.Script) map[string]any {
+			body := gadget(r, true)
+			body["spec"] = map[string]any{"size": 2}
+			return body
+		}, "gadgets.toy ns/a (rule 1, slot a): spec"},
+	} {
+		r := gadgetRun(trace.Dependency{})
+		r.See(ctl, gadgetA).Ready(widgetA).EndFaults().Settle()
+		r.Begin().Restart().Update(gadgetModel, gadgetA, c.body(r)).EndFaults().Settle()
+		findings := restore(t, r)
+		if c.want == "" {
+			if len(findings) != 0 {
+				t.Errorf("%s: findings = %+v", name, findings)
+			}
+			continue
+		}
+		requireFinding(t, findings, "Restore", 1, "changed resources", "kube/toy/gadgets", c.want)
+	}
+}
+
+func TestRestoreComparesAnotherKindsStatus(t *testing.T) {
+	r := twoCRs()
+	r.Begin().Restart()
+	r.Update(ctl, childA, tt.OwnedBy(map[string]any{"metadata": map[string]any{"name": "a-0"}, "status": "new"}, r.UID(widgetA), true))
+	r.EndFaults().Settle()
+	requireFinding(t, restore(t, r), "Restore", 1, "changed resources", "kube/configmaps", "configmaps ns/a-0 (rule 1, slot a): status")
+}

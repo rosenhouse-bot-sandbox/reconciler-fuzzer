@@ -1,0 +1,32 @@
+{
+  "steps": [
+    {
+      "period": "1s",
+      "faults": [
+        {
+          "match": {
+            "group": "toy.reconciler-fuzzer",
+            "resource": "gadgets"
+          },
+          "stuck": true
+        }
+      ],
+      "actions": [
+        {
+          "do": "create",
+          "slot": "a",
+          "object": {
+            "apiVersion": "toy.reconciler-fuzzer/v1",
+            "kind": "Widget",
+            "metadata": {
+              "name": "widget"
+            },
+            "spec": {
+              "count": 1
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

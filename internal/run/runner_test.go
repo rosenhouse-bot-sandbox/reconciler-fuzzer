@@ -673,3 +673,85 @@ func TestQuietGivesUpAfterTheSettleTimeout(t *testing.T) {
 		t.Errorf("Quiet waited %v, want the settle timeout %v", waited, timeouts.Settle)
 	}
 }
+
+type fakeModel struct {
+	fakeTarget
+	name, resource string
+}
+
+func (m fakeModel) Name() string { return m.name }
+
+func (m fakeModel) Takes(f plan.Fault) bool { return f.ModelFault() && f.Match.Resource == m.resource }
+
+func TestExecuteGivesAModelFaultToTheFirstModelThatTakesIt(t *testing.T) {
+	f := newFixture(t, nil)
+	models := &calls{}
+	f.runner.Models = []ModelTarget{
+		fakeModel{fakeTarget{calls: models}, "model:sprockets", "sprockets"},
+		fakeModel{fakeTarget{calls: models}, "model:gadgets", "gadgets"},
+		fakeModel{fakeTarget{calls: &calls{}}, "model:gadgets-again", "gadgets"},
+	}
+	p := &plan.Plan{Steps: []plan.Step{{Faults: []plan.Fault{
+		{Match: plan.Match{Resource: "gadgets"}, Stuck: true},
+		{Match: plan.Match{Resource: "gadgets"}, Drop: true},
+	}}}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if got := models.all(); !reflect.DeepEqual(got, []string{"fault gadgets", "end gadgets"}) {
+		t.Errorf("model calls = %q", got)
+	}
+	if got := f.faults.all(); !reflect.DeepEqual(got, []string{"fault gadgets", "end gadgets"}) {
+		t.Errorf("listener calls = %q, want the request fault", got)
+	}
+	var got []string
+	for _, e := range f.rec.Events() {
+		if e.Fault != nil {
+			got = append(got, fmt.Sprintf("%d %v %q", e.Fault.Index, e.Fault.Ended, e.Fault.Model))
+		}
+	}
+	want := []string{`0 false "model:gadgets"`, `1 false ""`, `0 true "model:gadgets"`, `1 true ""`}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("fault events = %q, want %q", got, want)
+	}
+}
+
+func TestExecuteRejectsAModelFaultNoModelTakes(t *testing.T) {
+	f := newFixture(t, nil)
+	p := &plan.Plan{Steps: []plan.Step{{Faults: []plan.Fault{{Match: plan.Match{Resource: "gadgets"}, SlowDelete: true}}}}}
+	err := f.runner.Execute(context.Background(), p)
+	if err == nil || !strings.Contains(err.Error(), "slowDelete") {
+		t.Fatalf("Execute = %v, want an error naming the fault", err)
+	}
+}
+
+type writingModel struct {
+	fakeModel
+	rec *trace.Recorder
+}
+
+func (m writingModel) Fault(f plan.Fault) (func(), error) {
+	m.rec.Record(trace.Event{Work: &trace.Work{System: m.name, Pending: true}})
+	return m.fakeModel.Fault(f)
+}
+
+func TestExecuteRecordsAFaultsStartBeforeItsModelWrites(t *testing.T) {
+	f := newFixture(t, nil)
+	f.runner.Models = []ModelTarget{writingModel{fakeModel{fakeTarget{calls: &calls{}}, "model:gadgets", "gadgets"}, f.rec}}
+	p := &plan.Plan{Steps: []plan.Step{{Faults: []plan.Fault{{Match: plan.Match{Resource: "gadgets"}, Stuck: true}}}}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, e := range f.rec.Events() {
+		switch {
+		case e.Fault != nil && !e.Fault.Ended:
+			got = append(got, "fault")
+		case e.Work != nil:
+			got = append(got, "write")
+		}
+	}
+	if !reflect.DeepEqual(got, []string{"fault", "write"}) {
+		t.Errorf("events = %q, want the fault's start first", got)
+	}
+}

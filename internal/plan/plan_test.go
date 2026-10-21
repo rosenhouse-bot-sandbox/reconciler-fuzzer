@@ -119,7 +119,12 @@ func TestValidate(t *testing.T) {
 		"restart with patch":    {[]Step{{Actions: []Action{{Do: Restart, Patch: json.RawMessage(`{}`)}}}}, "steps[0].actions[0]: restart takes no slot, object or patch"},
 		"negative at":           {[]Step{{Actions: []Action{{Do: Kill, At: -1}}}}, "steps[0].actions[0]: at is negative"},
 		"negative period":       {[]Step{{}, {Period: -1}}, "steps[1]: period is negative"},
-		"fault with no effect":  {[]Step{{Faults: []Fault{{}}}}, "steps[0].faults[0]: a fault sets 0 of error, delay, drop, dropResponse and killAfter"},
+		"fault with no effect":  {[]Step{{Faults: []Fault{{}}}}, "steps[0].faults[0]: a fault sets 0 of error, delay, drop, dropResponse, killAfter, stuck and slowDelete"},
+		"stuck and drop":        {[]Step{{Faults: []Fault{{Stuck: true, Drop: true, Match: gadgets}}}}, "a fault sets 2 of"},
+		"stuck no resource":     {[]Step{{Faults: []Fault{{Stuck: true}}}}, "steps[0].faults[0]: stuck needs a match with a resource"},
+		"slowDelete with verb":  {[]Step{{Faults: []Fault{{SlowDelete: true, Match: Match{Verb: "get", Resource: "gadgets"}}}}}, "slowDelete matches objects, so it takes no verb or subresource"},
+		"stuck subresource":     {[]Step{{Faults: []Fault{{Stuck: true, Match: Match{Resource: "gadgets", Subresource: "status"}}}}}, "stuck matches objects, so it takes no verb or subresource"},
+		"stuck with nth":        {[]Step{{Faults: []Fault{{Stuck: true, Match: gadgets, Nth: 1}}}}, "stuck takes no nth"},
 		"fault with two":        {[]Step{{Faults: []Fault{{Drop: true}, {Drop: true, Delay: &delay}}}}, "steps[0].faults[1]: a fault sets 2 of"},
 		"drop and dropResponse": {[]Step{{Faults: []Fault{{Drop: true, DropResponse: true}}}}, "a fault sets 2 of"},
 		"error and killAfter":   {[]Step{{Faults: []Fault{{Error: &Error{Code: 500}, KillAfter: true}}}}, "a fault sets 2 of"},
@@ -164,6 +169,8 @@ var (
 	fixture = &Target{Resource: "configmaps", Name: "widget-config"}
 )
 
+var gadgets = Match{Group: "example.com", Resource: "gadgets"}
+
 func named(slot, name string) Action {
 	return Action{Do: Create, Slot: slot, Object: json.RawMessage(`{"metadata":{"name":"` + name + `"}}`)}
 }
@@ -177,6 +184,7 @@ func TestValidateAccepts(t *testing.T) {
 		{Actions: []Action{{Do: Create, Slot: "a"}, {Do: Update, Slot: "a", Patch: json.RawMessage(`{"spec":{}}`)}}},
 		{Period: Duration(time.Second), Faults: []Fault{{Drop: true}, {Delay: &delay}, {Error: &Error{Code: 409}, Nth: 2}, {System: "kube", Error: &Error{Code: 599}}},
 			Actions: []Action{{Do: Delete, Slot: "a"}, {Do: Create, Slot: "a", At: Duration(time.Millisecond)}, {Do: Restart}, {Do: Kill}}},
+		{Faults: []Fault{{Stuck: true, Match: gadgets}, {SlowDelete: true, Match: Match{Group: "example.com", Resource: "gadgets", Name: "g"}}}},
 		{Faults: []Fault{{DropResponse: true}, {KillAfter: true, Nth: 1}}, Actions: []Action{
 			{Do: Damage, Target: cms}, {Do: Damage, Slot: "a", Target: cms, Patch: json.RawMessage(`{"data":{}}`)},
 			{Do: ChangeFixture, Target: fixture}, {Do: ChangeFixture, Target: fixture, Patch: json.RawMessage(`{"data":{"k":"v"}}`)},
@@ -208,12 +216,22 @@ func TestUnknownOutcomeEffectsMatchTrace(t *testing.T) {
 	}
 }
 
+func TestModelFaults(t *testing.T) {
+	for f, want := range map[Fault]bool{{Stuck: true}: true, {SlowDelete: true}: true, {Drop: true}: false, {DropResponse: true}: false} {
+		if got := f.ModelFault(); got != want {
+			t.Errorf("%s: ModelFault() = %v, want %v", f, got, want)
+		}
+	}
+}
+
 func TestFaultString(t *testing.T) {
 	delay := Duration(1500 * time.Millisecond)
 	for f, want := range map[*Fault]string{
 		{Error: &Error{Code: 500}}: "error(500)",
 		{Delay: &delay, Match: Match{Verb: "patch", Resource: "widgets", Subresource: "status"}}: "delay(1.5s) on verb=patch resource=widgets subresource=status",
 		{Drop: true, System: "kube", Match: Match{Group: "g", Name: "n"}, Nth: 2}:                "drop on system=kube group=g name=n nth=2",
+		{Stuck: true, Match: gadgets}:      "stuck on group=example.com resource=gadgets",
+		{SlowDelete: true, Match: gadgets}: "slowDelete on group=example.com resource=gadgets",
 	} {
 		if got := f.String(); got != want {
 			t.Errorf("String() = %q, want %q", got, want)

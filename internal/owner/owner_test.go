@@ -65,6 +65,9 @@ func TestInstanceLivesFromFirstVersionToDelete(t *testing.T) {
 	if !slices.Equal(uids, []string{"c2", "ua", "ub"}) {
 		t.Fatalf("instances at 6s = %q", uids)
 	}
+	if all := w.All(); len(all) != 4 || all[2].UID != "c1" {
+		t.Fatalf("All = %+v, want c1 third of 4", all)
+	}
 }
 
 func TestBodyIsTheLatestVersionAtT(t *testing.T) {

@@ -2,12 +2,15 @@ package interpose_test
 
 import (
 	"bufio"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -18,6 +21,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/interpose"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
@@ -719,5 +723,302 @@ func TestUnknownOutcomeFaultsSkipWatches(t *testing.T) {
 				t.Fatalf("The list after the watch got status %d, want a transport error.", resp.StatusCode)
 			}
 		})
+	}
+}
+
+var gadgets = schema.GroupResource{Group: "toy.reconciler-fuzzer", Resource: "gadgets"}
+
+func seeingGadgets(o *interpose.Options) { o.Seen = []schema.GroupResource{gadgets} }
+
+func (e *events) seen() []trace.Seen {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var seen []trace.Seen
+	for _, ev := range e.list {
+		if ev.Seen != nil {
+			seen = append(seen, *ev.Seen)
+		}
+	}
+	return seen
+}
+
+func gadgetJSON(name, uid, rv string) string {
+	return fmt.Sprintf(`{"kind":"Gadget","metadata":{"name":%q,"namespace":"ns1","uid":%q,"resourceVersion":%q}}`, name, uid, rv)
+}
+
+func seenGadget(name, uid, rv string) trace.Seen {
+	return trace.Seen{
+		Caller: trace.Controller, UID: uid, RV: rv,
+		Ref: trace.Ref{System: "kube", Group: gadgets.Group, Resource: gadgets.Resource, Namespace: "ns1", Name: name},
+	}
+}
+
+func respondOK(contentType, encoding, body string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", contentType)
+		if encoding != "" {
+			w.Header().Set("Content-Encoding", encoding)
+		}
+		if encoding == "gzip" {
+			var zipped bytes.Buffer
+			z := gzip.NewWriter(&zipped)
+			z.Write([]byte(body))
+			z.Close()
+			body = zipped.String()
+		}
+		w.Write([]byte(body))
+	})
+}
+
+const gadgetsPath = "/apis/toy.reconciler-fuzzer/v1/namespaces/ns1/gadgets"
+
+func TestAGetOfASeenKindRecordsSeen(t *testing.T) {
+	for _, encoding := range []string{"", "gzip"} {
+		t.Run("encoding "+encoding, func(t *testing.T) {
+			l, recorded := listen(t, respondOK("application/json", encoding, gadgetJSON("g1", "u1", "5")), seeingGadgets)
+
+			do(t, l, "GET", gadgetsPath+"/g1")
+
+			recorded.waitCalls(t, 1)
+			if got, want := recorded.seen(), []trace.Seen{seenGadget("g1", "u1", "5")}; !reflect.DeepEqual(got, want) {
+				t.Errorf("Recorded %+v, want %+v.", got, want)
+			}
+		})
+	}
+}
+
+func TestAListOfASeenKindRecordsSeenForEachItem(t *testing.T) {
+	body := `{"kind":"GadgetList","metadata":{"resourceVersion":"9"},"items":[` + gadgetJSON("g1", "u1", "5") + "," + gadgetJSON("g2", "u2", "6") + "]}"
+	l, recorded := listen(t, respondOK("application/json", "", body), seeingGadgets)
+
+	do(t, l, "GET", gadgetsPath)
+
+	recorded.waitCalls(t, 1)
+	want := []trace.Seen{seenGadget("g1", "u1", "5"), seenGadget("g2", "u2", "6")}
+	if got := recorded.seen(); !reflect.DeepEqual(got, want) {
+		t.Errorf("Recorded %+v, want %+v.", got, want)
+	}
+}
+
+func TestAWatchOfASeenKindRecordsSeenAsItForwardsEachEvent(t *testing.T) {
+	release := make(chan struct{})
+	l, recorded := listen(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		frame := func(kind, object string) {
+			fmt.Fprintf(w, `{"type":%q,"object":%s}`+"\n", kind, object)
+			w.(http.Flusher).Flush()
+		}
+		frame("ADDED", gadgetJSON("g1", "u1", "5"))
+		<-release
+		frame("MODIFIED", gadgetJSON("g1", "u1", "6"))
+		frame("BOOKMARK", `{"kind":"Gadget","metadata":{"resourceVersion":"7"}}`)
+		frame("ERROR", `{"kind":"Status","metadata":{}}`)
+		frame("DELETED", gadgetJSON("g1", "u1", "8"))
+	}), seeingGadgets)
+
+	resp, err := http.Get(l.URL() + gadgetsPath + "?watch=true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	deadline := time.Now().Add(5 * time.Second)
+	for len(recorded.seen()) == 0 {
+		if time.Now().After(deadline) {
+			close(release)
+			t.Fatal("Recorded no Seen while the watch was open.")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	io.Copy(io.Discard, resp.Body)
+	l.Close()
+
+	added, modified, deleted := seenGadget("g1", "u1", "5"), seenGadget("g1", "u1", "6"), seenGadget("g1", "u1", "8")
+	deleted.Deleted = true
+	want := []trace.Seen{added, modified, deleted}
+	for i := range want {
+		want[i].Stream = 1
+	}
+	if got := recorded.seen(); !reflect.DeepEqual(got, want) {
+		t.Errorf("Recorded %+v, want %+v.", got, want)
+	}
+	recorded.mu.Lock()
+	defer recorded.mu.Unlock()
+	if last := recorded.list[len(recorded.list)-1]; last.WatchEnd == nil {
+		t.Errorf("The last event is %+v, want the watch's end after its Seen events.", last)
+	}
+}
+
+func TestResponsesThatShowNoSeenKindRecordNoSeen(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		path    string
+		handler http.Handler
+	}{
+		{"another kind", "/api/v1/namespaces/ns1/configmaps/g1", respondOK("application/json", "", gadgetJSON("g1", "u1", "5"))},
+		{"a 404", gadgetsPath + "/g1", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(gadgetJSON("g1", "u1", "5")))
+		})},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			l, recorded := listen(t, c.handler, seeingGadgets)
+
+			do(t, l, "GET", c.path)
+
+			recorded.waitCalls(t, 1)
+			if got := recorded.seen(); len(got) > 0 {
+				t.Errorf("Recorded %+v, want no Seen.", got)
+			}
+		})
+	}
+}
+
+func TestAWriteOfASeenKindRecordsSeen(t *testing.T) {
+	for _, method := range []string{"POST", "PUT", "PATCH"} {
+		t.Run(method, func(t *testing.T) {
+			l, recorded := listen(t, respondOK("application/json", "", gadgetJSON("g1", "u1", "5")), seeingGadgets)
+
+			path := gadgetsPath
+			if method != "POST" {
+				path += "/g1"
+			}
+			do(t, l, method, path)
+
+			recorded.waitCalls(t, 1)
+			if got, want := recorded.seen(), []trace.Seen{seenGadget("g1", "u1", "5")}; !reflect.DeepEqual(got, want) {
+				t.Errorf("Recorded %+v, want %+v.", got, want)
+			}
+		})
+	}
+}
+
+func TestAResponseOfASeenKindItCannotDecodeRecordsAnOpaqueSeen(t *testing.T) {
+	big := `{"items":[` + strings.Repeat(gadgetJSON("g1", "u1", "5")+",", interpose.MaxResultBody/80) + gadgetJSON("g1", "u1", "5") + "]}"
+	for _, c := range []struct {
+		name, path string
+		handler    http.Handler
+	}{
+		{"protobuf", gadgetsPath + "/g1", respondOK("application/vnd.kubernetes.protobuf", "", "k8s\x00")},
+		{"a protobuf watch", gadgetsPath + "?watch=true", respondOK("application/vnd.kubernetes.protobuf;stream=watch", "", "")},
+		{"an unknown encoding", gadgetsPath + "/g1", respondOK("application/json", "br", gadgetJSON("g1", "u1", "5"))},
+		{"a watch in an unknown encoding", gadgetsPath + "?watch=true", respondOK("application/json", "br", "")},
+		{"bad JSON", gadgetsPath + "/g1", respondOK("application/json", "", "{")},
+		{"a big list", gadgetsPath, respondOK("application/json", "", big)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			l, recorded := listen(t, c.handler, seeingGadgets)
+
+			do(t, l, "GET", c.path)
+
+			recorded.waitCalls(t, 1)
+			l.Close()
+			want := seenGadget("", "", "")
+			want.Opaque = true
+			switch {
+			case strings.Contains(c.path, "watch"):
+				want.Stream = 1
+			case c.name != "a big list":
+				want.Ref.Name = "g1"
+			}
+			if got := recorded.seen(); !reflect.DeepEqual(got, []trace.Seen{want}) {
+				t.Errorf("Recorded %+v, want %+v.", got, []trace.Seen{want})
+			}
+		})
+	}
+}
+
+func TestADroppedResponseRecordsNoSeen(t *testing.T) {
+	l, recorded := listen(t, respondOK("application/json", "", gadgetJSON("g1", "u1", "5")), seeingGadgets)
+	fault(t, l, plan.Fault{DropResponse: true})
+
+	if resp, err := http.Get(l.URL() + gadgetsPath + "/g1"); err == nil {
+		resp.Body.Close()
+	}
+
+	recorded.waitCalls(t, 1)
+	if got := recorded.seen(); len(got) > 0 {
+		t.Errorf("Recorded %+v, want no Seen.", got)
+	}
+}
+
+func TestAFailedCreateRecordsTheRequestedName(t *testing.T) {
+	for _, c := range []struct{ body, want string }{
+		{`{"metadata":{"name":"cm-a"}}`, "cm-a"},
+		{`{"metadata":{"generateName":"cm-b-"}}`, "cm-b-"},
+	} {
+		var forwarded atomic.Value
+		l, recorded := listen(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			forwarded.Store(string(body))
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+
+		resp, err := http.Post(l.URL()+"/api/v1/namespaces/ns1/configmaps", "application/json", strings.NewReader(c.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+
+		if got := recorded.waitCalls(t, 1)[0]; got.RequestName != c.want {
+			t.Errorf("Recorded request name %q, want %q.", got.RequestName, c.want)
+		}
+		if forwarded.Load() != c.body {
+			t.Errorf("Forwarded %q, want %q.", forwarded.Load(), c.body)
+		}
+	}
+}
+
+// slowSeen delays recording each Seen.
+func slowSeen(o *interpose.Options) {
+	record := o.Record
+	o.Record = func(e trace.Event) {
+		if e.Seen != nil {
+			time.Sleep(50 * time.Millisecond)
+		}
+		record(e)
+	}
+}
+
+func TestAWatchRecordsSeenBeforeTheCallerGetsTheEvent(t *testing.T) {
+	l, recorded := listen(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"type":"ADDED","object":%s}`+"\n", gadgetJSON("g1", "u1", "5"))
+	}), seeingGadgets, slowSeen)
+
+	resp, err := http.Get(l.URL() + gadgetsPath + "?watch=true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if _, err := bufio.NewReader(resp.Body).ReadString('\n'); err != nil {
+		t.Fatal(err)
+	}
+	if len(recorded.seen()) != 1 {
+		t.Error("The caller got the event before its Seen was recorded.")
+	}
+}
+
+func TestAGetRecordsSeenBeforeTheCallerGetsTheObject(t *testing.T) {
+	body := gadgetJSON("g1", "u1", "5")
+	l, recorded := listen(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", fmt.Sprint(len(body)))
+		io.WriteString(w, body)
+		time.Sleep(100 * time.Millisecond)
+	}), seeingGadgets, slowSeen)
+
+	resp, err := http.Get(l.URL() + gadgetsPath + "/g1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if len(recorded.seen()) != 1 {
+		t.Error("The caller got the object before its Seen was recorded.")
+	}
+	if string(got) != body {
+		t.Errorf("Got %q, want %q.", got, body)
 	}
 }
