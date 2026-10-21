@@ -62,7 +62,6 @@ of these holds:
 
 - It cannot run against envtest: it needs a webhook to admit its CRs, a conversion webhook, or
   nodes and Pods that do work.
-- The primary kind is cluster-scoped. reconciler-fuzzer tests namespaced kinds.
 - Its RBAC manifests are not files you can list, such as a Helm template you cannot render.
 
 List the kinds it watches, reads and creates. For each, note who sets its status:
@@ -125,7 +124,8 @@ Fill each key from the project:
   off fixed ports, so runs cannot clash. Only `${systems.kube.kubeconfig}`, `namespace` and
   `url` expand. Pass the kubeconfig as a flag if the controller does not read `KUBECONFIG`.
 - `launch.rbac`: the Roles and ClusterRoles the controller runs with. Generation draws faults
-  from the requests they grant.
+  from the requests they grant. For another namespace, use a ClusterRole, or a Role with
+  `metadata.namespace`.
 - `crds`: the primary's CRD, and the CRD of every other kind the controller watches or creates.
 - `primary.ready`: CEL over the CR, true only once the controller acted on the current spec.
   Compare an `observedGeneration` with `metadata.generation`. If the controller writes no
@@ -136,10 +136,19 @@ Fill each key from the project:
   A field naming another object, such as a fixture, gets `{enum: [<sample's value>]}`.
   `distinct` names fields that must differ between CRs, such as a Secret's name. `mutate`
   names the fields updates change. `values.fixtures` names fixture strings to change.
-- `fixtures`: objects the controller reads and does not create, without `metadata.namespace`.
+- `fixtures`: objects the controller reads and does not create. Drop `metadata.namespace`
+  unless the controller reads the object in another namespace; the harness creates that
+  namespace.
+- `primary.owns` and `systems`: a child without an ownerReference to its CR, such as one in
+  another namespace, or a cluster-scoped child of a namespaced CR, needs one. Otherwise Clean
+  judges it only by the CRs alive at its creation. `owns: [{kind, name, namespace?}]` holds
+  CEL over the CR that names the child; a cluster-scoped kind takes no `namespace`.
+  `systems: [{name: kube, owner}]` holds CEL over a child that yields its CR's UID,
+  `namespace/name` or name, such as an owner label. Prefer the UID: a bare name that
+  matches CRs in two other namespaces names none.
 - `models`: one entry for every kind whose status another controller sets and the controller
-  reads. Add `dependency` when the primary's readiness waits on it and the CR owns it through
-  a controller ownerReference, directly or through owned objects. Honest judges only such
+  reads. Add `dependency` when the primary's readiness waits on it and the CR owns it: through
+  ownerReferences, directly or through owned objects, or by `owns` or `owner`. Honest judges only such
   dependencies, so leave `dependency` off a kind the CR names by reference, such as an
   issuer or a store. `required: false` allows a CR to be ready with none. Set `track` when the
   controller should notice a dependency going not ready. `status:` adds literal fields to each
@@ -193,7 +202,7 @@ controller:
 | Converge, with a line `whose status nothing models` | Another controller sets that kind's status. | Add the `models:` entry it suggests. |
 | Converge | `ready` reads a field the controller never writes. | Fix `ready`. |
 | Converge | A drawn value is one a webhook would refuse. | Narrow `values.overlay`. |
-| Honest, `reported ready with no dependency` | The CR can be ready without that kind, or does not own it through an ownerReference. | Set `required: false` in the first case; drop `dependency` in the second. |
+| Honest, `reported ready with no dependency` | The CR can be ready without that kind, or does not own it. | Set `required: false` in the first case. In the second, add `owns` or `owner`, or drop `dependency`. |
 | Clean | The controller keeps resources by design. | Set `primary.retain`. |
 
 Every other finding is a bug in the controller. Never hide one to make a check pass, and ask

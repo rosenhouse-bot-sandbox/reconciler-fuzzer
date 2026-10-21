@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grant-config
+  namespace: rf-shared
+data:
+  label: red

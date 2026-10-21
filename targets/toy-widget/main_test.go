@@ -13,7 +13,9 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/targets/toy-widget/controller"
@@ -68,7 +70,7 @@ func TestRestConfigFallsBackToTheEnvironment(t *testing.T) {
 func TestManagerOptionsWatchOnlyWatchNamespace(t *testing.T) {
 	t.Setenv("WATCH_NAMESPACE", "reconciler-fuzzer-run-x")
 
-	watched := managerOptions(nil, "0", 0).Cache.DefaultNamespaces
+	watched := managerOptions(nil, "0", 0, cacheOptions(widgetMode, "")).Cache.DefaultNamespaces
 
 	if namespaces := slices.Collect(maps.Keys(watched)); !slices.Equal(namespaces, []string{"reconciler-fuzzer-run-x"}) {
 		t.Errorf("The manager watches %v, want only reconciler-fuzzer-run-x.", namespaces)
@@ -78,7 +80,7 @@ func TestManagerOptionsWatchOnlyWatchNamespace(t *testing.T) {
 func TestManagerOptionsKeepTheSchemeAndMetricsAddress(t *testing.T) {
 	scheme := runtime.NewScheme()
 
-	options := managerOptions(scheme, "127.0.0.1:0", 0)
+	options := managerOptions(scheme, "127.0.0.1:0", 0, cache.Options{})
 
 	if options.Scheme != scheme {
 		t.Error("The manager does not use the scheme it was given.")
@@ -89,7 +91,7 @@ func TestManagerOptionsKeepTheSchemeAndMetricsAddress(t *testing.T) {
 }
 
 func TestManagerOptionsElectNoLeader(t *testing.T) {
-	if managerOptions(nil, "0", 0).LeaderElection {
+	if managerOptions(nil, "0", 0, cache.Options{}).LeaderElection {
 		t.Error("The manager runs leader election, which a single replica does not need.")
 	}
 }
@@ -99,7 +101,7 @@ func TestManagerOptionsElectNoLeader(t *testing.T) {
 func TestManagerOptionsElectALeaderInWatchNamespaceWithALease(t *testing.T) {
 	t.Setenv("WATCH_NAMESPACE", "reconciler-fuzzer-run-x")
 
-	options := managerOptions(nil, "0", 3*time.Second)
+	options := managerOptions(nil, "0", 3*time.Second, cache.Options{})
 
 	if !options.LeaderElection || options.LeaderElectionID == "" || options.LeaderElectionNamespace != "reconciler-fuzzer-run-x" {
 		t.Errorf("The manager elects a leader %t, by the lease %q in %q; want a lease in reconciler-fuzzer-run-x.",
@@ -130,8 +132,60 @@ func durationOrNil(d *time.Duration) string {
 func TestManagerOptionsWatchEveryNamespaceWithoutWatchNamespace(t *testing.T) {
 	t.Setenv("WATCH_NAMESPACE", "")
 
-	if watched := managerOptions(nil, "0", 0).Cache.DefaultNamespaces; watched != nil {
+	if watched := managerOptions(nil, "0", 0, cacheOptions(widgetMode, "")).Cache.DefaultNamespaces; watched != nil {
 		t.Errorf("The manager watches %v, want every namespace.", watched)
+	}
+}
+
+func TestTenantModeWatchesEveryNamespace(t *testing.T) {
+	t.Setenv("WATCH_NAMESPACE", "reconciler-fuzzer-run-x")
+
+	if watched := managerOptions(nil, "0", 0, cacheOptions(tenantMode, "")).Cache.DefaultNamespaces; watched != nil {
+		t.Errorf("The manager watches %v, want every namespace.", slices.Collect(maps.Keys(watched)))
+	}
+}
+
+func TestGrantModeWatchesConfigMapsOnlyInTheMirrorNamespace(t *testing.T) {
+	t.Setenv("WATCH_NAMESPACE", "reconciler-fuzzer-run-x")
+
+	options := managerOptions(nil, "0", 0, cacheOptions(grantMode, "shared")).Cache
+
+	if namespaces := slices.Collect(maps.Keys(options.DefaultNamespaces)); !slices.Equal(namespaces, []string{"reconciler-fuzzer-run-x"}) {
+		t.Errorf("The manager watches %v, want only reconciler-fuzzer-run-x.", namespaces)
+	}
+	for object, byObject := range options.ByObject {
+		if _, ok := object.(*corev1.ConfigMap); !ok {
+			t.Errorf("The cache has options for %T, want only ConfigMaps.", object)
+		}
+		if namespaces := slices.Collect(maps.Keys(byObject.Namespaces)); !slices.Equal(namespaces, []string{"shared"}) {
+			t.Errorf("The manager watches ConfigMaps in %v, want only shared.", namespaces)
+		}
+	}
+	if len(options.ByObject) != 1 {
+		t.Errorf("The cache has options for %d kinds, want ConfigMaps.", len(options.ByObject))
+	}
+}
+
+func TestRunRejectsTwoModes(t *testing.T) {
+	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "no-such-kubeconfig"))
+
+	for _, args := range [][]string{{"--tenant", "--grant"}, {"--tenant", "--gadget"}, {"--grant", "--gadget"}} {
+		err := run(args, io.Discard)
+
+		if err == nil || !strings.Contains(err.Error(), args[0]) || !strings.Contains(err.Error(), args[1]) {
+			t.Errorf("run returned %v for %v, want an error that names both flags.", err, args)
+		}
+	}
+}
+
+func TestModeOfOneFlag(t *testing.T) {
+	for _, testCase := range []struct {
+		tenant, grant bool
+		want          mode
+	}{{false, false, widgetMode}, {true, false, tenantMode}, {false, true, grantMode}} {
+		if got, err := modeOf(false, testCase.tenant, testCase.grant); got != testCase.want || err != nil {
+			t.Errorf("modeOf(--tenant=%t, --grant=%t) = %v, %v; want %v.", testCase.tenant, testCase.grant, got, err, testCase.want)
+		}
 	}
 }
 
@@ -187,7 +241,7 @@ func TestRunPrintsTheUsageForHelp(t *testing.T) {
 	if !errors.Is(err, flag.ErrHelp) {
 		t.Errorf("run returned %v for --help, want flag.ErrHelp so that main exits 0.", err)
 	}
-	for _, flag := range []string{"-bug", "-gadget"} {
+	for _, flag := range []string{"-bug", "-gadget", "-tenant", "-grant", "-mirror-namespace"} {
 		if !strings.Contains(printed.String(), flag) {
 			t.Errorf("run printed %q for --help, want the usage of %s.", printed.String(), flag)
 		}

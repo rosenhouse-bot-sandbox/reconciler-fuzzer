@@ -1,0 +1,6 @@
+apiVersion: toy.reconciler-fuzzer/v1
+kind: Grant
+metadata:
+  name: grant
+spec:
+  level: 1

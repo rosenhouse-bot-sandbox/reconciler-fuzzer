@@ -1,0 +1,23 @@
+# escalate lets the controller create ClusterRoles with rules it lacks.
+# tenants/finalizers lets it set blockOwnerDeletion where
+# OwnerReferencesPermissionEnforcement is on.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: toy-widget-tenant
+rules:
+  - apiGroups: ["toy.reconciler-fuzzer"]
+    resources: ["tenants"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["toy.reconciler-fuzzer"]
+    resources: ["tenants/status"]
+    verbs: ["patch"]
+  - apiGroups: ["toy.reconciler-fuzzer"]
+    resources: ["tenants/finalizers"]
+    verbs: ["update"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create", "update"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles"]
+    verbs: ["get", "list", "watch", "create", "update", "escalate"]

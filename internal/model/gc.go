@@ -46,10 +46,18 @@ type gcSweep struct {
 // failed.
 func collect(ctx context.Context, objects []object, c cluster) ([]op, bool) {
 	s := &gcSweep{ctx: ctx, c: c, reads: map[readKey]*metav1.ObjectMeta{}}
+	byUID := map[types.UID]object{}
+	for _, o := range objects {
+		byUID[o.UID] = o
+	}
+	// dependents holds each owner's dependents, as the real garbage
+	// collector's graph does, valid references or not.
 	dependents := map[types.UID][]object{}
 	for _, o := range objects {
 		for _, ref := range o.OwnerReferences {
-			dependents[ref.UID] = append(dependents[ref.UID], o)
+			if _, held := byUID[ref.UID]; held {
+				dependents[ref.UID] = append(dependents[ref.UID], o)
+			}
 		}
 	}
 	// orphaned holds the owner UIDs to remove from each dependent.
@@ -81,7 +89,7 @@ func collect(ctx context.Context, objects []object, c cluster) ([]op, bool) {
 				}
 			}
 		}
-		if len(drop) > 0 {
+		if len(drop) > 0 && !edit.delete {
 			edit.patch["ownerReferences"] = slices.DeleteFunc(slices.Clone(o.OwnerReferences), func(ref metav1.OwnerReference) bool {
 				return slices.Contains(drop, ref.UID)
 			})

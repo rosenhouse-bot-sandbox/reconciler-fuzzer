@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -15,8 +16,9 @@ func TestRenderBugMatrix(t *testing.T) {
 	for _, want := range []string{
 		"| Bug | Description | Plan | Check | Step |\n|---|---|---|---|---|\n",
 		"| B3 | Leaves child 0 without an owner reference. | b3 | Clean | 1 |\n",
-		"| B0 | The correct controller. | all 2 in plans/ and gadget/plans/ | none | |\n",
+		"| B0 | The correct controller. | all 2 committed plans | none | |\n",
 		"| B17 | Reports its Gadget ready without reading the Gadget's status. | gadget/b17 | Honest | 0 |\n",
+		"| B29 | Never releases a Tenant's children while the Tenant is being deleted, so only a Foreground delete wedges. | tenant/b29-background | none | |\n",
 	} {
 		if !strings.Contains(md, want) {
 			t.Errorf("Want %q in:\n%s", want, md)
@@ -64,7 +66,7 @@ func TestEveryGateBugHasADescription(t *testing.T) {
 	}
 }
 
-// bugs describes each seeded bug of controller/widget_controller.go.
+// bugs describes each seeded bug of controller/.
 var bugs = map[int]string{
 	0:  "The correct controller.",
 	1:  "Reports children ready before it creates them.",
@@ -92,6 +94,10 @@ var bugs = map[int]string{
 	23: "Gives up on cleanup for good when its Gadget outlives the delete, so the finalizer stays.",
 	24: "Never recreates a missing Gadget once it reported it ready.",
 	25: "Retries a forbidden Gadget status patch every 10 ms while the Gadget has Ready False.",
+	26: "Gives a Tenant's ClusterRole no owner reference, so it outlives the Tenant.",
+	27: "Forgets a Grant's ConfigMap in rf-shared when the finalizer cleans up.",
+	28: "Leaves a Grant's ClusterRole to garbage collection, which ignores its namespaced owner.",
+	29: "Never releases a Tenant's children while the Tenant is being deleted, so only a Foreground delete wedges.",
 }
 
 // renderBugMatrix renders the gate table, plus a B0 row for every plan.
@@ -103,12 +109,16 @@ func renderBugMatrix(plans []string) string {
 	var b strings.Builder
 	b.WriteString("# Bug matrix\n\n" +
 		"This file is generated from targets/toy-widget/gate_test.go by `make bug-matrix`.\n" +
-		"`make test-envtest` proves each row: the plan, run against the bug, reports the check's finding at that step.\n\n" +
+		"`make test-envtest` proves each row: the plan, run against the bug, reports the check's finding at that step, or no finding for check none.\n\n" +
 		"| Bug | Description | Plan | Check | Step |\n|---|---|---|---|---|\n")
-	fmt.Fprintf(&b, "| B0 | %s | all %d in plans/ and gadget/plans/ | none | |\n", bugs[0], len(plans))
+	fmt.Fprintf(&b, "| B0 | %s | all %d committed plans | none | |\n", bugs[0], len(plans))
 	for _, g := range rows {
 		check, _, _ := strings.Cut(g.finding, ":")
-		fmt.Fprintf(&b, "| B%d | %s | %s | %s | %d |\n", g.bug, bugs[g.bug], g.name(), check, g.step)
+		step := " " + strconv.Itoa(g.step) + " "
+		if check == "" {
+			check, step = "none", " "
+		}
+		fmt.Fprintf(&b, "| B%d | %s | %s | %s |%s|\n", g.bug, bugs[g.bug], g.name(), check, step)
 	}
 	return b.String()
 }

@@ -19,8 +19,9 @@ const serviceAccount = "reconciler-fuzzer-controller"
 // an expired token.
 const tokenLifetime = 7 * 24 * time.Hour
 
-// createIdentity creates the controller's ServiceAccount, binds its roles and
-// returns a config that authenticates as it.
+// createIdentity creates the controller's ServiceAccount in namespace, binds
+// each Role in its own namespace or else in namespace, binds the ClusterRoles,
+// and returns a config that authenticates as it.
 func createIdentity(ctx context.Context, client kubernetes.Interface, admin *rest.Config, namespace string, roles []rbacv1.Role, clusterRoles []rbacv1.ClusterRole) (*rest.Config, error) {
 	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: serviceAccount}}
 	if _, err := client.CoreV1().ServiceAccounts(namespace).Create(ctx, sa, metav1.CreateOptions{}); err != nil {
@@ -28,8 +29,10 @@ func createIdentity(ctx context.Context, client kubernetes.Interface, admin *res
 	}
 	subjects := []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: serviceAccount, Namespace: namespace}}
 	for _, role := range roles {
-		role.Namespace = namespace
-		if _, err := client.RbacV1().Roles(namespace).Create(ctx, &role, metav1.CreateOptions{}); err != nil {
+		if role.Namespace == "" {
+			role.Namespace = namespace
+		}
+		if _, err := client.RbacV1().Roles(role.Namespace).Create(ctx, &role, metav1.CreateOptions{}); err != nil {
 			return nil, fmt.Errorf("creating Role %s: %w", role.Name, err)
 		}
 		binding := &rbacv1.RoleBinding{
@@ -37,7 +40,7 @@ func createIdentity(ctx context.Context, client kubernetes.Interface, admin *res
 			Subjects:   subjects,
 			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: role.Name},
 		}
-		if _, err := client.RbacV1().RoleBindings(namespace).Create(ctx, binding, metav1.CreateOptions{}); err != nil {
+		if _, err := client.RbacV1().RoleBindings(role.Namespace).Create(ctx, binding, metav1.CreateOptions{}); err != nil {
 			return nil, fmt.Errorf("creating RoleBinding %s: %w", role.Name, err)
 		}
 	}

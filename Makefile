@@ -137,7 +137,7 @@ test-envtest: setup
 
 .PHONY: test-generated
 test-generated: setup
-	KUBEBUILDER_ASSETS="$$($(ENVTEST_USE))" go test -tags envtest -count=1 -p 2 -parallel 3 -timeout 30m -run '$(GENERATED)' ./targets/toy-widget
+	KUBEBUILDER_ASSETS="$$($(ENVTEST_USE))" go test -tags envtest -count=1 -p 2 -parallel 3 -timeout 50m -run '$(GENERATED)' ./targets/toy-widget
 
 .PHONY: bug-matrix
 bug-matrix:

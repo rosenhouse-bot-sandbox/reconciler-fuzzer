@@ -22,14 +22,18 @@ type gateRow struct {
 	config string
 }
 
-const gadgetConfig = "gadget/config.yaml"
+const (
+	gadgetConfig = "gadget/config.yaml"
+	tenantConfig = "tenant/config.yaml"
+	grantConfig  = "grant/config.yaml"
+)
 
 // configs are the toy's configs.
-var configs = []string{"config.yaml", gadgetConfig}
+var configs = []string{"config.yaml", gadgetConfig, tenantConfig, grantConfig}
 
 func (g gateRow) configPath() string { return cmp.Or(g.config, "config.yaml") }
 
-// name is the plan's path from plans/ or gadget/plans/, without .json.
+// name is the plan's path from its config's directory, without .json.
 func (g gateRow) name() string { return filepath.Join(filepath.Dir(g.configPath()), g.plan) }
 
 func (g gateRow) planPath() string { return planPath(g.configPath(), g.plan) }
@@ -48,7 +52,8 @@ func plans(config string) ([]string, error) {
 }
 
 // gate lists, for each plan, the bug it must catch and the finding
-// report.md must hold: its heading, its step and a detail line.
+// report.md must hold: its heading, its step and a detail line. An empty
+// finding means the bug must pass the plan.
 var gate = []gateRow{
 	{"b1", 1, "Converge: did not stay settled", 0, "changed writes", ""},
 	{"b2", 2, "Converge: did not settle", 0, "changed writes", ""},
@@ -77,6 +82,11 @@ var gate = []gateRow{
 	{"b23", 23, "Converge: did not settle", 1, "is being deleted", gadgetConfig},
 	{"b24", 24, "Restore: did not restore damaged resources", 1, "gadgets.toy.reconciler-fuzzer", gadgetConfig},
 	{"b25", 25, "Backoff: retried a failing request in a tight loop", 1, "patch gadgets.toy.reconciler-fuzzer", gadgetConfig},
+	{"b26", 26, "Clean: left resources behind", 1, "clusterroles.rbac.authorization.k8s.io tenant-tenant (rule 3, slot a)", tenantConfig},
+	{"b27", 27, "Clean: left resources behind", 1, ".grant (rule 2, slot a)", grantConfig},
+	{"b28", 28, "Clean: left resources behind", 1, "-grant (rule 1, slot a)", grantConfig},
+	{"b29", 29, "Converge: did not settle", 1, "is being deleted", tenantConfig},
+	{"b29-background", 29, "", 0, "", tenantConfig},
 }
 
 // hasFinding says whether report holds a finding whose heading starts with

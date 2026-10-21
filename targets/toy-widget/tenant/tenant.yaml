@@ -1,0 +1,6 @@
+apiVersion: toy.reconciler-fuzzer/v1
+kind: Tenant
+metadata:
+  name: tenant
+spec:
+  quota: 1

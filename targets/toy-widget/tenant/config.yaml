@@ -1,0 +1,29 @@
+# The toy with --tenant: a cluster-scoped Tenant owns a Namespace and a ClusterRole.
+# Paths resolve against this file's directory.
+launch:
+  binary: ../../../bin/toy-widget
+  args:
+    - --tenant
+    - --bug=0                      # A later --launch-arg --bug=N wins.
+  env:
+    KUBECONFIG: ${systems.kube.kubeconfig}
+  rbac:
+    - role.yaml
+crds:
+  - ../crds/
+primary:
+  kind: toy.reconciler-fuzzer/v1/Tenant
+  sample: tenant.yaml
+  ready: >-
+    has(self.status) && has(self.status.observedGeneration) && self.status.observedGeneration == self.metadata.generation
+    && has(self.status.ready) && self.status.ready
+  owns:
+    - {kind: rbac.authorization.k8s.io/v1/ClusterRole, name: "'tenant-' + self.metadata.name"}
+    - {kind: v1/Namespace, name: "'tenant-' + self.metadata.name"}
+fixtures:
+  - tenant-base.yaml
+timeouts:
+  settle: 5s
+  stable: 2s
+values:
+  mutate: [spec.quota]

@@ -11,6 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 )
@@ -37,17 +40,95 @@ func (i Instance) Live(t time.Duration) bool {
 
 // Owner is an instance's owning CR.
 type Owner struct {
-	// Rule is 1 for an ownerReference chain to a CR, and 4 for the set of
-	// CRs alive at the instance's creation.
+	// Rule is 1 for an ownerReference chain to a CR, 2 for a resource that
+	// names its CR, 3 for a CR that names the resource, and 4 for the set
+	// of CRs alive at the instance's creation.
 	Rule int
-	// CRs holds CR UIDs in order: one for rule 1, the set for rule 4. An
-	// empty rule-4 set marks a shared instance.
+	// CRs holds CR UIDs in order: one for rules 1 to 3, the set for rule 4.
+	// An empty rule-4 set marks a shared instance.
 	CRs []string
 }
 
-// Key is the owner as a map key.
-func (o Owner) Key() string {
-	return fmt.Sprintf("%d:%s", o.Rule, strings.Join(o.CRs, ","))
+// Rules hold the declared owning-CR rules 2 and 3.
+type Rules struct {
+	// Owners maps a system's name to rule 2 over its resources' bodies.
+	Owners map[string]func(self map[string]any) (string, error)
+	// Owns are rule 3.
+	Owns []OwnsRule
+}
+
+// OwnsRule is one primary.owns entry over a CR's body.
+type OwnsRule struct {
+	System, Group, Resource string
+	Name                    func(cr map[string]any) (string, error)
+	// Namespace is nil when unset: the CR's namespace, or cluster-scoped.
+	Namespace func(cr map[string]any) (string, error)
+}
+
+// Compile builds Rules from a Run event's owners and owns.
+func Compile(owners map[string]string, owns []trace.Owns) (Rules, error) {
+	rules := Rules{Owners: map[string]func(map[string]any) (string, error){}}
+	for system, expr := range owners {
+		eval, err := config.CompileString(expr)
+		if err != nil {
+			return Rules{}, fmt.Errorf("owner of system %s: %w", system, err)
+		}
+		rules.Owners[system] = eval
+	}
+	for _, o := range owns {
+		rule := OwnsRule{System: "kube", Group: o.Kind.Group, Resource: o.Kind.Resource}
+		var err error
+		if rule.Name, err = config.CompileString(o.Name); err != nil {
+			return Rules{}, fmt.Errorf("owns %s name: %w", o.Kind.Kind, err)
+		}
+		if o.Namespace != "" {
+			if rule.Namespace, err = config.CompileString(o.Namespace); err != nil {
+				return Rules{}, fmt.Errorf("owns %s namespace: %w", o.Kind.Kind, err)
+			}
+		}
+		rules.Owns = append(rules.Owns, rule)
+	}
+	return rules, nil
+}
+
+// Sources returns c's rules 2 and 3 for Compile. resource maps an owns
+// kind to its resource and says whether the kind is namespaced.
+func Sources(c *config.Config, resource func(schema.GroupVersionKind) (string, bool, error)) (map[string]string, []trace.Owns, error) {
+	var owners map[string]string
+	for _, s := range c.Systems {
+		if s.Owner != "" {
+			if owners == nil {
+				owners = map[string]string{}
+			}
+			owners[s.Name] = s.Owner
+		}
+	}
+	var owns []trace.Owns
+	for _, o := range c.Primary.Owns {
+		r, namespaced, err := resource(o.Kind)
+		if err != nil {
+			return nil, nil, fmt.Errorf("primary.owns kind %s: %w", o.Kind.Kind, err)
+		}
+		if o.Namespace != "" && !namespaced {
+			return nil, nil, fmt.Errorf("primary.owns kind %s is cluster-scoped, so it takes no namespace", o.Kind.Kind)
+		}
+		owns = append(owns, trace.Owns{
+			Kind: trace.Kind{Group: o.Kind.Group, Version: o.Kind.Version, Kind: o.Kind.Kind, Resource: r},
+			Name: o.Name, Namespace: o.Namespace,
+		})
+	}
+	return owners, owns, nil
+}
+
+// Key is the owner's CR set as a map key, so a change of rule keeps it.
+func (o Owner) Key() string { return strings.Join(o.CRs, ",") }
+
+// Named returns the one CR that rule 1, 2 or 3 names.
+func (o Owner) Named() (string, bool) {
+	if o.Rule == 4 {
+		return "", false
+	}
+	return o.CRs[0], true
 }
 
 // Shared reports whether no CR owns the instance.
@@ -55,16 +136,23 @@ func (o Owner) Shared() bool { return o.Rule == 4 && len(o.CRs) == 0 }
 
 // World indexes a trace's instances.
 type World struct {
+	rules     Rules
 	primary   trace.Ref
 	instances []Instance
 	byUID     map[string]int
 	versions  map[string][]trace.Event
 	slots     map[string]string
+	decoded   map[decodedKey]map[string]any
+}
+
+type decodedKey struct {
+	uid string
+	at  time.Duration
 }
 
 // New indexes every instance in ix.
-func New(ix *trace.Index) *World {
-	w := &World{byUID: map[string]int{}, versions: map[string][]trace.Event{}, slots: map[string]string{}}
+func New(ix *trace.Index, rules Rules) *World {
+	w := &World{rules: rules, byUID: map[string]int{}, versions: map[string][]trace.Event{}, slots: map[string]string{}, decoded: map[decodedKey]map[string]any{}}
 	if run, ok := ix.Run(); ok {
 		w.primary = run.Primary
 	}
@@ -179,12 +267,36 @@ func (w *World) Instance(uid string) (Instance, bool) {
 
 // Body is the instance's latest body at t.
 func (w *World) Body(i Instance, t time.Duration) json.RawMessage {
+	if v, found := w.version(i, t); found {
+		return v.Version.Body
+	}
+	return nil
+}
+
+func (w *World) version(i Instance, t time.Duration) (trace.Event, bool) {
 	versions := w.versions[i.UID]
 	n := sort.Search(len(versions), func(k int) bool { return versions[k].At > t })
 	if n == 0 {
+		return trace.Event{}, false
+	}
+	return versions[n-1], true
+}
+
+// object is the instance's body at t, decoded. It is nil before the
+// instance exists or when its body does not decode to an object.
+func (w *World) object(i Instance, t time.Duration) map[string]any {
+	v, found := w.version(i, t)
+	if !found {
 		return nil
 	}
-	return versions[n-1].Version.Body
+	key := decodedKey{i.UID, v.At}
+	if obj, done := w.decoded[key]; done {
+		return obj
+	}
+	var obj map[string]any
+	_ = json.Unmarshal(v.Version.Body, &obj) // An undecodable body names no owner.
+	w.decoded[key] = obj
+	return obj
 }
 
 // Primary reports whether i is of the primary kind.
@@ -197,6 +309,12 @@ func (w *World) Owner(i Instance, t time.Duration) Owner {
 	if cr, found := w.follow(i, t, map[string]bool{}); found {
 		return Owner{Rule: 1, CRs: []string{cr}}
 	}
+	if cr, found := w.named(i, t); found {
+		return Owner{Rule: 2, CRs: []string{cr}}
+	}
+	if cr, found := w.naming(i, t); found {
+		return Owner{Rule: 3, CRs: []string{cr}}
+	}
 	var crs []string
 	for _, other := range w.instances {
 		if w.Primary(other) && other.Live(i.Created) {
@@ -205,6 +323,90 @@ func (w *World) Owner(i Instance, t time.Duration) Owner {
 	}
 	slices.Sort(crs)
 	return Owner{Rule: 4, CRs: crs}
+}
+
+// named applies rule 2: i's system's owner CEL names a CR by UID,
+// namespace/name or name. A bare name prefers i's namespace, and skips the
+// rule when it names CRs in two other namespaces.
+func (w *World) named(i Instance, t time.Duration) (string, bool) {
+	eval := w.rules.Owners[i.Ref.System]
+	if eval == nil {
+		return "", false
+	}
+	self := w.object(i, t)
+	if self == nil {
+		return "", false
+	}
+	name, err := eval(self)
+	if err != nil {
+		return "", false
+	}
+	if cr, found := w.Instance(name); found && w.Primary(cr) {
+		return cr.UID, true
+	}
+	namespace, name, qualified := strings.Cut(name, "/")
+	if !qualified {
+		name, namespace = namespace, ""
+	}
+	var best Instance
+	bestHome, ambiguous := false, false
+	for _, cr := range w.instances {
+		if !w.Primary(cr) || cr.Ref.Name != name || cr.Created > t || qualified && cr.Ref.Namespace != namespace {
+			continue
+		}
+		switch home := cr.Ref.Namespace == i.Ref.Namespace; {
+		case home:
+			best, bestHome = cr, true
+		case bestHome:
+		case best.UID != "" && best.Ref.Namespace != cr.Ref.Namespace:
+			ambiguous = true
+		default:
+			best = cr
+		}
+	}
+	return best.UID, best.UID != "" && (bestHome || !ambiguous)
+}
+
+// naming applies rule 3: a primary.owns entry over a CR's body at t names
+// i. A CR live at t wins, then the latest created.
+func (w *World) naming(i Instance, t time.Duration) (string, bool) {
+	var best Instance
+	found := false
+	for _, rule := range w.rules.Owns {
+		if rule.System != i.Ref.System || rule.Group != i.Ref.Group || rule.Resource != i.Ref.Resource {
+			continue
+		}
+		for _, cr := range w.instances {
+			if !w.Primary(cr) || !w.names(rule, cr, i, t) {
+				continue
+			}
+			if !found || cr.Live(t) || !best.Live(t) {
+				best, found = cr, true
+			}
+		}
+	}
+	return best.UID, found
+}
+
+func (w *World) names(rule OwnsRule, cr, i Instance, t time.Duration) bool {
+	self := w.object(cr, t)
+	if self == nil {
+		return false
+	}
+	if name, err := rule.Name(self); err != nil || name != i.Ref.Name {
+		return false
+	}
+	namespace := ""
+	switch {
+	case rule.Namespace != nil:
+		var err error
+		if namespace, err = rule.Namespace(self); err != nil {
+			return false
+		}
+	case i.Ref.Namespace != "":
+		namespace = cr.Ref.Namespace
+	}
+	return namespace == i.Ref.Namespace
 }
 
 // follow walks i's ownerReferences at t, controller first, to a CR.
@@ -269,7 +471,7 @@ func (w *World) Select(creator trace.Caller, target plan.Target, slot string, t 
 	nth := max(target.Nth, 1)
 	for _, i := range w.instances {
 		if !i.Live(t) || i.Creator != creator || i.Ref.System != system || i.Ref.Resource != target.Resource ||
-			!matches(target.Group, i.Ref.Group) || !matches(target.Name, i.Ref.Name) || !matches(target.Role, i.Role) {
+			!matches(target.Group, i.Ref.Group) || !matches(target.Namespace, i.Ref.Namespace) || !matches(target.Name, i.Ref.Name) || !matches(target.Role, i.Role) {
 			continue
 		}
 		if cr != "" && !slices.Contains(w.Owner(i, t).CRs, cr) {

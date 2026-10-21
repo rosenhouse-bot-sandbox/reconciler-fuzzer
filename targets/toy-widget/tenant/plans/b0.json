@@ -1,0 +1,70 @@
+{
+  "steps": [
+    {
+      "actions": [
+        {
+          "do": "create",
+          "slot": "a",
+          "object": {
+            "apiVersion": "toy.reconciler-fuzzer/v1",
+            "kind": "Tenant",
+            "metadata": {
+              "name": "tenant"
+            },
+            "spec": {
+              "quota": 1
+            }
+          }
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "do": "update",
+          "slot": "a",
+          "patch": {
+            "spec": {
+              "quota": 2
+            }
+          }
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "do": "delete",
+          "slot": "a"
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "do": "create",
+          "slot": "b",
+          "object": {
+            "apiVersion": "toy.reconciler-fuzzer/v1",
+            "kind": "Tenant",
+            "metadata": {
+              "name": "second"
+            },
+            "spec": {
+              "quota": 3
+            }
+          }
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "do": "delete",
+          "slot": "b",
+          "propagation": "Foreground"
+        }
+      ]
+    }
+  ]
+}

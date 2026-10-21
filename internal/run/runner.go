@@ -224,7 +224,7 @@ func (e *execution) act(ctx context.Context, a plan.Action) (*trace.Ref, error) 
 		}
 		delete(e.live, a.Slot)
 		e.deleted[a.Slot] = ref
-		if err := e.Cluster.Delete(ctx, ref); !errors.Is(err, system.ErrGone) {
+		if err := e.Cluster.Delete(ctx, ref, a.Propagation); !errors.Is(err, system.ErrGone) {
 			return &ref, err
 		}
 		return &ref, nil
@@ -248,7 +248,7 @@ func (e *execution) act(ctx context.Context, a plan.Action) (*trace.Ref, error) 
 		if a.Patch != nil {
 			return &ref, e.Cluster.Patch(ctx, ref, a.Patch)
 		}
-		err := e.Cluster.Delete(ctx, ref)
+		err := e.Cluster.Delete(ctx, ref, "")
 		if errors.Is(err, system.ErrGone) {
 			return nil, fmt.Errorf("%w: %w", errNoMatch, err)
 		}

@@ -1,0 +1,78 @@
+{
+  "steps": [
+    {
+      "actions": [
+        {
+          "do": "create",
+          "slot": "a",
+          "object": {
+            "apiVersion": "toy.reconciler-fuzzer/v1",
+            "kind": "Grant",
+            "metadata": {
+              "name": "grant"
+            },
+            "spec": {
+              "level": 1
+            }
+          }
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "do": "update",
+          "slot": "a",
+          "patch": {
+            "spec": {
+              "level": 2
+            }
+          }
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "do": "damage",
+          "slot": "a",
+          "target": {
+            "resource": "configmaps"
+          }
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "do": "changeFixture",
+          "target": {
+            "resource": "configmaps",
+            "namespace": "rf-shared",
+            "name": "grant-config"
+          },
+          "patch": {
+            "data": {
+              "label": "blue"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "do": "restart"
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "do": "delete",
+          "slot": "a"
+        }
+      ]
+    }
+  ]
+}

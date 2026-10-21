@@ -22,6 +22,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 )
 
@@ -38,12 +39,79 @@ func TestReadRBACSplitsRolesAndClusterRoles(t *testing.T) {
 	}
 }
 
+func TestReadRBACKeepsARolesNamespace(t *testing.T) {
+	roles, _, err := readRBAC([]string{"testdata/role-with-namespace.yaml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(roles) != 1 || roles[0].Namespace != "fixed" {
+		t.Errorf("Roles are %+v, want writer in fixed.", roles)
+	}
+}
+
+func TestPlanSetup(t *testing.T) {
+	fixtures := []*unstructured.Unstructured{
+		object("v1", "ConfigMap", "", "local"),
+		object("v1", "ConfigMap", "far", "remote"),
+		object("rbac.authorization.k8s.io/v1", "ClusterRole", "ignored", "cluster"),
+		object("v1", "Secret", "declared", "s"),
+		object("v1", "Namespace", "", "declared"),
+		object("v1", "ConfigMap", "run", "explicit"),
+		object("v1", "ConfigMap", "far", "again"),
+	}
+	roles := []rbacv1.Role{
+		{ObjectMeta: metav1.ObjectMeta{Name: "local"}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "remote", Namespace: "roles"}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "shared", Namespace: "far"}},
+	}
+	clusterScoped := map[string]bool{"Namespace": true, "ClusterRole": true}
+	setup, err := planSetup("run", roles, fixtures, func(gvk schema.GroupVersionKind) (bool, error) {
+		return !clusterScoped[gvk.Kind], nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := func(objects []*unstructured.Unstructured) string {
+		var got []string
+		for _, o := range objects {
+			got = append(got, o.GetKind()+"/"+o.GetNamespace()+"/"+o.GetName())
+		}
+		return strings.Join(got, " ")
+	}
+	if got, want := names(setup.namespaces), "Namespace//declared"; got != want {
+		t.Errorf("Namespace fixtures are %s, want %s.", got, want)
+	}
+	if got, want := strings.Join(setup.missing, " "), "far roles"; got != want {
+		t.Errorf("Missing namespaces are %s, want %s.", got, want)
+	}
+	if got, want := names(setup.fixtures), "ConfigMap//local ConfigMap/far/remote ClusterRole/ignored/cluster Secret/declared/s ConfigMap/run/explicit ConfigMap/far/again"; got != want {
+		t.Errorf("Fixtures are %s, want %s.", got, want)
+	}
+}
+
+func TestPlanSetupReportsAnUnmappableKind(t *testing.T) {
+	_, err := planSetup("run", nil, []*unstructured.Unstructured{object("v1", "Nope", "", "n")}, func(schema.GroupVersionKind) (bool, error) {
+		return false, errors.New("no such kind")
+	})
+	if err == nil || !strings.Contains(err.Error(), "no such kind") {
+		t.Errorf("planSetup = %v, want the mapping error.", err)
+	}
+}
+
+func object(apiVersion, kind, namespace, name string) *unstructured.Unstructured {
+	o := &unstructured.Unstructured{}
+	o.SetAPIVersion(apiVersion)
+	o.SetKind(kind)
+	o.SetNamespace(namespace)
+	o.SetName(name)
+	return o
+}
+
 func TestReadRBACRejects(t *testing.T) {
 	for file, want := range map[string]string{
-		"not-rbac.yaml":            "v1 ConfigMap is not",
-		"role-with-namespace.yaml": "metadata.namespace",
-		"role-misspelled.yaml":     "rulez",
-		"missing.yaml":             "no such file",
+		"not-rbac.yaml":        "v1 ConfigMap is not",
+		"role-misspelled.yaml": "rulez",
+		"missing.yaml":         "no such file",
 	} {
 		_, _, err := readRBAC([]string{"testdata/" + file})
 		if err == nil || !strings.Contains(err.Error(), want) {
@@ -315,5 +383,38 @@ func TestALateSubscriberFirstHearsEachLiveObjectsLatestVersion(t *testing.T) {
 	see("a", "6", false)
 	if want := []string{"a 2", "b 3", "a 6"}; !slices.Equal(heard, want) {
 		t.Errorf("Heard %q, want %q.", heard, want)
+	}
+}
+
+func TestDeleteSendsPropagationAndTheUIDPrecondition(t *testing.T) {
+	for propagation, want := range map[plan.Propagation]string{"": "", plan.Foreground: "Foreground"} {
+		var options metav1.DeleteOptions
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if r.Method == http.MethodDelete {
+				json.NewDecoder(r.Body).Decode(&options)
+				w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Success"}`))
+				return
+			}
+			w.Write([]byte(`{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"c","namespace":"ns","uid":"u"}}`))
+		}))
+		harness, err := dynamic.NewForConfig(&rest.Config{Host: server.URL})
+		if err != nil {
+			t.Fatal(err)
+		}
+		o := newObserver()
+		o.gone["u"] = true
+		k := &Kube{mapper: newStaticMapper(), harness: harness, observer: o}
+		if err := k.Delete(context.Background(), trace.Ref{Resource: "configmaps", Namespace: "ns", Name: "c"}, propagation); err != nil {
+			t.Fatal(err)
+		}
+		server.Close()
+		got := ""
+		if options.PropagationPolicy != nil {
+			got = string(*options.PropagationPolicy)
+		}
+		if got != want || options.Preconditions == nil || *options.Preconditions.UID != "u" {
+			t.Errorf("Delete with %q sent %+v, want propagation %q and UID u.", propagation, options, want)
+		}
 	}
 }

@@ -68,7 +68,7 @@ Each event sets exactly one of these fields.
 
 | Field | Written by | Content |
 | --- | --- | --- |
-| `run` | runner, after the fixtures | Namespace, primary kind, `planSteps`, the config's `ready`, `retain`, `stable`, budgets and models, and `statusKinds`. |
+| `run` | runner, after the fixtures | Namespace, primary kind, `planSteps`, the config's `ready`, `retain`, `stable`, budgets, models, `owners` and `owns`, and `statusKinds`. |
 | `phase` | runner | Step and phase: `faultPeriod`, `endFaults` (with `deadline`, `backoffBound`), `settled`, `timedOut`, `confirmed`. |
 | `action` | runner | Step, index, `do`, slot, the ref acted on, and any error. |
 | `fault` | runner | Step, index, start or end, a description, and the `model` that took a model fault. |
@@ -105,8 +105,7 @@ every one. The first active fault that picks a request applies:
 
 **Seen.** A listener records a `seen` for each object of its `Seen` kinds
 (for the controller, the dependency kinds) that a 2xx response shows its
-caller, before forwarding it: a get's or write's object, each list item and
-each watch event's. An undecodable response records an `opaque` seen of its ref.
+caller. An undecodable response records an `opaque` seen of its ref.
 
 ## 6. Kubernetes system
 
@@ -116,9 +115,14 @@ both listeners and the observer, and creates the fixtures. `Vars` holds
 kinds with a status subresource. Harness actions return once the observer
 has recorded their effect. The system's poll interval is `stable`.
 **Observer.** It list-watches kinds cluster-wide and records one `version`
-per (ref, resourceVersion). It starts with the primary, fixture, model and
-`launch.rbac` kinds, and adds any kind a listener records a call on, except
-ignored kinds (§10). `Subscribe` hands each recorded version to the models.
+per (ref, resourceVersion). It starts with the primary, fixture, model,
+`primary.owns` and `launch.rbac` kinds, and adds any kind a listener records
+a call on, except ignored kinds (§10). `Subscribe` hands each recorded
+version to the models.
+
+**Scope.** Any kind may be cluster-scoped. A fixture or Role without
+`metadata.namespace` goes in the run namespace; Start creates each other
+namespace one names, and a Role binds there. Only envtest runs (§17, entry 49).
 
 ## 7. Models
 
@@ -134,27 +138,26 @@ is scheduled. A failed call retries after 250 ms.
 - It collects an instance once a live read finds every owner gone: not
   found, or found under another UID. An owner it cannot read or resolve is
   live. Its delete carries a UID precondition.
-- It looks up a namespaced owner kind in the dependent's namespace, and
-  never touches a cluster-scoped dependent of a namespaced owner kind.
+- It looks up a namespaced owner kind in the dependent's namespace, so an
+  owner in another namespace counts as gone. It never collects a
+  cluster-scoped dependent of a namespaced owner kind.
 - It deletes a `foregroundDeletion` owner's dependents, then removes the
   finalizer once no dependent with `blockOwnerDeletion` remains. It removes
-  an `orphan` owner from every dependent, then the finalizer.
+  an `orphan` owner from every dependent, then the finalizer. Both count a
+  dependent whose reference is invalid, as the real collector does.
 - It removes gone and foreground owners from a dependent with a live owner.
 
-**`namespace`** finishes a namespace with a `deletionTimestamp`: it deletes
-every object in it, waits until the observer has recorded each gone, then
-removes the `kubernetes` finalizer through the `finalize` subresource.
+**`namespace`** finishes any namespace with a `deletionTimestamp`, whoever
+created it: it deletes every object in it, waits until each is recorded
+gone, then removes the `kubernetes` finalizer through `finalize`.
 
 **Stage models.** `model.NewStage` makes one per `models:` entry, named
 `trace.ModelCaller` of its kind. Its stage, `readyCondition`, writes each
 live object not being deleted, `after` after a generation's first version,
-the `status:` fields and `Ready` True for the generation, which
-`config.ReadyConditionCEL` accepts. Model faults match objects by
-`match.name`, in any namespace, or all of them. `stuck` writes them `Ready`
-False, reason `Stuck`. `slowDelete` adds the finalizer
-`reconciler-fuzzer.dev/slow-delete` to those not being deleted. At either's
-end, the model removes the finalizer and writes them `Ready` True, `message:
-fault <n> ended`, so a controller without a watch gets an event.
+the `status:` fields and `Ready` True for the generation. Model faults match
+objects by `match.name`, in any namespace, or all of them. `stuck` writes
+them `Ready` False, and `slowDelete` adds a finalizer. At either's end, the
+model removes the finalizer and writes `Ready` True (§17, entry 39).
 
 ## 8. Plans
 
@@ -162,14 +165,14 @@ fault <n> ended`, so a controller without a watch gets an event.
 | --- | --- | --- |
 | `create` | `slot`, `object`? | Creates `object`, or the sample. Waits first until the slot's previous CR is gone. |
 | `update` | `slot`, `patch` | Merge-patches the slot's CR. |
-| `delete` | `slot` | Deletes the slot's CR. Does not wait. |
+| `delete` | `slot`, `propagation`? | Deletes the slot's CR, `Foreground` when set. Does not wait. |
 | `restart` | | Stops the controller with SIGTERM and starts it again. |
 | `kill` | | Sends SIGKILL. The controller stays down until end faults. |
 | `damage` | `target`, `slot`?, `patch`? | Deletes, or merge-patches, an instance the controller created. |
 | `changeFixture` | `target`, `patch`? | Merge-patches, or deletes, a fixture. |
 
-A `target` has `system` (default `kube`), `group`, `resource`, `name`,
-`role` and `nth` (default 1). Empty fields match anything.
+A `target` has `system` (default `kube`), `group`, `resource`, `namespace`,
+`name`, `role` and `nth` (default 1). Empty fields match anything.
 `owner.World.Select` resolves it when the action runs: the `nth` live
 instance, in creation order, that the controller (for `damage`) or the
 harness (for `changeFixture`) created, owned by the slot's live CR when a
@@ -181,27 +184,25 @@ Actions run in order, each at its optional `at` offset. A fault sets one
 effect: a request fault (§5), or a model fault (§7), whose `match` names a
 `resource` and no verb or subresource, with no `nth`. `plan.Load` decodes
 strictly and validates: known `do`; a `create` names a free slot and no
-other live CR's name; `update` and `delete` name a filled slot; a `damage`
-slot holds a live CR; `damage` and `changeFixture` need a target
+other live CR's namespace/name; `update` and `delete` name a filled slot; a
+`damage` slot holds a live CR; `damage` and `changeFixture` need a target
 `resource`, and `changeFixture` a `name`; a patch is a JSON object; only
-`create`, `update`, `damage` and `changeFixture` carry their fields.
+`delete` carries `propagation`, only `Foreground`; only `create`, `update`,
+`damage` and `changeFixture` carry their fields.
 
 ## 9. Step runner
 
-`run.Run` starts the recorder, `kube`, the models and the supervised
-controller, waits up to `settle` for the settle condition, executes the
-plan, judges the trace and writes `report.md`. `Runner.Execute` runs the
-plan's steps, then step `planSteps`, which deletes every live CR, and step
-`planSteps + 1`, which restarts the controller. Each step runs its fault
-period, ends its faults, polls `FirstSettled` every 50 ms until the
-deadline, and after `settled` waits out the confirm window.
+`run.Run` starts `kube`, the models and the controller, executes the plan,
+judges the trace and writes `report.md`. `Runner.Execute` runs the plan's
+steps, then step `planSteps`, which deletes every live CR, and step
+`planSteps + 1`, which restarts the controller (§17, entry 4).
 
 **Deadline.** `endFaults + settle + min(faultPeriod, backoffCap) + maxPoll`,
 where `maxPoll` is the longest poll interval of the systems the step's
 `damage` and `changeFixture` actions target. The runner gives a model fault
 to the first stage model that `Takes` it; none is a harness error. A create
-that waits `settle` for its slot ends the plan after its step. Any other
-action error, except an unmatched target, is a harness error.
+that waits `settle` for its slot ends the plan after its step. Any other action error, except
+an unmatched target, is a harness error.
 
 ## 10. Settle condition
 
@@ -232,63 +233,65 @@ time in `[from, to]`, testing `from`, event times, event times plus
 
 ## 11. Instances, owning CRs and roles
 
-`owner.New(ix)` indexes every instance the trace shows.
+`owner.New(ix, rules)` indexes every instance the trace shows. `rules`
+come from the config, or else the run event's `owners` and `owns`.
 
 - An instance is a (ref, UID), from its first version to its delete.
 - Its **creator** is the caller whose create, or 201 apply, answered with
   its UID, or `cluster`.
 - Its **owning CR** at `t` comes from the first rule that matches:
   1. Its ownerReferences at `t`, followed by UID, controller first, reach
-     an instance of the primary kind.
+     an instance of the primary kind, whatever either's scope.
+  2. Its system's `owner` CEL over its body at `t` yields a primary
+     instance's UID, or the `namespace/name` or name of the latest one
+     created by `t`. A bare name prefers the instance's namespace. A name
+     in two other namespaces, an error or a non-string skips the rule.
+  3. A `primary.owns` entry of its kind, over a CR's latest body by `t`,
+     yields its name and namespace: the `namespace` CEL, or else the CR's
+     for a namespaced instance. A CR live at `t` wins, then the latest.
   4. Otherwise, the set of primary instances live at its creation. An empty
-     set marks a **shared** instance. Issue #114's build order adds rules 2
-     and 3 in M3, and holds M3 to M5.
+     set marks a **shared** instance.
 - Its **role** is its `metadata.generateName` when set, or else its name.
 - The **controller's resources** at `t` are the live instances whose
   creator is `controller`, minus the primary kind and ignored kinds (§10).
-- A **group** is a (system, group, resource, namespace, owning CR, role).
+- A **group** is a (system, group, resource, namespace, owning CRs, role).
 
 ## 12. Checks
 
-Every check is `func(*trace.Index, Spec) []Finding`. A finding names its
-check, step, time, labels, a summary, details, and `kind` (`system/group/
-resource`, or `system/resource` for the core group). Its signature is
-check, summary and kind. `check.Judge` runs every check, and notes each
-action error and each fault that picked no request or held no object.
-`check.Markdown` renders the report. `Spec.Models` come from the config,
-or else the run event. A step's **end** is its `confirmed` time. Clean,
-Restore and Unique judge only settled steps (§17, entry 15).
+Every check is `func(*trace.Index, Spec) []Finding`. A finding's signature
+is its check, summary and `kind` (`system/group/resource`). `check.Judge`
+runs every check, and notes each action error and each fault that picked
+no request or held no object. `Spec.Models` and `Spec.Owners` come from
+the config, or else the run event. A step's **end** is its `confirmed`
+time. Clean, Restore and Unique judge only settled steps (§17, entry 15).
 
 **Converge.** The settle condition holds by the deadline, and still holds
 at `t* + stable`. The summary names the first unmet clause, such as
 `did not settle (clause 7)`, and the kind is its object's. `backoff-bound`
-labels a finding whose deadline `backoffCap` set. A finding at `t`
-suggests a `models:` entry for each kind in `statusKinds`, or Job, Pod or
-PVC, that is no primary or model kind, that the controller read by `t` but
-whose status it never wrote, with a live instance without status at `t`.
+labels a finding whose deadline `backoffCap` set. A finding suggests a
+`models:` entry for each unmodelled kind the controller read whose live
+instance has no status (§17, entry 44; `converge.go`).
 
 **Crash.** Each step with a controller exit the harness did not cause, not
 within 1 s of a faulted Lease request, gives one finding.
 
 **Clean.** At the end of a settled step with a `delete` action, a
-controller resource fails when its rule-1 CR is gone, or its rule-4 set is
-non-empty and every CR in it is gone. At the end of step `planSteps + 1`,
-every controller resource that is not shared fails. A resource whose CRs
-make `primary.retain` true is allowed. Shared resources are judged only
-for growth: each group holds at most its live count at the first `create`.
+controller resource fails when its rule 1 to 3 CR is gone, or its rule-4
+set is non-empty and every CR in it is gone. At the end of step `planSteps
++ 1`, every unshared controller resource fails. A resource whose CRs make
+`primary.retain` true is allowed. Shared resources are judged only for
+growth: each group holds at most its live count at the first `create`.
 Summary: `left resources behind`, listing each survivor's slot, once.
 
 **Restore.** It judges a settled step with no `create`, `update`, `delete`
 or `changeFixture` action whose previous step also settled. It compares the
 controller's resources at the two ends, by group:
 
-- In a group whose owning CR no `damage` touched, each previous instance
-  must still be live, no new instance may appear, and each body must be
-  equal without `resourceVersion`, `managedFields`, `generation` and a
-  model kind's `status`. Summaries: `replaced resources`, `changed resources`.
-- In a group whose owning CR a `damage` touched, a damaged instance's group
-  must have a live instance again, and each other group must keep its kind
-  live. Summary: `did not restore damaged resources` (§17, entry 22).
+- Where no `damage` touched the owning CR, each previous instance must
+  still be live, with no new one, and each body equal (§17, entries 21 and
+  40): `replaced resources`, `changed resources`.
+- Where one did, each damaged group must be live again, and each other
+  group's kind live: `did not restore damaged resources` (entry 22).
 
 **Unique.** At each settled step's end, a group holds at most one live
 controller instance. Summary: `duplicate resources`.
@@ -296,8 +299,8 @@ controller instance. Summary: `duplicate resources`.
 **Honest** and Backoff judge the whole run, fault periods included; a
 finding's step is the one whose fault period started last by its time. A
 CR's dependencies at `t` are the instances of dependency kinds it owns by
-rule 1: live ones not being deleted, and unreplaced gone ones the controller
-last saw live. A **trigger** is a CR version the controller wrote that becomes
+rules 1 to 3: live ones not being deleted, and unreplaced gone ones the
+controller last saw live. A **trigger** is a CR version the controller wrote that becomes
 `ready`, or raises observedGeneration (`status.observedGeneration`, or else
 the highest in `status.conditions`) while `ready`. `t0` is its call's start.
 
@@ -307,27 +310,25 @@ the highest in `status.conditions`) while `ready`. `t0` is its call's start.
   model's `ready` accepts: `reported ready before seeing its dependency
   ready`. With `required`, a trigger needs a dependency of each kind:
   `reported ready with no dependency`, of the primary's kind.
-- With `track: d`, a CR fails at `s + d` when the controller's `seen` at
-  `s` of a dependency not being deleted, and each later one until `s + d`,
-  showed it live and not ready, and the CR stayed `ready`. A controller
-  start or exit, or a failed or unknown-outcome write to the CR, in
-  `(s, s + d]` excuses it: `stayed ready after seeing its dependency not
-  ready`.
-- An `opaque` seen that covers a dependency after its last `seen` excuses it.
+- With `track: d`, a CR fails at `s + d` when every controller `seen` of
+  a dependency in `[s, s + d]` showed it live and not ready, and the CR
+  stayed `ready`, unless entry 48 excuses it: `stayed ready after seeing
+  its dependency not ready`.
+- A later `opaque` seen that covers a dependency excuses it.
 
 **Backoff.** Judged, failing controller calls, not watches or of unknown
 outcome, with one system, verb, object, subresource and status form a
 **run**; a failed create's object is its `requestName`. A success of that
 system, verb, object and subresource breaks it, as does a CR's new
-`metadata.generation` unless another CR owns the object by rule 1. With `n`
+`metadata.generation` unless another CR owns it by rules 1 to 3. With `n`
 CRs live during the run, at least 1, it fails when each gap between the
 starts of its calls `5n + 1` to `10n + 1` is under 100 ms: `retried a
 failing request in a tight loop`, one per step and kind. A 409 on a kind a
 `holdWatch` holds joins no run.
 
-**Corpus.** `check/testdata/corpus/<name>.jsonl` holds known bugs and false
-positives. Its `.want` (see `corpus_test.go`) lists the findings it needs.
-Source `D<n>` is an entry of `git show bee85633:DESIGN.md`'s log.
+**Corpus.** `check/testdata/corpus/` holds traces of known bugs and false
+positives, with the findings each needs (`corpus_test.go`). Source `D<n>`
+is an entry of `git show bee85633:DESIGN.md`'s log.
 
 ## 13. Config
 
@@ -346,6 +347,7 @@ primary:
   sample: widget.yaml
   ready: has(self.status) && self.status.ready == self.spec.count
   retain: false                   # CEL over the deleted CR; optional
+  owns: [{kind: v1/ConfigMap, name: "self.metadata.name + '-0'"}]   # rule 3; optional
 values: {overlay: {spec.count: {minimum: 0, maximum: 3}}, mutate: [spec.count]}   # config.Values
 fixtures: [widget-config.yaml]
 models:
@@ -353,12 +355,15 @@ models:
     stages: readyCondition        # the default; status: adds literal fields
     after: 200ms
     dependency: {required: true, track: 1s}   # required defaults to true
+systems: [{name: kube, owner: "self.metadata.labels['widget-uid']"}]   # rule 2; optional
 budgets: {reads: 2, writes: 4}                          # defaults
 timeouts: {settle: 30s, stable: 3s, backoffCap: 60s}    # defaults
 ```
 
-A model's kind is neither the primary's nor another model's. Later: `systems`,
-`properties`, `models[].outputs`, `primary.halted`, `.owns` and `.periodic`.
+`owns` names take CEL over the CR; a cluster-scoped kind takes no
+`namespace`. A model's kind is neither the primary's nor another model's.
+Later: `properties`, `models[].outputs`, `primary.halted`, `.periodic`, and
+`systems` keys besides `owner`.
 
 ## 14. Generation, replay and shrinking
 
@@ -370,22 +375,16 @@ of steps hold one `restart`, `kill` or `damage`, so Restore has steps to
 judge. About 30% of multi-action steps are bursts within 50 ms. A fault
 draws its request from what `launch.rbac` grants, creates weighted most
 (§17, entry 20). With `models:`, 2 of 7 fault draws are `stuck` or
-`slowDelete` on a drawn model kind. `damage` only deletes. A fault period
-lasts 0.5 s to `2 × stable`, plus the longest `track` for a model fault.
-The seed fixes the plan, not timing. `generate.go` documents the weights.
+`slowDelete`. `damage` only deletes. About 1 in 4 CR deletes is
+`Foreground`. A fault period lasts 0.5 s to `2 × stable`, plus the longest
+`track` for a model fault. `generate.go` documents the weights.
 
-**Hunt.** `hunt.Hunt` runs each seed into `<out>/seed-<n>`, keeps runs
-with a new signature, replays each 5 times and shrinks it unless no replay
-found it. A failed seed run is listed; a failed replay or candidate is not.
-`summary.md` lists the findings with seed, reproduction rate and shrunk plan.
-
-**Shrink.** `hunt.Shrink` takes the first of `hunt.Candidates` that still
-fails, until none does: drop a step; drop an action or a fault; halve a
-fault period, down to 0.5 s, or clear a faultless step's; reset one create
-field to the sample's, or drop one update field; rename a slot where the
-plan stays valid. A candidate fails when one of k runs gives the same
-signature: k is 2, or 4 when the original reproduced in under half its
-replays.
+**Hunt.** `hunt.Hunt` runs each seed, keeps runs with a new signature,
+replays each 5 times and shrinks it. `summary.md` lists the findings with
+seed, reproduction rate and shrunk plan. `hunt.Shrink` takes the first of
+`hunt.Candidates` that still fails, until none does (`shrink.go`). A
+candidate fails when one of k runs gives the same signature: k is 2, or 4
+when the original reproduced in under half its replays.
 
 ## 15. Commands
 
@@ -397,40 +396,35 @@ reconciler-fuzzer shrink --config c.yaml --plan plan.json --out dir [--launch-ar
 ```
 
 They print the findings, and exit 0 with none, 1 with findings, and 2 on a
-usage or harness error. `hunt` exits 1 on any find, even after a failed
-seed or an interrupt. `shrink` writes `shrunk.json`. `judge` refuses a
-config whose primary is not the trace's.
+usage or harness error. `judge` refuses a config whose primary is not the
+trace's.
 
 ## 16. Gates, examples and testing
 
-**Make targets.** CI and the nightly call these; `make help` lists all.
-`fmt`, `vet` and `verify-generate` lint and catch stale generated toy code.
-`test` runs `go test ./...`. `test-envtest` runs every envtest test but the
-generated tier, which `test-generated` runs: the toy's generated plans under
-B0 and one shrink under B3. `test-example-<name>` runs `examples/test.sh`:
-plans, listed seeds and the negative control. `hunt-<name>` hunts
-`HUNT_SEEDS` seeds from `HUNT_FROM`, a fresh one by default, for at most
-`HUNT_TIMEOUT`, and `nightly.yml` reports its `exit-status`: 1 a find, 2 an
-error. `bug-matrix` rewrites `docs/bug-matrix.md`. No tier runs on kind.
+**Make targets.** `make help` lists them; CI and the nightly call them.
+`test-envtest` runs every envtest test but the generated tier, which
+`test-generated` runs. `test-example-<name>` runs `examples/test.sh`.
+`hunt-<name>` hunts `HUNT_SEEDS` seeds from `HUNT_FROM`, and `nightly.yml`
+reports its `exit-status`: 1 a find, 2 an error. `bug-matrix` rewrites
+`docs/bug-matrix.md`. No tier runs on kind.
 
 **Toy.** `targets/toy-widget/config.yaml` drives `bin/toy-widget`, with
 fixture `widget-config.yaml`. `gadget/config.yaml` adds `--gadget`: each
 Widget owns a Gadget named after it, and reports `status.gadgetReady`,
-which `ready` requires; its model has `dependency: {track: 1s}`. Each
-config's `plans/` holds its gated bugs' and B0's plans. `gate_envtest_test.go`
-runs `gate_test.go`'s table, and `TestBugMatrixIsCurrent` requires
-`docs/bug-matrix.md` to render it (`-update`). B0 gives no findings and no
-notes on every committed plan, and no findings on the first 20 seeds with
-(model) faults. Seed 4's plan under B3 shrinks to at most 3 steps.
+which `ready` requires; its model has `dependency: {track: 1s}`.
+`tenant/` and `grant/` hold cross-scope configs. Each config's `plans/`
+holds its gated bugs' and B0's plans. `gate_envtest_test.go` runs
+`gate_test.go`'s table, which `docs/bug-matrix.md` renders. B0 gives no
+findings and no notes on every committed plan, and no findings on the first
+20 seeds of each config. Seed 4's plan under B3 shrinks to at most 3 steps.
 
 **Examples.** `examples/<name>` adopts cert-manager and external-secrets.
 Plans and listed seeds give no findings; negative controls fail Clean.
 
 **Testing.** Red/green TDD: a test must fail when its code is mutated.
 Checks and `owner` use `trace/tracetest` traces. Envtest tests, few, live
-in `*_envtest_test.go` behind `//go:build envtest`.
-`readme_test.go` checks the README's commands, `workflows_test.go` the
-workflows' make targets, and `design_test.go` this file's length and §2.
+in `*_envtest_test.go` behind `//go:build envtest`. Root tests check the
+README's commands, the workflows' make targets, and this file.
 
 ## 17. Decision log
 
@@ -460,8 +454,7 @@ ignore list.
 19. Unknown-outcome calls satisfy neither clause 4 nor clause 5.
 20. Faults draw the requests `launch.rbac` grants, weighted toward creates,
     the primary and core created kinds. Damage skips the primary.
-21. Restore ignores `resourceVersion`, `managedFields` and `generation`,
-    which every write changes.
+21. Restore ignores `resourceVersion`, `managedFields` and `generation`.
 22. Restore lets a damaged CR rename its other resources, as a reissue does.
 23. Groups split by namespace: one name in two namespaces is no duplicate.
 24. The gc model removes `foregroundDeletion` and `orphan` finalizers (§7).
@@ -478,7 +471,7 @@ ignore list.
 34. A stage model has one stage and an exact `after`; `outputs:` waits.
 35. Listeners record `seen` for dependency kinds only, for Honest. A
     write's result is a read. An undecodable response is `opaque`.
-36. Honest uses rule 1 only, since rule 4 blames the wrong CR.
+36. Honest ignores rule 4, which blames the wrong CR.
 37. Honest's read must show the controller's last write to the dependency,
     by version, since a watch can show it before the write's response.
 38. `stuck` writes `Ready` False rather than nothing, so B18 and B25 see it.
@@ -497,3 +490,10 @@ ignore list.
     counts a gone one the controller last saw live, so a stale read passes.
 48. A restart, exit or failed CR write excuses `track`, since it may stop an
     honest controller from reporting.
+49. The observer watches cluster-wide, and refuses no kind for its scope (#38).
+50. Every check that uses owning-CR rule 1 also uses rules 2 and 3.
+51. The gc follows Kubernetes' cross-scope owner rules, invalid references
+    included (§7).
+52. A `delete` may be `Foreground` (B29). `Orphan` would fail Clean.
+53. A group's owner key is its CR set, not its rule, so a rule change in a
+    quiet step is no Restore finding.

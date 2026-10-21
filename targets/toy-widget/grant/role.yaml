@@ -1,0 +1,36 @@
+# escalate lets the controller create ClusterRoles with rules it lacks.
+# grants/finalizers lets B28 set blockOwnerDeletion where
+# OwnerReferencesPermissionEnforcement is on.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: toy-widget-grant
+rules:
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles"]
+    verbs: ["get", "list", "watch", "create", "update", "delete", "escalate"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: toy-widget-grant
+rules:
+  - apiGroups: ["toy.reconciler-fuzzer"]
+    resources: ["grants"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["toy.reconciler-fuzzer"]
+    resources: ["grants/status"]
+    verbs: ["patch"]
+  - apiGroups: ["toy.reconciler-fuzzer"]
+    resources: ["grants/finalizers"]
+    verbs: ["update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: toy-widget-grant
+  namespace: rf-shared
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]

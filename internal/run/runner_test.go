@@ -76,8 +76,12 @@ func (c *fakeCluster) Patch(_ context.Context, ref trace.Ref, patch []byte) erro
 	return nil
 }
 
-func (c *fakeCluster) Delete(_ context.Context, ref trace.Ref) error {
-	c.add("delete %s", ref.Name)
+func (c *fakeCluster) Delete(_ context.Context, ref trace.Ref, propagation plan.Propagation) error {
+	if propagation == "" {
+		c.add("delete %s", ref.Name)
+	} else {
+		c.add("delete %s %s", ref.Name, propagation)
+	}
 	return c.deleteErr
 }
 
@@ -299,6 +303,22 @@ func TestExecuteReturnsAWaitGoneError(t *testing.T) {
 	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{{Do: plan.Create, Slot: "a"}, {Do: plan.Delete, Slot: "a"}, {Do: plan.Create, Slot: "a"}}}}}
 	if err := f.runner.Execute(context.Background(), p); err == nil || !strings.Contains(err.Error(), "forbidden") {
 		t.Fatalf("Execute = %v, want the wait's error", err)
+	}
+}
+
+func TestExecutePassesADeletesPropagationAndDeletesAtTheEndByDefault(t *testing.T) {
+	f := newFixture(t, nil)
+	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{
+		{Do: plan.Create, Slot: "a", Object: widget("foreground")},
+		{Do: plan.Create, Slot: "b", Object: widget("kept")},
+		{Do: plan.Delete, Slot: "a", Propagation: plan.Foreground},
+	}}}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"create foreground", "create kept", "delete foreground Foreground", "delete kept"}
+	if got := f.cluster.all(); !reflect.DeepEqual(got, want) {
+		t.Errorf("cluster calls = %q, want %q", got, want)
 	}
 }
 

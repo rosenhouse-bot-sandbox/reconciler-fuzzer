@@ -1,5 +1,5 @@
-// Command toy-widget runs the Widget controller of the toy target, with the
-// seeded bug --bug names.
+// Command toy-widget runs the Widget, Tenant or Grant controller of the toy
+// target, with the seeded bug --bug names.
 package main
 
 import (
@@ -9,9 +9,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -49,6 +52,9 @@ func run(args []string, out io.Writer) error {
 	lease := flags.Duration("lease", 0, "elect a leader through a Lease in $WATCH_NAMESPACE that lasts this long, and exit on losing it; 0 elects none")
 	gadget := flags.Bool("gadget", false, "give each Widget a Gadget, and report whether it is ready in status.gadgetReady")
 	index := flags.Bool("index", false, "index Widgets by spec.count, which starts their informer before the manager leads")
+	tenant := flags.Bool("tenant", false, "reconcile Tenants instead of Widgets, watching every namespace")
+	grant := flags.Bool("grant", false, "reconcile Grants instead of Widgets")
+	mirrorNamespace := flags.String("mirror-namespace", "rf-shared", "with --grant, the namespace of each Grant's ConfigMap and of grant-config")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			flags.SetOutput(out)
@@ -69,6 +75,10 @@ func run(args []string, out io.Writer) error {
 	if *lease < 0 {
 		return fmt.Errorf("--lease=%v: want 0 or more", *lease)
 	}
+	mode, err := modeOf(*gadget, *tenant, *grant)
+	if err != nil {
+		return err
+	}
 
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 
@@ -80,7 +90,7 @@ func run(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	manager, err := ctrl.NewManager(config, managerOptions(scheme, *metricsAddress, *lease))
+	manager, err := ctrl.NewManager(config, managerOptions(scheme, *metricsAddress, *lease, cacheOptions(mode, *mirrorNamespace)))
 	if err != nil {
 		return fmt.Errorf("creating the manager: %w", err)
 	}
@@ -91,16 +101,27 @@ func run(args []string, out io.Writer) error {
 		}
 	}
 
-	reconciler := &controller.Reconciler{
-		Client:       manager.GetClient(),
-		APIReader:    manager.GetAPIReader(),
-		Scheme:       manager.GetScheme(),
-		Bug:          bug,
-		B1Hold:       b1Hold,
-		Resync:       *resync,
-		CleanupDelay: *cleanupDelay,
-		LabelFrom:    *labelFrom,
-		Gadget:       *gadget,
+	var reconciler interface{ SetupWithManager(ctrl.Manager) error }
+	switch mode {
+	case tenantMode:
+		reconciler = &controller.TenantReconciler{Client: manager.GetClient(), Scheme: manager.GetScheme(), Bug: bug}
+	case grantMode:
+		reconciler = &controller.GrantReconciler{
+			Client: manager.GetClient(), APIReader: manager.GetAPIReader(), Scheme: manager.GetScheme(), Bug: bug,
+			MirrorNamespace: *mirrorNamespace,
+		}
+	default:
+		reconciler = &controller.Reconciler{
+			Client:       manager.GetClient(),
+			APIReader:    manager.GetAPIReader(),
+			Scheme:       manager.GetScheme(),
+			Bug:          bug,
+			B1Hold:       b1Hold,
+			Resync:       *resync,
+			CleanupDelay: *cleanupDelay,
+			LabelFrom:    *labelFrom,
+			Gadget:       *gadget,
+		}
 	}
 	if err := reconciler.SetupWithManager(manager); err != nil {
 		return fmt.Errorf("setting up the controller: %w", err)
@@ -110,18 +131,62 @@ func run(args []string, out io.Writer) error {
 	return manager.Start(ctrl.SetupSignalHandler())
 }
 
-// managerOptions confines the cache to the namespace WATCH_NAMESPACE names,
-// where it is set, as an operator-sdk operator does. A lease elects a leader
-// there, and the manager stops once it loses the lease.
-func managerOptions(scheme *runtime.Scheme, metricsAddress string, lease time.Duration) ctrl.Options {
+// mode is the kind the toy reconciles.
+type mode int
+
+const (
+	widgetMode mode = iota
+	tenantMode
+	grantMode
+)
+
+// modeOf chooses the mode from at most one of --gadget, --tenant and --grant.
+func modeOf(gadget, tenant, grant bool) (mode, error) {
+	var chosen []string
+	for flag, set := range map[string]bool{"--gadget": gadget, "--tenant": tenant, "--grant": grant} {
+		if set {
+			chosen = append(chosen, flag)
+		}
+	}
+	if len(chosen) > 1 {
+		slices.Sort(chosen)
+		return 0, fmt.Errorf("%s: want at most one", strings.Join(chosen, " and "))
+	}
+	switch {
+	case tenant:
+		return tenantMode, nil
+	case grant:
+		return grantMode, nil
+	}
+	return widgetMode, nil
+}
+
+// cacheOptions confine the cache to WATCH_NAMESPACE, where it is set, as an
+// operator-sdk operator does, except in Tenant mode. Grant mode caches
+// ConfigMaps only in the mirror namespace.
+func cacheOptions(m mode, mirrorNamespace string) cache.Options {
+	namespace := os.Getenv("WATCH_NAMESPACE")
+	if m == tenantMode || namespace == "" {
+		return cache.Options{}
+	}
+	options := cache.Options{DefaultNamespaces: map[string]cache.Config{namespace: {}}}
+	if m == grantMode {
+		options.ByObject = map[client.Object]cache.ByObject{
+			&corev1.ConfigMap{}: {Namespaces: map[string]cache.Config{mirrorNamespace: {}}},
+		}
+	}
+	return options
+}
+
+// managerOptions use cacheOptions. A lease elects a leader in
+// WATCH_NAMESPACE, and the manager stops once it loses the lease.
+func managerOptions(scheme *runtime.Scheme, metricsAddress string, lease time.Duration, c cache.Options) ctrl.Options {
 	namespace := os.Getenv("WATCH_NAMESPACE")
 	options := ctrl.Options{
 		Scheme:         scheme,
 		Metrics:        metricsserver.Options{BindAddress: metricsAddress},
 		LeaderElection: lease > 0,
-	}
-	if namespace != "" {
-		options.Cache.DefaultNamespaces = map[string]cache.Config{namespace: {}}
+		Cache:          c,
 	}
 	if lease > 0 {
 		renew, retry := lease*2/3, lease/5

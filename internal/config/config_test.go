@@ -2,8 +2,10 @@ package config_test
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -352,5 +354,103 @@ func TestModelReady(t *testing.T) {
 		if got, err := ready(c.obj); err != nil || got != c.want {
 			t.Errorf("%s: ready = %v, %v; want %v", name, got, err, c.want)
 		}
+	}
+}
+
+func TestCompileString(t *testing.T) {
+	name, err := config.CompileString("self.metadata.name + '-0'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := name(map[string]any{"metadata": map[string]any{"name": "a"}}); got != "a-0" || err != nil {
+		t.Errorf("name = %q, %v", got, err)
+	}
+	if got, err := config.CompileString("self.x.lowerAscii()"); err != nil {
+		t.Errorf("string extensions: %v", err)
+	} else if s, _ := got(map[string]any{"x": "AB"}); s != "ab" {
+		t.Errorf("lowerAscii = %q", s)
+	}
+	dyn, err := config.CompileString("self.x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dyn(map[string]any{"x": 1}); !errors.Is(err, config.ErrNotString) {
+		t.Errorf("a number: err = %v, want ErrNotString", err)
+	}
+	if _, err := dyn(map[string]any{}); err == nil {
+		t.Error("a missing field is no error")
+	}
+	for _, expr := range []string{"1 + 2", "true", "self.(", "other"} {
+		if _, err := config.CompileString(expr); err == nil {
+			t.Errorf("%s compiles", expr)
+		}
+	}
+}
+
+func TestOwns(t *testing.T) {
+	c, err := config.Load(writeConfig(t, strings.Replace(minimal(t), `  ready: "true"`, `  ready: "true"
+  owns:
+  - {kind: v1/Secret, name: self.spec.secretName}
+  - {kind: rbac.authorization.k8s.io/v1/ClusterRole, name: "'cr-' + self.metadata.name", namespace: "''"}`, 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []config.Owns{
+		{Kind: schema.GroupVersionKind{Version: "v1", Kind: "Secret"}, Name: "self.spec.secretName"},
+		{Kind: schema.GroupVersionKind{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRole"}, Name: "'cr-' + self.metadata.name", Namespace: "''"},
+	}
+	if !reflect.DeepEqual(c.Primary.Owns, want) {
+		t.Errorf("owns = %+v", c.Primary.Owns)
+	}
+}
+
+func TestOwnsRefusesMistakes(t *testing.T) {
+	for entry, key := range map[string]string{
+		"{kind: v1/Secret}":                                    "primary.owns[0].name",
+		"{kind: Secret, name: self.x}":                         "primary.owns[0].kind",
+		"{name: self.x}":                                       "primary.owns[0].kind",
+		"{kind: v1/Secret, name: '1 + 2'}":                     "primary.owns[0].name",
+		"{kind: v1/Secret, name: self.x, namespace: 'self.('}": "primary.owns[0].namespace",
+		"{kind: v1/Secret, name: self.x, nmespace: self.y}":    "nmespace",
+	} {
+		_, err := config.Load(writeConfig(t, strings.Replace(minimal(t), `  ready: "true"`, `  ready: "true"`+"\n  owns: ["+entry+"]", 1)))
+		if err == nil || !strings.Contains(err.Error(), key) {
+			t.Errorf("%s: err = %v, want one naming %s", entry, err, key)
+		}
+	}
+}
+
+func TestSystems(t *testing.T) {
+	c, err := config.Load(writeConfig(t, minimal(t)+"systems: [{name: kube, owner: \"self.metadata.labels['uid']\"}]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []config.System{{Name: "kube", Owner: "self.metadata.labels['uid']"}}; !reflect.DeepEqual(c.Systems, want) {
+		t.Errorf("systems = %+v", c.Systems)
+	}
+	if c, err := config.Load(writeConfig(t, minimal(t)+"systems: [{name: kube}]\n")); err != nil || c.Systems[0].Owner != "" {
+		t.Errorf("no owner: %+v, %v", c, err)
+	}
+}
+
+func TestSystemsRefuseMistakes(t *testing.T) {
+	for systems, want := range map[string]string{
+		"[{name: s3}]":                   "systems[0].name s3: the only system is kube until fake services land",
+		"[{name: kube}, {name: kube}]":   "systems[1].name kube",
+		"[{name: kube, owner: '1 + 2'}]": "systems[0].owner",
+		"[{name: kube, ownr: self.x}]":   "did you mean owner",
+		"[{name: kube, process: x}]":     "systems[0] takes name and owner",
+	} {
+		_, err := config.Load(writeConfig(t, minimal(t)+"systems: "+systems+"\n"))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v, want one containing %q", systems, err, want)
+		}
+	}
+}
+
+func TestUnknownPrimaryKeyListsOwns(t *testing.T) {
+	_, err := config.Load(writeConfig(t, strings.Replace(minimal(t), `  ready: "true"`, `  ready: "true"`+"\n  zzzzzz: x", 1)))
+	if err == nil || !strings.Contains(err.Error(), "retain and owns") {
+		t.Errorf("err = %v", err)
 	}
 }

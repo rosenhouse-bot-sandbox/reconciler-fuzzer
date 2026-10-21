@@ -71,3 +71,61 @@ func TestTheGadgetConfigDependsOnAModelledGadget(t *testing.T) {
 		}
 	}
 }
+
+func TestTheTenantConfigOwnsItsClusterScopedChildrenByName(t *testing.T) {
+	c, err := config.Load("tenant/config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (schema.GroupVersionKind{Group: "toy.reconciler-fuzzer", Version: "v1", Kind: "Tenant"}); c.Primary.Kind != want {
+		t.Errorf("The primary is %v, want %v.", c.Primary.Kind, want)
+	}
+	var owned []string
+	for _, owns := range c.Primary.Owns {
+		owned = append(owned, owns.Kind.Kind+" "+owns.Name)
+	}
+	if want := []string{"ClusterRole 'tenant-' + self.metadata.name", "Namespace 'tenant-' + self.metadata.name"}; !slices.Equal(owned, want) {
+		t.Errorf("The Tenant owns %v, want %v.", owned, want)
+	}
+	if _, set := c.Launch.Env["WATCH_NAMESPACE"]; set {
+		t.Error("The Tenant config sets WATCH_NAMESPACE, which would confine the cache.")
+	}
+	assertReadyOnTheCurrentGeneration(t, c)
+}
+
+func TestTheGrantConfigOwnsItsChildrenByLabel(t *testing.T) {
+	c, err := config.Load("grant/config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []config.System{{Name: "kube", Owner: "self.metadata.labels['toy.reconciler-fuzzer/grant-uid']"}}; !reflect.DeepEqual(c.Systems, want) {
+		t.Errorf("Systems are %+v, want %+v.", c.Systems, want)
+	}
+	if !slices.Contains(c.Launch.Args, "--mirror-namespace=rf-shared") {
+		t.Errorf("Launch args %v lack --mirror-namespace=rf-shared.", c.Launch.Args)
+	}
+	assertReadyOnTheCurrentGeneration(t, c)
+}
+
+func assertReadyOnTheCurrentGeneration(t *testing.T, c *config.Config) {
+	t.Helper()
+	cr := func(observed int64, ready bool) map[string]any {
+		return map[string]any{
+			"metadata": map[string]any{"generation": int64(2)},
+			"status":   map[string]any{"observedGeneration": observed, "ready": ready},
+		}
+	}
+	for name, tc := range map[string]struct {
+		cr   map[string]any
+		want bool
+	}{
+		"no status":           {map[string]any{"metadata": map[string]any{"generation": int64(2)}}, false},
+		"an older generation": {cr(1, true), false},
+		"not ready":           {cr(2, false), false},
+		"ready":               {cr(2, true), true},
+	} {
+		if ready, err := c.Ready(tc.cr); ready != tc.want || err != nil {
+			t.Errorf("%s: Ready = %v, %v; want %v.", name, ready, err, tc.want)
+		}
+	}
+}

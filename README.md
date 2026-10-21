@@ -116,6 +116,33 @@ timeouts: {settle: 30s, stable: 3s}
   across a plan's CRs, `mutate` names the fields updates change, and `fixtures` names the
   fixture strings `changeFixture` sets.
 
+### Other namespaces and cluster scope
+
+The primary, its children and fixtures may be cluster-scoped or in any namespace. The harness
+watches the whole cluster. A fixture with `metadata.namespace` stays in that namespace, which the
+harness creates; one without it goes in the run namespace.
+
+Clean, Restore, Unique and Honest judge each object by the CR that owns it. An ownerReference
+chain names that CR. A child with none, such as one in another namespace or a cluster-scoped
+child of a namespaced CR, needs one of these:
+
+```yaml
+primary:
+  owns:                                    # a field of the CR names the child
+    - {kind: rbac.authorization.k8s.io/v1/ClusterRole, name: "self.metadata.name + '-reader'"}
+    - {kind: v1/Secret, name: self.spec.secretName, namespace: "'shared'"}
+systems:
+  - name: kube                             # the only system for now
+    owner: self.metadata.labels['example.com/owner-uid']   # a label on the child names the CR
+```
+
+- `owns` takes CEL over the CR. Without `namespace`, a namespaced child is in the CR's namespace.
+  A cluster-scoped kind takes no `namespace`.
+- `owner` takes CEL over the child. It yields the CR's UID, `namespace/name` or name. A bare name
+  prefers a CR in the child's namespace, and names no CR when it matches CRs in two other namespaces.
+- Without either, Clean blames such a child on every CR that lived when it was created, so it
+  fails only once all of them are gone.
+
 ### Objects another controller sets ready
 
 envtest runs no other controllers. If your controller creates an object, such as a Gadget, and
@@ -130,8 +157,8 @@ models:
     dependency: {required: true, track: 1s}
 ```
 
-- `dependency` makes the Gadget a readiness dependency of the CR that owns it through
-  ownerReferences. Honest then fails a CR that reports ready before the controller saw its
+- `dependency` makes the Gadget a readiness dependency of the CR that owns it, by
+  ownerReference, `owns` or `owner`. Honest then fails a CR that reports ready before the controller saw its
   Gadget ready. `required` (the default)
   also fails one with no Gadget. `track: d` fails a CR that stays ready longer than `d` after
   the controller saw its Gadget not ready.

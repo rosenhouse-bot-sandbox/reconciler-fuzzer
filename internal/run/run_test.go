@@ -71,3 +71,12 @@ func TestTraceModelsNameKindsBothWays(t *testing.T) {
 		t.Errorf("traceModels = %+v, want %+v", got, want)
 	}
 }
+
+var clusterRoleKind = schema.GroupVersionKind{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRole"}
+
+func TestOwnsKindsWatchEveryOwnsKind(t *testing.T) {
+	owns := []config.Owns{{Kind: clusterRoleKind, Name: "'x'"}, {Kind: gadgetKind, Name: "'y'"}}
+	if got := ownsKinds(owns); !reflect.DeepEqual(got, []schema.GroupVersionKind{clusterRoleKind, gadgetKind}) {
+		t.Errorf("ownsKinds = %v", got)
+	}
+}

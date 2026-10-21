@@ -42,7 +42,7 @@ type Process interface {
 type Cluster interface {
 	Create(ctx context.Context, obj map[string]any) (trace.Ref, error)
 	Patch(ctx context.Context, ref trace.Ref, patch []byte) error
-	Delete(ctx context.Context, ref trace.Ref) error
+	Delete(ctx context.Context, ref trace.Ref, propagation plan.Propagation) error
 	WaitGone(ctx context.Context, ref trace.Ref) error
 }
 
@@ -161,7 +161,7 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 	watch, seen := modelKinds(cfg.Models)
 	k := kube.New(kube.Options{
 		CRDs: cfg.CRDs, RBAC: cfg.Launch.RBAC, Fixtures: cfg.Fixtures, Warm: []map[string]any{sample},
-		Watch: append([]schema.GroupVersionKind{cfg.Primary.Kind}, watch...), Seen: seen,
+		Watch: slices.Concat([]schema.GroupVersionKind{cfg.Primary.Kind}, watch, ownsKinds(cfg.Primary.Owns)), Seen: seen,
 	})
 	env := &system.Env{Record: rec.Record, Dir: o.Out, Seed: p.Seed}
 	endpoints, err := k.Start(ctx, env)
@@ -194,10 +194,18 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 	if err != nil {
 		return err
 	}
+	owners, owns, err := owner.Sources(cfg, func(gvk schema.GroupVersionKind) (string, bool, error) {
+		ref, err := k.Ref(gvk, "")
+		return ref.Resource, ref.Namespace != "", err
+	})
+	if err != nil {
+		return err
+	}
 	run := trace.Event{Run: &trace.Run{
 		Namespace: k.Namespace(), Primary: primary, PlanSteps: len(p.Steps),
 		Ready: cfg.Primary.Ready, Stable: cfg.Timeouts.Stable, Reads: cfg.Budgets.Reads, Writes: cfg.Budgets.Writes,
 		Retain: cfg.Primary.Retain, Models: models, StatusKinds: k.StatusKinds(),
+		Owners: owners, Owns: owns,
 	}}
 	rec.Record(run)
 	spec, err := check.SpecFor(cfg, trace.NewIndex([]trace.Event{run}))
@@ -241,7 +249,7 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 		},
 		Sample: sample,
 		Select: func(ix *trace.Index, creator trace.Caller, target plan.Target, slot string, t time.Duration) (trace.Ref, bool) {
-			return owner.New(ix).Select(creator, target, slot, t)
+			return owner.New(ix, spec.Owners).Select(creator, target, slot, t)
 		},
 	}
 	if err := runner.Quiet(ctx); err != nil {
@@ -281,6 +289,14 @@ func traceModels(models []config.Model, ref func(schema.GroupVersionKind, string
 		described = append(described, d)
 	}
 	return described, nil
+}
+
+func ownsKinds(owns []config.Owns) []schema.GroupVersionKind {
+	var kinds []schema.GroupVersionKind
+	for _, o := range owns {
+		kinds = append(kinds, o.Kind)
+	}
+	return kinds
 }
 
 // expandLaunch expands ${systems.<name>.<key>} in the launch args, with
