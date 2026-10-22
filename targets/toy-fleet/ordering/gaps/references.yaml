@@ -1,0 +1,41 @@
+# Proposed: ../config.yaml with references in place of its properties.
+# Paths resolve against this file's directory.
+launch:
+  binary: ../../../../bin/toy-fleet
+  args:
+    - --bug=0                      # A later --launch-arg --bug=N wins.
+  env:
+    KUBECONFIG: ${systems.kube.kubeconfig}
+    WATCH_NAMESPACE: ${systems.kube.namespace}
+  rbac:
+    - ../../rbac/role.yaml
+crds:
+  - ../../crds/
+primary:
+  kind: toy.reconciler-fuzzer/v1/Cluster
+  sample: ../../cluster.yaml
+  ready: &ready >-
+    has(self.status) && has(self.status.observedGeneration) && self.status.observedGeneration == self.metadata.generation
+    && has(self.status.phase) && self.status.phase == 'Ready'
+models:
+  - kind: storage.thirdparty/v1/Volume
+    stages: readyCondition
+    after: 300ms
+    dependency: {track: 1s}
+# A reference says that a field of one kind names a CR of another. Honest
+# then fails a `from` CR that reports ready before the controller saw its
+# `to` CR ready, and Ordered fails a `to` CR that goes while a `from` CR
+# names it. With onDelete: block, a `to` CR that waits in deletion for its
+# `from` CRs counts as settled.
+references:
+  - from: {kind: toy.reconciler-fuzzer/v1/Database, ready: *ready}
+    to: {kind: toy.reconciler-fuzzer/v1/Cluster, name: self.spec.clusterRef, ready: *ready}
+    onDelete: block
+  - from: {kind: toy.reconciler-fuzzer/v1/User, ready: *ready}
+    to: {kind: toy.reconciler-fuzzer/v1/Database, name: self.spec.databaseRef, ready: *ready}
+    onDelete: block
+values:
+  mutate: [spec.volumes, spec.volumeSize]
+timeouts:
+  settle: 10s
+  stable: 2s

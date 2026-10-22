@@ -28,6 +28,10 @@ type fleet struct {
 }
 
 func newFleet(t *testing.T, objects ...client.Object) *fleet {
+	return newBuggyFleet(t, 0, objects...)
+}
+
+func newBuggyFleet(t *testing.T, bug Bug, objects ...client.Object) *fleet {
 	scheme, err := NewScheme()
 	if err != nil {
 		t.Fatal(err)
@@ -37,7 +41,7 @@ func newFleet(t *testing.T, objects ...client.Object) *fleet {
 		WithIndex(&fleetv1.Database{}, clusterRefField, func(o client.Object) []string { return []string{o.(*fleetv1.Database).Spec.ClusterRef} }).
 		WithIndex(&fleetv1.User{}, databaseRefField, func(o client.Object) []string { return []string{o.(*fleetv1.User).Spec.DatabaseRef} }).
 		WithObjects(objects...).Build()
-	base := reconciler{Client: c, APIReader: c, Scheme: scheme}
+	base := reconciler{Client: c, APIReader: c, Scheme: scheme, Bug: bug}
 	return &fleet{t, c, &ClusterReconciler{base}, &DatabaseReconciler{base}, &UserReconciler{base}}
 }
 
@@ -214,7 +218,48 @@ func TestParseBugAcceptsOnlyKnownBugs(t *testing.T) {
 	if b, err := ParseBug(0); b != 0 || err != nil {
 		t.Errorf("ParseBug(0) = %v, %v", b, err)
 	}
+	for _, id := range []int{20, 21, 22, 23} {
+		if b, err := ParseBug(id); b != Bug(id) || err != nil {
+			t.Errorf("ParseBug(%d) = %v, %v", id, b, err)
+		}
+	}
 	if _, err := ParseBug(40); err == nil {
 		t.Error("ParseBug(40) succeeded, want an error.")
+	}
+}
+
+func TestB20ReleasesAClusterWhileADatabaseNamesIt(t *testing.T) {
+	f := newBuggyFleet(t, B20, clusterObj(), databaseObj())
+	f.settle(f.clusters, "cluster")
+	f.readyVolumes()
+	f.settle(f.clusters, "cluster")
+	f.delete(f.cluster())
+	f.settle(f.clusters, "cluster")
+	if err := f.get("cluster", &fleetv1.Cluster{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("Under B20, with a Database, the Cluster gives %v, want not found.", err)
+	}
+}
+
+func TestB21ReleasesADatabaseWhileAUserNamesIt(t *testing.T) {
+	f := newBuggyFleet(t, B21, databaseObj(), userObj())
+	f.settle(f.databases, "db")
+	db := &fleetv1.Database{}
+	if err := f.get("db", db); err != nil {
+		t.Fatal(err)
+	}
+	f.delete(db)
+	f.settle(f.databases, "db")
+	if err := f.get("db", db); !apierrors.IsNotFound(err) {
+		t.Fatalf("Under B21, with a User, the Database gives %v, want not found.", err)
+	}
+}
+
+func TestB23ReadiesADatabaseOnAPendingCluster(t *testing.T) {
+	f := newBuggyFleet(t, B23, clusterObj(), databaseObj())
+	f.settle(f.clusters, "cluster")
+	f.settle(f.databases, "db")
+	db := &fleetv1.Database{}
+	if err := f.get("db", db); err != nil || db.Status.Phase != fleetv1.Ready || f.cluster().Status.Phase == fleetv1.Ready {
+		t.Fatalf("Under B23, on Cluster %+v, the Database is %+v, %v.", f.cluster().Status, db.Status, err)
 	}
 }
