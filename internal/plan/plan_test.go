@@ -45,6 +45,27 @@ func TestLoadRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsAMiscasedField(t *testing.T) {
+	_, err := Load(write(t, `{"steps": [{"actions": [{"do": "create", "slot": "a"}]}, {"actions": [{"do": "delete", "Slot": "a"}]}]}`))
+	if err == nil || !strings.Contains(err.Error(), "Slot") {
+		t.Fatalf("Load = %v, want an unknown field error naming Slot", err)
+	}
+}
+
+func TestLoadPlacesAnUnknownField(t *testing.T) {
+	_, err := Load(write(t, `{"steps": [{}, {"actions": [{"do": "restart", "slott": "a"}]}]}`))
+	if err == nil || !strings.Contains(err.Error(), `steps[1].actions[0]: unknown field "slott"; did you mean slot?`) {
+		t.Fatalf("Load = %v, want the field's place and the nearest key", err)
+	}
+}
+
+func TestLoadListsTheActionsOnAnUnknownDo(t *testing.T) {
+	_, err := Load(write(t, `{"steps": [{"actions": [{"do": "patch"}]}]}`))
+	if err == nil || !strings.Contains(err.Error(), "create, update, delete, restart, kill, damage or changeFixture") {
+		t.Fatalf("Load = %v, want the valid actions listed", err)
+	}
+}
+
 func TestLoadRejectsTrailingData(t *testing.T) {
 	_, err := Load(write(t, `{"steps": []} {"steps": []}`))
 	if err == nil || !strings.Contains(err.Error(), "after the plan") {
