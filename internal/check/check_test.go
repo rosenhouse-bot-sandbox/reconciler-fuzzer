@@ -293,6 +293,19 @@ func TestJudgeNotesAFailedAction(t *testing.T) {
 	}
 }
 
+// A step without a period ends its faults as its last action returns, so
+// a fault meant for the controller's next request never acts.
+func TestJudgeNotesAFaultPeriodOfZero(t *testing.T) {
+	const what = "killAfter on verb=update resource=clusters nth=2"
+	b := createStep()
+	b.At(2*s).Add(tt.Phase(1, trace.FaultPeriod), trace.Event{Fault: &trace.Fault{Step: 1, What: what}}).
+		At(2*s).Add(trace.Event{Fault: &trace.Fault{Step: 1, Ended: true, What: what}})
+	notes := check.Judge(b.Index(), spec).Notes
+	if !slices.ContainsFunc(notes, func(n string) bool { return strings.Contains(n, "picked no request") && strings.Contains(n, "period") }) {
+		t.Fatalf("Want a note that the fault picked no request in a 0s period and that the step needs a period, got %q.", notes)
+	}
+}
+
 func TestJudgeNotesAFaultThatPickedNoRequest(t *testing.T) {
 	const what = "dropResponse on verb=create resource=configmaps nth=2"
 	fault := func(ended bool) trace.Event {
