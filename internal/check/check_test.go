@@ -108,6 +108,21 @@ func TestConvergeStuckDeletion(t *testing.T) {
 	}
 }
 
+func TestConvergeStuckDeletionNamesItsFinalizers(t *testing.T) {
+	body := deleting()
+	body["metadata"].(map[string]any)["finalizers"] = []any{"toy/cleanup"}
+	b := createStep()
+	b.At(5500 * ms).Add(tt.Phase(1, trace.FaultPeriod)).
+		At(5600 * ms).Add(tt.Call(trace.Harness, "delete", widgetA, 200, "3")).
+		At(5600 * ms).Add(tt.Version(widgetA, "ua", "3", body)).
+		At(5700 * ms).Add(tt.EndFaults(1, 15*s, false)).
+		At(15 * s).Add(tt.Phase(1, trace.TimedOut))
+	f := only(t, converge(b, spec))
+	if !slices.ContainsFunc(f.Details, func(d string) bool { return strings.Contains(d, "ns/a is being deleted; finalizers [toy/cleanup] remain") }) {
+		t.Fatalf("details = %q, want the finalizers that remain", f.Details)
+	}
+}
+
 func TestConvergeReadLoop(t *testing.T) {
 	b := createStep()
 	for at := 1600 * ms; at < 10*s; at += 300 * ms {
