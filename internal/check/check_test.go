@@ -293,6 +293,21 @@ func TestJudgeNotesAFailedAction(t *testing.T) {
 	}
 }
 
+func TestJudgeNotesARequestLaunchRBACForbids(t *testing.T) {
+	b := cleanRun()
+	gadgets := tt.Ref("toy/gadgets", "ns", "")
+	for _, at := range []time.Duration{2 * s, 4 * s} {
+		watch := tt.Call(ctl, "watch", gadgets, 403, "")
+		watch.Call.Watch = true
+		b.At(at).Add(watch)
+	}
+	notes := check.Judge(b.Index(), spec).Notes
+	want := "kube: launch.rbac forbids the controller's watch on gadgets.toy, 2 times"
+	if !slices.Contains(notes, want) {
+		t.Fatalf("notes = %q, want %q", notes, want)
+	}
+}
+
 func TestJudgeNotesAFaultThatPickedNoRequest(t *testing.T) {
 	const what = "dropResponse on verb=create resource=configmaps nth=2"
 	fault := func(ended bool) trace.Event {
