@@ -1,0 +1,6 @@
+{
+  "steps": [
+    {"period": "1s", "actions": [{"do": "create", "slot": "a", "object": {"apiVersion": "toy.reconciler-fuzzer/v1", "kind": "Cluster", "metadata": {"name": "cluster"}, "spec": {"volumes": 2, "volumeSize": "small"}}}, {"at": "100ms", "do": "restart"}]},
+    {"actions": [{"do": "update", "slot": "a", "patch": {"spec": {"volumes": 1}}}]}
+  ]
+}

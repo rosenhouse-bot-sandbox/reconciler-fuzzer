@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/run"
@@ -22,6 +23,25 @@ func TestMain(m *testing.M) {
 }
 
 func TestGate(t *testing.T) {
+	for _, rows := range byRun(gate) {
+		g := rows[0]
+		t.Run(fmt.Sprintf("%s catches B%d", g.name(), g.bug), func(t *testing.T) {
+			t.Parallel()
+			report := runPlan(t, g.configPath(), g.plan, g.bug)
+			want := map[string]bool{}
+			for _, r := range rows {
+				if !hasFinding(report, r.finding, r.step, r.detail) {
+					t.Errorf("Want a finding %q at step %d that says %q. report.md:\n%s", r.finding, r.step, r.detail, report)
+				}
+				want[checkOf(r.finding)] = true
+			}
+			for _, got := range checksOf(report) {
+				if !want[got] {
+					t.Errorf("Found an unexpected %s finding. report.md:\n%s", got, report)
+				}
+			}
+		})
+	}
 	for _, config := range configs {
 		names, err := plans(config)
 		if err != nil || len(names) == 0 {
@@ -35,6 +55,18 @@ func TestGate(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestGaps runs bugs the fuzzer should catch and does not yet.
+func TestGaps(t *testing.T) {
+	for _, g := range gaps {
+		t.Run(fmt.Sprintf("%s catches B%d", g.name(), g.bug), func(t *testing.T) {
+			t.Parallel()
+			if report := runPlan(t, g.configPath(), g.plan, g.bug); !strings.HasPrefix(report, "# Findings") {
+				t.Errorf("Want a finding: %s. report.md:\n%s", g.detail, report)
+			}
+		})
 	}
 }
 
