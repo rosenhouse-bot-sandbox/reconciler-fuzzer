@@ -208,18 +208,31 @@ replaced the first row's Certificate. Each cell counts the runs that kept the ke
 
 ## How reconciler-fuzzer found it
 
-This section is old-tree history: its hunt and `sequence.json` format predate the v2 cutover.
+reconciler-fuzzer runs cert-manager against envtest, with its own garbage collector. Its
+cert-manager config holds the property `fresh-key`: a Certificate's Secret holds a `tls.key`
+first written while that Certificate owned the Secret
+([config.yaml](../../examples/cert-manager/config.yaml)).
+[write-back-always.json](../../examples/cert-manager/bugs/write-back-always.json) issues a
+Certificate under `rotationPolicy: Always`. Its next step holds cert-manager's Secret watch
+for 2 s, deletes the Certificate, and creates it again with the same spec.
+It fails `fresh-key` whether the Secret was written back or re-pointed, and the finding's
+details say which. `make repro-cert-manager` runs it 20 times.
 
-reconciler-fuzzer ran cert-manager against envtest, which has no garbage collector. reconciler-fuzzer's own
-collector deletes dependents with UID and resourceVersion preconditions, within 1 s of the
-owner's deletion. Hunt seed 1043 recreates a `Never` Certificate with ECDSA and other
-`dnsNames` and `duration`. It kept the key in 5 of 17 replays: 4 by write-back and 1 by
-re-point. [`sequence.json`](cert-manager-secret-write-back/sequence.json), the recreate in
-the table's ECDSA row, kept it in 3 of 8 reconciler-fuzzer runs, all by write-back.
+| plan | runs | `fresh-key` failed | cert-manager logged `applying Secret data` |
+| --- | --- | --- | --- |
+| `write-back-always.json` | 20 | 20 | 20 |
+| the same, without the `holdWatch` fault | 20 | 0 | 1 |
 
-On a cluster without a garbage collector, the program's `-collect` deletes what the old
-Certificate controls, much as kube-controller-manager would, but without its retry after a
-Conflict. On envtest with `-policy Always -algorithm RSA`, it kept the key in 3 of 10 runs.
+- Every failure came by write-back.
+- In the run without the hold that applied the data, `fresh-key` still held at the step's
+  end.
+- Generated plans find it too. A scan of the first 3000 cert-manager seeds found 279 that
+  draw a step holding the Secret watch while it deletes a CR and creates it again. The
+  first six, seeds 14, 40, 53, 54, 55 and 66, each failed `fresh-key` at that step in one
+  run, by write-back.
+- The program's `-collect` deletes what the old Certificate controls, much as
+  kube-controller-manager would. On envtest with `-policy Always -algorithm RSA`, it kept the
+  key in 3 of 10 runs.
 
 ## Possible fix
 

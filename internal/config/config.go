@@ -19,15 +19,16 @@ import (
 // Config is a loaded target config. Every path is absolute, resolved against
 // the config file's directory.
 type Config struct {
-	Launch   Launch
-	CRDs     []string
-	Primary  Primary
-	Fixtures []string
-	Values   Values
-	Models   []Model
-	Systems  []System
-	Budgets  Budgets
-	Timeouts Timeouts
+	Launch     Launch
+	CRDs       []string
+	Primary    Primary
+	Fixtures   []string
+	Values     Values
+	Models     []Model
+	Systems    []System
+	Budgets    Budgets
+	Timeouts   Timeouts
+	Properties []Property
 
 	ready, retain, halted func(self map[string]any) (bool, error)
 }
@@ -42,7 +43,8 @@ type Values struct {
 	// Mutate paths are the ones updates change.
 	Mutate []string
 	// Fixtures maps a fixture file, as an absolute path, to the string
-	// paths changeFixture may set.
+	// paths changeFixture may set. The file is a fixtures entry or a
+	// system's.
 	Fixtures map[string][]string
 }
 
@@ -73,6 +75,18 @@ type Primary struct {
 	// unknown-outcome call for the CR, Converge counts the CR as done. It
 	// is empty when unset.
 	Halted string
+	// Periodic is nil when unset.
+	Periodic *Periodic
+}
+
+// Periodic declares the CR writes a controller makes on a timer, such as a
+// refresh time. Clause 7 does not count a controller write of the CR that
+// changes only Paths, at most once per Every.
+type Periodic struct {
+	Every time.Duration
+	// Paths are dotted, such as status.refreshTime. [*] names every item
+	// of a list, as in status.conditions[*].lastTransitionTime.
+	Paths []string
 }
 
 // Owns is one primary.owns entry. Name and Namespace are CEL over self, the
@@ -98,15 +112,46 @@ type System struct {
 	Owner string
 	// Process is nil for kube.
 	Process *Process
-	// API names the fake's API map: crud.
+	// API names the fake's API map: crud, vault or s3.
 	API string
+	// Token is the harness's credential for the fake, and its token var.
+	// It is empty when unset.
+	Token string
+	// Fixtures are files of SystemFixture lists, created before the
+	// controller starts.
+	Fixtures []string
 	// Role, Ready and Gone are CEL over one of the fake's resources, or
 	// empty. Ready is required with Dependency.
 	Role, Ready, Gone string
 	Dependency        *Dependency
 	// Poll defaults to Timeouts.Stable.
 	Poll time.Duration
+	// ReadOnly, from access: read, says the controller only reads the
+	// fake, so generation draws no damage or write faults on it.
+	ReadOnly bool
 }
+
+// APIMap holds what the harness knows of an API map beyond its code, in
+// the internal package of its name.
+type APIMap struct {
+	// Ignore lists the top-level body fields Restore does not compare.
+	Ignore []string
+	// ModelFaults says the fake takes stuck and slowDelete: only a crud
+	// fake serves the /_fake/ paths.
+	ModelFaults bool
+	// Token says the map needs the system's token.
+	Token bool
+}
+
+// APIMaps holds every API map a fake may use, by name.
+var APIMaps = map[string]APIMap{
+	"crud":  {Ignore: []string{"version"}, ModelFaults: true},
+	"vault": {Ignore: []string{"current_version", "versions", "created_time", "updated_time"}, Token: true},
+	"s3":    {Ignore: []string{"creationDate", "lastModified", "versionId"}},
+}
+
+// Map is the fake's APIMap.
+func (s System) Map() APIMap { return APIMaps[s.API] }
 
 // Process runs a fake service in the config file's directory.
 type Process struct {
@@ -197,12 +242,16 @@ type declaration struct {
 	} `json:"launch"`
 	CRDs    []string `json:"crds"`
 	Primary struct {
-		Kind   string `json:"kind"`
-		Sample string `json:"sample"`
-		Ready  string `json:"ready"`
-		Retain string `json:"retain"`
-		Halted string `json:"halted"`
-		Owns   []struct {
+		Kind     string `json:"kind"`
+		Sample   string `json:"sample"`
+		Ready    string `json:"ready"`
+		Retain   string `json:"retain"`
+		Halted   string `json:"halted"`
+		Periodic *struct {
+			Every string   `json:"every"`
+			Paths []string `json:"paths"`
+		} `json:"periodic"`
+		Owns []struct {
 			Kind      string `json:"kind"`
 			Name      string `json:"name"`
 			Namespace string `json:"namespace"`
@@ -229,11 +278,14 @@ type declaration struct {
 			Command []string `json:"command"`
 		} `json:"process"`
 		API        string              `json:"api"`
+		Token      string              `json:"token"`
+		Fixtures   []string            `json:"fixtures"`
 		Role       string              `json:"role"`
 		Ready      string              `json:"ready"`
 		Gone       string              `json:"gone"`
 		Dependency *declaredDependency `json:"dependency"`
 		Poll       string              `json:"poll"`
+		Access     string              `json:"access"`
 	} `json:"systems"`
 	Budgets struct {
 		Reads  *int `json:"reads"`
@@ -244,6 +296,11 @@ type declaration struct {
 		Stable     string `json:"stable"`
 		BackoffCap string `json:"backoffCap"`
 	} `json:"timeouts"`
+	Properties []struct {
+		Name string `json:"name"`
+		Expr string `json:"expr"`
+		When string `json:"when"`
+	} `json:"properties"`
 }
 
 type declaredDependency struct {
@@ -327,13 +384,8 @@ func load(path string) (*Config, error) {
 		}
 	}
 
-	c.Values = Values{Overlay: d.Values.Overlay, Distinct: d.Values.Distinct, Mutate: d.Values.Mutate, Fixtures: map[string][]string{}}
-	for file, paths := range d.Values.Fixtures {
-		path := resolve(dir, file)
-		if !slices.Contains(c.Fixtures, path) {
-			return nil, fmt.Errorf("values.fixtures %s: fixtures lists no such file", file)
-		}
-		c.Values.Fixtures[path] = paths
+	if c.Primary.Periodic, err = periodic(d); err != nil {
+		return nil, err
 	}
 
 	if c.Models, err = models(d, c.Primary.Kind); err != nil {
@@ -384,6 +436,21 @@ func load(path string) (*Config, error) {
 	if c.Systems, err = systems(d, dir, c.Timeouts.Stable); err != nil {
 		return nil, err
 	}
+	fixtures := slices.Clone(c.Fixtures)
+	for _, s := range c.Systems {
+		fixtures = append(fixtures, s.Fixtures...)
+	}
+	c.Values = Values{Overlay: d.Values.Overlay, Distinct: d.Values.Distinct, Mutate: d.Values.Mutate, Fixtures: map[string][]string{}}
+	for file, paths := range d.Values.Fixtures {
+		path := resolve(dir, file)
+		if !slices.Contains(fixtures, path) {
+			return nil, fmt.Errorf("values.fixtures %s: no fixtures key lists this file", file)
+		}
+		c.Values.Fixtures[path] = paths
+	}
+	if c.Properties, err = properties(d); err != nil {
+		return nil, err
+	}
 	if c.Primary.Owns, err = owns(d, c.Fakes()); err != nil {
 		return nil, err
 	}
@@ -393,7 +460,8 @@ func load(path string) (*Config, error) {
 	return c, nil
 }
 
-// launchVars are the keys each system's Endpoints.Vars holds.
+// launchVars are the keys each system's Endpoints.Vars holds. A fake with
+// a token also holds token.
 var launchVars = map[string][]string{"kube": {"kubeconfig", "namespace", "url"}, "fake": {"url"}}
 
 // checkLaunchVars refuses a launch arg or env value whose ${key} names no
@@ -406,6 +474,9 @@ func (c *Config) checkLaunchVars() error {
 	for _, f := range c.Fakes() {
 		for _, key := range launchVars["fake"] {
 			vars["systems."+f.Name+"."+key] = ""
+		}
+		if f.Token != "" {
+			vars["systems."+f.Name+".token"] = ""
 		}
 	}
 	check := func(where, value string) error {
@@ -571,7 +642,7 @@ func systems(d declaration, dir string, stable time.Duration) ([]System, error) 
 		}
 		if declared.Name == "kube" {
 			if declared.Process != nil || declared.API != "" || declared.Role != "" || declared.Ready != "" || declared.Gone != "" ||
-				declared.Dependency != nil || declared.Poll != "" {
+				declared.Dependency != nil || declared.Poll != "" || declared.Token != "" || declared.Fixtures != nil || declared.Access != "" {
 				return nil, fmt.Errorf("%s: kube takes only name and owner", key)
 			}
 			systems = append(systems, s)
@@ -588,15 +659,34 @@ func systems(d declaration, dir string, stable time.Duration) ([]System, error) 
 			command[0] = resolve(dir, command[0])
 		}
 		s.Process = &Process{Command: command, Dir: dir}
-		if s.API != "crud" {
-			return nil, fmt.Errorf("%s.api %q: the only API map is crud", key, s.API)
+		if _, known := APIMaps[s.API]; !known {
+			return nil, fmt.Errorf("%s.api %q: want crud, vault or s3", key, s.API)
+		}
+		s.Token = declared.Token
+		if s.Map().Token && s.Token == "" {
+			return nil, fmt.Errorf("%s.token is required with api %s", key, s.API)
 		}
 		var err error
+		if s.Fixtures, err = existing(dir, key+".fixtures", declared.Fixtures); err != nil {
+			return nil, err
+		}
+		for _, file := range s.Fixtures {
+			if _, err := ReadSystemFixtures(file); err != nil {
+				return nil, fmt.Errorf("%s.fixtures: %w", key, err)
+			}
+		}
 		if s.Dependency, err = dependency(key, declared.Dependency); err != nil {
 			return nil, err
 		}
 		if s.Dependency != nil && s.Ready == "" {
 			return nil, fmt.Errorf("%s.dependency needs ready", key)
+		}
+		switch declared.Access {
+		case "":
+		case "read":
+			s.ReadOnly = true
+		default:
+			return nil, fmt.Errorf("%s.access %q: want read, or none", key, declared.Access)
 		}
 		s.Poll = stable
 		if declared.Poll != "" {

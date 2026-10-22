@@ -1,0 +1,72 @@
+# ACK's s3-controller, unpatched, at the version the Makefile pins, against
+# moto's S3.
+launch:
+  binary: ../../bin/ack-s3-controller
+  args:
+    - --aws-region=us-east-1
+    - --aws-endpoint-url=${systems.aws.url}
+    - --aws-identity-endpoint-url=${systems.aws.url}
+    - --allow-unsafe-aws-endpoint-urls
+    - --aws-endpoint-use-path-style
+    - --enable-leader-election=false
+    - --metrics-addr=127.0.0.1:0
+    - --healthz-addr=127.0.0.1:0
+    # The default resync is 10 hours. Restore needs it to notice damage.
+    - --reconcile-default-resync-seconds=3
+  env:
+    KUBECONFIG: ${systems.kube.kubeconfig}
+    AWS_ACCESS_KEY_ID: testing
+    AWS_SECRET_ACCESS_KEY: testing
+    AWS_EC2_METADATA_DISABLED: "true"
+    # A CA bundle makes the SDK wrap ACK's HTTP client, which then fails.
+    AWS_CA_BUNDLE: ""
+  rbac:
+    - rbac/clusterrole.yaml
+crds:
+  - crds/
+primary:
+  kind: s3.services.k8s.aws/v1alpha1/Bucket
+  sample: bucket.yaml
+  # ACK records no observed generation, and each sync stamps its conditions'
+  # lastTransitionTime (bug 2). A sync that read the spec before a write can
+  # stamp the next second, so ready wants a stamp two seconds after any spec
+  # write, which the next resync gives.
+  ready: >-
+    has(self.status) && has(self.status.conditions) && self.status.conditions.exists(c,
+      c.type == "ACK.ResourceSynced" && c.status == "True" && has(c.lastTransitionTime)
+      && has(self.metadata.managedFields) && self.metadata.managedFields.all(m, !has(m.fieldsV1) || !("f:spec" in m.fieldsV1)
+        || timestamp(m.time) + duration("1s") < timestamp(c.lastTransitionTime)))
+  # Each resync rewrites every condition's lastTransitionTime (README.md).
+  periodic: {every: 3s, paths: ["status.conditions[*].lastTransitionTime"]}
+  owns:
+    - {kind: "aws:buckets", name: self.spec.name}
+systems:
+  - name: aws
+    # moto, with S3's default bucket encryption.
+    process: {command: [../../bin/moto/bin/python, -I, moto_server.py, -H, 127.0.0.1, -p, "${port}"]}
+    api: s3
+    poll: 3s
+# One reconcile reads ListBuckets and 24 bucket subresources. A write
+# requeues it, so a poll period may hold two.
+budgets: {reads: 60, writes: 4}
+values:
+  distinct: [spec.name]
+  mutate: [spec.tagging.tagSet, spec.versioning.status]
+  overlay:
+    spec.name: {pattern: "^rf-[a-z0-9]{3,12}$"}
+    # An update that only removes a field leaves managedFields' time alone, so
+    # ready cannot see it (README.md, harness issue 1).
+    spec.tagging: {required: [tagSet]}
+    # S3 rejects a tag without a key, or two with one key.
+    spec.tagging.tagSet: {minItems: 1, maxItems: 1, items: {required: [key], properties: {key: {pattern: "^[a-z]{1,8}$"}, value: {pattern: "^[a-z0-9]{0,8}$"}}}}
+    spec.versioning: {required: [status]}
+    spec.versioning.status: {enum: [Enabled, Suspended]}
+# The bucket carries the spec's tags and versioning.
+properties:
+  - name: bucket-matches-spec
+    when: step
+    expr: >-
+      crs.all(c, world.aws.buckets.exists(b, b.name == c.spec.name
+        && (!has(c.spec.tagging) || !has(c.spec.tagging.tagSet) || c.spec.tagging.tagSet.all(t,
+          has(t.key) && t.key in b.tags && b.tags[t.key] == (has(t.value) ? t.value : "")))
+        && (!has(c.spec.versioning) || !has(c.spec.versioning.status) || b.versioning == c.spec.versioning.status)))

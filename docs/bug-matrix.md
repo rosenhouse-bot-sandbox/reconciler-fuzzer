@@ -5,7 +5,7 @@ This file is generated from targets/toy-widget/gate_test.go and targets/toy-buck
 
 | Bug | Description | Plan | Check | Step |
 |---|---|---|---|---|
-| B0 | The correct controller. | all 46 committed plans | none | |
+| B0 | The correct controller. | all 47 committed plans | none | |
 | B1 | Reports children ready before it creates them. | b1 | Converge | 0 |
 | B2 | Creates children with generated names, so it duplicates them. | b2 | Converge | 0 |
 | B3 | Leaves child 0 without an owner reference. | b3 | Clean | 1 |

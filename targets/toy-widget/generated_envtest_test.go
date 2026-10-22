@@ -106,10 +106,10 @@ func faults(p *plan.Plan) int {
 	return n
 }
 
-// TestAGeneratedFailingPlanShrinks shrinks seed 4's four-step plan under B3.
+// TestAGeneratedFailingPlanShrinks shrinks seed 5's four-step plan under B3.
 func TestAGeneratedFailingPlanShrinks(t *testing.T) {
 	t.Parallel()
-	const seed, bug = 4, 3
+	const seed, bug = 5, 3
 	g, sample := generator(t, "config.yaml")
 	p, err := g.Plan(seed)
 	if err != nil {

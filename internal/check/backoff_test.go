@@ -147,6 +147,26 @@ func TestBackoffHoldsOnlyA409DuringTheHold(t *testing.T) {
 	}
 }
 
+func TestBackoffAllowsA409JustAfterTheHold(t *testing.T) {
+	for name, c := range map[string]struct {
+		after time.Duration
+		finds bool
+	}{
+		"within stable/4": {spec.Stable/4 - 200*ms, false},
+		"after stable/4":  {spec.Stable/4 + 10*ms, true},
+	} {
+		var b tt.Builder
+		b.Add(tt.Run("toy", "widgets"), tt.HoldFault(0, 0, false, tt.Ref("toy/gadgets", "", "")))
+		b.At(time.Second).Add(tt.HoldFault(0, 0, true, tt.Ref("toy/gadgets", "", "")))
+		for _, start := range every(10*ms, 11) {
+			b.At(time.Second + c.after + start).Add(tt.Call(ctl, "update", gadgetA, 409, ""))
+		}
+		if findings := check.Backoff(b.Index(), spec); (len(findings) > 0) != c.finds {
+			t.Errorf("%s: findings = %+v", name, findings)
+		}
+	}
+}
+
 func TestBackoffTimesRequestStarts(t *testing.T) {
 	var tl tt.Timeline
 	tl.At(0, tt.Run("toy", "widgets"))

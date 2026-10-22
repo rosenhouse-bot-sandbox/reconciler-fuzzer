@@ -1,6 +1,9 @@
 package run
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -9,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/fake"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 )
 
@@ -92,10 +96,46 @@ func TestOwnsKindsSkipFakeCollections(t *testing.T) {
 }
 
 func TestAPIMapTakesTheSystemsAPI(t *testing.T) {
-	if m, err := apiMap(config.System{Name: "cloud", API: "crud"}); err != nil || m == nil {
-		t.Errorf("apiMap(crud) = %v, %v", m, err)
+	for _, api := range []string{"crud", "vault", "s3"} {
+		if m, err := apiMap(config.System{Name: "cloud", API: api}); err != nil || m == nil {
+			t.Errorf("apiMap(%s) = %v, %v", api, m, err)
+		}
 	}
 	if _, err := apiMap(config.System{Name: "cloud", API: "rest"}); err == nil {
 		t.Error("apiMap took an unknown api")
+	}
+}
+
+func TestFakeOptionsCarryTheFixturesAndToken(t *testing.T) {
+	fixtures := filepath.Join(t.TempDir(), "secrets.yaml")
+	os.WriteFile(fixtures, []byte("- {resource: secret, name: app/db, body: {password: p1}}\n"), 0o644)
+	s := config.System{
+		Name: "vault", API: "vault", Token: "root", Fixtures: []string{fixtures}, Dependency: &config.Dependency{},
+		Process: &config.Process{Command: []string{"/bin/vault", "server"}, Dir: "/cfg"},
+	}
+	o, err := fakeOptions(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []fake.Fixture{{Resource: "secret", Name: "app/db", Body: json.RawMessage(`{"password":"p1"}`)}}
+	if o.Name != "vault" || !reflect.DeepEqual(o.Command, s.Process.Command) || o.Dir != "/cfg" || !o.SeenAll ||
+		!reflect.DeepEqual(o.Fixtures, want) || !reflect.DeepEqual(o.Vars, map[string]string{"token": "root"}) {
+		t.Errorf("fakeOptions = %+v", o)
+	}
+	s.Token, s.Fixtures, s.Dependency = "", nil, nil
+	if o, err := fakeOptions(s); err != nil || o.Vars != nil || o.Fixtures != nil || o.SeenAll {
+		t.Errorf("fakeOptions = %+v, %v, want no vars or fixtures", o, err)
+	}
+	s.Fixtures = []string{filepath.Join(t.TempDir(), "missing.yaml")}
+	if _, err := fakeOptions(s); err == nil {
+		t.Error("fakeOptions read a missing fixtures file")
+	}
+}
+
+func TestFlattenNamesEachSystemsVars(t *testing.T) {
+	got := flatten(map[string]map[string]string{"vault": {"url": "u", "token": "t"}, "kube": {"namespace": "rf"}})
+	want := map[string]string{"systems.vault.url": "u", "systems.vault.token": "t", "systems.kube.namespace": "rf"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("flatten = %v", got)
 	}
 }

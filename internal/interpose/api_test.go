@@ -292,3 +292,39 @@ func TestAnAPIMapUnknownOutcomeShowsButRecordsNoSeen(t *testing.T) {
 		})
 	}
 }
+
+// partial is the crud map with every object Partial and its header's ETag
+// as RV.
+type partial struct{ *crud.Map }
+
+func (p partial) Objects(req interpose.Request, header http.Header, body []byte) []interpose.Object {
+	objects := p.Map.Objects(req, header, body)
+	for i := range objects {
+		objects[i].Partial, objects[i].RV = true, header.Get("ETag")
+	}
+	return objects
+}
+
+func TestAPartialObjectGivesTheResultButNoSeen(t *testing.T) {
+	var reached atomic.Int32
+	l, recorded, heard := listenCloud(t, &reached, seeingAll, func(o *interpose.Options) {
+		o.API = partial{o.API.(*crud.Map)}
+	})
+
+	resp, err := postBucket(l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	got := recorded.waitCalls(t, 1)[0]
+	if got.ResultUID != "cloud/buckets/b-1" {
+		t.Errorf("Recorded result %q, want cloud/buckets/b-1.", got.ResultUID)
+	}
+	if len(recorded.seen()) > 0 {
+		t.Errorf("Recorded seen %+v, want none of a partial object.", recorded.seen())
+	}
+	if objects := heard.objects(); len(objects) != 1 || !objects[0].Partial {
+		t.Errorf("Showed %+v, want the partial object.", objects)
+	}
+}

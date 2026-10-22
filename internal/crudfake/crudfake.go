@@ -1,6 +1,6 @@
 // Package crudfake is a small JSON server with asynchronous states and
-// strict 404 and 409 answers. It copies no real API. DESIGN.md §7 defines
-// it. It imports no other package of this module.
+// strict 404 and 409 answers. It copies no real API, and imports no other
+// package of this module.
 package crudfake
 
 import (

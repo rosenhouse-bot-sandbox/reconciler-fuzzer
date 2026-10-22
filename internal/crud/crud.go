@@ -6,22 +6,24 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/fake"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/interpose"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 )
 
 // Name is the map's name in a systems entry's api key.
 const Name = "crud"
 
-// Ignore lists the body fields Restore does not compare.
-var Ignore = []string{"version"}
-
 // Map reads one system's requests.
 type Map struct {
 	system      string
+	mu          sync.Mutex
 	collections map[string]bool
 }
 
@@ -31,13 +33,21 @@ var _ interpose.API = (*Map)(nil)
 // until SetCollections.
 func New(system string) *Map { return &Map{system: system} }
 
-// SetCollections names the collections the system serves. Call it before
-// Classify.
+// SetCollections names the collections the system serves.
 func (m *Map) SetCollections(names []string) {
-	m.collections = map[string]bool{}
+	collections := map[string]bool{}
 	for _, name := range names {
-		m.collections[name] = true
+		collections[name] = true
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.collections = collections
+}
+
+func (m *Map) serves(collection string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.collections[collection]
 }
 
 var verbs = map[[2]string]string{
@@ -54,7 +64,7 @@ func (m *Map) Classify(r *http.Request) interpose.Request {
 	req := interpose.Request{Verb: strings.ToLower(r.Method), Unmapped: true}
 	req.Ref.System = m.system
 	segments := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
-	if len(segments) > 2 || !m.collections[segments[0]] || len(segments) == 2 && segments[1] == "" {
+	if len(segments) > 2 || !m.serves(segments[0]) || len(segments) == 2 && segments[1] == "" {
 		return req
 	}
 	key := [2]string{r.Method, ""}
@@ -98,7 +108,7 @@ func requestedName(r *http.Request) string {
 
 // Objects reads a list's items, or else one object. An empty list gives an
 // empty, non-nil slice.
-func (m *Map) Objects(req interpose.Request, body []byte) []interpose.Object {
+func (m *Map) Objects(req interpose.Request, _ http.Header, body []byte) []interpose.Object {
 	raws := []json.RawMessage{body}
 	if req.Verb == "list" {
 		var list struct {
@@ -162,5 +172,21 @@ func (m *Map) Error(code int, message string) (string, []byte) {
 	return "application/json", body
 }
 
-// Path is the request path of the resource ref names, for harness damage.
-func (m *Map) Path(collection, id string) string { return "/" + collection + "/" + id }
+// Write spells a POST to the collection, or a merge PATCH or DELETE of
+// the id.
+func (m *Map) Write(op fake.Op, ref trace.Ref, body []byte) (fake.Write, error) {
+	switch op {
+	case fake.Create:
+		return fake.Write{Method: http.MethodPost, Path: "/" + ref.Resource, ContentType: "application/json", Body: body}, nil
+	case fake.Patch:
+		return fake.Write{Method: http.MethodPatch, Path: "/" + ref.Resource + "/" + ref.Name, ContentType: "application/merge-patch+json", Body: body}, nil
+	case fake.Delete:
+		return fake.Write{Method: http.MethodDelete, Path: "/" + ref.Resource + "/" + ref.Name}, nil
+	}
+	return fake.Write{}, fmt.Errorf("crud has no write %q", op)
+}
+
+// Gone accepts a 404 or a 409.
+func (m *Map) Gone(status int, _ []byte) bool {
+	return status == http.StatusNotFound || status == http.StatusConflict
+}

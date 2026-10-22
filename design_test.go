@@ -35,7 +35,7 @@ func TestPackageTableProblemsCatchesMistakes(t *testing.T) {
 	}
 }
 
-var packageRow = regexp.MustCompile("^\\| `([a-z]+)` \\|")
+var packageRow = regexp.MustCompile("^\\| `([a-z0-9]+)` \\|")
 
 // packageTableProblems compares the rows of DESIGN.md's package table with
 // the directories under internal/.

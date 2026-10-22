@@ -17,7 +17,7 @@ func Backoff(ix *trace.Index, s Spec) []Finding {
 	found := map[findingKey]*Finding{}
 	var order []findingKey
 	steps := ix.Steps()
-	holds := holdWatches(ix)
+	holds := holdWatches(ix, s.Stable)
 	w := owner.New(ix, s.Owners)
 	for _, e := range backoffEvents(ix, s) {
 		if v := e.Version; v != nil {
@@ -150,30 +150,13 @@ func backoffTime(e trace.Event) time.Duration {
 	return e.At
 }
 
-// holdWatches says whether a holdWatch fault on ref's kind is active at t.
-func holdWatches(ix *trace.Index) func(ref trace.Ref, t time.Duration) bool {
-	type span struct {
-		hold       trace.Ref
-		start, end time.Duration
-	}
-	var spans []span
-	starts := map[[2]int]int{}
-	for _, e := range ix.Events() {
-		f := e.Fault
-		if f == nil || f.Hold == nil {
-			continue
-		}
-		key := [2]int{f.Step, f.Index}
-		if !f.Ended {
-			starts[key] = len(spans)
-			spans = append(spans, span{*f.Hold, e.At, time.Duration(1<<63 - 1)})
-		} else if n, found := starts[key]; found {
-			spans[n].end = e.At
-		}
-	}
+// holdWatches says whether a holdWatch fault on ref's kind is active at t,
+// or ended less than stable/4 before it, while the controller's cache
+// catches up.
+func holdWatches(ix *trace.Index, stable time.Duration) func(ref trace.Ref, t time.Duration) bool {
 	return func(ref trace.Ref, t time.Duration) bool {
-		return slices.ContainsFunc(spans, func(s span) bool {
-			return s.hold.Group == ref.Group && s.hold.Resource == ref.Resource && s.start <= t && t <= s.end
+		return slices.ContainsFunc(ix.Holds(), func(h trace.Hold) bool {
+			return h.Kind.Group == ref.Group && h.Kind.Resource == ref.Resource && h.Start <= t && t <= h.End+stable/4
 		})
 	}
 }

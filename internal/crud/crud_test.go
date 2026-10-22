@@ -110,7 +110,7 @@ func TestObjectsOfAListAreItsItems(t *testing.T) {
 	b1, b2 := `{"id":"b-1","version":3}`, `{"id":"b-2","version":"7"}`
 	list := m.Classify(httptest.NewRequest("GET", "/buckets", nil))
 
-	got := m.Objects(list, []byte(`{"items":[`+b1+`, `+b2+`]}`))
+	got := m.Objects(list, nil, []byte(`{"items":[`+b1+`, `+b2+`]}`))
 
 	want := []interpose.Object{object("buckets", "b-1", "3", b1), object("buckets", "b-2", "7", b2)}
 	if !reflect.DeepEqual(got, want) {
@@ -120,7 +120,7 @@ func TestObjectsOfAListAreItsItems(t *testing.T) {
 
 func TestAnEmptyListShowsNoObjectsButIsRead(t *testing.T) {
 	m := newMap()
-	got := m.Objects(m.Classify(httptest.NewRequest("GET", "/buckets", nil)), []byte(`{"items":[]}`))
+	got := m.Objects(m.Classify(httptest.NewRequest("GET", "/buckets", nil)), nil, []byte(`{"items":[]}`))
 	if got == nil || len(got) != 0 {
 		t.Errorf("Got %#v, want an empty, non-nil slice.", got)
 	}
@@ -134,7 +134,7 @@ func TestObjectsOfAnyOtherVerbIsOneObject(t *testing.T) {
 		if method == "POST" {
 			path = "/buckets"
 		}
-		got := m.Objects(m.Classify(httptest.NewRequest(method, path, nil)), []byte(body))
+		got := m.Objects(m.Classify(httptest.NewRequest(method, path, nil)), nil, []byte(body))
 		if want := []interpose.Object{object("buckets", "b-1", "12", body)}; !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: got %+v, want %+v.", method, got, want)
 		}
@@ -157,7 +157,7 @@ func TestObjectsOfAnUnreadableBodyIsNil(t *testing.T) {
 		{list, `{"id":"b-1"}`},
 		{list, `{"items":[{"id":"b-1"},{"name":"x"}]}`},
 	} {
-		if got := m.Objects(c.req, []byte(c.body)); got != nil {
+		if got := m.Objects(c.req, nil, []byte(c.body)); got != nil {
 			t.Errorf("%s %s: got %+v, want nil.", c.req.Verb, c.body, got)
 		}
 	}
@@ -186,8 +186,24 @@ func TestErrorIsAJSONErrorObject(t *testing.T) {
 	}
 }
 
-func TestPathAddressesOneResource(t *testing.T) {
-	if got := newMap().Path("buckets", "b-1"); got != "/buckets/b-1" {
-		t.Errorf("Got %q, want /buckets/b-1.", got)
+func TestWriteSpellsEachHarnessWrite(t *testing.T) {
+	ref := trace.Ref{System: "cloud", Resource: "buckets", Name: "b-1"}
+	for op, want := range map[fake.Op]fake.Write{
+		fake.Create: {Method: "POST", Path: "/buckets", ContentType: "application/json", Body: []byte(`{"name":"logs"}`)},
+		fake.Patch:  {Method: "PATCH", Path: "/buckets/b-1", ContentType: "application/merge-patch+json", Body: []byte(`{"name":"logs"}`)},
+		fake.Delete: {Method: "DELETE", Path: "/buckets/b-1"},
+	} {
+		body := want.Body
+		got, err := newMap().Write(op, ref, body)
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Errorf("Write(%s) = %+v, %v; want %+v.", op, got, err, want)
+		}
+	}
+}
+
+func TestGoneAcceptsA404OrA409(t *testing.T) {
+	m := crud.New("cloud")
+	if !m.Gone(404, nil) || !m.Gone(409, nil) || m.Gone(400, nil) || m.Gone(500, nil) {
+		t.Error("Gone wants only a 404 or a 409")
 	}
 }

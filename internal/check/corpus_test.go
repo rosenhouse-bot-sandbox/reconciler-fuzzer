@@ -296,6 +296,20 @@ var corpus = map[string]func() *tt.Script{
 		r.At(r.Now, tt.Phase(0, trace.Settled))
 		return r.Tick(1 * s).Add(tt.Phase(0, trace.Confirmed))
 	},
+	"d70-periodic-refresh-writes": func() *tt.Script {
+		r := newRun(1)
+		r.Spec.Periodic = &trace.Periodic{Every: 3 * s, Paths: []string{"status.refreshTime"}}
+		r.Begin()
+		withChild(r, "a", true)
+		r.EndFaults()
+		for i := range 4 {
+			r.Tick(1500*ms).Update(ctl, widgetA, named("a", map[string]any{"status": map[string]any{"ready": true, "refreshTime": i}}))
+		}
+		r.At(r.Now, tt.Phase(0, trace.Settled))
+		return r.Tick(1 * s).Add(tt.Phase(0, trace.Confirmed))
+	},
+	"d69-fresh-key-written-back": func() *tt.Script { return secretWriteBack("K", false) },
+	"d69-fresh-key-reissued":     func() *tt.Script { return secretWriteBack("K2", false) },
 	"d42-restart-beside-update": func() *tt.Script {
 		r := toy(2)
 		r.Begin().Update(trace.Harness, widgetA, named("a", map[string]any{"spec": map[string]any{"label": "blue"}, "status": map[string]any{"ready": false}}))

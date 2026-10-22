@@ -1,0 +1,15 @@
+# Nothing launches this target. Its RBAC grants no watch.
+launch:
+  binary: none
+  rbac: [role.yaml]
+crds: [../../../../targets/toy-widget/crds/]
+primary:
+  kind: toy.reconciler-fuzzer/v1/Widget
+  sample: ../../../../targets/toy-widget/widget.yaml
+  ready: "true"
+timeouts: {stable: 1s}
+systems:
+  - {name: vault, process: {command: [vault]}, api: vault, token: root, fixtures: [vault-secret.yaml, vault-others.yaml]}
+values:
+  fixtures:
+    vault-secret.yaml: [password, nested.key]

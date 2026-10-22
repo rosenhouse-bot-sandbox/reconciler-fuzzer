@@ -11,7 +11,7 @@ import (
 
 var updateGolden = flag.Bool("update", false, "rewrite testdata/golden.json")
 
-// goldenConfigs draw no model faults, so their plans must never change.
+// goldenConfigs draw no model faults. Their plans change only with the draws.
 var goldenConfigs = []string{
 	toyConfig,
 	"../../examples/cert-manager/config.yaml",

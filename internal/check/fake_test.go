@@ -233,7 +233,7 @@ func TestClause5LapsesAfterTheLongestPollOfTheChangedSystems(t *testing.T) {
 func TestClause5LooksAtABucket(t *testing.T) {
 	b := fakeDamagedAt1200ms(bucketA)
 	b.At(1500 * ms).Add(tt.Call(ctl, "get", bucketA, 404, ""))
-	if unmet := check.Settled(b.Index(), 3200*ms, spec); len(unmet) != 0 {
+	if unmet := check.Settled(b.Index(), 3500*ms, spec); len(unmet) != 0 {
 		t.Errorf("unmet = %q", unmet)
 	}
 }
@@ -432,5 +432,52 @@ func TestClause7CountsEachSystemsBudgetOverItsPoll(t *testing.T) {
 	want := "the controller made 3 gets and lists of cloud in (2s, 3s], over the budget of 2"
 	if unmet := check.Settled(b.Index(), 3*s, sp); !slices.Contains(unmet, want) {
 		t.Fatalf("unmet = %q, want %q", unmet, want)
+	}
+}
+
+func TestRestoreAllowsAnEmulatorsNewVersionOfTheSameData(t *testing.T) {
+	for api, c := range map[string]struct {
+		ref           trace.Ref
+		before, after func(data string) map[string]any
+	}{
+		"vault": {
+			trace.Ref{System: "cloud", Resource: "secret", Name: "app"},
+			func(data string) map[string]any {
+				return map[string]any{"path": "app", "current_version": 1, "versions": map[string]any{"1": map[string]any{}},
+					"data": map[string]any{"k": data}, "created_time": "t1", "updated_time": "t1"}
+			},
+			func(data string) map[string]any {
+				return map[string]any{"path": "app", "current_version": 2, "versions": map[string]any{"1": map[string]any{}, "2": map[string]any{}},
+					"data": map[string]any{"k": data}, "created_time": "t1", "updated_time": "t2"}
+			},
+		},
+		"s3": {
+			trace.Ref{System: "cloud", Resource: "objects", Namespace: "b", Name: "k"},
+			func(data string) map[string]any {
+				return map[string]any{"bucket": "b", "key": "k", "etag": data, "versionId": "v1", "lastModified": "t1"}
+			},
+			func(data string) map[string]any {
+				return map[string]any{"bucket": "b", "key": "k", "etag": data, "versionId": "v2", "lastModified": "t2"}
+			},
+		},
+	} {
+		for _, data := range []string{"same", "other"} {
+			r := newRun(2)
+			r.Spec.Systems = []trace.System{{Name: "cloud", API: api, Ignore: config.APIMaps[api].Ignore}}
+			r.Begin()
+			r.CreateCR("a", widgetA)
+			r.Create(ctl, c.ref, c.before("same"))
+			r.Ready(widgetA).EndFaults().Settle()
+			r.Begin().Restart()
+			r.Update(ctl, c.ref, c.after(data))
+			r.EndFaults().Settle()
+			findings := restore(t, r)
+			if data == "same" && len(findings) != 0 {
+				t.Errorf("%s: a new version of the same data: findings = %+v", api, findings)
+			}
+			if data == "other" && len(findings) != 1 {
+				t.Errorf("%s: other data: findings = %+v, want changed resources", api, findings)
+			}
+		}
 	}
 }

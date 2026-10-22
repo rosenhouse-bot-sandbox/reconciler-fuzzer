@@ -120,7 +120,14 @@ func TestValidate(t *testing.T) {
 		"restart with patch":      {[]Step{{Actions: []Action{{Do: Restart, Patch: json.RawMessage(`{}`)}}}}, "steps[0].actions[0]: restart takes no slot, object or patch"},
 		"negative at":             {[]Step{{Actions: []Action{{Do: Kill, At: -1}}}}, "steps[0].actions[0]: at is negative"},
 		"negative period":         {[]Step{{}, {Period: -1}}, "steps[1]: period is negative"},
-		"fault with no effect":    {[]Step{{Faults: []Fault{{}}}}, "steps[0].faults[0]: a fault sets 0 of error, delay, drop, dropResponse, killAfter, stuck and slowDelete"},
+		"fault with no effect":    {[]Step{{Faults: []Fault{{}}}}, "steps[0].faults[0]: a fault sets 0 of error, delay, drop, dropResponse, killAfter, stuck, slowDelete and holdWatch"},
+		"holdWatch and drop":      {[]Step{{Faults: []Fault{{HoldWatch: true, Drop: true, Match: gadgets}}}}, "a fault sets 2 of"},
+		"holdWatch no resource":   {[]Step{{Faults: []Fault{{HoldWatch: true, Match: Match{Group: "example.com"}}}}}, "holdWatch needs a match with a resource"},
+		"holdWatch on a fake":     {[]Step{{Faults: []Fault{{HoldWatch: true, System: "cloud", Match: Match{Resource: "buckets"}}}}}, "holdWatch acts only on kube"},
+		"holdWatch with verb":     {[]Step{{Faults: []Fault{{HoldWatch: true, Match: Match{Verb: "watch", Resource: "gadgets"}}}}}, "holdWatch takes no verb, subresource, name or nth"},
+		"holdWatch subresource":   {[]Step{{Faults: []Fault{{HoldWatch: true, Match: Match{Resource: "gadgets", Subresource: "status"}}}}}, "holdWatch takes no verb, subresource, name or nth"},
+		"holdWatch with name":     {[]Step{{Faults: []Fault{{HoldWatch: true, Match: Match{Resource: "gadgets", Name: "g"}}}}}, "holdWatch takes no verb, subresource, name or nth"},
+		"holdWatch with nth":      {[]Step{{Faults: []Fault{{HoldWatch: true, Match: gadgets, Nth: 1}}}}, "holdWatch takes no verb, subresource, name or nth"},
 		"stuck and drop":          {[]Step{{Faults: []Fault{{Stuck: true, Drop: true, Match: gadgets}}}}, "a fault sets 2 of"},
 		"stuck no resource":       {[]Step{{Faults: []Fault{{Stuck: true}}}}, "steps[0].faults[0]: stuck needs a match with a resource"},
 		"slowDelete with verb":    {[]Step{{Faults: []Fault{{SlowDelete: true, Match: Match{Verb: "get", Resource: "gadgets"}}}}}, "slowDelete matches objects, so it takes no verb or subresource"},
@@ -154,7 +161,7 @@ func TestValidate(t *testing.T) {
 		"fake stuck with verb":    {[]Step{{Faults: []Fault{{System: "cloud", Stuck: true, Match: Match{Verb: "get"}}}}}, "stuck matches objects"},
 		"kube target no resource": {[]Step{{Actions: []Action{{Do: Damage, Target: &Target{System: "kube"}}}}}, "damage needs a target with a resource"},
 		"malformed target system": {[]Step{{Actions: []Action{{Do: Damage, Target: &Target{System: "Cloud"}}}}}, "steps[0].actions[0]: system \"Cloud\" is not a system name"},
-		"fake fixture":            {[]Step{{Actions: []Action{{Do: ChangeFixture, Target: &Target{System: "cloud", Resource: "buckets", Name: "b"}}}}}, "changeFixture targets only kube"},
+		"fake fixture no name":    {[]Step{{Actions: []Action{{Do: ChangeFixture, Target: &Target{System: "cloud", Resource: "buckets"}}}}}, "changeFixture needs a target name"},
 		"create a live slot":      {[]Step{{Actions: []Action{create}}, {Actions: []Action{create}}}, "steps[1].actions[0]: create names slot \"a\", which still holds a CR"},
 		"two samples":             {[]Step{{Actions: []Action{create, {Do: Create, Slot: "b"}}}}, "steps[0].actions[1]: create of slot \"b\" gives its CR the name of slot \"a\"'s CR"},
 		"two names":               {[]Step{{Actions: []Action{named("a", "w"), named("b", "w")}}}, "create of slot \"b\" gives its CR the name"},
@@ -201,6 +208,9 @@ func TestValidateAccepts(t *testing.T) {
 		}},
 		{Faults: []Fault{{System: "cloud", Stuck: true}, {System: "cloud-2", SlowDelete: true, Match: Match{Resource: "buckets"}}, {System: "cloud", Error: &Error{Code: 503}}},
 			Actions: []Action{{Do: Damage, Target: &Target{System: "cloud"}}, {Do: Damage, Target: &Target{System: "cloud", Resource: "buckets", Role: "r"}}}},
+		{Faults: []Fault{{HoldWatch: true, Match: gadgets}, {HoldWatch: true, System: "kube", Match: Match{Resource: "secrets"}}},
+			Actions: []Action{{Do: ChangeFixture, Target: &Target{System: "vault", Name: "secret/app"}, Patch: json.RawMessage(`{"data":{"k":"v"}}`)},
+				{Do: ChangeFixture, Target: &Target{System: "cloud", Resource: "buckets", Name: "b"}}}},
 	}}
 	if err := p.Validate(); err != nil {
 		t.Fatal(err)
@@ -229,7 +239,7 @@ func TestUnknownOutcomeEffectsMatchTrace(t *testing.T) {
 }
 
 func TestModelFaults(t *testing.T) {
-	for f, want := range map[Fault]bool{{Stuck: true}: true, {SlowDelete: true}: true, {Drop: true}: false, {DropResponse: true}: false} {
+	for f, want := range map[Fault]bool{{Stuck: true}: true, {SlowDelete: true}: true, {Drop: true}: false, {DropResponse: true}: false, {HoldWatch: true}: false} {
 		if got := f.ModelFault(); got != want {
 			t.Errorf("%s: ModelFault() = %v, want %v", f, got, want)
 		}
@@ -244,6 +254,7 @@ func TestFaultString(t *testing.T) {
 		{Drop: true, System: "kube", Match: Match{Group: "g", Name: "n"}, Nth: 2}:                "drop on system=kube group=g name=n nth=2",
 		{Stuck: true, Match: gadgets}:      "stuck on group=example.com resource=gadgets",
 		{SlowDelete: true, Match: gadgets}: "slowDelete on group=example.com resource=gadgets",
+		{HoldWatch: true, Match: gadgets}:  "holdWatch on group=example.com resource=gadgets",
 	} {
 		if got := f.String(); got != want {
 			t.Errorf("String() = %q, want %q", got, want)

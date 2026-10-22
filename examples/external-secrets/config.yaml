@@ -1,5 +1,5 @@
 # external-secrets, unpatched, at the version the Makefile pins, built with
-# the fake provider.
+# its Vault provider, against a Vault dev server.
 launch:
   binary: ../../bin/external-secrets
   args:
@@ -26,7 +26,7 @@ primary:
       c.type == "Ready" && c.status == "True")
 fixtures:
   - secretstore.yaml
-# spec.data is not mutated: its optional enums draw specs the fake provider
+# spec.data is not mutated: its optional enums draw specs the Vault provider
 # rejects. creationPolicy and deletionPolicy are not mutated: Orphan is the
 # negative control.
 values:
@@ -35,3 +35,12 @@ values:
   overlay:
     spec.target.name: {pattern: "^example-secret-[a-z0-9]{1,8}$"}
     spec.refreshInterval: {enum: ["1h0m0s", "24h0m0s"]}
+systems:
+  - name: vault
+    api: vault
+    token: root
+    # external-secrets only reads Vault.
+    access: read
+    process:
+      command: [../../bin/vault, server, -dev, -dev-root-token-id=root, "-dev-listen-address=${addr}"]
+    fixtures: [vault.yaml]

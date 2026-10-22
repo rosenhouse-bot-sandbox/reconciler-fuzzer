@@ -1,0 +1,8 @@
+HTTP/1.1 200 OK
+Content-Type: application/xml
+Content-Length: 424
+Access-Control-Allow-Origin: *
+Connection: close
+
+<?xml version="1.0" encoding="utf-8"?>
+<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><IsTruncated>false</IsTruncated><Contents><Key>a/k.txt</Key><LastModified>2026-10-21T13:52:12.000Z</LastModified><ETag>"5d41402abc4b2a76b9719d911017c592"</ETag><Size>5</Size><StorageClass>STANDARD</StorageClass></Contents><Name>logs-bucket</Name><Prefix/><MaxKeys>1000</MaxKeys><KeyCount>1</KeyCount></ListBucketResult>

@@ -1,5 +1,5 @@
 # The controller's rules from the v2.11.0 Helm chart (rbac.yaml), trimmed to
-# the fake provider. Generators, ConfigMap targets and service account
+# the Vault provider. Generators, ConfigMap targets and service account
 # tokens are left out.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

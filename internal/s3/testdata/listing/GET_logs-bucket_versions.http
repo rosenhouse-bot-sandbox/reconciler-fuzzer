@@ -1,0 +1,8 @@
+HTTP/1.1 200 OK
+Content-Type: application/xml
+Content-Length: 608
+Access-Control-Allow-Origin: *
+Connection: close
+
+<?xml version="1.0" encoding="utf-8"?>
+<ListVersionsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><IsTruncated>false</IsTruncated><KeyMarker/><VersionIdMarker/><Version><ETag>"5d41402abc4b2a76b9719d911017c592"</ETag><Size>5</Size><StorageClass>STANDARD</StorageClass><Key>a/k.txt</Key><VersionId>null</VersionId><IsLatest>true</IsLatest><LastModified>2026-10-21T13:52:12.000Z</LastModified><Owner><DisplayName>webfile</DisplayName><ID>75aa57f09aa0c8caeab4f8c24e99d10f8e7faeebf76c078efc7c6caea54ba06a</ID></Owner></Version><Name>logs-bucket</Name><Prefix/><MaxKeys>1000</MaxKeys></ListVersionsResult>

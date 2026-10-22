@@ -526,3 +526,28 @@ func TestJudgeNotesAModelFaultThatHeldNoObject(t *testing.T) {
 		}
 	}
 }
+
+func TestJudgeNotesAHoldWatchOnlyWithoutAWatchOfItsKind(t *testing.T) {
+	hold := trace.Ref{System: "kube", Resource: "secrets"}
+	for name, c := range map[string]struct {
+		watch trace.Ref
+		noted bool
+	}{
+		"a watch of the kind":     {trace.Ref{System: "kube", Resource: "secrets", Namespace: "ns"}, false},
+		"a watch of another kind": {trace.Ref{System: "kube", Resource: "configmaps"}, true},
+	} {
+		b := createStep()
+		watch := tt.Call(ctl, "watch", c.watch, 200, "")
+		watch.Call.Watch, watch.Call.Stream = true, 7
+		b.At(1500 * ms).Add(watch)
+		b.At(2*s).Add(tt.Phase(1, trace.FaultPeriod), tt.HoldFault(1, 0, false, hold))
+		b.At(2200 * ms).Add(tt.HoldFault(1, 0, true, hold))
+		notes := check.Judge(b.Index(), spec).Notes
+		if got := slices.Contains(notes, "Step 1, fault 0 (holdWatch) held no watch."); got != c.noted {
+			t.Errorf("%s: notes = %q, want the note: %v", name, notes, c.noted)
+		}
+		if slices.ContainsFunc(notes, func(n string) bool { return strings.Contains(n, "picked no request") }) {
+			t.Errorf("%s: notes = %q, want no picked-no-request note", name, notes)
+		}
+	}
+}

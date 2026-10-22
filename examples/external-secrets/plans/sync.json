@@ -17,7 +17,7 @@
               "refreshInterval": "1h0m0s",
               "secretStoreRef": {
                 "kind": "SecretStore",
-                "name": "fake"
+                "name": "vault"
               },
               "target": {
                 "name": "example-secret"
@@ -26,7 +26,8 @@
                 {
                   "secretKey": "token",
                   "remoteRef": {
-                    "key": "/token"
+                    "key": "token",
+                    "property": "value"
                   }
                 }
               ]
@@ -46,7 +47,8 @@
                 {
                   "secretKey": "token",
                   "remoteRef": {
-                    "key": "/other"
+                    "key": "other",
+                    "property": "value"
                   }
                 }
               ]

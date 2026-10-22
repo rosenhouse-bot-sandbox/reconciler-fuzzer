@@ -94,7 +94,7 @@ func startCommand(t *testing.T, delay time.Duration, command ...string) *started
 	}
 	t.Cleanup(func() { rec.Close() })
 	f := fake.New(fake.Options{
-		Name: "cloud", Command: command, Dir: dir, API: crud.New("cloud"),
+		Name: "cloud", Command: command, Dir: dir, API: crud.New("cloud"), ModelFaults: true,
 	})
 	endpoints, err := f.Start(context.Background(), &system.Env{Record: rec.Record, Dir: out})
 	if err != nil {

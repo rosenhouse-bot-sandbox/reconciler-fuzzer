@@ -1,0 +1,14 @@
+apiVersion: s3.services.k8s.aws/v1alpha1
+kind: Bucket
+metadata:
+  name: example
+spec:
+  name: rf-example
+  # S3's default. Without it, every resync deletes the bucket's encryption.
+  encryption:
+    rules:
+      - applyServerSideEncryptionByDefault: {sseAlgorithm: AES256}
+        bucketKeyEnabled: false
+  tagging:
+    tagSet:
+      - {key: team, value: a}

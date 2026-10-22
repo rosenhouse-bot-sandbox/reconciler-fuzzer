@@ -3,6 +3,7 @@ package tracetest
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"time"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
@@ -14,13 +15,16 @@ type Script struct {
 	Timeline
 	// Spec is the trace's run event. A CR is ready when status.ready is
 	// true.
-	Spec   *trace.Run
-	Now    time.Duration
-	Step   int
-	n      int
-	uids   map[trace.Ref]string
-	bodies map[trace.Ref]map[string]any
-	index  map[int]int
+	Spec *trace.Run
+	Now  time.Duration
+	Step int
+	// BodyUIDs puts each kube object's uid in its body's metadata.uid, as
+	// the API server does.
+	BodyUIDs bool
+	n        int
+	uids     map[trace.Ref]string
+	bodies   map[trace.Ref]map[string]any
+	index    map[int]int
 }
 
 // Tick is how far each call moves the clock.
@@ -92,7 +96,9 @@ func (r *Script) Act(do, slot string, ref *trace.Ref) *Script {
 // Create has caller create ref with body, and returns its uid.
 func (r *Script) Create(caller trace.Caller, ref trace.Ref, body map[string]any) string {
 	uid, rv := "u"+r.next(), r.next()
-	r.uids[ref], r.bodies[ref] = uid, body
+	r.uids[ref] = uid
+	body = r.withUID(ref, body)
+	r.bodies[ref] = body
 	r.Add(Create(caller, ref, uid, rv), Version(ref, uid, rv, body))
 	return uid
 }
@@ -127,8 +133,25 @@ func (r *Script) inFlight(call, version trace.Event, latency time.Duration) {
 // Update has caller write body to ref.
 func (r *Script) Update(caller trace.Caller, ref trace.Ref, body map[string]any) *Script {
 	rv := r.next()
+	body = r.withUID(ref, body)
 	r.bodies[ref] = body
 	return r.Add(Call(caller, "update", ref, 200, rv), Version(ref, r.uids[ref], rv, body))
+}
+
+// withUID is body with ref's uid in metadata.uid when BodyUIDs is set.
+func (r *Script) withUID(ref trace.Ref, body map[string]any) map[string]any {
+	if !r.BodyUIDs || ref.System != "kube" {
+		return body
+	}
+	body = maps.Clone(body)
+	metadata, _ := body["metadata"].(map[string]any)
+	metadata = maps.Clone(metadata)
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadata["uid"] = r.uids[ref]
+	body["metadata"] = metadata
+	return body
 }
 
 // NoOp has caller write ref without changing it.

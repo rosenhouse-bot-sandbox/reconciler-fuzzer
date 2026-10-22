@@ -1,0 +1,8 @@
+HTTP/1.1 404 NOT FOUND
+Content-Type: application/xml
+Content-Length: 340
+Access-Control-Allow-Origin: *
+Connection: close
+
+<?xml version="1.0" encoding="utf-8"?>
+<Error><Code>NoSuchBucketPolicy</Code><Message>The bucket policy does not exist</Message><BucketName>logs-bucket</BucketName><RequestId>x4N5wTymjvyFxOV4CHWOPycI9TOPYDIF9OjsbGeGJrBbVNpJRc3J</RequestId><HostId>9Gjjt1m+cjU4OPvX9O9/8RuvnG41MRb/18Oux2o5H5MY7ISNTlXN+Dz9IG62/ILVxhAGI0qyPfg=</HostId></Error>

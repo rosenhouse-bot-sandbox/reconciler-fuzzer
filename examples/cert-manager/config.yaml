@@ -19,6 +19,8 @@ primary:
     has(self.status) && has(self.status.conditions) && self.status.conditions.exists(c,
       c.type == "Ready" && c.status == "True"
       && has(c.observedGeneration) && c.observedGeneration == self.metadata.generation)
+  owns:
+    - {kind: v1/Secret, name: self.spec.secretName}
 fixtures:
   - issuer.yaml
 # No webhook runs, so the overlay states valid values. renewBefore is not
@@ -36,3 +38,12 @@ values:
     # Under Never, cert-manager keeps a stored key that a later algorithm
     # does not match, and waits for a user. plans/rotation-never.json covers it.
     spec.privateKey.rotationPolicy: {enum: ["Always"]}
+# #63: a Certificate's Secret holds a key first written while that
+# Certificate owned the Secret, not one its deleted namesake left behind.
+# Both paths fail it: a write-back, whose Secret is a new instance, and a
+# re-point of the old Secret. The finding's details say which ran.
+properties:
+  - name: fresh-key
+    expr: >-
+      crs.all(c, world.kube.secrets.all(s, s.metadata.name != c.spec.secretName
+        || !has(s.data) || firstWrittenUnder(s, ["data", "tls.key"]) == c.metadata.uid))

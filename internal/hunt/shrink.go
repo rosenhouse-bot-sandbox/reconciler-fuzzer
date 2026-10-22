@@ -69,14 +69,15 @@ func Candidates(p *plan.Plan, sample map[string]any) []*plan.Plan {
 }
 
 // Shrink replaces p by its first failing candidate until no candidate
-// fails, and returns the result.
+// fails, and returns the result. An error of fails ends it; the result is
+// then the smallest failing plan so far.
 func Shrink(ctx context.Context, p *plan.Plan, sample map[string]any, fails Fails) (*plan.Plan, error) {
 	for {
 		shrunk := false
 		for _, c := range Candidates(p, sample) {
 			failed, err := fails(ctx, c)
 			if err != nil {
-				return nil, err
+				return p, err
 			}
 			if failed {
 				p, shrunk = c, true

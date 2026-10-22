@@ -1,0 +1,62 @@
+{
+  "steps": [
+    {
+      "actions": [
+        {
+          "do": "create",
+          "slot": "a",
+          "object": {
+            "apiVersion": "external-secrets.io/v1",
+            "kind": "ExternalSecret",
+            "metadata": {
+              "name": "example"
+            },
+            "spec": {
+              "refreshPolicy": "Periodic",
+              "refreshInterval": "2s",
+              "secretStoreRef": {
+                "name": "vault",
+                "kind": "SecretStore"
+              },
+              "target": {
+                "name": "example-secret"
+              },
+              "data": [
+                {
+                  "secretKey": "token",
+                  "remoteRef": {
+                    "key": "token",
+                    "property": "value"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "do": "changeFixture",
+          "target": {
+            "system": "vault",
+            "resource": "secret",
+            "name": "token"
+          },
+          "patch": {
+            "value": "r0tated"
+          }
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "do": "delete",
+          "slot": "a"
+        }
+      ]
+    }
+  ]
+}

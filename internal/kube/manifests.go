@@ -18,6 +18,7 @@ import (
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/yaml"
 
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 )
 
@@ -113,11 +114,12 @@ func planSetup(runNamespace string, roles []rbacv1.Role, fixtures []*unstructure
 	return s, nil
 }
 
-// readObjects decodes every document of paths as an object.
-func readObjects(paths []string) ([]*unstructured.Unstructured, error) {
+// readObjects decodes every document of paths as an object, after
+// expanding ${key} from vars.
+func readObjects(paths []string, vars map[string]string) ([]*unstructured.Unstructured, error) {
 	var objects []*unstructured.Unstructured
 	for _, path := range paths {
-		documents, err := readDocuments(path)
+		documents, err := readExpanded(path, vars)
 		if err != nil {
 			return nil, err
 		}
@@ -141,6 +143,26 @@ func readDocuments(path string) ([][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return splitDocuments(path, data)
+}
+
+// readExpanded is readDocuments after expanding ${key} from vars in each
+// line.
+func readExpanded(path string, vars map[string]string) ([][]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.SplitAfter(string(data), "\n")
+	for i, line := range lines {
+		if lines[i], err = config.Expand(line, vars); err != nil {
+			return nil, fmt.Errorf("fixture %s line %d: %w", path, i+1, err)
+		}
+	}
+	return splitDocuments(path, []byte(strings.Join(lines, "")))
+}
+
+func splitDocuments(path string, data []byte) ([][]byte, error) {
 	var documents [][]byte
 	reader := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(data)))
 	for {

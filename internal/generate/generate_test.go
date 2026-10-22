@@ -147,7 +147,7 @@ func TestPlansDrawEveryActionAndFaultKind(t *testing.T) {
 			t.Errorf("No plan draws a %s.", want)
 		}
 	}
-	for _, want := range []string{"error", "delay", "drop", "dropResponse", "killAfter",
+	for _, want := range []string{"error", "delay", "drop", "dropResponse", "killAfter", "holdWatch",
 		"error(500)", "error(503)", "error(429)", "delay(500ms)", "delay(1s)", "delay(2s)"} {
 		if !slices.Contains(effects, want) {
 			t.Errorf("No plan draws a %s fault.", want)
@@ -168,6 +168,9 @@ func TestFaultsMatchRequestsTheRBACGrants(t *testing.T) {
 	}
 	statuses := 0
 	for _, f := range faults(plans(t, toyConfig, 200)) {
+		if f.HoldWatch {
+			continue
+		}
 		key := f.Match.Group + "/" + f.Match.Resource
 		if f.Match.Subresource != "" {
 			key += "/" + f.Match.Subresource
@@ -184,9 +187,12 @@ func TestFaultsMatchRequestsTheRBACGrants(t *testing.T) {
 
 func TestFaultsFavorCreates(t *testing.T) {
 	counts := map[string]int{}
-	all := faults(plans(t, toyConfig, 200))
-	for _, f := range all {
-		counts[f.Match.Verb]++
+	var all []plan.Fault
+	for _, f := range faults(plans(t, toyConfig, 200)) {
+		if !f.HoldWatch {
+			all = append(all, f)
+			counts[f.Match.Verb]++
+		}
 	}
 	if counts["create"] < len(all)/5 || counts["create"] <= counts["get"] {
 		t.Errorf("Faults match verbs %v, want creates to be at least a fifth and more than the gets.", counts)
@@ -409,7 +415,9 @@ func TestDamageNamesALiveSlot(t *testing.T) {
 func TestFaultsFavorThePrimaryAndTheCoreKindsTheControllerCreates(t *testing.T) {
 	counts := map[string]int{}
 	for _, f := range faults(plans(t, "../../examples/cert-manager/config.yaml", 200)) {
-		counts[f.Match.Resource]++
+		if !f.HoldWatch {
+			counts[f.Match.Resource]++
+		}
 	}
 	for _, favored := range []string{"secrets", "certificates"} {
 		if counts[favored] < 2*counts["orders"] {
