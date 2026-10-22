@@ -1,0 +1,56 @@
+# config.yaml with properties that judge the ordering across kinds, which no
+# check judges. Paths resolve against this file's directory.
+launch:
+  binary: ../../../bin/toy-fleet
+  args:
+    - --bug=0                      # A later --launch-arg --bug=N wins.
+  env:
+    KUBECONFIG: ${systems.kube.kubeconfig}
+    WATCH_NAMESPACE: ${systems.kube.namespace}
+  rbac:
+    - ../rbac/role.yaml
+crds:
+  - ../crds/
+primary:
+  kind: toy.reconciler-fuzzer/v1/Cluster
+  sample: ../cluster.yaml
+  ready: >-
+    has(self.status) && has(self.status.observedGeneration) && self.status.observedGeneration == self.metadata.generation
+    && has(self.status.phase) && self.status.phase == 'Ready'
+models:
+  - kind: storage.thirdparty/v1/Volume
+    stages: readyCondition
+    after: 300ms
+    dependency: {track: 1s}
+values:
+  mutate: [spec.volumes, spec.volumeSize]
+timeouts:
+  settle: 10s
+  stable: 2s
+properties:
+  - name: databases-have-a-cluster
+    when: always
+    expr: >-
+      !('databases.toy.reconciler-fuzzer' in world.kube)
+      || world.kube['databases.toy.reconciler-fuzzer'].all(d, world.kube['clusters.toy.reconciler-fuzzer'].exists(c,
+        c.metadata.name == d.spec.clusterRef))
+  - name: users-have-a-database
+    when: always
+    expr: >-
+      !('users.toy.reconciler-fuzzer' in world.kube)
+      || world.kube['users.toy.reconciler-fuzzer'].all(u, 'databases.toy.reconciler-fuzzer' in world.kube
+        && world.kube['databases.toy.reconciler-fuzzer'].exists(d, d.metadata.name == u.spec.databaseRef))
+  - name: ready-databases-have-a-ready-cluster
+    when: always
+    expr: >-
+      !('databases.toy.reconciler-fuzzer' in world.kube)
+      || world.kube['databases.toy.reconciler-fuzzer'].all(d, !(has(d.status) && has(d.status.phase) && d.status.phase == 'Ready')
+        || world.kube['clusters.toy.reconciler-fuzzer'].exists(c, c.metadata.name == d.spec.clusterRef
+          && has(c.status) && has(c.status.phase) && c.status.phase in ['Ready', 'Deleting']))
+  - name: users-of-ready-databases-are-ready
+    expr: >-
+      !('users.toy.reconciler-fuzzer' in world.kube)
+      || world.kube['users.toy.reconciler-fuzzer'].all(u, (has(u.status) && has(u.status.phase) && u.status.phase == 'Ready')
+        || !('databases.toy.reconciler-fuzzer' in world.kube)
+        || !world.kube['databases.toy.reconciler-fuzzer'].exists(d, d.metadata.name == u.spec.databaseRef
+          && has(d.status) && has(d.status.phase) && d.status.phase == 'Ready'))
