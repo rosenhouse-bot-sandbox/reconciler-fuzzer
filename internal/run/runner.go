@@ -102,7 +102,7 @@ func (e *execution) step(ctx context.Context, n int, step plan.Step) error {
 	started, err := e.faultPeriod(ctx, n, step, start)
 	for i, f := range started {
 		f.end()
-		e.Recorder.Record(trace.Event{Fault: &trace.Fault{Step: n, Index: i, Ended: true, What: step.Faults[i].String(), System: step.Faults[i].System, Model: f.model}})
+		e.Recorder.Record(faultEvent(n, i, step.Faults[i], f.model, true))
 	}
 	if err != nil && !errors.Is(err, errSlotTaken) {
 		return err
@@ -130,10 +130,8 @@ func (e *execution) maxPoll(step plan.Step) time.Duration {
 	}
 	for _, a := range step.Actions {
 		switch a.Do {
-		case plan.Damage:
+		case plan.Damage, plan.ChangeFixture:
 			systems = append(systems, a.Target.System)
-		case plan.ChangeFixture:
-			systems = append(systems, kube.Name)
 		case plan.Create, plan.Update, plan.Delete:
 			for _, s := range e.Config.Fakes() {
 				systems = append(systems, s.Name)
@@ -162,7 +160,7 @@ func (e *execution) faultPeriod(ctx context.Context, n int, step plan.Step, star
 		if err != nil {
 			return started, fmt.Errorf("steps[%d].faults[%d]: %w", n, i, err)
 		}
-		e.Recorder.Record(trace.Event{Fault: &trace.Fault{Step: n, Index: i, What: f.String(), System: f.System, Model: model}})
+		e.Recorder.Record(faultEvent(n, i, f, model, false))
 		end, err := target.Fault(f)
 		if err != nil {
 			return started, fmt.Errorf("steps[%d].faults[%d]: %w", n, i, err)
@@ -184,6 +182,15 @@ func (e *execution) faultPeriod(ctx context.Context, n int, step plan.Step, star
 		}
 	}
 	return started, sleepUntil(ctx, start.Add(time.Duration(step.Period)))
+}
+
+// faultEvent records a fault's start or end. A holdWatch's names its kind.
+func faultEvent(n, i int, f plan.Fault, model string, ended bool) trace.Event {
+	event := &trace.Fault{Step: n, Index: i, Ended: ended, What: f.String(), System: f.System, Model: model}
+	if f.HoldWatch {
+		event.Hold = &trace.Ref{System: kube.Name, Group: f.Match.Group, Resource: f.Match.Resource}
+	}
+	return trace.Event{Fault: event}
 }
 
 // target returns the first model that takes a model fault, or the
@@ -268,12 +275,9 @@ func (e *execution) act(ctx context.Context, a plan.Action) (*trace.Ref, error) 
 		if !found {
 			return nil, errNoMatch
 		}
-		var actor Actor = e.Cluster
-		if a.Do == plan.Damage {
-			var known bool
-			if actor, known = e.Actors[ref.System]; !known {
-				return nil, fmt.Errorf("no system %q takes damage", ref.System)
-			}
+		actor, known := e.Actors[ref.System]
+		if !known {
+			return nil, fmt.Errorf("no system %q takes %s", ref.System, a.Do)
 		}
 		if a.Patch != nil {
 			return &ref, actor.Patch(ctx, ref, a.Patch)

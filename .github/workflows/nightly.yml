@@ -28,6 +28,8 @@ jobs:
             binary: cert-manager-controller
           - example: external-secrets
             binary: external-secrets
+          - example: ack-s3
+            binary: ack-s3-controller
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v5
@@ -41,6 +43,18 @@ jobs:
             bin/envtest
             bin/setup-envtest
           key: envtest-${{ runner.os }}-${{ hashFiles('Makefile') }}
+      - name: Read the Vault and moto pins
+        id: fakes
+        run: echo "key=$({ grep -E '^VAULT_' Makefile; cat requirements-moto.txt; python3 --version; } | sha256sum | cut -c1-16)" >>"$GITHUB_OUTPUT"
+      - name: Cache Vault and moto
+        uses: actions/cache@v4
+        with:
+          path: |
+            bin/vault
+            bin/vault-*.installed
+            bin/moto
+            bin/moto-*.installed
+          key: fakes-${{ runner.os }}-${{ steps.fakes.outputs.key }}
       - name: Read the ${{ matrix.example }} pin
         id: pin
         run: echo "version=$(make --no-print-directory ${{ matrix.example }}-version)" >>"$GITHUB_OUTPUT"

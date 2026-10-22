@@ -4,6 +4,7 @@ package run
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -25,8 +26,10 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/model"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/owner"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/s3"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/system"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/vault"
 )
 
 // PollInterval is how often the settle wait tests the settle condition.
@@ -131,8 +134,8 @@ type Options struct {
 	LaunchArgs []string
 }
 
-// Run loads the config and plan, starts the Kubernetes system, the models
-// and the controller, executes the plan, judges the trace and writes the outputs.
+// Run loads the config and plan, starts the fake services, the Kubernetes
+// system, the models and the controller, executes the plan, judges the trace and writes the outputs.
 func Run(ctx context.Context, o Options) (check.Report, error) {
 	cfg, err := config.Load(o.ConfigPath)
 	if err != nil {
@@ -179,33 +182,21 @@ func Run(ctx context.Context, o Options) (check.Report, error) {
 	return report, nil
 }
 
-// execute starts the Kubernetes system, the fake services, the models and
+// execute starts the fake services, the Kubernetes system, the models and
 // the controller, runs the plan and stops them.
 func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, sample map[string]any, rec *trace.Recorder) (err error) {
-	watch, seen := modelKinds(cfg.Models)
-	k := kube.New(kube.Options{
-		CRDs: cfg.CRDs, RBAC: cfg.Launch.RBAC, Fixtures: cfg.Fixtures, Warm: []map[string]any{sample},
-		Watch: slices.Concat([]schema.GroupVersionKind{cfg.Primary.Kind}, watch, ownsKinds(cfg.Primary.Owns)), Seen: seen,
-	})
 	env := &system.Env{Record: rec.Record, Dir: o.Out, Seed: p.Seed}
-	endpoints, err := k.Start(ctx, env)
-	if err != nil {
-		return err
-	}
-	defer func() { err = errors.Join(err, k.Stop(context.WithoutCancel(ctx))) }()
-	vars := map[string]map[string]string{kube.Name: endpoints.Vars}
-	controllerListeners := map[string]*interpose.Listener{kube.Name: endpoints.Controller}
-	actors := map[string]Actor{kube.Name: k}
+	vars := map[string]map[string]string{}
+	controllerListeners := map[string]*interpose.Listener{}
+	actors := map[string]Actor{}
 	var targets []ModelTarget
 	var fakes []*fake.Fake
 	for _, s := range cfg.Fakes() {
-		api, err := apiMap(s)
+		fo, err := fakeOptions(s)
 		if err != nil {
 			return err
 		}
-		f := fake.New(fake.Options{
-			Name: s.Name, Command: s.Process.Command, Dir: s.Process.Dir, API: api, SeenAll: s.Dependency != nil,
-		})
+		f := fake.New(fo)
 		defer func() { err = errors.Join(err, f.Stop(context.WithoutCancel(ctx))) }()
 		fakeEndpoints, err := f.Start(ctx, env)
 		if err != nil {
@@ -214,6 +205,17 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 		vars[s.Name], controllerListeners[s.Name], actors[s.Name] = fakeEndpoints.Vars, fakeEndpoints.Controller, f
 		targets, fakes = append(targets, f), append(fakes, f)
 	}
+	watch, seen := modelKinds(cfg.Models)
+	k := kube.New(kube.Options{
+		CRDs: cfg.CRDs, RBAC: cfg.Launch.RBAC, Fixtures: cfg.Fixtures, Vars: flatten(vars), Warm: []map[string]any{sample},
+		Watch: slices.Concat([]schema.GroupVersionKind{cfg.Primary.Kind}, watch, ownsKinds(cfg.Primary.Owns)), Seen: seen,
+	})
+	endpoints, err := k.Start(ctx, env)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, k.Stop(context.WithoutCancel(ctx))) }()
+	vars[kube.Name], controllerListeners[kube.Name], actors[kube.Name] = endpoints.Vars, endpoints.Controller, k
 	systems := model.New(k)
 	for _, m := range cfg.Models {
 		stage, err := model.NewStage(k, m)
@@ -297,10 +299,52 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 	return runner.Execute(ctx, p)
 }
 
+// fakeOptions configure the fake of s, with its fixtures and token.
+func fakeOptions(s config.System) (fake.Options, error) {
+	api, err := apiMap(s)
+	if err != nil {
+		return fake.Options{}, err
+	}
+	o := fake.Options{Name: s.Name, Command: s.Process.Command, Dir: s.Process.Dir, API: api, SeenAll: s.Dependency != nil, ModelFaults: s.Map().ModelFaults}
+	if s.Token != "" {
+		o.Vars = map[string]string{"token": s.Token}
+	}
+	for _, file := range s.Fixtures {
+		fixtures, err := config.ReadSystemFixtures(file)
+		if err != nil {
+			return fake.Options{}, fmt.Errorf("system %s: %w", s.Name, err)
+		}
+		for _, f := range fixtures {
+			body, err := json.Marshal(f.Body)
+			if err != nil {
+				return fake.Options{}, err
+			}
+			o.Fixtures = append(o.Fixtures, fake.Fixture{Resource: f.Resource, Name: f.Name, Body: body})
+		}
+	}
+	return o, nil
+}
+
+// flatten names each system's vars as systems.<name>.<key>.
+func flatten(systemVars map[string]map[string]string) map[string]string {
+	vars := map[string]string{}
+	for system, values := range systemVars {
+		for key, value := range values {
+			vars["systems."+system+"."+key] = value
+		}
+	}
+	return vars
+}
+
 // apiMap returns the map s.API names.
 func apiMap(s config.System) (fake.API, error) {
-	if s.API == crud.Name {
+	switch s.API {
+	case crud.Name:
 		return crud.New(s.Name), nil
+	case vault.Name:
+		return vault.New(s.Name, s.Token), nil
+	case s3.Name:
+		return s3.New(s.Name), nil
 	}
 	return nil, fmt.Errorf("system %s: unknown api %q", s.Name, s.API)
 }
@@ -327,6 +371,7 @@ func runEvent(cfg *config.Config, k *kube.Kube, planSteps int) (trace.Event, err
 		Ready: cfg.Primary.Ready, Stable: cfg.Timeouts.Stable, Reads: cfg.Budgets.Reads, Writes: cfg.Budgets.Writes,
 		Retain: cfg.Primary.Retain, Models: models, StatusKinds: k.StatusKinds(),
 		Owners: owners, Owns: owns, Halted: cfg.Primary.Halted, Systems: owner.Systems(cfg),
+		Properties: owner.Properties(cfg), Periodic: owner.Periodic(cfg),
 	}}, nil
 }
 
@@ -378,12 +423,7 @@ func ownsKinds(owns []config.Owns) []schema.GroupVersionKind {
 // expandLaunch expands ${systems.<name>.<key>} in the launch args, with
 // extra appended, and in the env. systemVars maps a system to its Vars.
 func expandLaunch(l config.Launch, extra []string, systemVars map[string]map[string]string) (launch.Options, error) {
-	vars := map[string]string{}
-	for system, values := range systemVars {
-		for key, value := range values {
-			vars["systems."+system+"."+key] = value
-		}
-	}
+	vars := flatten(systemVars)
 	o := launch.Options{Path: l.Binary, Env: map[string]string{}}
 	for _, arg := range append(slices.Clone(l.Args), extra...) {
 		expanded, err := config.Expand(arg, vars)

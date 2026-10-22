@@ -3,6 +3,7 @@ package owner_test
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/owner"
@@ -126,5 +127,19 @@ func TestSourcesAndSystemsOfAFake(t *testing.T) {
 		Ignore: []string{"version"}, Poll: s, Dependency: &trace.Dependency{Required: true}}}
 	if got := owner.Systems(c); !reflect.DeepEqual(got, want) {
 		t.Errorf("systems = %+v", got)
+	}
+}
+
+func TestPropertiesAndPeriodicCopyTheConfig(t *testing.T) {
+	c := &config.Config{Properties: []config.Property{{Name: "fresh", Expr: "true", When: config.Always}}}
+	if want := []trace.Property{{Name: "fresh", Expr: "true", When: "always"}}; !reflect.DeepEqual(owner.Properties(c), want) {
+		t.Errorf("Properties = %+v, want %+v", owner.Properties(c), want)
+	}
+	if owner.Periodic(c) != nil {
+		t.Error("Periodic without primary.periodic is not nil")
+	}
+	c.Primary.Periodic = &config.Periodic{Every: time.Second, Paths: []string{"status.refreshTime"}}
+	if want := (&trace.Periodic{Every: time.Second, Paths: []string{"status.refreshTime"}}); !reflect.DeepEqual(owner.Periodic(c), want) {
+		t.Errorf("Periodic = %+v, want %+v", owner.Periodic(c), want)
 	}
 }

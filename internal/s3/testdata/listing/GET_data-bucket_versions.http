@@ -1,0 +1,8 @@
+HTTP/1.1 200 OK
+Content-Type: application/xml
+Content-Length: 1023
+Access-Control-Allow-Origin: *
+Connection: close
+
+<?xml version="1.0" encoding="utf-8"?>
+<ListVersionsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><IsTruncated>false</IsTruncated><KeyMarker/><VersionIdMarker/><Version><ETag>"1b267619c4812cc46ee281747884ca50"</ETag><Size>2</Size><StorageClass>STANDARD</StorageClass><Key>k</Key><VersionId>673feb4e-6fb0-4d40-97d1-675e3cf3d1f6</VersionId><IsLatest>true</IsLatest><LastModified>2026-10-21T13:52:12.000Z</LastModified><Owner><DisplayName>webfile</DisplayName><ID>75aa57f09aa0c8caeab4f8c24e99d10f8e7faeebf76c078efc7c6caea54ba06a</ID></Owner></Version><Version><ETag>"6654c734ccab8f440ff0825eb443dc7f"</ETag><Size>2</Size><StorageClass>STANDARD</StorageClass><Key>k</Key><VersionId>97c55ef9-6212-4aba-bb7d-afe287e45fa4</VersionId><IsLatest>false</IsLatest><LastModified>2026-10-21T13:52:12.000Z</LastModified><Owner><DisplayName>webfile</DisplayName><ID>75aa57f09aa0c8caeab4f8c24e99d10f8e7faeebf76c078efc7c6caea54ba06a</ID></Owner></Version><Name>data-bucket</Name><Prefix/><MaxKeys>1000</MaxKeys></ListVersionsResult>

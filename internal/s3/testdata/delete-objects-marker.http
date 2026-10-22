@@ -1,0 +1,8 @@
+HTTP/1.1 200 OK
+Content-Type: application/xml
+Content-Length: 263
+Access-Control-Allow-Origin: *
+Connection: close
+
+<?xml version="1.0" encoding="utf-8"?>
+<DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Deleted><Key>k</Key><DeleteMarker>true</DeleteMarker><DeleteMarkerVersionId>7d8b819f-6e1b-4175-82a0-07665c1d2623</DeleteMarkerVersionId></Deleted></DeleteResult>

@@ -444,7 +444,7 @@ func TestSystemsRefuseMistakes(t *testing.T) {
 		"[{name: s3, api: crud, process: {}}]":                     "systems[0].process.command is required",
 		"[{name: s3, api: crud, process: {command: ['']}}]":        "systems[0].process.command is required",
 		"[{name: S3, api: crud, process: {command: [x]}}]":         "systems[0].name S3: want",
-		"[{name: s3, process: {command: [x]}}]":                    "systems[0].api \"\": the only API map is crud",
+		"[{name: s3, process: {command: [x]}}]":                    "systems[0].api \"\": want crud, vault or s3",
 		"[{name: s3, api: rest, process: {command: [x]}}]":         "systems[0].api \"rest\"",
 		"[" + fake + ", " + fake + "]":                             "systems[1].name cloud: another system has this name",
 		"[" + with("role: '1 + 2'") + "]":                          "systems[0].role",
@@ -567,7 +567,7 @@ func TestFakeOwns(t *testing.T) {
 
 func TestUnknownPrimaryKeyListsOwns(t *testing.T) {
 	_, err := config.Load(writeConfig(t, strings.Replace(minimal(t), `  ready: "true"`, `  ready: "true"`+"\n  zzzzzz: x", 1)))
-	if err == nil || !strings.Contains(err.Error(), "retain, halted and owns") {
+	if err == nil || !strings.Contains(err.Error(), "retain, halted, periodic and owns") {
 		t.Errorf("err = %v", err)
 	}
 }

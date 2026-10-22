@@ -1,0 +1,51 @@
+{
+  "steps": [
+    {
+      "actions": [
+        {
+          "do": "create",
+          "slot": "a",
+          "object": {
+            "apiVersion": "s3.services.k8s.aws/v1alpha1",
+            "kind": "Bucket",
+            "metadata": {
+              "name": "example",
+              "annotations": {
+                "services.k8s.aws/deletion-policy": "retain"
+              }
+            },
+            "spec": {
+              "name": "rf-retained",
+              "encryption": {
+                "rules": [
+                  {
+                    "applyServerSideEncryptionByDefault": {
+                      "sseAlgorithm": "AES256"
+                    },
+                    "bucketKeyEnabled": false
+                  }
+                ]
+              },
+              "tagging": {
+                "tagSet": [
+                  {
+                    "key": "team",
+                    "value": "a"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "do": "delete",
+          "slot": "a"
+        }
+      ]
+    }
+  ]
+}

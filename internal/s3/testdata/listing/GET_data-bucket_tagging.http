@@ -1,0 +1,8 @@
+HTTP/1.1 404 NOT FOUND
+Content-Type: application/xml
+Content-Length: 327
+Access-Control-Allow-Origin: *
+Connection: close
+
+<?xml version="1.0" encoding="utf-8"?>
+<Error><Code>NoSuchTagSet</Code><Message>The TagSet does not exist</Message><BucketName>data-bucket</BucketName><RequestId>GUgxPSbtb8Jwd574tZiAFWcKfAEEnLdWoS2Pr0iM0k1xdNv5efdq</RequestId><HostId>9Gjjt1m+cjU4OPvX9O9/8RuvnG41MRb/18Oux2o5H5MY7ISNTlXN+Dz9IG62/ILVxhAGI0qyPfg=</HostId></Error>

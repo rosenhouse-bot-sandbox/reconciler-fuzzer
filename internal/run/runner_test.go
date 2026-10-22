@@ -836,13 +836,14 @@ func TestExecuteGivesTheDeadlineTheLongestPollOfTheStepsSystems(t *testing.T) {
 		{Faults: []plan.Fault{{System: "cloud", Stuck: true}}},
 		{Actions: []plan.Action{{Do: plan.Damage, Target: &plan.Target{System: "cloud"}}}},
 		{Actions: []plan.Action{{Do: plan.Damage, Target: &plan.Target{Resource: "configmaps"}}}},
+		{Actions: []plan.Action{{Do: plan.ChangeFixture, Target: &plan.Target{System: "cloud", Name: "b"}}}},
 		{Actions: []plan.Action{{Do: plan.Create, Slot: "a", Object: widget("w")}}},
 	}}
 	if err := f.runner.Execute(context.Background(), p); err != nil {
 		t.Fatal(err)
 	}
 	events := f.rec.Events()
-	for step, poll := range []time.Duration{0, timeouts.Stable, cloudPoll, cloudPoll, cloudPoll, timeouts.Stable, cloudPoll, cloudPoll} {
+	for step, poll := range []time.Duration{0, timeouts.Stable, cloudPoll, cloudPoll, cloudPoll, timeouts.Stable, cloudPoll, cloudPoll, cloudPoll} {
 		start, _ := find(events, step, trace.FaultPeriod)
 		endFaults, _ := find(events, step, trace.EndFaults)
 		want, _ := Deadline(endFaults.At, endFaults.At-start.At, poll, timeouts)
@@ -889,5 +890,64 @@ func TestExecuteRecordsEachFaultsSystem(t *testing.T) {
 	}
 	if n != 2 {
 		t.Errorf("%d fault events, want 2", n)
+	}
+}
+
+func TestExecuteRecordsTheKindAHoldWatchHolds(t *testing.T) {
+	f := newFixture(t, nil)
+	p := &plan.Plan{Steps: []plan.Step{{Faults: []plan.Fault{
+		{HoldWatch: true, Match: plan.Match{Group: "cert-manager.io", Resource: "certificates"}},
+		{Drop: true, Match: plan.Match{Resource: "secrets"}},
+	}}}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := f.faults.all()[:2], []string{"fault certificates", "fault secrets"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("kube listener calls = %q, want %q", got, want)
+	}
+	hold := trace.Ref{System: "kube", Group: "cert-manager.io", Resource: "certificates"}
+	var holds []*trace.Ref
+	for _, e := range f.rec.Events() {
+		if e.Fault != nil {
+			holds = append(holds, e.Fault.Hold)
+		}
+	}
+	if want := []*trace.Ref{&hold, nil, &hold, nil}; !reflect.DeepEqual(holds, want) {
+		t.Errorf("fault holds = %v, want %v", holds, want)
+	}
+}
+
+func TestExecuteRoutesAChangeFixtureToItsTargetsSystem(t *testing.T) {
+	f := newFixture(t, nil)
+	vault := &calls{}
+	f.runner.Actors["vault"] = fakeActor{vault}
+	asked := selecting(f, map[string]trace.Ref{"": {System: "vault", Resource: "secret", Name: "app"}})
+	target := plan.Target{System: "vault", Name: "app"}
+	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{
+		{Do: plan.ChangeFixture, Target: &target, Patch: json.RawMessage(`{"data":{"k":"v2"}}`)},
+		{Do: plan.ChangeFixture, Target: &target},
+	}}}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := vault.all(), []string{`patch app {"data":{"k":"v2"}}`, "delete app"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("vault calls = %q, want %q", got, want)
+	}
+	if got := f.cluster.all(); len(got) != 0 {
+		t.Errorf("cluster calls = %q, want none", got)
+	}
+	for _, s := range *asked {
+		if s.creator != trace.Harness {
+			t.Errorf("Select asked for creator %s, want the harness", s.creator)
+		}
+	}
+}
+
+func TestExecuteRefusesAChangeFixtureOnASystemWithNoActor(t *testing.T) {
+	f := newFixture(t, nil)
+	selecting(f, map[string]trace.Ref{"": {System: "vault", Resource: "secret", Name: "app"}})
+	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{{Do: plan.ChangeFixture, Target: &plan.Target{System: "vault", Name: "app"}}}}}}
+	if err := f.runner.Execute(context.Background(), p); err == nil || !strings.Contains(err.Error(), "vault") {
+		t.Fatalf("Execute = %v, want an error naming vault", err)
 	}
 }

@@ -1,0 +1,3 @@
+07c959f142579405e8ebfd03a26e8ef4b66027a39d4a5202aed164566d29d4b6  s3.services.k8s.aws_buckets.yaml
+bd2c1b6628054556460df6fbb963a5901fd68781d7b1ab74050a69143e55becc  services.k8s.aws_fieldexports.yaml
+28f6813fae62c4c69d6ef22b0e6ae8eef3b75c5543539adcf8bb9923af3adda3  services.k8s.aws_iamroleselectors.yaml

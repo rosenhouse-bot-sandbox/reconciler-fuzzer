@@ -112,6 +112,9 @@ type Fault struct {
 	Stuck bool `json:"stuck,omitempty"`
 	// SlowDelete holds each matching object's deletion until the fault ends.
 	SlowDelete bool `json:"slowDelete,omitempty"`
+	// HoldWatch pauses the controller's watch events of the kind Match's
+	// group and resource name, and delivers them in order when it ends.
+	HoldWatch bool `json:"holdWatch,omitempty"`
 }
 
 // ModelFault reports whether a stage model, not a listener, takes f.
@@ -277,10 +280,7 @@ func (a Action) validateChange(names map[string]string) error {
 	if err := validSystem(a.Target.System); err != nil {
 		return err
 	}
-	switch {
-	case a.Do == ChangeFixture && !onKube(a.Target.System):
-		return errors.New("changeFixture targets only kube")
-	case onKube(a.Target.System) && a.Target.Resource == "":
+	if onKube(a.Target.System) && a.Target.Resource == "" {
 		return fmt.Errorf("%s needs a target with a resource", a.Do)
 	}
 	if a.Patch != nil && !isObject(a.Patch) {
@@ -338,16 +338,27 @@ func isObject(raw json.RawMessage) bool {
 
 // Validate requires exactly one effect, an error code from 400 to 599, a
 // system name and a non-negative nth. A model fault takes no verb,
-// subresource or nth, and on kube needs a resource.
+// subresource or nth, and on kube needs a resource. A holdWatch acts on
+// kube, needs a resource and takes only a group besides.
 func (f Fault) Validate() error {
 	effects := 0
-	for _, set := range []bool{f.Error != nil, f.Delay != nil, f.Drop, f.DropResponse, f.KillAfter, f.Stuck, f.SlowDelete} {
+	for _, set := range []bool{f.Error != nil, f.Delay != nil, f.Drop, f.DropResponse, f.KillAfter, f.Stuck, f.SlowDelete, f.HoldWatch} {
 		if set {
 			effects++
 		}
 	}
 	if effects != 1 {
-		return fmt.Errorf("a fault sets %d of error, delay, drop, dropResponse, killAfter, stuck and slowDelete, want exactly one", effects)
+		return fmt.Errorf("a fault sets %d of error, delay, drop, dropResponse, killAfter, stuck, slowDelete and holdWatch, want exactly one", effects)
+	}
+	if f.HoldWatch {
+		switch {
+		case !onKube(f.System):
+			return errors.New("holdWatch acts only on kube")
+		case f.Match.Resource == "":
+			return errors.New("holdWatch needs a match with a resource")
+		case f.Match.Verb != "" || f.Match.Subresource != "" || f.Match.Name != "" || f.Nth != 0:
+			return errors.New("holdWatch takes no verb, subresource, name or nth")
+		}
 	}
 	if f.ModelFault() {
 		switch effect := f.Effect(); {
@@ -397,6 +408,8 @@ func (f Fault) Effect() string {
 		return "stuck"
 	case f.SlowDelete:
 		return "slowDelete"
+	case f.HoldWatch:
+		return "holdWatch"
 	}
 	return "drop"
 }

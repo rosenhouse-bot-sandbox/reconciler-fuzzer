@@ -22,8 +22,16 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 )
 
-// Replays is how many times a hunt replays each finding's plan.
-const Replays = 5
+// Replays is how many times a hunt replays each finding's plan, and
+// ShrinkCandidates how many candidates a shrink of one finding tries, so
+// that one slow shrink leaves time for the other seeds.
+const (
+	Replays          = 5
+	ShrinkCandidates = 16
+)
+
+// errShrinkCut ends a shrink after ShrinkCandidates candidates.
+var errShrinkCut = errors.New("the shrink tried ShrinkCandidates candidates")
 
 // RunPlan runs one plan into out and returns its report. run.Run implements
 // it in production.
@@ -203,7 +211,11 @@ func (h *hunter) investigate(ctx context.Context, p *plan.Plan, dir, name string
 		if 2*f.Reproduced < Replays {
 			k = 4
 		}
+		tried := 0
 		fails := func(ctx context.Context, c *plan.Plan) (bool, error) {
+			if tried++; tried > ShrinkCandidates {
+				return false, errShrinkCut
+			}
 			candidates++
 			for r := 1; r <= k; r++ {
 				out := filepath.Join(dir, fmt.Sprintf("shrink-%d-%d", candidates, r))
@@ -222,7 +234,11 @@ func (h *hunter) investigate(ctx context.Context, p *plan.Plan, dir, name string
 			h.logf("%s, shrink candidate %d: passes", name, candidates)
 			return false, nil
 		}
-		if f.Shrunk, err = Shrink(ctx, p, h.sample, fails); err != nil {
+		if f.Shrunk, err = Shrink(ctx, p, h.sample, fails); errors.Is(err, errShrinkCut) {
+			h.logf("%s: shrink stopped after %d candidates", name, ShrinkCandidates)
+			err = nil
+		}
+		if err != nil {
 			f.Shrunk = nil
 			return found, err
 		}

@@ -14,7 +14,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
-	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/crud"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 )
@@ -151,16 +150,30 @@ func Sources(c *config.Config, resource func(schema.GroupVersionKind) (string, b
 func Systems(c *config.Config) []trace.System {
 	var systems []trace.System
 	for _, f := range c.Fakes() {
-		s := trace.System{Name: f.Name, API: f.API, Role: f.Role, Ready: f.Ready, Gone: f.Gone, Poll: f.Poll}
-		if f.API == crud.Name {
-			s.Ignore = crud.Ignore
-		}
+		s := trace.System{Name: f.Name, API: f.API, Role: f.Role, Ready: f.Ready, Gone: f.Gone, Poll: f.Poll, Ignore: f.Map().Ignore}
 		if f.Dependency != nil {
 			s.Dependency = &trace.Dependency{Required: f.Dependency.Required, Track: f.Dependency.Track}
 		}
 		systems = append(systems, s)
 	}
 	return systems
+}
+
+// Properties returns c's properties for the run event.
+func Properties(c *config.Config) []trace.Property {
+	var properties []trace.Property
+	for _, p := range c.Properties {
+		properties = append(properties, trace.Property{Name: p.Name, Expr: p.Expr, When: string(p.When)})
+	}
+	return properties
+}
+
+// Periodic returns c's primary.periodic for the run event, or nil.
+func Periodic(c *config.Config) *trace.Periodic {
+	if p := c.Primary.Periodic; p != nil {
+		return &trace.Periodic{Every: p.Every, Paths: p.Paths}
+	}
+	return nil
 }
 
 // Key is the owner's CR set as a map key, so a change of rule keeps it.
@@ -332,6 +345,14 @@ func (w *World) Instance(uid string) (Instance, bool) {
 	}
 	return w.instances[n], true
 }
+
+// Versions returns the instance's versions in order.
+func (w *World) Versions(i Instance) []trace.Event { return w.versions[i.UID] }
+
+// Object is the instance's latest body at t, decoded and shared between
+// callers, which must not change it. It is nil before the instance exists
+// or when its body does not decode to an object.
+func (w *World) Object(i Instance, t time.Duration) map[string]any { return w.object(i, t) }
 
 // Body is the instance's latest body at t.
 func (w *World) Body(i Instance, t time.Duration) json.RawMessage {

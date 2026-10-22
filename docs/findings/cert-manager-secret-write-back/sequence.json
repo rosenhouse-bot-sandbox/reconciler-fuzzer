@@ -1,3 +1,0 @@
-{"seed": 1, "target": "cert-manager", "ops": [
-  {"i": 0, "t": "create", "obj": {"apiVersion": "cert-manager.io/v1", "kind": "Certificate", "metadata": {"name": "example"}, "spec": {"secretName": "example-tls", "commonName": "example.test", "dnsNames": ["example.test"], "issuerRef": {"kind": "Issuer", "name": "selfsigned"}, "privateKey": {"rotationPolicy": "Never"}}}},
-  {"i": 1, "t": "recreate", "obj": {"apiVersion": "cert-manager.io/v1", "kind": "Certificate", "metadata": {"name": "example"}, "spec": {"secretName": "example-tls", "commonName": "example.test", "dnsNames": ["example.test"], "issuerRef": {"kind": "Issuer", "name": "selfsigned"}, "privateKey": {"algorithm": "ECDSA", "rotationPolicy": "Never"}}}}]}

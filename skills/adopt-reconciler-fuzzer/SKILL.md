@@ -198,6 +198,28 @@ systems:
   with two resources in one collection.
 - `ready` and `gone` are CEL over a resource. `dependency` needs `ready`. `poll` is how often the
   controller reads the API; it lengthens each step's deadline.
+- For Vault or S3, run the real emulator instead: `api: vault` with a Vault dev server, or
+  `api: s3` with moto's `moto_server`. In a clone of reconciler-fuzzer, `make setup` installs
+  both under `bin/`.
+  `token` is the token the harness sends, and `${systems.<name>.token}` expands to it; Vault
+  needs one. Set `access: read` when the controller only reads the emulator, so generated
+  plans spend no damage or write faults on it.
+  `fixtures` lists files of `{resource, name, body}` entries the harness writes first, such
+  as a KV secret under mount `secret`. `<module>/examples/external-secrets/config.yaml` and
+  `<module>/examples/ack-s3/config.yaml` are examples.
+- Kube fixtures expand `${systems.<name>.url}` and `.token`, so a Secret fixture can carry the
+  controller's credentials for the emulator.
+
+### Properties and timers
+
+- `properties: [{name, expr, when}]` holds CEL that must hold at each settled step's end, or at
+  every version with `when: always`. It sees `crs` and `world.<system>.<key>`, such as
+  `world.kube.secrets`. Write one when the user names an invariant the checks cannot know, such
+  as "the Secret holds Vault's current value". Ask the user before adding one.
+- `primary.periodic: {every, paths}` names the CR fields the controller rewrites on a timer,
+  such as `status.refreshTime`, or `status.conditions[*].lastTransitionTime` for a field of
+  every list item. Name the narrowest path: a broader one also excuses real flapping. Without
+  it, a controller that refreshes every few seconds never settles.
 
 ## 5. Write the sample
 
@@ -227,7 +249,12 @@ With a model, add a step whose fault keeps it not ready, such as
 "resource": "gadgets"}, "stuck": true}]}`. With a fake, add a step that drops the response
 to the first create, such as `{"actions": [...], "period": "1s", "faults": [{"system": "cloud",
 "match": {"verb": "create", "resource": "buckets"}, "nth": 1, "dropResponse": true}]}`, and one
-that damages a resource, `{"do": "damage", "slot": "a", "target": {"system": "cloud"}}`.
+that damages a resource, `{"do": "damage", "slot": "a", "target": {"system": "cloud"}}`. With a
+Vault fixture, add a step that writes a new version, `{"do": "changeFixture", "target":
+{"system": "vault", "resource": "secret", "name": "token"}, "patch": {"value": "new"}}`. A step
+that deletes and creates slot `a` with `"faults": [{"match": {"resource": "secrets"},
+"holdWatch": true}]` tests how the controller acts on a stale cache. A report note that the
+`holdWatch` held no watch means the controller watches no such kind, or the match is wrong.
 `<module>/targets/toy-widget/plans/` and `<module>/targets/toy-bucket/plans/` hold more.
 Run it from the config's directory, in the background, and act on the exit code:
 
@@ -248,6 +275,7 @@ controller:
 | --- | --- | --- |
 | Converge, with a line `whose status nothing models` | Another controller sets that kind's status. | Add the `models:` entry it suggests. |
 | Converge | `ready` reads a field the controller never writes. | Fix `ready`. |
+| Converge, clause 7, on CR writes each refresh period | The controller refreshes on a timer. | Set `primary.periodic`, and raise `budgets.reads` if each refresh reads more than twice. |
 | Converge | A drawn value is one a webhook would refuse. | Narrow `values.overlay`. |
 | Honest, `reported ready with no dependency` | The CR can be ready without that kind, or does not own it. | Set `required: false` in the first case. In the second, add `owns` or `owner`, or drop `dependency`. |
 | Clean | The controller keeps resources by design. | Set `primary.retain`. |
@@ -257,7 +285,7 @@ controller:
 Every other finding is a bug in the controller. Never hide one to make a check pass, and ask
 the user when in doubt. On a finding, stop and report it (step 11).
 
-A note `unmapped request` means the `crud` map could not read a request to a fake, so no check
+A note `unmapped request` means the API map could not read a request to a fake, so no check
 judged it. Tell the user which paths the controller uses.
 
 **Exit 0**: no findings. Go on.

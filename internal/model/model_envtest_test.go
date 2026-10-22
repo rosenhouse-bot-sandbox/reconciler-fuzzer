@@ -224,9 +224,14 @@ func TestAStageMakesAGadgetReadyThenStuckThenRecovered(t *testing.T) {
 	await(t, "stuck", false, "Stuck")
 	end()
 	await(t, "recovered", true, "fault 1 ended")
-	if recorded.count(func(e trace.Event) bool {
+	// The observer can record the last write's version before the write's call.
+	deadline := time.Now().Add(10 * time.Second)
+	for recorded.count(func(e trace.Event) bool {
 		return e.Call != nil && e.Call.Caller == s.caller() && e.Call.Subresource == "status" && e.Call.Status == 200
 	}) < 3 {
-		t.Error("The stage's writes are not calls by its caller.")
+		if time.Now().After(deadline) {
+			t.Fatal("The stage's writes are not calls by its caller.")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

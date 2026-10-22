@@ -1,0 +1,2 @@
+- {resource: secret, name: one, body: {a: b}}
+- {resource: secret, name: two, body: {a: b}}

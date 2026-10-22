@@ -40,10 +40,19 @@ type Generator struct {
 	// requests are what faults match, each with the weight of its draw.
 	requests []request
 	fixtures []fixture
+	// watchable are the resources the RBAC lets the controller watch,
+	// which holdWatch faults hold. A kind appears once per unit of its
+	// holdWeight.
+	watchable []gvk.GroupResource
+	// owned are the kube kinds primary.owns names.
+	owned []gvk.GroupResource
 	// models are the resources of the model kinds, which model faults match.
 	models []gvk.GroupResource
-	// fakes are the fake services' names.
-	fakes []string
+	// fakes are the fake services' names. modelFakes take model faults,
+	// and readOnly fakes take no damage and no write faults.
+	fakes      []string
+	modelFakes map[string]bool
+	readOnly   map[string]bool
 	// track is the longest dependency track, which a model fault's period
 	// adds.
 	track  time.Duration
@@ -80,7 +89,7 @@ func build(cfg *config.Config) (*Generator, error) {
 	if err != nil {
 		return nil, err
 	}
-	g := &Generator{rules: rules, stable: cfg.Timeouts.Stable, sample: &unstructured.Unstructured{}, granted: map[gvk.GroupResource][]string{}}
+	g := &Generator{rules: rules, stable: cfg.Timeouts.Stable, sample: &unstructured.Unstructured{}, granted: map[gvk.GroupResource][]string{}, modelFakes: map[string]bool{}, readOnly: map[string]bool{}}
 	if g.sample.Object, err = readObject(cfg.Primary.Sample); err != nil {
 		return nil, err
 	}
@@ -119,11 +128,26 @@ func build(cfg *config.Config) (*Generator, error) {
 		return nil, err
 	}
 	g.addRequests()
+	for _, o := range cfg.Primary.Owns {
+		if o.System == "" {
+			gvr, _ := meta.UnsafeGuessKindToResource(o.Kind)
+			g.owned = append(g.owned, gvr.GroupResource())
+		}
+	}
+	for n, gr := range g.resources {
+		if verbs := g.granted[gr]; slices.Contains(verbs, "watch") || slices.Contains(verbs, "*") {
+			for range g.holdWeight(n, gr) {
+				g.watchable = append(g.watchable, gr)
+			}
+		}
+	}
 	if err := g.readModels(cfg); err != nil {
 		return nil, err
 	}
 	for _, f := range cfg.Fakes() {
 		g.fakes = append(g.fakes, f.Name)
+		g.modelFakes[f.Name] = f.Map().ModelFaults
+		g.readOnly[f.Name] = f.ReadOnly
 		if f.Dependency != nil {
 			g.track = max(g.track, f.Dependency.Track)
 		}
@@ -196,6 +220,25 @@ func (g *Generator) readFixtures(cfg *config.Config) error {
 				f.paths = append(f.paths, strings.Split(dotted, "."))
 			}
 			g.fixtures = append(g.fixtures, f)
+		}
+	}
+	for _, s := range cfg.Systems {
+		for _, path := range s.Fixtures {
+			paths := cfg.Values.Fixtures[path]
+			if len(paths) == 0 {
+				continue
+			}
+			entries, err := config.ReadSystemFixtures(path)
+			if err != nil {
+				return err
+			}
+			for _, entry := range entries {
+				f := fixture{target: plan.Target{System: s.Name, Resource: entry.Resource, Name: entry.Name}}
+				for _, dotted := range paths {
+					f.paths = append(f.paths, strings.Split(dotted, "."))
+				}
+				g.fixtures = append(g.fixtures, f)
+			}
 		}
 	}
 	return nil
@@ -310,7 +353,11 @@ func (g *Generator) step(t *rapid.T, at state) plan.Step {
 		switch do := sampled(t, singles, "single"); do {
 		case "":
 			step.Faults = []plan.Fault{g.fault(t)}
-			step.Actions = []plan.Action{g.traffic(t, at, step.Faults[0])}
+			if step.Faults[0].HoldWatch {
+				step.Actions = g.holdTraffic(t, at)
+			} else {
+				step.Actions = []plan.Action{g.traffic(t, at, step.Faults[0])}
+			}
 		case plan.Damage:
 			step.Actions = []plan.Action{g.damage(t, at)}
 		default:
@@ -319,11 +366,15 @@ func (g *Generator) step(t *rapid.T, at state) plan.Step {
 	case len(at.live()) > 0 && uniform(t, 10, "burst") < 3:
 		step.Actions = g.burst(t, at)
 	default:
-		for range 1 + uniform(t, 4, "actions") {
-			step.Actions = append(step.Actions, g.action(t, at))
-		}
 		if rapid.Bool().Draw(t, "fault") {
 			step.Faults = []plan.Fault{g.fault(t)}
+		}
+		if len(step.Faults) > 0 && step.Faults[0].HoldWatch {
+			step.Actions = g.holdTraffic(t, at)
+			break
+		}
+		for range 1 + uniform(t, 4, "actions") {
+			step.Actions = append(step.Actions, g.action(t, at))
 		}
 	}
 	if len(step.Faults) > 0 || slices.ContainsFunc(step.Actions, func(a plan.Action) bool { return a.Do == plan.Kill }) {
@@ -339,12 +390,27 @@ func (g *Generator) step(t *rapid.T, at state) plan.Step {
 // 50 ms.
 func (g *Generator) burst(t *rapid.T, at state) []plan.Action {
 	slot := sampled(t, at.live(), "slot")
-	var actions []plan.Action
 	if len(g.fields) > 0 && rapid.Bool().Draw(t, "updates") {
-		actions = []plan.Action{g.update(t, at, slot), g.update(t, at, slot)}
-	} else {
-		actions = []plan.Action{g.delete(t, at, slot), g.create(t, at, slot)}
+		return within50ms(t, []plan.Action{g.update(t, at, slot), g.update(t, at, slot)})
 	}
+	return within50ms(t, []plan.Action{g.delete(t, at, slot), g.create(t, at, slot)})
+}
+
+// holdTraffic is the action a holdWatch takes: a live CR deleted and
+// created again as it was within 50 ms, which a stale cache can mistake
+// for the old CR, or else a create.
+func (g *Generator) holdTraffic(t *rapid.T, at state) []plan.Action {
+	if len(at.live()) == 0 {
+		return []plan.Action{g.create(t, at, sampled(t, at.free(), "slot"))}
+	}
+	slot := sampled(t, at.live(), "slot")
+	cr := at[slot]
+	deleted := g.delete(t, at, slot)
+	at[slot] = cr
+	return within50ms(t, []plan.Action{deleted, {Do: plan.Create, Slot: slot, Object: marshal(cr)}})
+}
+
+func within50ms(t *rapid.T, actions []plan.Action) []plan.Action {
 	offsets := []int{uniform(t, 51, "at"), uniform(t, 51, "at")}
 	slices.Sort(offsets)
 	for i := range actions {
@@ -422,14 +488,19 @@ func (g *Generator) delete(t *rapid.T, at state, slot string) plan.Action {
 }
 
 // damageable says whether a kube resource or a fake can take damage.
-func (g *Generator) damageable() bool { return len(g.resources) > 1 || len(g.fakes) > 0 }
+func (g *Generator) damageable() bool { return len(g.resources) > 1 || len(g.writable()) > 0 }
+
+// writable are the fakes that are not read-only.
+func (g *Generator) writable() []string {
+	return slices.DeleteFunc(slices.Clone(g.fakes), func(name string) bool { return g.readOnly[name] })
+}
 
 // damage deletes an object of a drawn resource, of a live slot when one is.
-// With fakes, half the draws, or all without a kube resource, target a
-// fake drawn uniformly.
+// With writable fakes, half the draws, or all without a kube resource,
+// target one drawn uniformly.
 func (g *Generator) damage(t *rapid.T, at state) plan.Action {
-	if len(g.fakes) > 0 && (len(g.resources) == 1 || uniform(t, 2, "damage a fake") == 0) {
-		return g.damageOf(t, at, plan.Target{System: sampled(t, g.fakes, "fake")})
+	if fakes := g.writable(); len(fakes) > 0 && (len(g.resources) == 1 || uniform(t, 2, "damage a fake") == 0) {
+		return g.damageOf(t, at, plan.Target{System: sampled(t, fakes, "fake")})
 	}
 	gr := sampled(t, g.resources[1:], "resource")
 	return g.damageOf(t, at, plan.Target{Group: gr.Group, Resource: gr.Resource})
@@ -476,8 +547,18 @@ func (g *Generator) traffic(t *rapid.T, at state, f plan.Fault) plan.Action {
 // slowDelete takes a delete of a live CR. Stuck, a create or any verb
 // takes a create, which makes a new resource. Without a CR to delete or a
 // slot to create, or for another verb, it takes damage of the fake, which
-// the controller repairs.
+// the controller repairs. A read-only fake's read takes a create, or an
+// update of a live CR, which the controller reads the fake for.
 func (g *Generator) fakeTraffic(t *rapid.T, at state, f plan.Fault) plan.Action {
+	if g.readOnly[f.System] {
+		switch {
+		case len(at.free()) > 0:
+			return g.create(t, at, sampled(t, at.free(), "slot"))
+		case len(g.fields) > 0:
+			return g.update(t, at, sampled(t, at.live(), "slot"))
+		}
+		return plan.Action{Do: plan.Restart}
+	}
 	deletes := f.SlowDelete || f.Match.Verb == "delete"
 	switch creates := f.Stuck || f.Match.Verb == "create" || f.Match.Verb == ""; {
 	case deletes && len(at.live()) > 0:
@@ -505,14 +586,32 @@ var verbWeights = map[string]int{"get": 1, "list": 1, "create": 6, "update": 2, 
 // kinds the controller may create, such as Secrets.
 const favored = 4
 
+// holdWeight is favored for the primary, g.resources[0], and for the kube
+// kinds primary.owns names, else 1. Without owned kinds it is kindWeight.
+func (g *Generator) holdWeight(n int, gr gvk.GroupResource) int {
+	if len(g.owned) == 0 {
+		return g.kindWeight(n, gr)
+	}
+	if n == 0 || slices.Contains(g.owned, gr) {
+		return favored
+	}
+	return 1
+}
+
+// kindWeight is favored for the primary, g.resources[0], and for core kinds
+// the RBAC lets the controller create, else 1.
+func (g *Generator) kindWeight(n int, gr gvk.GroupResource) int {
+	if n == 0 || gr.Group == "" && slices.Contains(g.granted[gr], "create") {
+		return favored
+	}
+	return 1
+}
+
 // addRequests adds a request for each verb the RBAC grants on each resource
 // and its status, or get and list on a resource it does not name.
 func (g *Generator) addRequests() {
 	for n, gr := range g.resources {
-		kindWeight := 1
-		if n == 0 || gr.Group == "" && slices.Contains(g.granted[gr], "create") {
-			kindWeight = favored
-		}
+		kindWeight := g.kindWeight(n, gr)
 		for _, subresource := range []string{"", "status"} {
 			named := gr
 			if subresource != "" {
@@ -541,8 +640,9 @@ func (g *Generator) addRequests() {
 
 // fault draws a request and one of five request effects. With models, it
 // draws one of seven effects instead, and the last two are stuck and
-// slowDelete on a model kind drawn uniformly. With fakes, half the draws
-// are a fake fault instead.
+// slowDelete on a model kind drawn uniformly. With a watchable kind, two
+// more effects are a holdWatch of one drawn uniformly. With fakes, half the
+// draws are a fake fault instead.
 func (g *Generator) fault(t *rapid.T) plan.Fault {
 	if len(g.fakes) > 0 && uniform(t, 2, "fault on a fake") == 0 {
 		return g.fakeFault(t)
@@ -561,17 +661,23 @@ func (g *Generator) fault(t *rapid.T) plan.Fault {
 	if len(g.models) > 0 {
 		effects = 7
 	}
-	switch effect := uniform(t, effects, "effect"); effect {
-	case 0:
+	if len(g.watchable) > 0 {
+		effects += 2
+	}
+	switch effect := uniform(t, effects, "effect"); {
+	case effect >= effects-2 && len(g.watchable) > 0:
+		gr := sampled(t, g.watchable, "hold")
+		return plan.Fault{Match: plan.Match{Group: gr.Group, Resource: gr.Resource}, HoldWatch: true}
+	case effect == 0:
 		f.Error = &plan.Error{Code: sampled(t, []int{500, 503, 429}, "code")}
-	case 1:
+	case effect == 1:
 		delay := plan.Duration(g.stable / time.Duration(sampled(t, []int{4, 2, 1}, "delay")))
 		f.Delay = &delay
-	case 2:
+	case effect == 2:
 		f.Drop = true
-	case 3:
+	case effect == 3:
 		f.DropResponse = true
-	case 4:
+	case effect == 4:
 		f.KillAfter = true
 	default:
 		gr := sampled(t, g.models, "model")
@@ -580,16 +686,25 @@ func (g *Generator) fault(t *rapid.T) plan.Fault {
 	return f
 }
 
-// fakeVerbs are the crud map's verbs, each drawn equally.
-var fakeVerbs = []string{"create", "get", "list", "update", "patch", "delete"}
+// fakeVerbs are the crud map's verbs, each drawn equally, and readVerbs
+// those a read-only fake's faults match.
+var (
+	fakeVerbs = []string{"create", "get", "list", "update", "patch", "delete"}
+	readVerbs = []string{"get", "list"}
+)
 
 // fakeFault draws a fake uniformly, then one of seven effects: five request
 // effects on the first or every request, of a verb or of any verb, or
-// stuck or slowDelete on every collection. A controller may use few of the
-// verbs, so half the request faults match any.
+// stuck or slowDelete on every collection. A fake without model faults
+// draws one of the five. A controller may use few of the verbs, so half
+// the request faults match any. A read-only fake's match a read verb.
 func (g *Generator) fakeFault(t *rapid.T) plan.Fault {
 	f := plan.Fault{System: sampled(t, g.fakes, "fake")}
-	switch effect := uniform(t, 7, "effect"); effect {
+	effects := 5
+	if g.modelFakes[f.System] {
+		effects = 7
+	}
+	switch effect := uniform(t, effects, "effect"); effect {
 	case 5:
 		f.Stuck = true
 		return f
@@ -608,7 +723,10 @@ func (g *Generator) fakeFault(t *rapid.T) plan.Fault {
 	case 4:
 		f.KillAfter = true
 	}
-	if uniform(t, 2, "any verb") == 0 {
+	switch {
+	case g.readOnly[f.System]:
+		f.Match.Verb = sampled(t, readVerbs, "verb")
+	case uniform(t, 2, "any verb") == 0:
 		f.Match.Verb = sampled(t, fakeVerbs, "verb")
 	}
 	f.Nth = uniform(t, 2, "nth")

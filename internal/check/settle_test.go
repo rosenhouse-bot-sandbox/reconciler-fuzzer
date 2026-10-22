@@ -327,18 +327,38 @@ func TestClause5TheControllerLooksAtEachChangedObject(t *testing.T) {
 	for name, look := range looks {
 		b := damagedAt1200ms("damage")
 		b.At(1500 * ms).Add(look)
-		if unmet := check.Settled(b.Index(), 3200*ms, spec); len(unmet) != 0 {
+		if unmet := check.Settled(b.Index(), 3500*ms, spec); len(unmet) != 0 {
 			t.Errorf("%s: unmet = %q", name, unmet)
 		}
 	}
 }
 
-func TestClause5HoldsOnlyStableAfterTheChange(t *testing.T) {
-	b := damagedAt1200ms("damage")
-	b.At(1210 * ms).Add(call("get", cm, 404, ""))
+func TestClause5HoldsStableAfterTheChange(t *testing.T) {
+	b := settledAt3s()
+	b.At(1 * s).Add(tt.Phase(0, trace.FaultPeriod)).
+		At(1100 * ms).Add(watchCall(1)).
+		At(1200 * ms).Add(tt.Action(0, "damage", cm)).
+		At(1210 * ms).Add(call("get", cm, 404, "")).
+		At(1300 * ms).Add(tt.EndFaults(0, 10*s, false))
 	requireUnmet(t, b, 3199*ms, "configmaps ns/c was changed at 1.2s, less than stable ago")
 	if got, ok := check.FirstSettled(b.Index(), 1300*ms, 10*s, spec); !ok || got != 3200*ms {
-		t.Errorf("FirstSettled = %v, %v; want 3.2s", got, ok)
+		t.Errorf("FirstSettled = %v, %v; want 3.2s, since a watch saw the change", got, ok)
+	}
+}
+
+// A polling controller repairs just after it looks.
+func TestClause5HoldsStableAfterTheFirstLook(t *testing.T) {
+	b := damagedAt1200ms("damage")
+	b.At(2500 * ms).Add(call("list", tt.Ref("configmaps", "ns", ""), 200, "")).
+		At(3 * s).Add(call("get", cm, 404, ""))
+	requireUnmet(t, b, 4200*ms, "the controller looked at configmaps ns/c at 2.5s, less than stable ago")
+	if got, ok := check.FirstSettled(b.Index(), 1300*ms, 10*s, spec); !ok || got != 4300*ms {
+		t.Errorf("FirstSettled = %v, %v; want the lapse at 4.3s", got, ok)
+	}
+	b = damagedAt1200ms("damage")
+	b.At(1500 * ms).Add(call("get", cm, 404, ""))
+	if got, ok := check.FirstSettled(b.Index(), 1300*ms, 10*s, spec); !ok || got != 3500*ms {
+		t.Errorf("FirstSettled = %v, %v; want stable after the look at 1.5s", got, ok)
 	}
 }
 
@@ -388,6 +408,20 @@ func TestClause5CountsAWatchOpenAcrossTheChange(t *testing.T) {
 	}
 	b.At(2 * s).Add(trace.Event{WatchEnd: &trace.WatchEnd{Caller: ctl, System: "kube", Stream: 1}})
 	requireUnmet(t, b, 3200*ms, "has not looked at configmaps ns/c")
+}
+
+func TestClause5HoldsStableAfterAHoldWatchReleasesTheWatch(t *testing.T) {
+	hold := trace.Ref{System: "kube", Resource: "configmaps"}
+	b := settledAt3s()
+	b.At(1*s).Add(tt.Phase(0, trace.FaultPeriod), tt.HoldFault(0, 0, false, hold)).
+		At(1100*ms).Add(watchCall(1)).
+		At(1200*ms).Add(tt.Action(0, "damage", cm)).
+		At(3500*ms).Add(tt.HoldFault(0, 0, true, hold), tt.EndFaults(0, 10*s, false))
+	requireUnmet(t, b, 3400*ms, "has not looked at configmaps ns/c")
+	requireUnmet(t, b, 5499*ms, "a holdWatch released the controller's watch of configmaps ns/c at 3.5s, less than stable ago")
+	if got, ok := check.FirstSettled(b.Index(), 3500*ms, 10*s, spec); !ok || got != 5500*ms {
+		t.Errorf("FirstSettled = %v, %v; want stable after the release", got, ok)
+	}
 }
 
 func TestClause5LapsesAfterOneAndAHalfPollIntervals(t *testing.T) {

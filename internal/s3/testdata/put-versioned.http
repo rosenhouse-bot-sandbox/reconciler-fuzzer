@@ -1,0 +1,9 @@
+HTTP/1.1 200 OK
+ETag: "6654c734ccab8f440ff0825eb443dc7f"
+last-modified: Wed, 21 Oct 2026 13:52:12 GMT
+x-amz-version-id: 97c55ef9-6212-4aba-bb7d-afe287e45fa4
+Content-Type: text/html; charset=utf-8
+Content-Length: 0
+Access-Control-Allow-Origin: *
+Connection: close
+

@@ -1,0 +1,7 @@
+HTTP/1.1 200 OK
+Cache-Control: no-store
+Content-Type: application/json
+Strict-Transport-Security: max-age=31536000; includeSubDomains
+Content-Length: 297
+
+{"request_id":"b31f48fb-75e7-0b55-c595-68ccb488e2a8","lease_id":"","renewable":false,"lease_duration":0,"data":{"created_time":"2026-10-21T13:51:22.669271338Z","custom_metadata":null,"deletion_time":"","destroyed":false,"version":2},"wrap_info":null,"warnings":null,"auth":null,"mount_type":"kv"}

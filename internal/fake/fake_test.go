@@ -94,7 +94,7 @@ func startCommand(t *testing.T, delay time.Duration, command ...string) *started
 	}
 	t.Cleanup(func() { rec.Close() })
 	f := fake.New(fake.Options{
-		Name: "cloud", Command: command, Dir: dir, API: crud.New("cloud"),
+		Name: "cloud", Command: command, Dir: dir, API: crud.New("cloud"), ModelFaults: true,
 	})
 	endpoints, err := f.Start(context.Background(), &system.Env{Record: rec.Record, Dir: out})
 	if err != nil {
@@ -321,18 +321,14 @@ func TestAnExitTheHarnessDidNotCauseIsAnErrorNamingTheLog(t *testing.T) {
 	}
 	log := filepath.Join(s.out, "cloud.log")
 	deadline := time.Now().Add(5 * time.Second)
-	for {
-		_, err := s.fake.Snapshot(context.Background())
-		if err != nil {
-			if !strings.Contains(err.Error(), log) {
-				t.Errorf("Snapshot = %v, want an error naming %s", err, log)
-			}
-			break
-		}
+	for s.fake.Err() == nil {
 		if time.Now().After(deadline) {
-			t.Fatal("Snapshot never failed after the fake exited")
+			t.Fatal("The fake's exit was never recorded.")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := s.fake.Snapshot(context.Background()); err == nil || !strings.Contains(err.Error(), log) {
+		t.Errorf("Snapshot = %v, want an error naming %s", err, log)
 	}
 	if err := s.fake.Stop(context.Background()); err == nil || !strings.Contains(err.Error(), log) {
 		t.Errorf("Stop = %v, want an error naming %s", err, log)

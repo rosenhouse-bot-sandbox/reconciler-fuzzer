@@ -1,0 +1,60 @@
+# The external-secrets example with a Periodic ExternalSecret, which must
+# sync each new Vault version of its key.
+launch:
+  binary: ../../../bin/external-secrets
+  args:
+    - --enable-leader-election=false
+    - --metrics-addr=127.0.0.1:0
+    - --live-addr=127.0.0.1:0
+    # Each SecretStore validation writes. Longer than a run keeps it quiet.
+    - --store-requeue-interval=1h
+  # There is no --kubeconfig flag.
+  env:
+    KUBECONFIG: ${systems.kube.kubeconfig}
+  rbac:
+    - ../rbac/clusterrole.yaml
+crds:
+  - ../crds/external-secrets.yaml
+primary:
+  kind: external-secrets.io/v1/ExternalSecret
+  sample: externalsecret.yaml
+  # syncedResourceVersion is "<generation>-<hash>".
+  ready: >-
+    has(self.status) && has(self.status.syncedResourceVersion)
+    && self.status.syncedResourceVersion.startsWith(string(self.metadata.generation) + "-")
+    && has(self.status.conditions) && self.status.conditions.exists(c,
+      c.type == "Ready" && c.status == "True")
+  # Each refresh writes status.refreshTime.
+  periodic: {every: 2s, paths: [status.refreshTime]}
+fixtures:
+  - ../secretstore.yaml
+# spec.data is not mutated: its optional enums draw specs the Vault provider
+# rejects. creationPolicy and deletionPolicy are not mutated: Orphan is the
+# negative control.
+values:
+  distinct: [spec.target.name]
+  mutate: [spec.target.name]
+  # changeFixture writes a new Vault version of a key.
+  fixtures: {../vault.yaml: [value]}
+  overlay:
+    spec.target.name: {pattern: "^example-secret-[a-z0-9]{1,8}$"}
+    spec.refreshInterval: {enum: ["2s"]}
+    spec.refreshPolicy: {enum: [Periodic]}
+systems:
+  - name: vault
+    api: vault
+    token: root
+    # external-secrets only reads Vault.
+    access: read
+    process:
+      command: [../../../bin/vault, server, -dev, -dev-root-token-id=root, "-dev-listen-address=${addr}"]
+    fixtures: [../vault.yaml]
+# The synced Secret holds Vault's current value of its key.
+properties:
+  - name: synced
+    expr: >-
+      crs.all(c, c.spec.data.all(d, world.vault.secret.all(v, v.path != d.remoteRef.key
+        || world.kube.secrets.exists(s, s.metadata.name == c.spec.target.name
+          && s.data[d.secretKey] == base64.encode(bytes(v.data[d.remoteRef.property]))))))
+# Each refresh reads three Secrets, and a stable period holds two refreshes.
+budgets: {reads: 6}

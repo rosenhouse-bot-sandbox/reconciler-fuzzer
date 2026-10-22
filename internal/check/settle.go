@@ -59,7 +59,9 @@ func unmetClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 // lookClauses holds the controller to looking at each object that the
 // damage and changeFixture actions of the latest step changed, until the
 // step's lapse time. It also holds the step for Stable after each change,
-// so that clause 7 sees the controller's reaction.
+// after a holdWatch released the watch that saw it, and, without a watch
+// across the change, after the first request that looked, so that clause 7
+// sees the controller's reaction. A held watch does not look.
 func lookClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 	step, found := latestStep(ix, t)
 	if !found || step.Reached[trace.EndFaults] && t >= lapse(ix, step, s) {
@@ -68,12 +70,19 @@ func lookClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 	var unmets []unmet
 	for _, change := range changes(ix, step.Step) {
 		ref := *change.Action.Ref
-		looked := ix.Watching(trace.Controller, ref, change.At, t) ||
-			slices.ContainsFunc(ix.Calls(trace.Controller, change.At, t), func(e trace.Event) bool { return looksAt(*e.Call, ref) })
+		watched := ix.Watching(trace.Controller, ref, change.At, t)
+		released, holding, held := ix.Released(ref, change.At, t)
+		watched = watched && !holding
+		calls := ix.Calls(trace.Controller, change.At, t)
+		first := slices.IndexFunc(calls, func(e trace.Event) bool { return looksAt(*e.Call, ref) })
 		switch {
 		case t < change.At+s.Stable:
 			unmets = append(unmets, unmet{5, kind(ref), fmt.Sprintf("%s was changed at %v, less than stable ago", describe(ref), change.At)})
-		case !looked:
+		case watched && held && t < released+s.Stable:
+			unmets = append(unmets, unmet{5, kind(ref), fmt.Sprintf("a holdWatch released the controller's watch of %s at %v, less than stable ago", describe(ref), released)})
+		case !watched && first >= 0 && t < calls[first].At+s.Stable:
+			unmets = append(unmets, unmet{5, kind(ref), fmt.Sprintf("the controller looked at %s at %v, less than stable ago", describe(ref), calls[first].At)})
+		case !watched && first < 0:
 			unmets = append(unmets, unmet{5, kind(ref), fmt.Sprintf("the controller has not looked at %s since the %s at %v", describe(ref), change.Action.Do, change.At)})
 		}
 	}
@@ -191,7 +200,7 @@ func quietClauses(ix *trace.Index, t time.Duration, s Spec, crs int) []unmet {
 			continue
 		}
 		if e.At > t {
-			if e.At-e.Call.Latency <= t && ix.Changed(e) {
+			if e.At-e.Call.Latency <= t && ix.Changed(e) && !s.periodicWrite(ix, e) {
 				changed = append(changed, e)
 			}
 			continue
@@ -205,7 +214,7 @@ func quietClauses(ix *trace.Index, t time.Duration, s Spec, crs int) []unmet {
 			if inPoll {
 				writes[system]++
 			}
-			if e.At > t-s.Stable && ix.Changed(e) {
+			if e.At > t-s.Stable && ix.Changed(e) && !s.periodicWrite(ix, e) {
 				changed = append(changed, e)
 			}
 		}

@@ -2,6 +2,7 @@ package trace
 
 import (
 	"cmp"
+	"math"
 	"slices"
 	"sort"
 	"time"
@@ -37,6 +38,19 @@ type Index struct {
 	watchEnds map[WatchEnd]time.Duration
 	// work holds each system's Work events.
 	work map[string][]Event
+	// holds holds the holdWatch faults, by start.
+	holds     []Hold
+	holdStart map[[2]int]int
+}
+
+// Hold is one holdWatch fault's span. End is the largest Duration while the
+// hold lasts.
+type Hold struct {
+	Kind       Ref
+	Step       int
+	Index      int
+	What       string
+	Start, End time.Duration
 }
 
 type objectRV struct {
@@ -60,6 +74,7 @@ func NewIndex(events []Event) *Index {
 		watches:   map[Caller][]Event{},
 		watchEnds: map[WatchEnd]time.Duration{},
 		work:      map[string][]Event{},
+		holdStart: map[[2]int]int{},
 	}
 	ix.Append(events...)
 	return ix
@@ -89,6 +104,8 @@ func (ix *Index) Append(events ...Event) {
 			ix.watchEnds[*e.WatchEnd] = e.At
 		case e.Work != nil:
 			ix.work[e.Work.System] = append(ix.work[e.Work.System], e)
+		case e.Fault != nil && e.Fault.Hold != nil:
+			ix.addHold(e)
 		case e.Seen != nil && e.Seen.Opaque:
 			ix.opaque[e.Seen.Caller] = append(ix.opaque[e.Seen.Caller], e)
 		case e.Seen != nil:
@@ -98,6 +115,50 @@ func (ix *Index) Append(events ...Event) {
 			ix.seen[e.Seen.Caller][e.Seen.UID] = append(ix.seen[e.Seen.Caller][e.Seen.UID], e)
 		}
 	}
+}
+
+func (ix *Index) addHold(e Event) {
+	f := e.Fault
+	key := [2]int{f.Step, f.Index}
+	if !f.Ended {
+		ix.holdStart[key] = len(ix.holds)
+		ix.holds = append(ix.holds, Hold{Kind: *f.Hold, Step: f.Step, Index: f.Index, What: f.What, Start: e.At, End: math.MaxInt64})
+	} else if n, found := ix.holdStart[key]; found {
+		ix.holds[n].End = e.At
+	}
+}
+
+// Holds returns every holdWatch span, by start.
+func (ix *Index) Holds() []Hold { return ix.holds }
+
+// Released is the end of the latest holdWatch on ref's kind that overlaps
+// [from, t], when its held watch events reach the controller. holding says
+// a hold is still on at t.
+func (ix *Index) Released(ref Ref, from, t time.Duration) (end time.Duration, holding, found bool) {
+	for _, h := range ix.holds {
+		if h.Kind.Group != ref.Group || h.Kind.Resource != ref.Resource || h.Kind.System != ref.System || h.Start > t || h.End < from {
+			continue
+		}
+		if h.End > t {
+			return h.End, true, true
+		}
+		end, found = max(end, h.End), true
+	}
+	return end, false, found
+}
+
+// WatchedKind reports whether caller had a successful watch of kind's group
+// and resource open at some time in [from, to].
+func (ix *Index) WatchedKind(caller Caller, kind Ref, from, to time.Duration) bool {
+	watches := ix.watches[caller]
+	return slices.ContainsFunc(watches[:after(watches, to)], func(e Event) bool {
+		c := e.Call
+		if c.Ref.System != kind.System || c.Ref.Group != kind.Group || c.Ref.Resource != kind.Resource || c.Status < 200 || c.Status > 299 {
+			return false
+		}
+		end, ended := ix.watchEnds[WatchEnd{Caller: caller, System: c.Ref.System, Stream: c.Stream}]
+		return !ended || end >= from
+	})
 }
 
 func (ix *Index) addPhase(e Event) {
@@ -286,6 +347,17 @@ func (ix *Index) VersionOf(ref Ref, rv string) (Version, bool) {
 	return *e.Version, true
 }
 
+// Previous is the version of ref, of the same instance, that the observer
+// recorded just before ref's version rv.
+func (ix *Index) Previous(ref Ref, rv string) (Version, bool) {
+	versions := ix.versions[Ref{System: ref.System, Group: ref.Group, Resource: ref.Resource}][ref]
+	n := slices.IndexFunc(versions, func(e Event) bool { return e.Version.RV == rv })
+	if n <= 0 || versions[n-1].Version.UID != versions[n].Version.UID {
+		return Version{}, false
+	}
+	return *versions[n-1].Version, true
+}
+
 // Later reports whether ref's version rv came at or after its version
 // base, by the observer's order. found is false when the trace lacks either.
 func (ix *Index) Later(ref Ref, rv, base string) (later, found bool) {
@@ -321,8 +393,11 @@ func (ix *Index) Opaque(caller Caller, ref Ref, from, to time.Duration) bool {
 
 // Changed reports whether e, a successful mutating call, produced a
 // resourceVersion that no earlier version or response held for its object.
-// A no-op write is not a change. A successful mutating call whose response
-// carried no resourceVersion counts as a change.
+// A no-op write is not a change. A kube write whose response carried no
+// resourceVersion counts as a change. A fake's such write changed its
+// object when the observer recorded, within ObserveLag of the response, a
+// version that differs from the last before the request, or when the trace
+// ends within ObserveLag of the response.
 //
 // An earlier holder must precede the call's request, at At minus Latency,
 // because the observer may see a write's own version before its response
@@ -332,11 +407,35 @@ func (ix *Index) Changed(e Event) bool {
 	if c == nil || !Mutating(c.Verb) || c.Status < 200 || c.Status > 299 {
 		return false
 	}
+	start := e.At - c.Latency
+	if c.ResultRV == "" && c.Ref.System != "kube" && c.Ref.System != "" {
+		return ix.observedChange(c.Object(), start, e.At)
+	}
 	if c.ResultRV == "" {
 		return true
 	}
 	first, found := ix.firstRV[objectRV{c.Object(), c.ResultRV}]
-	return !found || first.Seq >= e.Seq || first.At > e.At-c.Latency
+	return !found || first.Seq >= e.Seq || first.At > start
+}
+
+// ObserveLag bounds how long a fake's observer takes to record a write.
+const ObserveLag = 200 * time.Millisecond
+
+func (ix *Index) observedChange(ref Ref, start, end time.Duration) bool {
+	if len(ix.events) == 0 || ix.events[len(ix.events)-1].At < end+ObserveLag {
+		return true
+	}
+	versions := ix.versions[Ref{System: ref.System, Group: ref.Group, Resource: ref.Resource}][ref]
+	n := after(versions, start)
+	if n == len(versions) || versions[n].At > end+ObserveLag {
+		return false
+	}
+	next := versions[n].Version
+	if n == 0 {
+		return !next.Deleted
+	}
+	last := versions[n-1].Version
+	return next.RV != last.RV || next.Deleted != last.Deleted || next.UID != last.UID
 }
 
 // Mutating reports whether verb writes.

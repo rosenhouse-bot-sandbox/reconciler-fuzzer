@@ -371,3 +371,52 @@ func TestLiveIsOfKubeKinds(t *testing.T) {
 		t.Fatalf("Live = %+v", live)
 	}
 }
+
+func TestPrevious(t *testing.T) {
+	var b tt.Builder
+	b.Add(tt.Version(widgetA, "u", "1", map[string]any{"n": 1})).
+		Add(tt.Version(widgetB, "w", "5", nil)).
+		Add(tt.Version(widgetA, "u", "2", map[string]any{"n": 2})).
+		Add(tt.Version(widgetA, "u2", "3", map[string]any{"n": 3}))
+	ix := b.Index()
+	if v, found := ix.Previous(widgetA, "2"); !found || v.RV != "1" {
+		t.Errorf("Previous(a, 2) = %+v, %v; want version 1", v, found)
+	}
+	for _, rv := range []string{"1", "3", "9"} {
+		if v, found := ix.Previous(widgetA, rv); found {
+			t.Errorf("Previous(a, %s) = %+v, want none", rv, v)
+		}
+	}
+}
+
+// A fake's partial write carries no resourceVersion, so the observer's
+// next version says whether it changed anything.
+func TestChangedJudgesAFakesWriteWithNoRVByTheObserver(t *testing.T) {
+	bucket := trace.Ref{System: "aws", Resource: "buckets", Name: "b"}
+	var b tt.Builder
+	b.At(1 * s).Add(tt.Version(bucket, "u", "h1", nil))
+	noOp := add(&b, 2*s, tt.Call(trace.Controller, "update", bucket, 200, ""))
+	b.At(3 * s).Add(tt.Start(1))
+	change := add(&b, 4*s, tt.Call(trace.Controller, "update", bucket, 200, ""))
+	b.At(4*s + 10*time.Millisecond).Add(tt.Version(bucket, "u", "h2", nil))
+	deleted := add(&b, 5*s, tt.Call(trace.Controller, "delete", bucket, 204, ""))
+	b.At(5*s + 10*time.Millisecond).Add(tt.Deleted(bucket, "u", "h2", nil))
+	deleteGone := add(&b, 6*s, tt.Call(trace.Controller, "delete", bucket, 204, ""))
+	b.At(7 * s).Add(tt.Start(2))
+	unobserved := add(&b, 8*s, tt.Call(trace.Controller, "update", bucket, 200, ""))
+	ix := b.Index()
+	for name, c := range map[string]struct {
+		seq  int
+		want bool
+	}{
+		"a no-op":                      {noOp, false},
+		"a change":                     {change, true},
+		"a delete":                     {deleted, true},
+		"a delete of nothing":          {deleteGone, false},
+		"a write the observer may lag": {unobserved, true},
+	} {
+		if got := ix.Changed(ix.Events()[c.seq]); got != c.want {
+			t.Errorf("%s: Changed = %v, want %v", name, got, c.want)
+		}
+	}
+}

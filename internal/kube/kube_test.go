@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -121,7 +123,7 @@ func TestReadRBACRejects(t *testing.T) {
 }
 
 func TestReadObjectsReadsEveryDocument(t *testing.T) {
-	objects, err := readObjects([]string{"testdata/objects.yaml"})
+	objects, err := readObjects([]string{"testdata/objects.yaml"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,9 +137,24 @@ func TestReadObjectsReadsEveryDocument(t *testing.T) {
 }
 
 func TestReadObjectsRejectsAnObjectWithNoKind(t *testing.T) {
-	_, err := readObjects([]string{"testdata/kindless.yaml"})
+	_, err := readObjects([]string{"testdata/kindless.yaml"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "kind") {
 		t.Errorf("readObjects(kindless.yaml) = %v, want an error naming kind.", err)
+	}
+}
+
+func TestReadObjectsExpandsVars(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "store.yaml")
+	os.WriteFile(path, []byte("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: store}\ndata: {url: '${systems.vault.url}/v1'}\n"), 0o644)
+	objects, err := readObjects([]string{path}, map[string]string{"systems.vault.url": "http://127.0.0.1:9"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if url, _, _ := unstructured.NestedString(objects[0].Object, "data", "url"); url != "http://127.0.0.1:9/v1" {
+		t.Errorf("url = %s", url)
+	}
+	if _, err := readObjects([]string{path}, nil); err == nil || !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "systems.vault.url") {
+		t.Errorf("readObjects = %v, want an error naming the fixture and key", err)
 	}
 }
 

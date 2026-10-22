@@ -1,0 +1,4 @@
+# The Vault fixtures: two KV version 2 secrets, so a plan can switch
+# remoteRef.key.
+- {resource: secret, name: token, body: {value: s3cr3t}}
+- {resource: secret, name: other, body: {value: other-value}}

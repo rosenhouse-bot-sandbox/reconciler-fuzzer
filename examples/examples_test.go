@@ -23,10 +23,10 @@ func load(t *testing.T, example string) *config.Config {
 }
 
 func TestPlansLoad(t *testing.T) {
-	for _, example := range []string{"cert-manager", "external-secrets"} {
+	for _, example := range []string{"cert-manager", "external-secrets", "external-secrets/rotation"} {
 		load(t, example)
 		paths, _ := filepath.Glob(filepath.Join(example, "*", "*.json"))
-		if len(paths) < 4 {
+		if len(paths) < 2 {
 			t.Errorf("%s has plans %v", example, paths)
 		}
 		for _, path := range paths {
@@ -127,5 +127,54 @@ func TestSomeSeedDropsTheResponseToASecretWrite(t *testing.T) {
 		if !found {
 			t.Errorf("No seed in %s/seeds drops the response to a %s of secrets.", example, verb)
 		}
+	}
+}
+
+// TestTheGeneratorCanDrawTheWriteBack holds the cert-manager hunt to plans
+// that can find #63: a step that holds the Secret watch while it deletes
+// and creates slot a.
+func TestTheGeneratorCanDrawTheWriteBack(t *testing.T) {
+	g, err := generate.New(load(t, "cert-manager"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for seed := uint64(1); seed <= 3000; seed++ {
+		p, err := g.Plan(seed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if slices.ContainsFunc(p.Steps, holdsSecretsAcrossARecreate) {
+			t.Logf("Seed %d draws it.", seed)
+			return
+		}
+	}
+	t.Error("No seed up to 3000 holds the Secret watch across a recreate.")
+}
+
+func holdsSecretsAcrossARecreate(s plan.Step) bool {
+	if !slices.ContainsFunc(s.Faults, func(f plan.Fault) bool { return f.HoldWatch && f.Match.Resource == "secrets" }) {
+		return false
+	}
+	deleted := map[string]bool{}
+	for _, a := range s.Actions {
+		switch a.Do {
+		case plan.Delete:
+			deleted[a.Slot] = true
+		case plan.Create:
+			if deleted[a.Slot] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TestTheWriteBackPlanHoldsSecretsAcrossARecreate(t *testing.T) {
+	p, err := plan.Load(filepath.Join("cert-manager", "bugs", "write-back-always.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(p.Steps, holdsSecretsAcrossARecreate) {
+		t.Error("No step holds the Secret watch while it deletes and creates a slot.")
 	}
 }

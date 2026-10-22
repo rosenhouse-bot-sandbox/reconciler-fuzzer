@@ -1,0 +1,2 @@
+# #63: A recreated Certificate's Secret gets back its predecessor's key, which fresh-key fails.
+Property 1

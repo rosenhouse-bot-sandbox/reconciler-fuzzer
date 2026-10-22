@@ -1022,3 +1022,217 @@ func TestAGetRecordsSeenBeforeTheCallerGetsTheObject(t *testing.T) {
 		t.Errorf("Got %q, want %q.", got, body)
 	}
 }
+
+func TestForwardsTheAuthorizationHeaderWhenAsked(t *testing.T) {
+	var seen atomic.Value
+	l, _ := listen(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen.Store(r.Header.Get("Authorization"))
+	}), func(o *interpose.Options) { o.ForwardAuthorization = true })
+	req, _ := http.NewRequest("GET", l.URL()+"/api/v1/pods", nil)
+	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 caller")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if got := seen.Load(); got != "AWS4-HMAC-SHA256 caller" {
+		t.Errorf("The upstream saw Authorization %q, want the caller's.", got)
+	}
+}
+
+// streaming sends its header, then each frame it receives, until frames
+// closes or the client leaves.
+func streaming(frames <-chan string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		for {
+			select {
+			case frame, open := <-frames:
+				if !open {
+					return
+				}
+				fmt.Fprintln(w, frame)
+				w.(http.Flusher).Flush()
+			case <-r.Context().Done():
+				return
+			}
+		}
+	})
+}
+
+// watchLines opens a watch and hands each line it reads to the channel.
+func watchLines(t *testing.T, l *interpose.Listener, path string) (<-chan string, context.CancelFunc) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	req, _ := http.NewRequestWithContext(ctx, "GET", l.URL()+path+"?watch=true", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := make(chan string, 16)
+	go func() {
+		defer resp.Body.Close()
+		defer close(lines)
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			lines <- scanner.Text()
+		}
+	}()
+	return lines, cancel
+}
+
+func gadgetFrame(rv string) string {
+	return fmt.Sprintf(`{"type":"MODIFIED","object":%s}`, gadgetJSON("g1", "u1", rv))
+}
+
+func expectLines(t *testing.T, lines <-chan string, want ...string) {
+	t.Helper()
+	for _, w := range want {
+		select {
+		case got := <-lines:
+			if got != w {
+				t.Fatalf("Got line %s, want %s.", got, w)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("Got no line, want %s.", w)
+		}
+	}
+}
+
+func expectNoLine(t *testing.T, lines <-chan string) {
+	t.Helper()
+	select {
+	case got := <-lines:
+		t.Fatalf("Got line %s during the hold.", got)
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+var holdGadgets = plan.Fault{HoldWatch: true, Match: plan.Match{Group: gadgets.Group, Resource: gadgets.Resource}}
+
+func TestAHoldWatchPausesWatchEventsAndDeliversThemInOrder(t *testing.T) {
+	for _, path := range []string{gadgetsPath, "/apis/toy.reconciler-fuzzer/v1/namespaces/ns2/gadgets", "/apis/toy.reconciler-fuzzer/v1/gadgets"} {
+		t.Run(path, func(t *testing.T) {
+			frames := make(chan string)
+			l, recorded := listen(t, streaming(frames), seeingGadgets)
+			lines, _ := watchLines(t, l, path)
+			frames <- gadgetFrame("1")
+			expectLines(t, lines, gadgetFrame("1"))
+
+			end := fault(t, l, holdGadgets)
+			frames <- gadgetFrame("2")
+			frames <- gadgetFrame("3")
+			expectNoLine(t, lines)
+			if got := len(recorded.seen()); got != 1 {
+				t.Errorf("Recorded %d Seen during the hold, want only the one before it.", got)
+			}
+
+			end()
+			expectLines(t, lines, gadgetFrame("2"), gadgetFrame("3"))
+			var rvs []string
+			for _, s := range recorded.seen() {
+				rvs = append(rvs, s.RV)
+			}
+			if want := []string{"1", "2", "3"}; !slices.Equal(rvs, want) {
+				t.Errorf("Recorded Seen versions %v, want %v.", rvs, want)
+			}
+		})
+	}
+}
+
+func TestAHoldWatchHoldsAWatchOpenedDuringIt(t *testing.T) {
+	frames := make(chan string)
+	l, _ := listen(t, streaming(frames))
+	end := fault(t, l, holdGadgets)
+	lines, _ := watchLines(t, l, gadgetsPath)
+	frames <- gadgetFrame("1")
+	expectNoLine(t, lines)
+
+	end()
+	expectLines(t, lines, gadgetFrame("1"))
+}
+
+func TestAHoldWatchLastsUntilEveryHoldOnTheKindEnds(t *testing.T) {
+	frames := make(chan string)
+	l, _ := listen(t, streaming(frames))
+	endFirst := fault(t, l, holdGadgets)
+	endSecond := fault(t, l, holdGadgets)
+	lines, _ := watchLines(t, l, gadgetsPath)
+	frames <- gadgetFrame("1")
+
+	endFirst()
+	expectNoLine(t, lines)
+	endSecond()
+	expectLines(t, lines, gadgetFrame("1"))
+}
+
+func TestAHoldWatchSparesOtherKindsAndRequests(t *testing.T) {
+	frames := make(chan string)
+	l, recorded := listen(t, streaming(frames))
+	fault(t, l, plan.Fault{HoldWatch: true, Match: plan.Match{Resource: "gadgets"}})
+	fault(t, l, plan.Fault{Drop: true, Match: plan.Match{Verb: "get"}, Nth: 1})
+	lines, _ := watchLines(t, l, gadgetsPath)
+	frames <- gadgetFrame("1")
+	expectLines(t, lines, gadgetFrame("1"))
+
+	fault(t, l, holdGadgets)
+	if _, err := http.Get(l.URL() + gadgetsPath + "/g1"); err == nil {
+		t.Error("A get under a hold escaped the drop, so the hold counted or picked it.")
+	}
+	close(frames)
+	recorded.waitCalls(t, 2)
+	for _, c := range recorded.calls() {
+		if c.Watch && c.Injected != "" {
+			t.Errorf("The watch has injected %q, want none.", c.Injected)
+		}
+	}
+}
+
+func TestClosingReleasesAHeldWatch(t *testing.T) {
+	frames := make(chan string, 1)
+	l, _ := listen(t, streaming(frames))
+	fault(t, l, holdGadgets)
+	lines, _ := watchLines(t, l, gadgetsPath)
+	frames <- gadgetFrame("1")
+	time.Sleep(50 * time.Millisecond)
+
+	closed := make(chan error)
+	go func() { closed <- l.Close() }()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close hung on a held watch.")
+	}
+	for range lines {
+	}
+}
+
+func TestAHeldWatchEndsWhenItsClientLeaves(t *testing.T) {
+	frames := make(chan string, 1)
+	l, recorded := listen(t, streaming(frames))
+	fault(t, l, holdGadgets)
+	lines, cancel := watchLines(t, l, gadgetsPath)
+	frames <- gadgetFrame("1")
+	time.Sleep(50 * time.Millisecond)
+
+	cancel()
+	for range lines {
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		recorded.mu.Lock()
+		ended := slices.ContainsFunc(recorded.list, func(e trace.Event) bool { return e.WatchEnd != nil })
+		recorded.mu.Unlock()
+		if ended {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("The held watch did not end after its client left.")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}

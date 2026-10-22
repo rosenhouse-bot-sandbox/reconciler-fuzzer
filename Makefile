@@ -16,6 +16,11 @@ EXTERNAL_SECRETS_VERSION ?= v2.11.0
 # only thing that tells it from another.
 EXTERNAL_SECRETS_COMMIT ?= e8f12e1f1646e0ad47966458023ff10c9577f2b0
 EXTERNAL_SECRETS_CRDS_SHA256 ?= c427124642886d240af8f28d294714a168d920ef8e5d55db14600e00ed0cfb80
+# An OSS Vault release and the sha256 of its linux_amd64 zip, from its SHA256SUMS.
+VAULT_VERSION ?= 2.1.2
+VAULT_SHA256 ?= 873bbdac35ca4b0c3e2886c41991ca1272fc452826208d5499f32d12cd2e76e1
+# moto 5.2.3 and its dependencies, each pinned by hash.
+MOTO_REQUIREMENTS := requirements-moto.txt
 # The release index setup-envtest downloads from, pinned to a controller-tools tag.
 ENVTEST_INDEX_URL ?= https://raw.githubusercontent.com/kubernetes-sigs/controller-tools/$(CONTROLLER_GEN_VERSION)/envtest-releases.yaml
 
@@ -26,6 +31,9 @@ HUNT_SEEDS ?= 20
 HUNT_FROM ?= $(shell date +%s)
 HUNT_TIMEOUT ?= 40m
 HUNT_OUT := reconciler-fuzzer-out
+# A repro runs each plan in REPRO_PLANS, or else the example's bugs/ plans,
+# REPRO_RUNS times.
+REPRO_RUNS ?= 20
 # The toys' generated tiers run apart from the envtest tier.
 GENERATED = TestGeneratedPlansWithFaultsPassB0|TestAGeneratedFailingPlanShrinks|TestGeneratedBucketPlansWithCloudFaultsPassB0
 
@@ -42,8 +50,16 @@ CERT_MANAGER_CRDS := examples/cert-manager/crds/cert-manager.crds.yaml
 EXTERNAL_SECRETS_REPO := https://github.com/external-secrets/external-secrets.git
 EXTERNAL_SECRETS_SRC := $(LOCALBIN)/external-secrets-src
 EXTERNAL_SECRETS := $(LOCALBIN)/external-secrets
-EXTERNAL_SECRETS_STAMP := $(LOCALBIN)/external-secrets-$(EXTERNAL_SECRETS_VERSION).built
+# The build tags pick the providers external-secrets registers.
+EXTERNAL_SECRETS_TAGS := vault
+EXTERNAL_SECRETS_BUILD := $(EXTERNAL_SECRETS_VERSION)-$(EXTERNAL_SECRETS_TAGS)
+EXTERNAL_SECRETS_STAMP := $(LOCALBIN)/external-secrets-$(EXTERNAL_SECRETS_BUILD).built
 EXTERNAL_SECRETS_CRDS := examples/external-secrets/crds/external-secrets.yaml
+VAULT := $(LOCALBIN)/vault
+VAULT_STAMP := $(LOCALBIN)/vault-$(VAULT_VERSION).installed
+MOTO_VENV := $(LOCALBIN)/moto
+MOTO_SERVER := $(MOTO_VENV)/bin/moto_server
+MOTO_STAMP := $(LOCALBIN)/moto-$(shell sha256sum $(MOTO_REQUIREMENTS) | cut -c1-16).installed
 
 # Let go fetch the toolchain go.mod asks for.
 GOTOOLCHAIN ?= auto
@@ -53,9 +69,11 @@ export GOTOOLCHAIN
 ENVTEST_USE := $(SETUP_ENVTEST) use $(ENVTEST_K8S_VERSION) --index $(ENVTEST_INDEX_URL) --bin-dir $(ENVTEST_ASSETS_DIR) -p path
 
 .PHONY: help
-help:
+help::
 	@echo "Targets:"
-	@echo "  setup                             Download modules and install the envtest control plane."
+	@echo "  setup                             Download modules, and install the envtest control plane, Vault and moto."
+	@echo "  vault                             Download the pinned, checksummed Vault to bin/vault."
+	@echo "  moto                              Install the pinned moto server into the bin/moto venv."
 	@echo "  assets-path                       Print the KUBEBUILDER_ASSETS directory and nothing else."
 	@echo "  build                             Build bin/reconciler-fuzzer, bin/crudfake and the toys."
 	@echo "  generate                          Write the toys' deepcopy code and CRD YAML."
@@ -66,9 +84,11 @@ help:
 	@echo "  test-envtest                      Run the envtest tests, the toy's gate included."
 	@echo "  test-generated                    Run the toys' generated plans under B0, and shrink one under B3."
 	@echo "  bug-matrix                        Rewrite docs/bug-matrix.md from the toys' gate tables."
-	@echo "  test-example-cert-manager         Run the cert-manager plans, seeds and negative control."
-	@echo "  test-example-external-secrets     Run the external-secrets plans, seeds and negative control."
+	@echo "  test-example-cert-manager         Run the cert-manager plans, seeds, negative control and #63 plan."
+	@echo "  test-example-external-secrets     Run the external-secrets plans, seeds and negative controls, rotation included."
 	@echo "  hunt-cert-manager                 Hunt cert-manager on HUNT_SEEDS seeds from HUNT_FROM, for at most HUNT_TIMEOUT."
+	@echo "  repro-cert-manager                Run each REPRO_PLANS plan, cert-manager's bugs/ by default, REPRO_RUNS times, and print its rate."
+	@echo "  repro-external-secrets            Run each REPRO_PLANS plan, external-secrets' bugs/ by default, REPRO_RUNS times, and print its rate."
 	@echo "  hunt-external-secrets             Hunt external-secrets on HUNT_SEEDS seeds from HUNT_FROM, for at most HUNT_TIMEOUT."
 	@echo "  cert-manager                      Clone and build the pinned cert-manager controller."
 	@echo "  cert-manager-crds                 Refetch the pinned cert-manager CRD release asset."
@@ -77,11 +97,11 @@ help:
 	@echo "  verify-cert-manager-port          Fail if port 9403, where cert-manager listens, is bound."
 	@echo "  external-secrets                  Clone and build the pinned external-secrets controller."
 	@echo "  external-secrets-crds             Refetch the pinned external-secrets CRD release asset."
-	@echo "  external-secrets-version          Print EXTERNAL_SECRETS_VERSION and nothing else."
+	@echo "  external-secrets-version          Print the external-secrets version and build tags, and nothing else."
 	@echo "  verify-external-secrets-pin       Fail if the example's CRDs or the upstream tag drifted from the pin."
 
 .PHONY: setup
-setup: $(SETUP_ENVTEST)
+setup: $(SETUP_ENVTEST) vault moto
 	go mod download
 	@$(ENVTEST_USE) >/dev/null
 	@echo "The envtest control plane for Kubernetes $(ENVTEST_K8S_VERSION) is installed."
@@ -89,6 +109,25 @@ setup: $(SETUP_ENVTEST)
 # Silent, so that assets-path prints only the path even when this runs first.
 $(SETUP_ENVTEST):
 	@GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@$(SETUP_ENVTEST_VERSION)
+
+.PHONY: vault
+vault: $(VAULT_STAMP)
+
+$(VAULT_STAMP):
+	@mkdir -p $(LOCALBIN)
+	@tmp=$$(mktemp -d) && \
+	curl -fsSL -o $$tmp/vault.zip https://releases.hashicorp.com/vault/$(VAULT_VERSION)/vault_$(VAULT_VERSION)_linux_amd64.zip && \
+	echo "$(VAULT_SHA256)  $$tmp/vault.zip" | sha256sum -c --quiet - && \
+	unzip -oq $$tmp/vault.zip vault -d $$tmp && mv $$tmp/vault $(VAULT) && rm -rf $$tmp
+	@rm -f $(LOCALBIN)/vault-*.installed && touch $@
+
+.PHONY: moto
+moto: $(MOTO_STAMP)
+
+$(MOTO_STAMP):
+	@rm -rf $(MOTO_VENV) && python3 -m venv $(MOTO_VENV)
+	@$(MOTO_VENV)/bin/pip install -q --disable-pip-version-check --require-hashes -r $(MOTO_REQUIREMENTS)
+	@rm -f $(LOCALBIN)/moto-*.installed && touch $@
 
 .PHONY: assets-path
 assets-path: $(SETUP_ENVTEST)
@@ -151,16 +190,21 @@ bug-matrix:
 	go test -count=1 -run TestBugMatrixIsCurrent ./targets/toy-bucket -args -update
 
 # Each example runs its plans and the seeds its seeds file lists, then its
-# negative control. EXAMPLE_SEEDS replaces the seeds file.
+# negative control. EXAMPLE_SEEDS replaces the seeds file. cert-manager also
+# runs its #63 plan, which must find the bug in one of 3 attempts.
 .PHONY: test-example-cert-manager
 test-example-cert-manager: verify-cert-manager-pin verify-cert-manager-port setup build cert-manager
 	KUBEBUILDER_ASSETS="$$($(ENVTEST_USE))" examples/test.sh cert-manager \
-		plans/issue.json example-tls --launch-arg --enable-certificate-owner-ref=false
+		plans/issue.json Clean 'secrets .*/example-tls ' --launch-arg --enable-certificate-owner-ref=false
+	KUBEBUILDER_ASSETS="$$($(ENVTEST_USE))" examples/bug.sh cert-manager \
+		bugs/write-back-always.json Property 'property fresh-key does not hold' 3
 
 .PHONY: test-example-external-secrets
 test-example-external-secrets: verify-external-secrets-pin setup build external-secrets
 	KUBEBUILDER_ASSETS="$$($(ENVTEST_USE))" examples/test.sh external-secrets \
-		controls/orphan.json example-secret
+		controls/orphan.json Clean 'secrets .*/example-secret '
+	KUBEBUILDER_ASSETS="$$($(ENVTEST_USE))" examples/test.sh external-secrets/rotation \
+		controls/onchange.json Property 'property synced does not hold'
 
 # A hunt writes summary.md and each failing seed's run under
 # reconciler-fuzzer-out/hunt-<name>. make exits 2 on any failure, so the hunt's
@@ -178,6 +222,29 @@ endef
 .PHONY: hunt-cert-manager
 hunt-cert-manager: verify-cert-manager-pin verify-cert-manager-port setup build cert-manager
 	$(call hunt,cert-manager)
+
+# A repro prints, for each plan, how many of REPRO_RUNS runs gave a finding.
+# It exits 2 on a harness error.
+define repro
+	@for plan in $(2); do \
+		found=0; \
+		for i in $$(seq $(REPRO_RUNS)); do \
+			out=$(HUNT_OUT)/repro-$(1)/$$(basename $$plan .json)/$$i; rm -rf $$out; \
+			KUBEBUILDER_ASSETS="$$($(ENVTEST_USE))" ./bin/reconciler-fuzzer run \
+				--config examples/$(1)/config.yaml --plan $$plan --out $$out >/dev/null; \
+			case $$? in 0) ;; 1) found=$$((found + 1)) ;; *) cat $$out/report.md 2>/dev/null; exit 2 ;; esac; \
+		done; \
+		echo "$$plan: $$found of $(REPRO_RUNS) runs gave a finding."; \
+	done
+endef
+
+.PHONY: repro-cert-manager
+repro-cert-manager: verify-cert-manager-port setup build cert-manager
+	$(call repro,cert-manager,$(or $(REPRO_PLANS),$(wildcard examples/cert-manager/bugs/*.json)))
+
+.PHONY: repro-external-secrets
+repro-external-secrets: setup build external-secrets
+	$(call repro,external-secrets,$(or $(REPRO_PLANS),$(wildcard examples/external-secrets/bugs/*.json)))
 
 .PHONY: hunt-external-secrets
 hunt-external-secrets: verify-external-secrets-pin setup build external-secrets
@@ -256,8 +323,8 @@ verify-cert-manager-port:
 	fi
 
 # external-secrets' main package is the repository root, with replace
-# directives onto in-tree modules, so go install cannot reach it either. The
-# fake provider registers itself only under its build tag.
+# directives onto in-tree modules, so go install cannot reach it either. Each
+# provider registers itself only under its build tag.
 .PHONY: external-secrets
 external-secrets: $(EXTERNAL_SECRETS)
 
@@ -269,7 +336,7 @@ $(EXTERNAL_SECRETS): $(EXTERNAL_SECRETS_STAMP)
 		echo "$(EXTERNAL_SECRETS_VERSION) is $$cloned, and the pin is $(EXTERNAL_SECRETS_COMMIT). The tag moved."; \
 		exit 1; \
 	fi
-	cd $(EXTERNAL_SECRETS_SRC) && go build -tags fake -o $@ .
+	cd $(EXTERNAL_SECRETS_SRC) && go build -tags $(EXTERNAL_SECRETS_TAGS) -o $@ .
 	rm -rf $(EXTERNAL_SECRETS_SRC)
 
 $(EXTERNAL_SECRETS_STAMP):
@@ -278,7 +345,7 @@ $(EXTERNAL_SECRETS_STAMP):
 
 .PHONY: external-secrets-version
 external-secrets-version:
-	@echo $(EXTERNAL_SECRETS_VERSION)
+	@echo $(EXTERNAL_SECRETS_BUILD)
 
 .PHONY: external-secrets-crds
 external-secrets-crds:
@@ -292,3 +359,76 @@ verify-external-secrets-pin:
 	@echo "$(EXTERNAL_SECRETS_CRDS_SHA256)  $(EXTERNAL_SECRETS_CRDS)" | sha256sum -c --status - \
 		|| { echo "$(EXTERNAL_SECRETS_CRDS) hashes to $$(sha256sum $(EXTERNAL_SECRETS_CRDS) | cut -d' ' -f1). Refetch it, and pin the digest 'make external-secrets-crds' prints."; exit 1; }
 	$(call verify-tag-pin,$(EXTERNAL_SECRETS_REPO),$(EXTERNAL_SECRETS_VERSION),$(EXTERNAL_SECRETS_COMMIT),EXTERNAL_SECRETS_COMMIT)
+
+# The ACK s3-controller example owns the lines from here to the end. It adds
+# its own help:: rule.
+
+ACK_S3_VERSION ?= v1.12.2
+# The commit that tag names, and the module's go.sum hash. go install also
+# checks the module against the sumdb.
+ACK_S3_COMMIT ?= eace6021b60209c7d3fe216024270bf339c5e54a
+ACK_S3_SUM ?= h1:tRFI61nEhMGTT6mM3PSoOKT4yC0WyzEKDO8MjbQO7wQ=
+ACK_S3_MODULE := github.com/aws-controllers-k8s/s3-controller
+ACK_S3 := $(LOCALBIN)/ack-s3-controller
+ACK_S3_STAMP := $(LOCALBIN)/ack-s3-$(ACK_S3_VERSION).built
+ACK_S3_CRDS := examples/ack-s3/crds
+
+help::
+	@echo "  test-example-ack-s3               Run the ACK s3-controller plans, seeds and negative control."
+	@echo "  hunt-ack-s3                       Hunt the ACK s3-controller on HUNT_SEEDS seeds from HUNT_FROM, for at most HUNT_TIMEOUT."
+	@echo "  ack-s3-controller                 Build the pinned ACK s3-controller from proxy.golang.org."
+	@echo "  ack-s3-version                    Print ACK_S3_VERSION and nothing else."
+	@echo "  ack-s3-crds                       Copy the pinned module's CRDs into the example and print their sha256."
+	@echo "  verify-ack-s3-pin                 Fail if the example's CRDs, or the module's commit or hash, drifted from the pin."
+
+.PHONY: test-example-ack-s3
+test-example-ack-s3: verify-ack-s3-pin setup build ack-s3-controller
+	KUBEBUILDER_ASSETS="$$($(ENVTEST_USE))" examples/test.sh ack-s3 \
+		controls/retain.json Clean "aws buckets rf-retained "
+
+.PHONY: hunt-ack-s3
+hunt-ack-s3: verify-ack-s3-pin setup build ack-s3-controller
+	$(call hunt,ack-s3)
+
+# The nightly report's replay steps run 'make <example>'.
+.PHONY: ack-s3-controller ack-s3
+ack-s3-controller ack-s3: $(ACK_S3)
+
+$(ACK_S3): $(ACK_S3_STAMP)
+	@tmp=$$(mktemp -d) && \
+	GOBIN=$$tmp go install $(ACK_S3_MODULE)/cmd/controller@$(ACK_S3_VERSION) && \
+	mv $$tmp/controller $@ && rm -rf $$tmp
+
+$(ACK_S3_STAMP):
+	rm -f $(LOCALBIN)/ack-s3-*.built
+	touch $@
+
+.PHONY: ack-s3-version
+ack-s3-version:
+	@echo $(ACK_S3_VERSION)
+
+# ack-s3-module prints one field of the downloaded module: Dir, Sum or Hash,
+# its commit. It runs outside this module, so go.sum stays as it is.
+ack-s3-module = $$(cd / && go mod download -json $(ACK_S3_MODULE)@$(ACK_S3_VERSION) | sed -n 's/^.*"$(1)": "\(.*\)",*$$/\1/p')
+
+.PHONY: ack-s3-crds
+ack-s3-crds:
+	@dir=$(call ack-s3-module,Dir) && \
+	cp $$dir/config/crd/bases/s3.services.k8s.aws_buckets.yaml $$dir/config/crd/common/bases/*.yaml $(ACK_S3_CRDS)/ && \
+	chmod 644 $(ACK_S3_CRDS)/*.yaml && \
+	cd $(ACK_S3_CRDS) && sha256sum *.yaml >SHA256SUMS && cat SHA256SUMS
+
+.PHONY: verify-ack-s3-pin
+verify-ack-s3-pin:
+	@cd $(ACK_S3_CRDS) && sha256sum -c --quiet SHA256SUMS \
+		|| { echo "$(ACK_S3_CRDS) drifted from SHA256SUMS. Run 'make ack-s3-crds' and commit the result."; exit 1; }
+	@commit=$(call ack-s3-module,Hash) sum=$(call ack-s3-module,Sum); \
+	if [ "$$commit" != "$(ACK_S3_COMMIT)" ] || [ "$$sum" != "$(ACK_S3_SUM)" ]; then \
+		echo "$(ACK_S3_MODULE)@$(ACK_S3_VERSION) is commit $$commit with hash $$sum, and the pins are $(ACK_S3_COMMIT) and $(ACK_S3_SUM)."; \
+		exit 1; \
+	fi
+	@dir=$(call ack-s3-module,Dir) && \
+	for f in $(ACK_S3_CRDS)/*.yaml; do \
+		cmp -s $$f $$dir/config/crd/bases/$$(basename $$f) || cmp -s $$f $$dir/config/crd/common/bases/$$(basename $$f) \
+			|| { echo "$$f is not the $(ACK_S3_VERSION) module's file. Run 'make ack-s3-crds'."; exit 1; }; \
+	done

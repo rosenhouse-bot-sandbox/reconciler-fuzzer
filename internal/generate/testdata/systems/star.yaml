@@ -1,0 +1,9 @@
+# Nothing launches this target. Its RBAC grants every verb on Secrets.
+launch:
+  binary: none
+  rbac: [star-role.yaml]
+crds: [../../../../targets/toy-widget/crds/]
+primary:
+  kind: toy.reconciler-fuzzer/v1/Widget
+  sample: ../../../../targets/toy-widget/widget.yaml
+  ready: "true"

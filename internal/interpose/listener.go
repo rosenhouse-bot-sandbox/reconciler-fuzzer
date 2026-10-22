@@ -42,10 +42,12 @@ type Options struct {
 	System string
 	Caller trace.Caller
 	// Upstream is where requests go. Transport carries the caller's
-	// credentials, so the listener drops any Authorization header.
-	Upstream  *url.URL
-	Transport http.RoundTripper
-	Record    func(trace.Event)
+	// credentials, so the listener drops any Authorization header unless
+	// ForwardAuthorization is set.
+	Upstream             *url.URL
+	Transport            http.RoundTripper
+	ForwardAuthorization bool
+	Record               func(trace.Event)
 	// OnCall hears each call after it is recorded.
 	OnCall func(trace.Call)
 	// Seen lists the kinds whose objects the listener records as Seen
@@ -104,7 +106,9 @@ func Listen(o Options) (*Listener, error) {
 	}
 	l.reverse = &httputil.ReverseProxy{
 		Rewrite: func(r *httputil.ProxyRequest) {
-			r.Out.Header.Del("Authorization")
+			if !o.ForwardAuthorization {
+				r.Out.Header.Del("Authorization")
+			}
 			r.SetURL(o.Upstream)
 		},
 		Transport:     o.Transport,
@@ -125,7 +129,8 @@ func Listen(o Options) (*Listener, error) {
 func (l *Listener) URL() string { return l.url }
 
 // Fault starts a request fault. Its Nth counts matching requests from this
-// call. Calling end stops it and releases every request it delays.
+// call. Calling end stops it and releases every request it delays, or
+// every watch it holds.
 func (l *Listener) Fault(f plan.Fault) (end func(), err error) {
 	if err := f.Validate(); err != nil {
 		return nil, err
@@ -180,7 +185,7 @@ func (l *Listener) pick(r Request) *activeFault {
 	defer l.mu.Unlock()
 	var picked *activeFault
 	for _, f := range l.faults {
-		if !Matches(f.fault.Match, r) || r.Watch && unknownOutcome(f.fault) {
+		if f.fault.HoldWatch || !Matches(f.fault.Match, r) || r.Watch && unknownOutcome(f.fault) {
 			continue
 		}
 		f.matched++
@@ -214,6 +219,7 @@ func (l *Listener) serve(w http.ResponseWriter, r *http.Request) {
 			RequestName: req.RequestName, Unmapped: req.Unmapped,
 		},
 		req:    req,
+		ctx:    r.Context(),
 		decode: mutating(req.Verb),
 		seen:   showing(req.Verb) && (l.o.API != nil || l.sees(req.Ref)),
 	}
@@ -326,6 +332,34 @@ func (l *Listener) answerUnseen(rec *recorder, r *http.Request, kill bool) {
 	drop(rec.ResponseWriter)
 }
 
+// holding returns an active holdWatch on the kind of r, or nil.
+func (l *Listener) holding(r Request) *activeFault {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, f := range l.faults {
+		if f.fault.HoldWatch && f.fault.Match.Group == r.Ref.Group && f.fault.Match.Resource == r.Ref.Resource {
+			return f
+		}
+	}
+	return nil
+}
+
+// waitHolds waits until no holdWatch holds the watch or its client leaves,
+// as when the listener closes. After the client leaves, it never waits.
+func (rec *recorder) waitHolds() {
+	for !rec.released {
+		f := rec.listener.holding(rec.req)
+		if f == nil {
+			return
+		}
+		select {
+		case <-f.ended:
+		case <-rec.ctx.Done():
+			rec.released = true
+		}
+	}
+}
+
 // hold waits for d, the fault's end or the client's departure.
 func hold(ctx context.Context, f *activeFault, d time.Duration) {
 	timer := time.NewTimer(d)
@@ -348,6 +382,10 @@ type recorder struct {
 	decode   bool
 	body     *bytes.Buffer
 	recorded bool
+	// ctx is the client's request context. released says the client left,
+	// so no holdWatch holds the watch.
+	ctx      context.Context
+	released bool
 
 	// seen says the response can show objects of a Seen kind, or under
 	// an API map that it can show objects. A watch hands each write to
@@ -391,6 +429,9 @@ func (rec *recorder) WriteHeader(status int) {
 func (rec *recorder) Write(p []byte) (int, error) {
 	if rec.call.Status == 0 {
 		rec.WriteHeader(http.StatusOK)
+	}
+	if rec.call.Watch {
+		rec.waitHolds()
 	}
 	if rec.body != nil && rec.body.Len() <= MaxResultBody {
 		rec.body.Write(p[:min(len(p), MaxResultBody+1-rec.body.Len())])
@@ -482,7 +523,7 @@ func (rec *recorder) readObjects(encoding string) {
 	var objects []Object
 	if body := decompress(bytes.NewReader(rec.seenBody.Bytes()), encoding); body != nil {
 		if data, err := io.ReadAll(body); err == nil {
-			objects = o.API.Objects(rec.req, data)
+			objects = o.API.Objects(rec.req, rec.Header(), data)
 		}
 	}
 	if objects == nil && rec.seen && rec.listener.sees(rec.call.Ref) {
@@ -495,7 +536,7 @@ func (rec *recorder) readObjects(encoding string) {
 		if o.Shown != nil {
 			o.Shown(object)
 		}
-		if rec.seen && rec.listener.sees(object.Ref) && o.Record != nil {
+		if rec.seen && !object.Partial && rec.listener.sees(object.Ref) && o.Record != nil {
 			o.Record(trace.Event{Seen: &trace.Seen{Caller: rec.call.Caller, Ref: object.Ref, UID: object.UID, RV: object.RV}})
 		}
 	}

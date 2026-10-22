@@ -1,0 +1,8 @@
+HTTP/1.1 200 OK
+Content-Type: application/xml
+Content-Length: 117
+Access-Control-Allow-Origin: *
+Connection: close
+
+<?xml version="1.0" encoding="utf-8"?>
+<GetBucketVersioningResponse xmlns="http://s3.amazonaws.com/doc/2006-03-01/"/>

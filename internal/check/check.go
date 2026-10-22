@@ -43,6 +43,32 @@ type Spec struct {
 	Polls map[string]time.Duration
 	// Ignore maps a fake to the body fields Restore does not compare.
 	Ignore map[string][]string
+	// Properties come from the config, or else the Run event.
+	Properties []PropertySpec
+	// Periodic is nil when the config sets no primary.periodic.
+	Periodic *trace.Periodic
+}
+
+// PropertySpec is a compiled config property.
+type PropertySpec struct {
+	Name string
+	// Always judges it at each version event, and otherwise at each settled
+	// step's end.
+	Always  bool
+	Expr    string
+	Program *config.PropertyProgram
+}
+
+func compileProperties(properties []trace.Property) ([]PropertySpec, error) {
+	var compiled []PropertySpec
+	for _, p := range properties {
+		program, err := config.CompileProperty(p.Expr)
+		if err != nil {
+			return nil, fmt.Errorf("property %s: %w", p.Name, err)
+		}
+		compiled = append(compiled, PropertySpec{Name: p.Name, Always: p.When == string(config.Always), Expr: p.Expr, Program: program})
+	}
+	return compiled, nil
 }
 
 // Model is a stage model's kind as the checks judge it.
@@ -91,6 +117,10 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 		if s.Owners, err = owner.Compile(owners, owns, systems); err != nil {
 			return Spec{}, fmt.Errorf("the config's owners: %w", err)
 		}
+		if s.Properties, err = compileProperties(owner.Properties(c)); err != nil {
+			return Spec{}, fmt.Errorf("the config's properties: %w", err)
+		}
+		s.Periodic = owner.Periodic(c)
 		return s, nil
 	}
 	if run.Ready == "" || run.Stable <= 0 || run.Reads <= 0 || run.Writes <= 0 {
@@ -124,6 +154,10 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 	if s.Owners, err = owner.Compile(run.Owners, run.Owns, run.Systems); err != nil {
 		return Spec{}, fmt.Errorf("the trace's owners: %w", err)
 	}
+	if s.Properties, err = compileProperties(run.Properties); err != nil {
+		return Spec{}, fmt.Errorf("the trace's properties: %w", err)
+	}
+	s.Periodic = run.Periodic
 	return s, nil
 }
 
@@ -246,6 +280,7 @@ func Judge(ix *trace.Index, s Spec) Report {
 	findings = append(findings, Unique(ix, s)...)
 	findings = append(findings, Honest(ix, s)...)
 	findings = append(findings, Backoff(ix, s)...)
+	findings = append(findings, Property(ix, s)...)
 	notes = append(append(append(actionErrors(ix), unpicked(ix, s)...), notes...), unmapped(ix)...)
 	return Report{Findings: findings, Notes: notes}
 }
@@ -265,14 +300,19 @@ func unmapped(ix *trace.Index) []string {
 }
 
 // unpicked notes each request fault that altered no controller request
-// while it was active, and each stage-model fault whose model held no
-// object.
+// while it was active, each stage-model fault whose model held no object,
+// and each holdWatch while the controller had no watch of its kind.
 func unpicked(ix *trace.Index, s Spec) []string {
 	starts := map[[2]int]trace.Event{}
 	var notes []string
+	for _, h := range ix.Holds() {
+		if !ix.WatchedKind(trace.Controller, h.Kind, h.Start, h.End) {
+			notes = append(notes, fmt.Sprintf("%s, fault %d (%s) held no watch.", stepName(ix, h.Step), h.Index, h.What))
+		}
+	}
 	for _, e := range ix.Events() {
 		f := e.Fault
-		if f == nil {
+		if f == nil || f.Hold != nil {
 			continue
 		}
 		key := [2]int{f.Step, f.Index}

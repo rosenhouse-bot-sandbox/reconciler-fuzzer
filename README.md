@@ -21,7 +21,9 @@ export KUBEBUILDER_ASSETS="$(setup-envtest use 1.37.0 --index $index -p path)"
 `setup-envtest` downloads etcd and kube-apiserver. Set `KUBEBUILDER_ASSETS` in each new shell.
 Building takes Go 1.26.0 or later. Set `GOTOOLCHAIN=auto` if your Go is older.
 
-From a checkout, the Makefile installs the same control plane under `bin/`:
+From a checkout, the Makefile installs the same control plane under `bin/`. It also installs a
+pinned, checksummed Vault and moto with its dependencies pinned by hash, the emulators the
+examples run:
 
 ```sh
 make setup
@@ -220,10 +222,96 @@ collections:
   reused, and a `version`, a number or string that changes with every change. A listing the
   harness cannot read fails the run.
 
+### Emulators
+
+A real emulator can be a fake service too. `api: vault` reads a Vault server's KV version 2
+mounts, and `api: s3` an S3 server's buckets and objects:
+
+```yaml
+systems:
+  - name: vault
+    api: vault
+    token: root                              # required: the harness's token, and ${systems.vault.token}
+    access: read                             # optional: the controller only reads it
+    process:
+      command: [../../bin/vault, server, -dev, -dev-root-token-id=root, "-dev-listen-address=${addr}"]
+    fixtures: [vault.yaml]                   # created before step 0
+```
+
+```yaml
+# vault.yaml
+- {resource: secret, name: token, body: {value: s3cr3t}}   # secret/data/token
+```
+
+- The harness runs the command with `${addr}` and `${port}` expanded, and lists the emulator
+  through its own API. Emulators take no `stuck` or `slowDelete`.
+- Kube fixtures expand `${systems.<name>.url}` and `.token`, so a Secret fixture can hold the
+  controller's credentials.
+- `changeFixture` on `{"system": "vault", "resource": "secret", "name": "token"}` with a `patch`
+  writes a new KV version. The patch merges into the secret's data, so `{"value": "new"}`
+  sets `value`.
+- With `access: read`, generated plans draw no damage and only read faults on the fake.
+- A request the map cannot place gets a note `unmapped request`, and no check judges it.
+
+### Properties
+
+A property is CEL that must hold at each settled step's end, or with `when: always` at every
+recorded version. It sees `crs`, the live CRs, and `world.<system>.<key>`, the live objects of
+each system, such as `world.kube.secrets` or `world.vault.secret`:
+
+```yaml
+properties:
+  - name: synced
+    expr: >-
+      crs.all(c, world.vault.secret.all(v, v.path != c.spec.data[0].remoteRef.key
+        || world.kube.secrets.exists(s, s.metadata.name == c.spec.target.name
+          && s.data.token == base64.encode(bytes(v.data.value)))))
+```
+
+`firstWrittenUnder(object, path)` names the CR that owned the object when its value at `path`
+first appeared, across deletes and recreates. cert-manager's `fresh-key` property uses it. A
+failing property's details say which instance and CR such a value came from.
+
+A controller that refreshes on a timer writes its CR each period. `primary.periodic: {every:
+2s, paths: [status.refreshTime]}` lets those writes pass the settle condition. `[*]` names a
+field of every list item, as in `status.conditions[*].lastTransitionTime`.
+
+### Holding watch events
+
+A `holdWatch` fault pauses the controller's watch events of one kind for the fault period, and
+delivers them in order when it ends. The controller then acts on a stale cache, as on a busy
+cluster. The settle condition counts a held watch as looking only once the hold ends:
+
+```json
+{"actions": [{"do": "delete", "slot": "a"}, {"do": "create", "slot": "a", "object": {}}],
+ "period": "2s", "faults": [{"match": {"resource": "secrets"}, "holdWatch": true}]}
+```
+
+Generated plans draw it for kinds `launch.rbac` lets the controller watch, the primary and
+`primary.owns` kinds most, in a step that deletes a CR and creates it again unchanged. About 1
+cert-manager seed in 11 holds Secrets this way, so a 20-seed `make hunt-cert-manager` usually,
+but not always, finds #63. A report notes a `holdWatch` while the controller had no watch of
+its kind, such as one with a misspelt resource.
+
 ### Examples
 
-[examples/cert-manager](examples/cert-manager/config.yaml) and
-[examples/external-secrets](examples/external-secrets/config.yaml) are real configs.
+Each example builds its controller from a pinned upstream tag. Its plans and seeds give no
+findings, and a negative control, where one exists, must fail.
+
+- [examples/cert-manager](examples/cert-manager/config.yaml) runs cert-manager. Its
+  `bugs/` plan holds the Secret watch across a recreate, and `fresh-key` finds
+  [a real bug](docs/findings/cert-manager-secret-write-back.md): the new Certificate gets the
+  deleted one's key. `make test-example-cert-manager` needs it in 1 of 3 runs, and
+  `make repro-cert-manager` prints its reproduction rate.
+- [examples/external-secrets](examples/external-secrets/config.yaml) runs external-secrets
+  with its Vault provider against a Vault dev server. Its `bugs/` plan finds
+  [a real bug](docs/findings/external-secrets-onchange-stale-failure.md): after a lost Secret
+  create, an `OnChange` ExternalSecret stays `Ready=False`.
+  [rotation](examples/external-secrets/rotation/config.yaml) rotates a Vault value under
+  `refreshPolicy: Periodic`.
+- [examples/ack-s3](examples/ack-s3/config.yaml) runs ACK's s3-controller against moto. Its
+  [README](examples/ack-s3/README.md) lists the ACK bugs it found and the harness bugs it
+  exposed.
 
 ## Reading a failure
 
@@ -289,4 +377,5 @@ The README also uses these:
 | `ready` | CEL over a CR that is true once the controller has acted on its spec. |
 | `stable` | How long the controller must stay quiet for a step to settle. |
 | `crudfake` | The harness's JSON server, a fake service for a REST JSON API. |
+| Emulator | A real API's local server, such as a Vault dev server or moto for S3. |
 | Unknown outcome | A request that reached the server, but whose response the caller never saw. |

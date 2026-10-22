@@ -1,0 +1,8 @@
+HTTP/1.1 200 OK
+Content-Type: application/xml
+Content-Length: 269
+Access-Control-Allow-Origin: *
+Connection: close
+
+<?xml version="1.0" encoding="utf-8"?>
+<InitiateMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Bucket>logs-bucket</Bucket><Key>big</Key><UploadId>A8zUgQjS49CKGJEiL5E51o0C3nRnFzEkCkq4y8N53N71X451tKTpDGkg</UploadId></InitiateMultipartUploadResult>

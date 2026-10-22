@@ -1,0 +1,61 @@
+{
+  "steps": [
+    {
+      "actions": [
+        {
+          "do": "create",
+          "slot": "a",
+          "object": {
+            "apiVersion": "external-secrets.io/v1",
+            "kind": "ExternalSecret",
+            "metadata": {
+              "name": "example"
+            },
+            "spec": {
+              "refreshPolicy": "OnChange",
+              "refreshInterval": "1h0m0s",
+              "secretStoreRef": {
+                "kind": "SecretStore",
+                "name": "vault"
+              },
+              "target": {
+                "name": "example-secret"
+              },
+              "data": [
+                {
+                  "secretKey": "token",
+                  "remoteRef": {
+                    "key": "token",
+                    "property": "value"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "do": "damage",
+          "slot": "a",
+          "target": {
+            "resource": "secrets"
+          }
+        }
+      ],
+      "period": "1s",
+      "faults": [
+        {
+          "match": {
+            "verb": "create",
+            "resource": "secrets"
+          },
+          "nth": 1,
+          "dropResponse": true
+        }
+      ]
+    }
+  ]
+}

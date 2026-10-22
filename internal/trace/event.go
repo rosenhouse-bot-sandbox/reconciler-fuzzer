@@ -89,6 +89,23 @@ type Run struct {
 	Halted string `json:"halted,omitempty"`
 	// Systems lists the fake services.
 	Systems []System `json:"systems,omitempty"`
+	// Properties are the config's properties.
+	Properties []Property `json:"properties,omitempty"`
+	// Periodic is the primary's periodic, or nil.
+	Periodic *Periodic `json:"periodic,omitempty"`
+}
+
+// Property is one config property. When is "step" or "always".
+type Property struct {
+	Name string `json:"name"`
+	Expr string `json:"expr"`
+	When string `json:"when"`
+}
+
+// Periodic declares the CR paths a controller writes on a timer.
+type Periodic struct {
+	Every time.Duration `json:"every"`
+	Paths []string      `json:"paths"`
 }
 
 // System is one fake service as the checks need it. Role, Ready and Gone
@@ -189,7 +206,6 @@ type Fault struct {
 	// Model names the model that took a stuck or slowDelete fault.
 	Model string `json:"model,omitempty"`
 	// Hold names the kind whose watch events a holdWatch fault holds.
-	// Nothing sets it before M5.
 	Hold *Ref `json:"hold,omitempty"`
 }
 

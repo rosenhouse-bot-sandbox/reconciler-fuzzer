@@ -1,0 +1,51 @@
+{
+  "steps": [
+    {
+      "actions": [
+        {
+          "do": "create",
+          "slot": "a"
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "do": "update",
+          "slot": "a",
+          "patch": {
+            "spec": {
+              "tagging": {
+                "tagSet": [
+                  {
+                    "key": "team",
+                    "value": "b"
+                  },
+                  {
+                    "key": "env",
+                    "value": "dev"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "do": "update",
+          "slot": "a",
+          "patch": {
+            "spec": {
+              "versioning": {
+                "status": "Enabled"
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

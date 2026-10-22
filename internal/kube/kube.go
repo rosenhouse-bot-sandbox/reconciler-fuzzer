@@ -58,6 +58,9 @@ type Options struct {
 	// starts. A namespaced fixture without a namespace goes in the run
 	// namespace.
 	Fixtures []string
+	// Vars expand as ${key} in the fixtures, such as
+	// systems.vault.url.
+	Vars map[string]string
 	// Watch lists kinds the observer watches from the start. It adds any
 	// other kind a listener sees a request for.
 	Watch []schema.GroupVersionKind
@@ -117,7 +120,7 @@ func (k *Kube) start(ctx context.Context, env *system.Env) (system.Endpoints, er
 	if err != nil {
 		return system.Endpoints{}, err
 	}
-	fixtures, err := readObjects(k.o.Fixtures)
+	fixtures, err := readObjects(k.o.Fixtures, k.o.Vars)
 	if err != nil {
 		return system.Endpoints{}, err
 	}

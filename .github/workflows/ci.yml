@@ -41,6 +41,7 @@ jobs:
       - run: make test
 
   # The envtest and generated tiers run both toys, toy-widget and toy-bucket.
+  # make setup installs Vault and moto, which the envtest tier uses.
   envtest:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -58,6 +59,19 @@ jobs:
             bin/envtest
             bin/setup-envtest
           key: envtest-${{ runner.os }}-${{ hashFiles('Makefile') }}
+      # The venv names the runner's python, so its version joins the key.
+      - name: Read the Vault and moto pins
+        id: fakes
+        run: echo "key=$({ grep -E '^VAULT_' Makefile; cat requirements-moto.txt; python3 --version; } | sha256sum | cut -c1-16)" >>"$GITHUB_OUTPUT"
+      - name: Cache Vault and moto
+        uses: actions/cache@v4
+        with:
+          path: |
+            bin/vault
+            bin/vault-*.installed
+            bin/moto
+            bin/moto-*.installed
+          key: fakes-${{ runner.os }}-${{ steps.fakes.outputs.key }}
       - run: make test-envtest
 
   generated:
@@ -76,15 +90,35 @@ jobs:
             bin/envtest
             bin/setup-envtest
           key: envtest-${{ runner.os }}-${{ hashFiles('Makefile') }}
+      # The venv names the runner's python, so its version joins the key.
+      - name: Read the Vault and moto pins
+        id: fakes
+        run: echo "key=$({ grep -E '^VAULT_' Makefile; cat requirements-moto.txt; python3 --version; } | sha256sum | cut -c1-16)" >>"$GITHUB_OUTPUT"
+      - name: Cache Vault and moto
+        uses: actions/cache@v4
+        with:
+          path: |
+            bin/vault
+            bin/vault-*.installed
+            bin/moto
+            bin/moto-*.installed
+          key: fakes-${{ runner.os }}-${{ steps.fakes.outputs.key }}
       - run: make test-generated
 
+  # The slowest tier, external-secrets', takes about 12 minutes.
   example:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        example: [cert-manager, external-secrets]
+        include:
+          - example: cert-manager
+            binary: cert-manager-controller
+          - example: external-secrets
+            binary: external-secrets
+          - example: ack-s3
+            binary: ack-s3-controller
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v5
@@ -98,6 +132,19 @@ jobs:
             bin/envtest
             bin/setup-envtest
           key: envtest-${{ runner.os }}-${{ hashFiles('Makefile') }}
+      # The venv names the runner's python, so its version joins the key.
+      - name: Read the Vault and moto pins
+        id: fakes
+        run: echo "key=$({ grep -E '^VAULT_' Makefile; cat requirements-moto.txt; python3 --version; } | sha256sum | cut -c1-16)" >>"$GITHUB_OUTPUT"
+      - name: Cache Vault and moto
+        uses: actions/cache@v4
+        with:
+          path: |
+            bin/vault
+            bin/vault-*.installed
+            bin/moto
+            bin/moto-*.installed
+          key: fakes-${{ runner.os }}-${{ steps.fakes.outputs.key }}
       - name: Read the ${{ matrix.example }} pin
         id: pin
         run: echo "version=$(make --no-print-directory ${{ matrix.example }}-version)" >>"$GITHUB_OUTPUT"
@@ -106,7 +153,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            bin/${{ matrix.example == 'cert-manager' && 'cert-manager-controller' || 'external-secrets' }}
+            bin/${{ matrix.binary }}
             bin/${{ matrix.example }}-${{ steps.pin.outputs.version }}.built
           key: ${{ matrix.example }}-${{ runner.os }}-${{ steps.pin.outputs.version }}
       - run: make test-example-${{ matrix.example }}

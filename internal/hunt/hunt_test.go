@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/check"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/generate"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 )
 
@@ -362,5 +364,42 @@ func TestSummaryEscapesPipes(t *testing.T) {
 	got := Summary("1 plan", []Found{{Finding: check.Finding{Check: "Clean", Summary: "a|b"}}}, nil)
 	if !strings.Contains(got, `| a\|b |`) {
 		t.Errorf("Summary is %q.", got)
+	}
+}
+
+func TestAShrinkStopsAfterShrinkCandidates(t *testing.T) {
+	cfg, err := config.Load(toyConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := generate.New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sample, err := loadSample(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := uint64(1)
+	for ; ; seed++ {
+		if p, _ := g.Plan(seed); len(Candidates(p, sample)) > ShrinkCandidates {
+			break
+		}
+	}
+	found, fake := hunt(t, []uint64{seed}, func(dir string, _ *plan.Plan) []check.Finding {
+		if strings.Contains(dir, "shrink") {
+			return nil
+		}
+		return []check.Finding{clean}
+	})
+	tried := map[string]bool{}
+	for _, dir := range fake.dirs {
+		if rest, ok := strings.CutPrefix(filepath.Base(dir), "shrink-"); ok {
+			c, _, _ := strings.Cut(rest, "-")
+			tried[c] = true
+		}
+	}
+	if len(tried) != ShrinkCandidates || len(found) != 1 || found[0].Shrunk == nil {
+		t.Errorf("The shrink of seed %d tried %d candidates and found %+v, want %d and the plan kept.", seed, len(tried), found, ShrinkCandidates)
 	}
 }
