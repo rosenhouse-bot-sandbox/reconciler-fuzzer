@@ -18,10 +18,10 @@ permissions:
 
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -31,10 +31,10 @@ jobs:
 
   # The unit tests include the size test and the bug-matrix check.
   unit:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -43,17 +43,17 @@ jobs:
   # The envtest and generated tiers run both toys, toy-widget and toy-bucket.
   # make setup installs Vault and moto, which the envtest tier uses.
   envtest:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
       # The Makefile pins ENVTEST_K8S_VERSION, so its hash keys the cache.
       - name: Cache envtest control-plane binaries
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             bin/envtest
@@ -64,7 +64,7 @@ jobs:
         id: fakes
         run: echo "key=$({ grep -E '^VAULT_' Makefile; cat requirements-moto.txt; python3 --version; } | sha256sum | cut -c1-16)" >>"$GITHUB_OUTPUT"
       - name: Cache Vault and moto
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             bin/vault
@@ -75,16 +75,16 @@ jobs:
       - run: make test-envtest
 
   generated:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 55
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
       - name: Cache envtest control-plane binaries
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             bin/envtest
@@ -95,7 +95,7 @@ jobs:
         id: fakes
         run: echo "key=$({ grep -E '^VAULT_' Makefile; cat requirements-moto.txt; python3 --version; } | sha256sum | cut -c1-16)" >>"$GITHUB_OUTPUT"
       - name: Cache Vault and moto
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             bin/vault
@@ -107,7 +107,7 @@ jobs:
 
   # The slowest tier, external-secrets', takes about 12 minutes.
   example:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -120,13 +120,13 @@ jobs:
           - example: ack-s3
             binary: ack-s3-controller
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
       - name: Cache envtest control-plane binaries
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             bin/envtest
@@ -137,7 +137,7 @@ jobs:
         id: fakes
         run: echo "key=$({ grep -E '^VAULT_' Makefile; cat requirements-moto.txt; python3 --version; } | sha256sum | cut -c1-16)" >>"$GITHUB_OUTPUT"
       - name: Cache Vault and moto
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             bin/vault
@@ -150,7 +150,7 @@ jobs:
         run: echo "version=$(make --no-print-directory ${{ matrix.example }}-version)" >>"$GITHUB_OUTPUT"
       # The stamp tells make the cached binary is current.
       - name: Cache the ${{ matrix.example }} controller
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             bin/${{ matrix.binary }}
@@ -159,7 +159,7 @@ jobs:
       - run: make test-example-${{ matrix.example }}
       - name: Keep the failing run's evidence
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: reconciler-fuzzer-out-${{ matrix.example }}
           path: reconciler-fuzzer-out/
