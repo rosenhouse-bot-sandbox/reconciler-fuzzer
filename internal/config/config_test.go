@@ -313,6 +313,19 @@ func TestModels(t *testing.T) {
 	}
 }
 
+// A third-party controller puts its own finalizer on what it serves, and
+// removes it once it has torn the object down.
+func TestAModelCanHoldAFinalizer(t *testing.T) {
+	_, err := config.Load(writeConfig(t, minimal(t)+`models:
+  - kind: example.com/v1/Gadget
+    after: 200ms
+    finalizer: {name: example.com/protect, after: 1s}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestModelsRefuseMistakes(t *testing.T) {
 	for _, models := range []string{
 		"- {after: 1s}",

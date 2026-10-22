@@ -15,6 +15,8 @@ import (
 const (
 	databaseConfig = "database/config.yaml"
 	orderConfig    = "order/config.yaml"
+	// protectConfig needs a model finalizer, which configs cannot yet set.
+	protectConfig = "protect/config.yaml"
 )
 
 // configs are the toy's configs. B0 passes every plan in plans/ beside each.
@@ -40,6 +42,9 @@ var gate = []gateRow{
 	{"slow-delete", 16, "Finalizers: removed another caller's finalizer", 1, "cluster-vol-0: reconciler-fuzzer.dev/slow-delete", ""},
 	{"stuck-delete", 17, "Converge: did not settle (clause 2)", 1, "cluster is being deleted", ""},
 	{"slow-delete", 18, "", 0, "", ""},
+	{"b0", 0, "", 0, "", protectConfig},
+	{"b0", 15, "Clean: released a CR before its resources were gone", 2, "cluster-vol-0 (rule 1, slot a)", protectConfig},
+	{"b0", 16, "Finalizers: removed another caller's finalizer", 2, "cluster-vol-0: storage.thirdparty/protect", protectConfig},
 }
 
 func (g gateRow) configPath() string { return cmp.Or(g.config, "config.yaml") }
