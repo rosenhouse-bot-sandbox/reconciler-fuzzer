@@ -124,6 +124,20 @@ func TestHonestJudgesAnObservedGenerationRaise(t *testing.T) {
 	}
 }
 
+// A Gadget the controller made without an ownerReference is no dependency.
+// The finding names it and how to declare its owner.
+func TestHonestNamesAnUnownedDependency(t *testing.T) {
+	r := newRun(1)
+	r.Spec.Models = []trace.Model{{Kind: trace.Kind{Group: "toy", Version: "v1", Kind: "Gadget", Resource: "gadgets"},
+		Ready: config.ReadyConditionCEL, Dependency: &trace.Dependency{Required: true}}}
+	r.Begin().CreateCR("a", widgetA)
+	r.Create(ctl, gadgetA, tt.ReadyCondition("a", 1, false))
+	r.Update(gadgetModel, gadgetA, tt.ReadyCondition("a", 1, true))
+	r.See(ctl, gadgetA).Ready(widgetA)
+	requireFinding(t, honest(t, r), "Honest", 0, noDependency, "kube/toy/widgets",
+		"slot a: gadgets.toy ns/a has no ownerReference to it; declare primary.owns or a kube owner")
+}
+
 func TestHonestRequiresADependency(t *testing.T) {
 	r := newRun(1)
 	r.Spec.Models = []trace.Model{{Kind: trace.Kind{Group: "toy", Version: "v1", Kind: "Gadget", Resource: "gadgets"},
