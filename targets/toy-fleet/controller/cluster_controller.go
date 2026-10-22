@@ -112,7 +112,7 @@ func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Clust
 	}
 	var dependents int
 	for _, db := range databases.Items {
-		if db.Spec.ClusterRef == cluster.Name {
+		if db.Spec.ClusterRef == cluster.Name && r.Bug != B20 {
 			dependents++
 		}
 	}

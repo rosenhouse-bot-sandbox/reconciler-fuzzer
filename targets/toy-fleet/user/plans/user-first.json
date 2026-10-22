@@ -1,0 +1,5 @@
+{
+  "steps": [
+    {"period": "2s", "actions": [{"do": "create", "slot": "a"}, {"at": "1s", "do": "create", "slot": "d", "object": {"apiVersion": "toy.reconciler-fuzzer/v1", "kind": "Database", "metadata": {"name": "db"}, "spec": {"clusterRef": "cluster", "engine": "postgres"}}}]}
+  ]
+}

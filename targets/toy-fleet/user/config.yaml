@@ -1,0 +1,30 @@
+# Users as the primary, on a fixture Cluster. Plans create the Database.
+# Paths resolve against this file's directory.
+launch:
+  binary: ../../../bin/toy-fleet
+  args:
+    - --bug=0                      # A later --launch-arg --bug=N wins.
+  env:
+    KUBECONFIG: ${systems.kube.kubeconfig}
+    WATCH_NAMESPACE: ${systems.kube.namespace}
+  rbac:
+    - ../rbac/role.yaml
+crds:
+  - ../crds/
+primary:
+  kind: toy.reconciler-fuzzer/v1/User
+  sample: user.yaml
+  ready: >-
+    has(self.status) && has(self.status.observedGeneration) && self.status.observedGeneration == self.metadata.generation
+    && has(self.status.phase) && self.status.phase == 'Ready'
+models:
+  - kind: storage.thirdparty/v1/Volume
+    stages: readyCondition
+    after: 300ms
+fixtures:
+  - ../cluster.yaml
+values:
+  overlay: {spec.databaseRef: {enum: [db]}}
+timeouts:
+  settle: 10s
+  stable: 2s

@@ -64,7 +64,7 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		db.Status.Message = fmt.Sprintf("waiting for Cluster %s", db.Spec.ClusterRef)
 	case err != nil:
 		return ctrl.Result{}, err
-	case !hosts(cluster, old.Phase):
+	case !hosts(cluster, old.Phase) && r.Bug != B23:
 		db.Status.Message = fmt.Sprintf("waiting for Cluster %s to be Ready", cluster.Name)
 	default:
 		if err := r.syncConfigMap(ctx, db); err != nil {
@@ -110,7 +110,7 @@ func (r *DatabaseReconciler) finalize(ctx context.Context, db *fleetv1.Database)
 	}
 	var dependents int
 	for _, u := range users.Items {
-		if u.Spec.DatabaseRef == db.Name {
+		if u.Spec.DatabaseRef == db.Name && r.Bug != B21 {
 			dependents++
 		}
 	}

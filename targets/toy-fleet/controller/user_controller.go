@@ -23,11 +23,13 @@ import (
 type UserReconciler struct{ reconciler }
 
 func (r *UserReconciler) SetupWithManager(m ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(m).
+	b := ctrl.NewControllerManagedBy(m).
 		For(&fleetv1.User{}).
-		Owns(&corev1.Secret{}).
-		Watches(&fleetv1.Database{}, handler.EnqueueRequestsFromMapFunc(r.usersOf)).
-		Complete(r)
+		Owns(&corev1.Secret{})
+	if r.Bug != B22 {
+		b = b.Watches(&fleetv1.Database{}, handler.EnqueueRequestsFromMapFunc(r.usersOf))
+	}
+	return b.Complete(r)
 }
 
 func (r *UserReconciler) usersOf(ctx context.Context, db client.Object) []reconcile.Request {

@@ -1,0 +1,6 @@
+{
+  "steps": [
+    {"actions": [{"do": "create", "slot": "a"}, {"do": "create", "slot": "u", "object": {"apiVersion": "toy.reconciler-fuzzer/v1", "kind": "User", "metadata": {"name": "alice"}, "spec": {"databaseRef": "db"}}}]},
+    {"actions": [{"do": "delete", "slot": "a"}]}
+  ]
+}
