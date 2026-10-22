@@ -31,6 +31,7 @@ func run(args []string, out io.Writer) error {
 	flags.SetOutput(io.Discard) // main reports what Parse rejects; --help prints below.
 	kubeconfig := flags.String("kubeconfig", "", "path to a kubeconfig file; defaults to $KUBECONFIG, then to the in-cluster configuration")
 	bugID := flags.Int("bug", 0, "seeded bug to run; 0 is the correct controller")
+	version := flags.Int("version", 1, "controller version to run, 1 or 2")
 	metricsAddress := flags.String("metrics-bind-address", "0", "address the metrics server binds to; 0 disables it")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -38,6 +39,9 @@ func run(args []string, out io.Writer) error {
 			flags.Usage()
 		}
 		return err
+	}
+	if *version != 1 && *version != 2 {
+		return fmt.Errorf("--version=%d: want 1 or 2", *version)
 	}
 	bug, err := controller.ParseBug(*bugID)
 	if err != nil {
@@ -61,10 +65,10 @@ func run(args []string, out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("creating the manager: %w", err)
 	}
-	if err := controller.Setup(manager, bug); err != nil {
+	if err := controller.Setup(manager, bug, *version); err != nil {
 		return fmt.Errorf("setting up the controllers: %w", err)
 	}
-	ctrl.Log.WithName("toy-fleet").Info("starting", "bug", int(bug))
+	ctrl.Log.WithName("toy-fleet").Info("starting", "bug", int(bug), "version", *version)
 	return manager.Start(ctrl.SetupSignalHandler())
 }
 

@@ -1,0 +1,7 @@
+{
+  "steps": [
+    {"actions": [{"do": "create", "slot": "a"}]},
+    {"actions": [{"do": "restart"}]},
+    {"actions": [{"do": "delete", "slot": "a"}]}
+  ]
+}

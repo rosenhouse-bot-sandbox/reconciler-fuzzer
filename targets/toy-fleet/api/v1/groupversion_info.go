@@ -27,7 +27,9 @@ type Phase string
 const (
 	Pending      Phase = "Pending"
 	Provisioning Phase = "Provisioning"
-	Ready        Phase = "Ready"
+	// Creating replaces Provisioning in version 2.
+	Creating Phase = "Creating"
+	Ready       Phase = "Ready"
 	Deleting     Phase = "Deleting"
 )
 

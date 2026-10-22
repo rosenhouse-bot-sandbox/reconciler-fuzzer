@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -37,8 +38,29 @@ func newFleet(t *testing.T, objects ...client.Object) *fleet {
 		WithIndex(&fleetv1.Database{}, clusterRefField, func(o client.Object) []string { return []string{o.(*fleetv1.Database).Spec.ClusterRef} }).
 		WithIndex(&fleetv1.User{}, databaseRefField, func(o client.Object) []string { return []string{o.(*fleetv1.User).Spec.DatabaseRef} }).
 		WithObjects(objects...).Build()
-	base := reconciler{Client: c, APIReader: c, Scheme: scheme}
-	return &fleet{t, c, &ClusterReconciler{base}, &DatabaseReconciler{base}, &UserReconciler{base}}
+	f := &fleet{t: t, c: c}
+	return f.as(1, 0)
+}
+
+// as switches the fleet to the controller of version, with bug.
+func (f *fleet) as(version int, bug Bug) *fleet {
+	base := reconciler{Client: f.c, APIReader: f.c, Scheme: f.c.Scheme(), Bug: bug, Version: version}
+	f.clusters, f.databases, f.user = &ClusterReconciler{base}, &DatabaseReconciler{base}, &UserReconciler{base}
+	return f
+}
+
+// volumes lists the Volumes' names.
+func (f *fleet) volumes() []string {
+	f.t.Helper()
+	list := &storagev1.VolumeList{}
+	if err := f.c.List(f.t.Context(), list); err != nil {
+		f.t.Fatal(err)
+	}
+	var names []string
+	for _, v := range list.Items {
+		names = append(names, v.Name)
+	}
+	return names
 }
 
 // settle reconciles name with r until it stops changing anything.
@@ -210,11 +232,90 @@ func TestDatabaseWaitsForItsClusterAndHoldsDeletionForUsers(t *testing.T) {
 	}
 }
 
+// readyV1Cluster leaves a Ready Cluster made by version 1.
+func readyV1Cluster(t *testing.T) *fleet {
+	f := newFleet(t, clusterObj())
+	f.settle(f.clusters, "cluster")
+	f.readyVolumes()
+	f.settle(f.clusters, "cluster")
+	return f
+}
+
+func TestV2NamesNewVolumesData(t *testing.T) {
+	f := newFleet(t, clusterObj()).as(2, 0)
+	f.settle(f.clusters, "cluster")
+	if got := f.volumes(); !slices.Equal(got, []string{"cluster-data-0", "cluster-data-1"}) {
+		t.Errorf("Volumes %v", got)
+	}
+	if c := f.cluster(); c.Status.Phase != fleetv1.Creating || !slices.Equal(c.Finalizers, []string{fleetv1.ClusterFinalizerV2}) {
+		t.Errorf("Cluster %+v %v", c.Status, c.Finalizers)
+	}
+}
+
+func TestV2TakesOverAV1ClusterAndDeletesIt(t *testing.T) {
+	f := readyV1Cluster(t).as(2, 0)
+	f.settle(f.clusters, "cluster")
+	if c := f.cluster(); c.Status.Phase != fleetv1.Ready || !slices.Equal(c.Finalizers, []string{fleetv1.ClusterFinalizerV2}) {
+		t.Errorf("Upgraded Cluster %+v %v", c.Status, c.Finalizers)
+	}
+	if got := f.volumes(); !slices.Equal(got, []string{"cluster-vol-0", "cluster-vol-1"}) {
+		t.Errorf("Upgraded Volumes %v", got)
+	}
+	f.delete(f.cluster())
+	f.settle(f.clusters, "cluster")
+	if err := f.get("cluster", &fleetv1.Cluster{}); !apierrors.IsNotFound(err) {
+		t.Errorf("Deleted Cluster gives %v, want not found.", err)
+	}
+}
+
+func TestV2FinishesAV1ClusterStillProvisioning(t *testing.T) {
+	f := newFleet(t, clusterObj())
+	f.settle(f.clusters, "cluster")
+	f.as(2, 0).settle(f.clusters, "cluster")
+	f.readyVolumes()
+	f.settle(f.clusters, "cluster")
+	if c := f.cluster(); c.Status.Phase != fleetv1.Ready {
+		t.Errorf("Cluster %+v", c.Status)
+	}
+}
+
+func TestB40KeepsTheV1Finalizer(t *testing.T) {
+	f := readyV1Cluster(t).as(2, B40)
+	f.settle(f.clusters, "cluster")
+	f.delete(f.cluster())
+	f.settle(f.clusters, "cluster")
+	if c := f.cluster(); !slices.Equal(c.Finalizers, []string{fleetv1.ClusterFinalizer}) {
+		t.Errorf("Deleted Cluster has finalizers %v", c.Finalizers)
+	}
+}
+
+func TestB41LeaksV1Volumes(t *testing.T) {
+	f := readyV1Cluster(t).as(2, B41)
+	f.settle(f.clusters, "cluster")
+	if got := f.volumes(); len(got) != 4 {
+		t.Errorf("Volumes %v, want 2 of each version", got)
+	}
+}
+
+func TestB42StrandsAV1ClusterStillProvisioning(t *testing.T) {
+	f := newFleet(t, clusterObj())
+	f.settle(f.clusters, "cluster")
+	f.as(2, B42).settle(f.clusters, "cluster")
+	f.readyVolumes()
+	f.settle(f.clusters, "cluster")
+	if c := f.cluster(); c.Status.Phase != fleetv1.Provisioning {
+		t.Errorf("Cluster %+v", c.Status)
+	}
+}
+
 func TestParseBugAcceptsOnlyKnownBugs(t *testing.T) {
 	if b, err := ParseBug(0); b != 0 || err != nil {
 		t.Errorf("ParseBug(0) = %v, %v", b, err)
 	}
-	if _, err := ParseBug(40); err == nil {
-		t.Error("ParseBug(40) succeeded, want an error.")
+	if _, err := ParseBug(39); err == nil {
+		t.Error("ParseBug(39) succeeded, want an error.")
+	}
+	if b, err := ParseBug(42); b != B42 || err != nil {
+		t.Errorf("ParseBug(42) = %v, %v", b, err)
 	}
 }

@@ -3,6 +3,8 @@ package controller
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -41,13 +43,19 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if !cluster.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, r.finalize(ctx, cluster)
 	}
-	if controllerutil.AddFinalizer(cluster, fleetv1.ClusterFinalizer) {
+	migrated := r.Version == 2 && r.Bug != B40 && controllerutil.RemoveFinalizer(cluster, fleetv1.ClusterFinalizer)
+	if controllerutil.AddFinalizer(cluster, r.finalizer()) || migrated {
 		return ctrl.Result{}, r.Update(ctx, cluster)
 	}
 	old := cluster.Status
-	if old.Phase == "" {
+	switch old.Phase {
+	case "":
 		cluster.Status.Phase = fleetv1.Pending
 		return ctrl.Result{}, r.writeStatus(ctx, cluster, old, cluster.Status)
+	case fleetv1.Provisioning:
+		if r.Version == 2 && r.Bug == B42 {
+			return ctrl.Result{}, nil
+		}
 	}
 	ready, err := r.syncVolumes(ctx, cluster)
 	if err != nil {
@@ -55,7 +63,7 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 	status := fleetv1.ClusterStatus{ReadyVolumes: ready}
 	status.ObservedGeneration = cluster.Generation
-	status.Phase, status.Message = fleetv1.Provisioning, fmt.Sprintf("%d of %d Volumes ready", ready, cluster.Spec.Volumes)
+	status.Phase, status.Message = r.provisioning(), fmt.Sprintf("%d of %d Volumes ready", ready, cluster.Spec.Volumes)
 	if ready == cluster.Spec.Volumes {
 		status.Phase, status.Message = fleetv1.Ready, ""
 	}
@@ -73,7 +81,7 @@ func (r *ClusterReconciler) syncVolumes(ctx context.Context, cluster *fleetv1.Cl
 	want := map[string]bool{}
 	var ready int32
 	for i := range cluster.Spec.Volumes {
-		name := fmt.Sprintf("%s-vol-%d", cluster.Name, i)
+		name := r.volumeName(cluster, i, volumes)
 		want[name] = true
 		volume := &storagev1.Volume{ObjectMeta: metav1.ObjectMeta{Namespace: cluster.Namespace, Name: name}}
 		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, volume, func() error {
@@ -103,7 +111,7 @@ func (r *ClusterReconciler) syncVolumes(ctx context.Context, cluster *fleetv1.Cl
 // finalize waits for the Cluster's Databases to go, deletes its Volumes,
 // waits for them to go, and then releases the Cluster.
 func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Cluster) error {
-	if !controllerutil.ContainsFinalizer(cluster, fleetv1.ClusterFinalizer) {
+	if !controllerutil.ContainsFinalizer(cluster, r.finalizer()) && (r.Bug == B40 || !controllerutil.ContainsFinalizer(cluster, fleetv1.ClusterFinalizer)) {
 		return nil
 	}
 	databases := &fleetv1.DatabaseList{}
@@ -146,7 +154,10 @@ func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Clust
 	if len(volumes) > 0 {
 		return nil // A Volume's deletion requeues the Cluster.
 	}
-	controllerutil.RemoveFinalizer(cluster, fleetv1.ClusterFinalizer)
+	controllerutil.RemoveFinalizer(cluster, r.finalizer())
+	if r.Bug != B40 {
+		controllerutil.RemoveFinalizer(cluster, fleetv1.ClusterFinalizer)
+	}
 	return client.IgnoreNotFound(r.Update(ctx, cluster))
 }
 
@@ -158,11 +169,35 @@ func (r *ClusterReconciler) ownedVolumes(ctx context.Context, reader client.Read
 	}
 	var owned []storagev1.Volume
 	for _, v := range list.Items {
-		if metav1.IsControlledBy(&v, cluster) {
+		if metav1.IsControlledBy(&v, cluster) && (r.Bug != B41 || strings.HasPrefix(v.Name, cluster.Name+"-data-")) {
 			owned = append(owned, v)
 		}
 	}
 	return owned, nil
+}
+
+func (r *ClusterReconciler) finalizer() string {
+	if r.Version == 2 {
+		return fleetv1.ClusterFinalizerV2
+	}
+	return fleetv1.ClusterFinalizer
+}
+
+func (r *ClusterReconciler) provisioning() fleetv1.Phase {
+	if r.Version == 2 {
+		return fleetv1.Creating
+	}
+	return fleetv1.Provisioning
+}
+
+// volumeName names the Cluster's ith Volume. Version 2 keeps a v1 name
+// that one of volumes holds.
+func (r *ClusterReconciler) volumeName(cluster *fleetv1.Cluster, i int32, volumes []storagev1.Volume) string {
+	v1 := fmt.Sprintf("%s-vol-%d", cluster.Name, i)
+	if r.Version != 2 || slices.ContainsFunc(volumes, func(v storagev1.Volume) bool { return v.Name == v1 }) {
+		return v1
+	}
+	return fmt.Sprintf("%s-data-%d", cluster.Name, i)
 }
 
 // volumeReady says whether the Volume's Ready condition is True for its
