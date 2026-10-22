@@ -29,6 +29,8 @@ type gateRow struct {
 var gate = []gateRow{
 	{"kill-finalize", 60, "Clean: left resources behind", 1, "cluster-vol-0 (rule 2, slot a)"},
 	{"restart-deleting", 61, "Converge: did not settle (clause 2)", 1, "cluster is being deleted"},
+	// The CR goes while its unowned Volumes still terminate under slowDelete.
+	{"slow-delete", 60, "Clean: released the CR before its resources were gone", 1, "cluster-vol-0 (rule 2, slot a)"},
 	{"slow-delete", 62, "Backoff", 1, "delete volumes.storage.thirdparty"},
 }
 
