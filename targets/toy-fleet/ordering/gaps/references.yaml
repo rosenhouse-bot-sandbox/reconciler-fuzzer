@@ -1,4 +1,4 @@
-# Proposed: ../config.yaml with references in place of its properties.
+# Proposed (#126): ../config.yaml with primaries and references in place of its properties.
 # Paths resolve against this file's directory.
 launch:
   binary: ../../../../bin/toy-fleet
@@ -11,28 +11,33 @@ launch:
     - ../../rbac/role.yaml
 crds:
   - ../../crds/
-primary:
-  kind: toy.reconciler-fuzzer/v1/Cluster
-  sample: ../../cluster.yaml
-  ready: &ready >-
-    has(self.status) && has(self.status.observedGeneration) && self.status.observedGeneration == self.metadata.generation
-    && has(self.status.phase) && self.status.phase == 'Ready'
+primaries:
+  - kind: toy.reconciler-fuzzer/v1/Cluster
+    sample: ../../cluster.yaml
+    ready: &ready >-
+      has(self.status) && has(self.status.observedGeneration) && self.status.observedGeneration == self.metadata.generation
+      && has(self.status.phase) && self.status.phase == 'Ready'
+  - {kind: toy.reconciler-fuzzer/v1/Database, sample: ../../database/database.yaml, ready: *ready}
+  - {kind: toy.reconciler-fuzzer/v1/User, sample: ../../user/user.yaml, ready: *ready}
 models:
   - kind: storage.thirdparty/v1/Volume
     stages: readyCondition
     after: 300ms
     dependency: {track: 1s}
-# A reference says that a field of one kind names a CR of another. Honest
-# then fails a `from` CR that reports ready before the controller saw its
-# `to` CR ready, and Ordered fails a `to` CR that goes while a `from` CR
-# names it. With onDelete: block, a `to` CR that waits in deletion for its
-# `from` CRs counts as settled.
+# Generation fills each reference's field with a CR of its `to` kind. Honest
+# fails a `from` CR that reports ready before the controller saw its `to` CR
+# ready. With onDelete: block, a `to` CR that waits in deletion for its
+# `from` CRs counts as settled, and Ordered fails a `to` CR that goes while a
+# `from` CR names it. With onDelete: cascade, Ordered fails a `from` CR that
+# outlives its `to` CR.
 references:
-  - from: {kind: toy.reconciler-fuzzer/v1/Database, ready: *ready}
-    to: {kind: toy.reconciler-fuzzer/v1/Cluster, name: self.spec.clusterRef, ready: *ready}
+  - from: toy.reconciler-fuzzer/v1/Database
+    to: toy.reconciler-fuzzer/v1/Cluster
+    name: self.spec.clusterRef
     onDelete: block
-  - from: {kind: toy.reconciler-fuzzer/v1/User, ready: *ready}
-    to: {kind: toy.reconciler-fuzzer/v1/Database, name: self.spec.databaseRef, ready: *ready}
+  - from: toy.reconciler-fuzzer/v1/User
+    to: toy.reconciler-fuzzer/v1/Database
+    name: self.spec.databaseRef
     onDelete: block
 values:
   mutate: [spec.volumes, spec.volumeSize]
