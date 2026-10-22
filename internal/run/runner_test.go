@@ -951,3 +951,19 @@ func TestExecuteRefusesAChangeFixtureOnASystemWithNoActor(t *testing.T) {
 		t.Fatalf("Execute = %v, want an error naming vault", err)
 	}
 }
+
+// After a stop the controller stays down, so the runner appends no
+// delete-all and no restart.
+func TestExecuteAppendsNothingAfterAStop(t *testing.T) {
+	f := newFixture(t, nil)
+	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{{Do: "stop"}}}}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.process.all(); slices.Contains(got, "start") || len(slices.DeleteFunc(slices.Clone(got), func(c string) bool { return c != "stop" })) != 1 {
+		t.Errorf("process calls = %q, want one stop and no start", got)
+	}
+	if _, found := find(f.rec.Events(), 1, trace.FaultPeriod); found {
+		t.Error("The runner appended a step after the stop.")
+	}
+}

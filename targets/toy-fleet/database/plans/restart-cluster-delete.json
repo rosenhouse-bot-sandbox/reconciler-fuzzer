@@ -1,0 +1,12 @@
+{
+  "steps": [
+    {"actions": [{"do": "create", "slot": "a"}]},
+    {
+      "period": "2s",
+      "actions": [
+        {"do": "changeFixture", "target": {"group": "toy.reconciler-fuzzer", "resource": "clusters", "name": "cluster"}},
+        {"at": "1s", "do": "restart"}
+      ]
+    }
+  ]
+}

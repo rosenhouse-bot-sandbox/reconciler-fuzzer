@@ -261,3 +261,11 @@ func TestFaultString(t *testing.T) {
 		}
 	}
 }
+
+// An uninstall stops the controller for good after its CRs are gone.
+func TestLoadAcceptsStop(t *testing.T) {
+	p, err := Load(write(t, `{"steps": [{"actions": [{"do": "create", "slot": "a"}]}, {"actions": [{"do": "delete", "slot": "a"}]}, {"actions": [{"do": "stop"}]}]}`))
+	if err != nil || p.Steps[2].Actions[0].Do != "stop" {
+		t.Fatalf("Load = %+v, %v; want a stop action", p, err)
+	}
+}

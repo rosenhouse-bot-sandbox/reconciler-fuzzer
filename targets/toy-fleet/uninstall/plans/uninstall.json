@@ -1,0 +1,23 @@
+{
+  "steps": [
+    {
+      "period": "2s",
+      "actions": [
+        {"do": "create", "slot": "a"},
+        {"do": "create", "slot": "b", "object": {"apiVersion": "toy.reconciler-fuzzer/v1", "kind": "Database", "metadata": {"name": "db"}, "spec": {"clusterRef": "cluster", "engine": "postgres"}}},
+        {"do": "create", "slot": "c", "object": {"apiVersion": "toy.reconciler-fuzzer/v1", "kind": "User", "metadata": {"name": "alice"}, "spec": {"databaseRef": "db"}}}
+      ]
+    },
+    {"actions": [{"do": "delete", "slot": "c"}]},
+    {"actions": [{"do": "delete", "slot": "b"}]},
+    {"actions": [{"do": "delete", "slot": "a"}]},
+    {"actions": [{"do": "stop"}]},
+    {
+      "actions": [
+        {"do": "changeFixture", "target": {"group": "apiextensions.k8s.io", "resource": "customresourcedefinitions", "name": "databases.toy.reconciler-fuzzer"}},
+        {"do": "changeFixture", "target": {"group": "apiextensions.k8s.io", "resource": "customresourcedefinitions", "name": "clusters.toy.reconciler-fuzzer"}},
+        {"do": "changeFixture", "target": {"group": "apiextensions.k8s.io", "resource": "customresourcedefinitions", "name": "users.toy.reconciler-fuzzer"}}
+      ]
+    }
+  ]
+}
