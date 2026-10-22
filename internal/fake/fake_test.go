@@ -321,18 +321,14 @@ func TestAnExitTheHarnessDidNotCauseIsAnErrorNamingTheLog(t *testing.T) {
 	}
 	log := filepath.Join(s.out, "cloud.log")
 	deadline := time.Now().Add(5 * time.Second)
-	for {
-		_, err := s.fake.Snapshot(context.Background())
-		if err != nil {
-			if !strings.Contains(err.Error(), log) {
-				t.Errorf("Snapshot = %v, want an error naming %s", err, log)
-			}
-			break
-		}
+	for s.fake.Err() == nil {
 		if time.Now().After(deadline) {
-			t.Fatal("Snapshot never failed after the fake exited")
+			t.Fatal("The fake's exit was never recorded.")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := s.fake.Snapshot(context.Background()); err == nil || !strings.Contains(err.Error(), log) {
+		t.Errorf("Snapshot = %v, want an error naming %s", err, log)
 	}
 	if err := s.fake.Stop(context.Background()); err == nil || !strings.Contains(err.Error(), log) {
 		t.Errorf("Stop = %v, want an error naming %s", err, log)
