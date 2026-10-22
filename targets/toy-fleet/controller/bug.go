@@ -6,8 +6,16 @@ import "fmt"
 // controller. The fleet's bugs start at B40.
 type Bug int
 
+// Startup bugs, which main applies.
+const (
+	// B70 exits before starting the manager.
+	B70 Bug = 70
+	// B71 ignores KUBECONFIG and dials localhost:8080.
+	B71 Bug = 71
+)
+
 // bugs holds every seeded bug ID.
-var bugs = map[Bug]bool{}
+var bugs = map[Bug]bool{B70: true, B71: true}
 
 // ParseBug converts a --bug value into a Bug.
 func ParseBug(id int) (Bug, error) {

@@ -49,6 +49,9 @@ func run(args []string, out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("loading the cluster configuration: %w", err)
 	}
+	if bug == controller.B71 {
+		config = &rest.Config{Host: "http://localhost:8080"}
+	}
 	scheme, err := controller.NewScheme()
 	if err != nil {
 		return err
@@ -60,6 +63,9 @@ func run(args []string, out io.Writer) error {
 	})
 	if err != nil {
 		return fmt.Errorf("creating the manager: %w", err)
+	}
+	if bug == controller.B70 {
+		return errors.New("setting up the controllers: no kind Cluster is registered in the scheme")
 	}
 	if err := controller.Setup(manager, bug); err != nil {
 		return fmt.Errorf("setting up the controllers: %w", err)
