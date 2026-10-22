@@ -1,0 +1,42 @@
+# config.yaml with properties that judge the Cluster's phases.
+launch:
+  binary: ../../../bin/toy-fleet
+  args:
+    - --bug=0                      # A later --launch-arg --bug=N wins.
+  env:
+    KUBECONFIG: ${systems.kube.kubeconfig}
+    WATCH_NAMESPACE: ${systems.kube.namespace}
+  rbac:
+    - ../rbac/role.yaml
+crds:
+  - ../crds/
+primary:
+  kind: toy.reconciler-fuzzer/v1/Cluster
+  sample: ../cluster.yaml
+  ready: >-
+    has(self.status) && has(self.status.observedGeneration) && self.status.observedGeneration == self.metadata.generation
+    && has(self.status.phase) && self.status.phase == 'Ready'
+models:
+  - kind: storage.thirdparty/v1/Volume
+    stages: readyCondition
+    after: 300ms
+    dependency: {track: 1s}
+values:
+  mutate: [spec.volumes, spec.volumeSize]
+timeouts:
+  settle: 10s
+  stable: 2s
+properties:
+  # A Ready Cluster has spec.volumes Volumes of its size.
+  - name: volumes-match-spec
+    expr: >-
+      crs.all(c, !has(c.status) || !has(c.status.phase) || c.status.phase != 'Ready'
+        || world.kube['volumes.storage.thirdparty'].filter(v, v.metadata.labels['fleet.toy/cluster'] == c.metadata.name
+             && v.spec.size == c.spec.volumeSize).size() == c.spec.volumes)
+  # A Cluster provisions only while some Volume is not ready.
+  - name: provisioning-means-volumes-not-ready
+    when: always
+    expr: >-
+      crs.all(c, !has(c.status) || !has(c.status.phase) || c.status.phase != 'Provisioning'
+        || !has(c.status.observedGeneration) || c.status.observedGeneration != c.metadata.generation
+        || (has(c.status.readyVolumes) ? c.status.readyVolumes : 0) < c.spec.volumes)

@@ -12,10 +12,13 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 )
 
-const databaseConfig = "database/config.yaml"
+const (
+	databaseConfig = "database/config.yaml"
+	phasesConfig   = "phases/config.yaml"
+)
 
 // configs are the toy's configs. B0 passes every plan in plans/ beside each.
-var configs = []string{"config.yaml", databaseConfig}
+var configs = []string{"config.yaml", databaseConfig, phasesConfig}
 
 type gateRow struct {
 	plan    string
