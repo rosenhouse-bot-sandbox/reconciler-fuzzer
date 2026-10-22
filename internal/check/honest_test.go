@@ -249,6 +249,18 @@ func TestHonestFailsAReadyAfterSeeingItsDependencyDeleted(t *testing.T) {
 	requireFinding(t, honest(t, r), "Honest", 0, beforeSeeing, "kube/toy/gadgets", "seen not ready")
 }
 
+// A scale-down: the controller deletes Gadget b, which no finalizer holds,
+// and reports ready on Gadget a before its watch shows b deleted.
+func TestHonestPassesAReadyAfterTheControllerDeletedADependency(t *testing.T) {
+	gadgetB := tt.Ref("toy/gadgets", "ns", "b")
+	r := gadgetRun(trace.Dependency{Required: true})
+	r.See(ctl, gadgetA)
+	r.Create(ctl, gadgetB, gadget(r, false))
+	r.Update(gadgetModel, gadgetB, gadget(r, true)).See(ctl, gadgetB)
+	r.Delete(ctl, gadgetB).Ready(widgetA)
+	requireNone(t, honest(t, r))
+}
+
 func TestHonestCountsASeenOfTheWritesVersionRecordedBeforeItsResponse(t *testing.T) {
 	r := gadgetRun(trace.Dependency{Required: true})
 	r.See(ctl, gadgetA)
