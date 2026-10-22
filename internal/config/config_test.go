@@ -433,6 +433,16 @@ func TestSystems(t *testing.T) {
 	}
 }
 
+// A kube role groups children whose names carry a per-process suffix, so
+// that Unique sees two of one role.
+func TestKubeTakesARole(t *testing.T) {
+	const role = "self.metadata.labels['index']"
+	c, err := config.Load(writeConfig(t, minimal(t)+"systems: [{name: kube, role: \""+role+"\"}]\n"))
+	if err != nil || c.Systems[0].Role != role {
+		t.Errorf("systems = %+v, %v", c, err)
+	}
+}
+
 func TestSystemsRefuseMistakes(t *testing.T) {
 	for systems, want := range map[string]string{
 		"[{name: kube}, {name: kube}]":                             "systems[1].name kube",
