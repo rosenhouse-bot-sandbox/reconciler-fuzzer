@@ -86,7 +86,7 @@ func (r *ClusterReconciler) syncVolumes(ctx context.Context, cluster *fleetv1.Cl
 		}); err != nil {
 			return 0, fmt.Errorf("ensuring Volume %s: %w", name, err)
 		}
-		if volumeReady(volume) {
+		if volumeReady(volume) || r.Bug == B72 && staleReady(volume) {
 			ready++
 		}
 	}
@@ -163,6 +163,12 @@ func (r *ClusterReconciler) ownedVolumes(ctx context.Context, reader client.Read
 		}
 	}
 	return owned, nil
+}
+
+// staleReady says whether the Volume's Ready condition is True for any
+// generation.
+func staleReady(v *storagev1.Volume) bool {
+	return meta.IsStatusConditionTrue(v.Status.Conditions, "Ready")
 }
 
 // volumeReady says whether the Volume's Ready condition is True for its

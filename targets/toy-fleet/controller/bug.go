@@ -14,8 +14,11 @@ const (
 	B71 Bug = 71
 )
 
+// B72 counts a Volume ready on a Ready condition of an older generation.
+const B72 Bug = 72
+
 // bugs holds every seeded bug ID.
-var bugs = map[Bug]bool{B70: true, B71: true}
+var bugs = map[Bug]bool{B70: true, B71: true, B72: true}
 
 // ParseBug converts a --bug value into a Bug.
 func ParseBug(id int) (Bug, error) {
