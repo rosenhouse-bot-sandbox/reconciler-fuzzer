@@ -45,6 +45,13 @@ func TestLoadRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+func TestLoadNamesAnUnknownFieldsPosition(t *testing.T) {
+	_, err := Load(write(t, `{"steps": [{}, {"actions": [{"do": "restart", "args": ["--version=2"]}]}]}`))
+	if err == nil || !strings.Contains(err.Error(), `steps[1].actions[0]`) {
+		t.Fatalf("Load = %v, want an error naming steps[1].actions[0]", err)
+	}
+}
+
 func TestLoadRejectsTrailingData(t *testing.T) {
 	_, err := Load(write(t, `{"steps": []} {"steps": []}`))
 	if err == nil || !strings.Contains(err.Error(), "after the plan") {
