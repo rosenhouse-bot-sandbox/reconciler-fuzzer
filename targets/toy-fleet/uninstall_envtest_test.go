@@ -23,6 +23,9 @@ var uninstallRows = []struct {
 }{
 	{uninstallConfig, "crd-first", 52, "Converge: did not settle (clause 2)", 2, "cluster is being deleted"},
 	{databaseConfig, "restart-cluster-delete", 50, "Converge: did not settle (clause 1)", 1, "db is not ready"},
+	// Under B0 the create waits for the name, the slowDelete for the
+	// create, and the plan ends at its create.
+	{uninstallConfig, "recreate", 0, "", 0, ""},
 	// The rows below need a stop action, a final Clean after it, CRDs from
 	// crds: that changeFixture can delete, and a check of finalizer order.
 	{uninstallConfig, "crd-first-stop", 0, "", 0, ""},
