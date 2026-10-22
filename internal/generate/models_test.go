@@ -1,6 +1,7 @@
 package generate
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -87,6 +88,30 @@ func TestAModelFaultComesWithTheActionItExercises(t *testing.T) {
 		if action.Do != c.want {
 			t.Errorf("%s with a live CR %t comes with %s, want %s.", c.fault, c.live, action.Do, c.want)
 		}
+	}
+}
+
+// A restart or kill while slowDelete holds a deletion finds a controller
+// that keeps finalizer state in memory.
+func TestAQuarterOfSlowDeleteStepsRestartOrKillAfterTheDelete(t *testing.T) {
+	var held, restarted int
+	for _, p := range plans(t, modelsConfig, 400) {
+		for _, step := range p.Steps {
+			if !slices.ContainsFunc(step.Faults, func(f plan.Fault) bool { return f.SlowDelete }) {
+				continue
+			}
+			del := slices.IndexFunc(step.Actions, func(a plan.Action) bool { return a.Do == plan.Delete })
+			if del < 0 {
+				continue
+			}
+			held++
+			if slices.ContainsFunc(step.Actions[del:], func(a plan.Action) bool { return a.Do == plan.Restart || a.Do == plan.Kill }) {
+				restarted++
+			}
+		}
+	}
+	if restarted*4 < held {
+		t.Errorf("%d of %d slowDelete steps with a delete restart or kill after it, want a quarter.", restarted, held)
 	}
 }
 
