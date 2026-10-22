@@ -77,6 +77,18 @@ func TestClassify(t *testing.T) {
 	}
 }
 
+// Subresource "-" selects only the main resource, so that a killAfter can
+// pick a finalizer removal and not a status write.
+func TestMatchesNoSubresource(t *testing.T) {
+	update := interpose.Request{Verb: "update", Ref: ref{Group: "toy", Resource: "clusters", Name: "c"}}
+	status := update
+	status.Subresource = "status"
+	m := plan.Match{Verb: "update", Resource: "clusters", Subresource: "-"}
+	if !interpose.Matches(m, update) || interpose.Matches(m, status) {
+		t.Errorf("Matches(%+v): main resource %v, status %v; want true, false.", m, interpose.Matches(m, update), interpose.Matches(m, status))
+	}
+}
+
 func TestMatches(t *testing.T) {
 	r := interpose.Request{Verb: "patch", Ref: ref{Group: "apps", Resource: "deployments", Name: "d1"}, Subresource: "status"}
 	for _, c := range []struct {
