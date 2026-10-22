@@ -101,6 +101,14 @@ func TestClause2NoCRIsBeingDeleted(t *testing.T) {
 	requireUnmet(t, b, 3*s, "ns/a is being deleted")
 }
 
+func TestClause2NamesTheFinalizersThatHoldTheCR(t *testing.T) {
+	body := deleting()
+	body["metadata"].(map[string]any)["finalizers"] = []any{"toy/old", "toy/new"}
+	b := settledAt3s()
+	b.At(1 * s).Add(tt.Version(widgetA, "ua", "2", body))
+	requireUnmet(t, b, 3*s, "ns/a is being deleted, held by finalizers toy/old, toy/new")
+}
+
 func TestClause2ADeletedCRIsNotAlsoUnready(t *testing.T) {
 	body := deleting()
 	body["status"] = map[string]any{"ready": false}

@@ -1,0 +1,14 @@
+{
+  "steps": [
+    {"actions": [{"do": "create", "slot": "a"}]},
+    {
+      "period": "4s",
+      "actions": [{"do": "restart"}, {"at": "3s", "do": "update", "slot": "a", "patch": {"spec": {"volumeSize": "large"}}}]
+    },
+    {
+      "period": "2s",
+      "faults": [{"match": {"group": "storage.thirdparty", "resource": "volumes"}, "slowDelete": true}],
+      "actions": [{"do": "delete", "slot": "a"}]
+    }
+  ]
+}

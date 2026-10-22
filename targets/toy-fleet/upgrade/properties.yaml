@@ -1,0 +1,37 @@
+# config.yaml, plus properties that judge the Volumes.
+launch:
+  binary: toy-fleet.sh
+  args:
+    - --bug=0
+  env:
+    KUBECONFIG: ${systems.kube.kubeconfig}
+    WATCH_NAMESPACE: ${systems.kube.namespace}
+  rbac:
+    - ../rbac/role.yaml
+crds:
+  - ../crds/
+primary:
+  kind: toy.reconciler-fuzzer/v1/Cluster
+  sample: ../cluster.yaml
+  ready: >-
+    has(self.status) && has(self.status.observedGeneration) && self.status.observedGeneration == self.metadata.generation
+    && has(self.status.phase) && self.status.phase == 'Ready'
+models:
+  - kind: storage.thirdparty/v1/Volume
+    stages: readyCondition
+    after: 300ms
+    dependency: {track: 1s}
+values:
+  mutate: [spec.volumes, spec.volumeSize]
+timeouts:
+  settle: 10s
+  stable: 2s
+properties:
+  - name: volumes-match-spec
+    expr: >-
+      crs.all(c, has(c.metadata.deletionTimestamp) || size(world.kube['volumes.storage.thirdparty'].filter(v,
+        v.metadata.labels['fleet.toy/cluster'] == c.metadata.name && !has(v.metadata.deletionTimestamp))) == c.spec.volumes)
+  - name: volumes-go-first
+    when: always
+    expr: >-
+      world.kube['volumes.storage.thirdparty'].all(v, crs.exists(c, c.metadata.uid == v.metadata.ownerReferences[0].uid))
