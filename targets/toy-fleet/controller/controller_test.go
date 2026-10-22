@@ -214,6 +214,9 @@ func TestParseBugAcceptsOnlyKnownBugs(t *testing.T) {
 	if b, err := ParseBug(0); b != 0 || err != nil {
 		t.Errorf("ParseBug(0) = %v, %v", b, err)
 	}
+	if b, err := ParseBug(15); b != ReleaseBeforeVolumesGo || err != nil {
+		t.Errorf("ParseBug(15) = %v, %v", b, err)
+	}
 	if _, err := ParseBug(40); err == nil {
 		t.Error("ParseBug(40) succeeded, want an error.")
 	}

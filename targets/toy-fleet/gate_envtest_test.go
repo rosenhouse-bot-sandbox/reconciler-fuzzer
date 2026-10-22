@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/run"
@@ -22,6 +23,32 @@ func TestMain(m *testing.M) {
 }
 
 func TestGate(t *testing.T) {
+	for _, rows := range byRun(gate) {
+		g := rows[0]
+		verb := "catches"
+		if g.finding == "" {
+			verb = "passes"
+		}
+		t.Run(fmt.Sprintf("%s %s B%d", g.name(), verb, g.bug), func(t *testing.T) {
+			t.Parallel()
+			report := runPlan(t, g.configPath(), g.plan, g.bug)
+			want := map[string]bool{}
+			for _, r := range rows {
+				if r.finding != "" && !hasFinding(report, r.finding, r.step, r.detail) {
+					t.Errorf("Want a finding %q at step %d that says %q. report.md:\n%s", r.finding, r.step, r.detail, report)
+				}
+				want[checkOf(r.finding)] = r.finding != ""
+			}
+			for _, got := range checksOf(report) {
+				if !want[got] {
+					t.Errorf("Found an unexpected %s finding. report.md:\n%s", got, report)
+				}
+			}
+			if strings.Contains(report, "# Notes") {
+				t.Errorf("report.md has notes:\n%s", report)
+			}
+		})
+	}
 	for _, config := range configs {
 		names, err := plans(config)
 		if err != nil || len(names) == 0 {
