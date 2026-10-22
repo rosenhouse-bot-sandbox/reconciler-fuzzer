@@ -368,6 +368,14 @@ func TestHonestSkipsAGoneDependencyItsCRReplaced(t *testing.T) {
 	requireNone(t, honest(t, r))
 }
 
+// A controller that scales down deletes a dependency it no longer needs and
+// writes ready before its watch shows the deletion.
+func TestHonestSkipsADependencyTheControllerDeleted(t *testing.T) {
+	r := gadgetRun(trace.Dependency{})
+	r.See(ctl, gadgetA).Delete(ctl, gadgetA).Ready(widgetA).SeeDeleted(ctl, gadgetA)
+	requireNone(t, honest(t, r))
+}
+
 func TestHonestJudgesADependencyTheControllerSawBeforeTheObserver(t *testing.T) {
 	r := newRun(1)
 	r.Spec.Models = []trace.Model{{Kind: trace.Kind{Group: "toy", Version: "v1", Kind: "Gadget", Resource: "gadgets"},
