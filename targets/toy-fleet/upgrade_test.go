@@ -18,9 +18,11 @@ func TestUpgradeConfigsLoad(t *testing.T) {
 
 func TestUpgradePlansLoad(t *testing.T) { loadAll(t, "upgrade/plans/*.json") }
 
-// TestRestartActionsLoadWithArgsAndCRDs wants a restart that names the
+// TestRestartActionsLoadWithUpgradeFields wants a restart that names the
 // controller's new args and the CRDs it installs first, as an upgrade does.
-func TestRestartActionsLoadWithArgsAndCRDs(t *testing.T) { loadAll(t, "upgrade/proposed/*.json") }
+// With overlap, the new process starts that long before the old one stops,
+// as in a rolling update.
+func TestRestartActionsLoadWithUpgradeFields(t *testing.T) { loadAll(t, "upgrade/proposed/*.json") }
 
 func loadAll(t *testing.T, glob string) {
 	paths, err := filepath.Glob(glob)

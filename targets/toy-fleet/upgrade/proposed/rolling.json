@@ -1,0 +1,7 @@
+{
+  "steps": [
+    {"actions": [{"do": "create", "slot": "a"}]},
+    {"actions": [{"do": "restart", "args": ["--version=2"], "overlap": "2s"}]},
+    {"actions": [{"do": "delete", "slot": "a"}]}
+  ]
+}
