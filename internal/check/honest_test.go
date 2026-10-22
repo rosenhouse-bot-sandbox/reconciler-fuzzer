@@ -379,3 +379,12 @@ func TestHonestJudgesADependencyTheControllerSawBeforeTheObserver(t *testing.T) 
 	r.Add(tt.Version(gadgetA, "ug", "50", gadget(r, false)))
 	requireFinding(t, honest(t, r), "Honest", 0, beforeSeeing, "kube/toy/gadgets", "slot a", "gadgets.toy ns/a seen not ready")
 }
+
+// A controller that scales down deletes what it no longer needs, and need
+// not see it go before it reports ready.
+func TestHonestSkipsADependencyTheControllerDeleted(t *testing.T) {
+	r := gadgetRun(trace.Dependency{})
+	r.Update(gadgetModel, gadgetA, gadget(r, false)).See(ctl, gadgetA)
+	r.Delete(ctl, gadgetA).Ready(widgetA)
+	requireNone(t, honest(t, r))
+}
