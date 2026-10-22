@@ -22,6 +22,25 @@ func TestMain(m *testing.M) {
 }
 
 func TestGate(t *testing.T) {
+	for _, rows := range byRun(gate) {
+		g := rows[0]
+		t.Run(fmt.Sprintf("%s catches B%d", g.plan, g.bug), func(t *testing.T) {
+			t.Parallel()
+			report := runPlan(t, "config.yaml", g.plan, g.bug)
+			want := map[string]bool{}
+			for _, r := range rows {
+				if !hasFinding(report, r.finding, r.step, r.detail) {
+					t.Errorf("Want a finding %q at step %d that says %q. report.md:\n%s", r.finding, r.step, r.detail, report)
+				}
+				want[checkOf(r.finding)] = true
+			}
+			for _, got := range checksOf(report) {
+				if !want[got] {
+					t.Errorf("Found an unexpected %s finding. report.md:\n%s", got, report)
+				}
+			}
+		})
+	}
 	for _, config := range configs {
 		names, err := plans(config)
 		if err != nil || len(names) == 0 {

@@ -60,6 +60,22 @@ func TestBackoffFailsATightLoop(t *testing.T) {
 	requireNone(t, check.Backoff(retries(every(10*ms, 10), nil).Index(), spec))
 }
 
+// A controller that requeues a terminating CR at once re-deletes its
+// terminating dependency. Each delete succeeds and changes nothing.
+func TestBackoffFailsATightLoopOfNoOpDeletes(t *testing.T) {
+	var tl tt.Timeline
+	tl.At(0, tt.Run("toy", "widgets"), tt.Start(1), tt.Phase(0, trace.FaultPeriod))
+	for _, start := range every(10*ms, 21) {
+		del := tt.Call(ctl, "delete", gadgetA, 200, "")
+		del.Call.Latency = 2 * ms
+		tl.At(start+2*ms, del)
+	}
+	findings := check.Backoff(tl.Index(), spec)
+	if len(findings) != 1 || findings[0].Check != "Backoff" {
+		t.Fatalf("Want one Backoff finding for 21 no-op deletes 10ms apart, got %+v.", findings)
+	}
+}
+
 func TestBackoffJudgesOnlyCallsSixToEleven(t *testing.T) {
 	starts := append(every(10*ms, 5), every(100*ms, 6)...)
 	for i := 5; i < len(starts); i++ {
