@@ -139,6 +139,7 @@ build:
 	go build -o bin/crudfake ./cmd/crudfake
 	go build -o bin/toy-widget ./targets/toy-widget
 	go build -o bin/toy-bucket ./targets/toy-bucket
+	go build -o bin/toy-fleet ./targets/toy-fleet
 
 .PHONY: generate
 generate:
@@ -148,11 +149,16 @@ generate:
 	go run sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_GEN_VERSION) \
 		object paths=./targets/toy-bucket/api/... \
 		crd paths=./targets/toy-bucket/api/... output:crd:artifacts:config=targets/toy-bucket/crds
+	go run sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_GEN_VERSION) \
+		object paths=./targets/toy-fleet/api/... paths=./targets/toy-fleet/thirdparty/... \
+		crd paths=./targets/toy-fleet/api/... paths=./targets/toy-fleet/thirdparty/... output:crd:artifacts:config=targets/toy-fleet/crds
 
 .PHONY: verify-generate
 verify-generate: generate
 	@stale=$$(git status --porcelain -- targets/toy-widget/api/v1/zz_generated.deepcopy.go targets/toy-widget/crds \
-		targets/toy-bucket/api/v1/zz_generated.deepcopy.go targets/toy-bucket/crds); \
+		targets/toy-bucket/api/v1/zz_generated.deepcopy.go targets/toy-bucket/crds \
+		targets/toy-fleet/api/v1/zz_generated.deepcopy.go targets/toy-fleet/thirdparty/storage/v1/zz_generated.deepcopy.go \
+		targets/toy-fleet/crds); \
 	if [ -n "$$stale" ]; then \
 		echo "Generated files are out of date. Run 'make generate' and commit the result:"; \
 		echo "$$stale"; \
