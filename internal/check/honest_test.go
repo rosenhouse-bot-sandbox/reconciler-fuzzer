@@ -249,6 +249,17 @@ func TestHonestFailsAReadyAfterSeeingItsDependencyDeleted(t *testing.T) {
 	requireFinding(t, honest(t, r), "Honest", 0, beforeSeeing, "kube/toy/gadgets", "seen not ready")
 }
 
+// The observer can record the deletion after the controller's next status
+// write starts, as toy-fleet's b0 plan showed on scaling Volumes down.
+func TestHonestSkipsADependencyTheControllerDeletedBeforeTheObserverRecordsIt(t *testing.T) {
+	r := gadgetRun(trace.Dependency{})
+	r.See(ctl, gadgetA).Ready(widgetA)
+	r.Add(tt.Call(ctl, "delete", gadgetA, 200, "")).SeeDeleted(ctl, gadgetA)
+	r.Update(ctl, widgetA, tt.CR("a", false)).Ready(widgetA)
+	r.Add(tt.Deleted(gadgetA, r.UID(gadgetA), "99", gadget(r, true)))
+	requireNone(t, honest(t, r))
+}
+
 func TestHonestCountsASeenOfTheWritesVersionRecordedBeforeItsResponse(t *testing.T) {
 	r := gadgetRun(trace.Dependency{Required: true})
 	r.See(ctl, gadgetA)
