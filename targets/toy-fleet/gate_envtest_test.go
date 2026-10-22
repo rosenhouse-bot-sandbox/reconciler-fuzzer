@@ -46,13 +46,18 @@ func TestReferencesJudgeTheOrderAcrossKinds(t *testing.T) {
 	runGate(t, referenceGate)
 }
 
-// TestCleanBlamesAChildOnTheCRThatOwnsIt wants Clean to see that Database
-// db, which a plan created and which outlives its released Cluster, still
-// owns its ConfigMap.
-func TestCleanBlamesAChildOnTheCRThatOwnsIt(t *testing.T) {
+// TestJudgingAReleasedClusterWithALiveDatabase runs B20, which releases
+// Cluster a while plan-made Database db names it. Database db still owns
+// its ConfigMap, so Clean should not blame the ConfigMap on slot a. With no
+// Cluster left, the delete-all step should still wait out the controller's
+// last write.
+func TestJudgingAReleasedClusterWithALiveDatabase(t *testing.T) {
 	report := runPlan(t, "config.yaml", "ordering/gaps/plans/blocked-delete.json", 20)
 	if strings.Contains(report, "db-db (rule 4, slot a)") {
 		t.Errorf("Clean blamed Database db's ConfigMap on Cluster slot a. report.md:\n%s", report)
+	}
+	if strings.Contains(report, "## Converge: did not settle (clause 7)\n\nStep 2 (delete all)") {
+		t.Errorf("The delete-all step settled before the controller's last write. report.md:\n%s", report)
 	}
 }
 
