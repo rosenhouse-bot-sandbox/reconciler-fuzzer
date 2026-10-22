@@ -207,3 +207,17 @@ func TestASampleItsCRDRefusesIsAConfigurationError(t *testing.T) {
 		})
 	}
 }
+
+// A ready the CRD's schema cannot type is a configuration error, like a
+// sample the CRD refuses, rather than a CR that never settles.
+func TestAReadyTheCRDSchemaCannotTypeIsAConfigurationError(t *testing.T) {
+	for _, ready := range []string{"self.status.ready == 'yes'", "self.status.ready > 'a'", "self.status.state == 1"} {
+		t.Run(ready, func(t *testing.T) {
+			cfg := loadConfig(t, toyConfig)
+			cfg.Primary.Ready = ready
+			if _, err := New(cfg); err == nil || !strings.Contains(err.Error(), "primary.ready") {
+				t.Errorf("New returned %v, want it to reject primary.ready.", err)
+			}
+		})
+	}
+}

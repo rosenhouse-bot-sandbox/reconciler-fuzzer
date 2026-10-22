@@ -293,6 +293,23 @@ func TestJudgeNotesAFailedAction(t *testing.T) {
 	}
 }
 
+// A ready that no CR ever meets more likely names the wrong field or value
+// than finds a bug, so the report says so.
+func TestJudgeNotesAReadyNoCRVersionMet(t *testing.T) {
+	var b tt.Builder
+	b.Add(tt.Run("toy", "widgets"), tt.Start(1)).
+		At(0).Add(tt.Phase(0, trace.FaultPeriod)).
+		At(100*ms).Add(tt.Call(trace.Harness, "create", widgetA, 201, "1"), tt.Version(widgetA, "ua", "1", ready(false))).
+		At(1*s).Add(tt.EndFaults(0, 10*s, false)).
+		At(1500*ms).Add(tt.Call(ctl, "update", widgetA, 200, "2"), tt.Version(widgetA, "ua", "2", ready("Ready"))).
+		At(10 * s).Add(tt.Phase(0, trace.TimedOut))
+	notes := check.Judge(b.Index(), spec).Notes
+	want := "primary.ready held for no CR version; the last of widgets.toy ns/a has status {\"ready\":\"Ready\"}"
+	if !slices.Contains(notes, want) {
+		t.Fatalf("notes = %q, want %q", notes, want)
+	}
+}
+
 func TestJudgeNotesARequestLaunchRBACForbids(t *testing.T) {
 	b := cleanRun()
 	gadgets := tt.Ref("toy/gadgets", "ns", "")
