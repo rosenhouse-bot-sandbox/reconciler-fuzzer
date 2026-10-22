@@ -3,16 +3,19 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
@@ -65,7 +68,16 @@ func run(args []string, out io.Writer) error {
 		return fmt.Errorf("setting up the controllers: %w", err)
 	}
 	ctrl.Log.WithName("toy-fleet").Info("starting", "bug", int(bug))
-	return manager.Start(ctrl.SetupSignalHandler())
+	if err := manager.Start(ctrl.SetupSignalHandler()); err != nil {
+		return err
+	}
+	c, err := client.New(config, client.Options{Scheme: scheme})
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return controller.Shutdown(ctx, c, os.Getenv("WATCH_NAMESPACE"), bug)
 }
 
 // cacheOptions confine the cache to namespace, where it is set.

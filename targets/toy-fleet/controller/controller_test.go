@@ -28,6 +28,10 @@ type fleet struct {
 }
 
 func newFleet(t *testing.T, objects ...client.Object) *fleet {
+	return newBuggyFleet(t, 0, objects...)
+}
+
+func newBuggyFleet(t *testing.T, bug Bug, objects ...client.Object) *fleet {
 	scheme, err := NewScheme()
 	if err != nil {
 		t.Fatal(err)
@@ -37,7 +41,7 @@ func newFleet(t *testing.T, objects ...client.Object) *fleet {
 		WithIndex(&fleetv1.Database{}, clusterRefField, func(o client.Object) []string { return []string{o.(*fleetv1.Database).Spec.ClusterRef} }).
 		WithIndex(&fleetv1.User{}, databaseRefField, func(o client.Object) []string { return []string{o.(*fleetv1.User).Spec.DatabaseRef} }).
 		WithObjects(objects...).Build()
-	base := reconciler{Client: c, APIReader: c, Scheme: scheme}
+	base := reconciler{Client: c, APIReader: c, Scheme: scheme, Bug: bug}
 	return &fleet{t, c, &ClusterReconciler{base}, &DatabaseReconciler{base}, &UserReconciler{base}}
 }
 
