@@ -45,6 +45,12 @@ var gate = []gateRow{
 	{"b32", 32, "Unique: duplicate resources", 0, "cluster-vol-1-", ""},
 	{"b32", 32, "Unique: duplicate resources", 1, "cluster-vol-0-", ""},
 	{"b33", 33, "Converge: did not settle", 0, "is not ready", ""},
+	{"b35-restart", 35, "Restore: replaced resources", 1, "cluster-vol-0-", ""},
+	{"b30", 30, "Property: property provisioning-means-volumes-not-ready does not hold", 0, "is false", phasesConfig},
+	{"b30", 30, "Property: property provisioning-means-volumes-not-ready does not hold", 1, "is false", phasesConfig},
+	{"b34", 34, "Property: property volumes-match-spec does not hold", 0, "is false", phasesConfig},
+	{"b35", 35, "Property: property volumes-match-spec does not hold", 0, "is false", phasesConfig},
+	{"b35", 35, "Property: property volumes-match-spec does not hold", 1, "is false", phasesConfig},
 }
 
 // gaps lists bugs the fuzzer should catch with some finding and misses.
