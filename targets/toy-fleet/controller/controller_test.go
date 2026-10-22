@@ -38,7 +38,7 @@ func newFleet(t *testing.T, objects ...client.Object) *fleet {
 		WithIndex(&fleetv1.User{}, databaseRefField, func(o client.Object) []string { return []string{o.(*fleetv1.User).Spec.DatabaseRef} }).
 		WithObjects(objects...).Build()
 	base := reconciler{Client: c, APIReader: c, Scheme: scheme}
-	return &fleet{t, c, &ClusterReconciler{base}, &DatabaseReconciler{base}, &UserReconciler{base}}
+	return &fleet{t, c, &ClusterReconciler{reconciler: base}, &DatabaseReconciler{base}, &UserReconciler{base}}
 }
 
 // settle reconciles name with r until it stops changing anything.

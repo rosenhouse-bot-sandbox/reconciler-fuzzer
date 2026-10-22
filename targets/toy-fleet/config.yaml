@@ -26,3 +26,6 @@ values:
 timeouts:
   settle: 10s
   stable: 2s
+systems:
+  - name: kube
+    owner: "has(self.metadata.labels) && 'fleet.toy/cluster' in self.metadata.labels ? self.metadata.labels['fleet.toy/cluster'] : ''"

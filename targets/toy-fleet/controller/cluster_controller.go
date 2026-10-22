@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -21,12 +22,19 @@ import (
 const ClusterLabel = "fleet.toy/cluster"
 
 // ClusterReconciler moves a Cluster through its phases and keeps its Volumes.
-type ClusterReconciler struct{ reconciler }
+type ClusterReconciler struct {
+	reconciler
+	// deleting holds, under B61, the Clusters whose deletion this process
+	// started.
+	deleting map[types.NamespacedName]bool
+}
 
 func (r *ClusterReconciler) SetupWithManager(m ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(m).
 		For(&fleetv1.Cluster{}).
-		Owns(&storagev1.Volume{}).
+		Watches(&storagev1.Volume{}, handler.EnqueueRequestsFromMapFunc(func(_ context.Context, o client.Object) []reconcile.Request {
+			return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: o.GetNamespace(), Name: o.GetLabels()[ClusterLabel]}}}
+		})).
 		Watches(&fleetv1.Database{}, handler.EnqueueRequestsFromMapFunc(func(_ context.Context, o client.Object) []reconcile.Request {
 			return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: o.GetNamespace(), Name: o.(*fleetv1.Database).Spec.ClusterRef}}}
 		})).
@@ -39,7 +47,7 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !cluster.DeletionTimestamp.IsZero() {
-		return ctrl.Result{}, r.finalize(ctx, cluster)
+		return r.finalize(ctx, cluster)
 	}
 	if controllerutil.AddFinalizer(cluster, fleetv1.ClusterFinalizer) {
 		return ctrl.Result{}, r.Update(ctx, cluster)
@@ -82,6 +90,9 @@ func (r *ClusterReconciler) syncVolumes(ctx context.Context, cluster *fleetv1.Cl
 				volume.Labels = map[string]string{}
 			}
 			volume.Labels[ClusterLabel] = cluster.Name
+			if r.Bug == B60 {
+				return nil
+			}
 			return controllerutil.SetControllerReference(cluster, volume, r.Scheme)
 		}); err != nil {
 			return 0, fmt.Errorf("ensuring Volume %s: %w", name, err)
@@ -102,13 +113,23 @@ func (r *ClusterReconciler) syncVolumes(ctx context.Context, cluster *fleetv1.Cl
 
 // finalize waits for the Cluster's Databases to go, deletes its Volumes,
 // waits for them to go, and then releases the Cluster.
-func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Cluster) error {
+func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Cluster) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(cluster, fleetv1.ClusterFinalizer) {
-		return nil
+		return ctrl.Result{}, nil
+	}
+	if r.Bug == B61 {
+		key := client.ObjectKeyFromObject(cluster)
+		if cluster.Status.Phase == fleetv1.Deleting && !r.deleting[key] {
+			return ctrl.Result{}, nil
+		}
+		if r.deleting == nil {
+			r.deleting = map[types.NamespacedName]bool{}
+		}
+		r.deleting[key] = true
 	}
 	databases := &fleetv1.DatabaseList{}
 	if err := r.APIReader.List(ctx, databases, client.InNamespace(cluster.Namespace)); err != nil {
-		return fmt.Errorf("listing Databases: %w", err)
+		return ctrl.Result{}, fmt.Errorf("listing Databases: %w", err)
 	}
 	var dependents int
 	for _, db := range databases.Items {
@@ -118,7 +139,7 @@ func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Clust
 	}
 	volumes, err := r.ownedVolumes(ctx, r.APIReader, cluster)
 	if err != nil {
-		return err
+		return ctrl.Result{}, err
 	}
 	old := cluster.Status
 	cluster.Status.Phase = fleetv1.Deleting
@@ -131,23 +152,34 @@ func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Clust
 		cluster.Status.Message = ""
 	}
 	if err := r.writeStatus(ctx, cluster, old, cluster.Status); err != nil {
-		return err
+		return ctrl.Result{}, err
 	}
 	if dependents > 0 {
-		return nil // A Database's deletion requeues the Cluster.
+		return ctrl.Result{}, nil // A Database's deletion requeues the Cluster.
+	}
+	if r.Bug == B60 {
+		controllerutil.RemoveFinalizer(cluster, fleetv1.ClusterFinalizer)
+		if err := r.Update(ctx, cluster); client.IgnoreNotFound(err) != nil {
+			return ctrl.Result{}, err
+		}
 	}
 	for i := range volumes {
-		if v := &volumes[i]; v.DeletionTimestamp.IsZero() {
+		if v := &volumes[i]; v.DeletionTimestamp.IsZero() || r.Bug == B62 {
 			if err := r.Delete(ctx, v); client.IgnoreNotFound(err) != nil {
-				return fmt.Errorf("deleting Volume %s: %w", v.Name, err)
+				return ctrl.Result{}, fmt.Errorf("deleting Volume %s: %w", v.Name, err)
 			}
 		}
 	}
-	if len(volumes) > 0 {
-		return nil // A Volume's deletion requeues the Cluster.
+	switch {
+	case r.Bug == B60:
+		return ctrl.Result{}, nil
+	case len(volumes) > 0 && r.Bug == B62:
+		return ctrl.Result{RequeueAfter: time.Millisecond}, nil
+	case len(volumes) > 0:
+		return ctrl.Result{}, nil // A Volume's deletion requeues the Cluster.
 	}
 	controllerutil.RemoveFinalizer(cluster, fleetv1.ClusterFinalizer)
-	return client.IgnoreNotFound(r.Update(ctx, cluster))
+	return ctrl.Result{}, client.IgnoreNotFound(r.Update(ctx, cluster))
 }
 
 // ownedVolumes lists, through reader, the Volumes the Cluster controls.
@@ -158,7 +190,7 @@ func (r *ClusterReconciler) ownedVolumes(ctx context.Context, reader client.Read
 	}
 	var owned []storagev1.Volume
 	for _, v := range list.Items {
-		if metav1.IsControlledBy(&v, cluster) {
+		if metav1.IsControlledBy(&v, cluster) || r.Bug == B60 {
 			owned = append(owned, v)
 		}
 	}
