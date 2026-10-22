@@ -115,6 +115,28 @@ func TestAQuarterOfSlowDeleteStepsRestartOrKillAfterTheDelete(t *testing.T) {
 	}
 }
 
+// A restart that follows a delete within milliseconds comes before the
+// controller has begun to finalize, so it tests nothing about finalizers.
+func TestSomeRestartsOrKillsComeWhileADeleteIsFinalizing(t *testing.T) {
+	var late int
+	for _, p := range plans(t, modelsConfig, 400) {
+		for _, step := range p.Steps {
+			del := slices.IndexFunc(step.Actions, func(a plan.Action) bool { return a.Do == plan.Delete })
+			if del < 0 {
+				continue
+			}
+			for _, a := range step.Actions[del:] {
+				if (a.Do == plan.Restart || a.Do == plan.Kill) && time.Duration(a.At-step.Actions[del].At) >= 300*time.Millisecond {
+					late++
+				}
+			}
+		}
+	}
+	if late < 20 {
+		t.Errorf("%d restarts or kills over 400 plans come 300ms or more after a delete in their step, want 20.", late)
+	}
+}
+
 func TestTheGadgetToyDrawsBothModelFaultsOnGadgets(t *testing.T) {
 	gadgets := plan.Match{Group: "toy.reconciler-fuzzer", Resource: "gadgets"}
 	drawn := map[string]bool{}
