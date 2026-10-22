@@ -273,6 +273,31 @@ func TestHuntKeepsAFindWhoseReplaysWereCutShort(t *testing.T) {
 	}
 }
 
+// A hunt cut short while shrinking, as by a CI timeout, keeps the smallest
+// failing plan so far and counts the seed that found it.
+func TestHuntKeepsTheShrinkSoFarOnACancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fake := &fakeRun{out: t.TempDir(), finds: always(clean)}
+	found, err := Hunt(ctx, Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{4}), Out: fake.out,
+		Run: func(ctx context.Context, p *plan.Plan, out string) (check.Report, error) {
+			if strings.HasPrefix(filepath.Base(out), "shrink-3-") {
+				cancel()
+				return check.Report{}, ctx.Err()
+			}
+			return fake.run(ctx, p, out)
+		}})
+	summary, _ := os.ReadFile(filepath.Join(fake.out, "summary.md"))
+	shrunk := filepath.Join(fake.out, "seed-4", "shrunk.json")
+	if !errors.Is(err, context.Canceled) || len(found) != 1 || found[0].ShrunkPath != shrunk ||
+		!strings.Contains(string(summary), "over 1 seed") || !strings.Contains(string(summary), shrunk) {
+		t.Errorf("Hunt = %+v, %v, and wrote:\n%s", found, err, summary)
+	}
+	if _, err := plan.Load(shrunk); err != nil {
+		t.Error(err)
+	}
+}
+
 func TestHuntRemovesTheRunOfASeedWithNothingNew(t *testing.T) {
 	_, fake := hunt(t, []uint64{1, 2}, always(clean))
 	for dir, kept := range map[string]bool{"seed-1": true, "seed-2": false} {
