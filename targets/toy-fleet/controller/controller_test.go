@@ -2,6 +2,9 @@ package controller
 
 import (
 	"context"
+	"errors"
+	"slices"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -12,6 +15,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	fleetv1 "github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/targets/toy-fleet/api/v1"
 	storagev1 "github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/targets/toy-fleet/thirdparty/storage/v1"
@@ -28,6 +32,10 @@ type fleet struct {
 }
 
 func newFleet(t *testing.T, objects ...client.Object) *fleet {
+	return newBuggyFleet(t, 0, interceptor.Funcs{}, objects...)
+}
+
+func newBuggyFleet(t *testing.T, bug Bug, funcs interceptor.Funcs, objects ...client.Object) *fleet {
 	scheme, err := NewScheme()
 	if err != nil {
 		t.Fatal(err)
@@ -36,9 +44,9 @@ func newFleet(t *testing.T, objects ...client.Object) *fleet {
 		WithStatusSubresource(&fleetv1.Cluster{}, &fleetv1.Database{}, &fleetv1.User{}, &storagev1.Volume{}).
 		WithIndex(&fleetv1.Database{}, clusterRefField, func(o client.Object) []string { return []string{o.(*fleetv1.Database).Spec.ClusterRef} }).
 		WithIndex(&fleetv1.User{}, databaseRefField, func(o client.Object) []string { return []string{o.(*fleetv1.User).Spec.DatabaseRef} }).
-		WithObjects(objects...).Build()
-	base := reconciler{Client: c, APIReader: c, Scheme: scheme}
-	return &fleet{t, c, &ClusterReconciler{base}, &DatabaseReconciler{base}, &UserReconciler{base}}
+		WithObjects(objects...).WithInterceptorFuncs(funcs).Build()
+	base := reconciler{Client: c, APIReader: c, Scheme: scheme, Bug: bug}
+	return &fleet{t, c, newClusterReconciler(base), &DatabaseReconciler{base}, &UserReconciler{base}}
 }
 
 // settle reconciles name with r until it stops changing anything.
@@ -216,5 +224,91 @@ func TestParseBugAcceptsOnlyKnownBugs(t *testing.T) {
 	}
 	if _, err := ParseBug(40); err == nil {
 		t.Error("ParseBug(40) succeeded, want an error.")
+	}
+}
+
+// reconcile reconciles the Cluster once.
+func (f *fleet) reconcile() {
+	f.t.Helper()
+	if _, err := f.clusters.Reconcile(f.t.Context(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "cluster"}}); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+func (f *fleet) volumes() []storagev1.Volume {
+	f.t.Helper()
+	list := &storagev1.VolumeList{}
+	if err := f.c.List(f.t.Context(), list); err != nil {
+		f.t.Fatal(err)
+	}
+	return list.Items
+}
+
+func TestPhaseRegressesOncePerGeneration(t *testing.T) {
+	f := newBuggyFleet(t, PhaseRegresses, interceptor.Funcs{}, clusterObj())
+	f.settle(f.clusters, "cluster")
+	f.readyVolumes()
+	var phases []fleetv1.Phase
+	for range 4 {
+		f.reconcile()
+		phases = append(phases, f.cluster().Status.Phase)
+	}
+	if want := []fleetv1.Phase{fleetv1.Ready, fleetv1.Provisioning, fleetv1.Ready, fleetv1.Ready}; !slices.Equal(phases, want) {
+		t.Errorf("Phases %v, want %v.", phases, want)
+	}
+}
+
+func TestReadyBeforeVolumes(t *testing.T) {
+	f := newBuggyFleet(t, ReadyBeforeVolumes, interceptor.Funcs{}, clusterObj())
+	f.settle(f.clusters, "cluster")
+	if c := f.cluster(); c.Status.Phase != fleetv1.Ready {
+		t.Errorf("With Volumes not ready, the Cluster is %+v.", c.Status)
+	}
+}
+
+func TestRestartBugsCreateASecondSetOfVolumes(t *testing.T) {
+	for _, bug := range []Bug{DuplicateVolumesAfterRestart, RenamedVolumesAfterRestart} {
+		f := newBuggyFleet(t, bug, interceptor.Funcs{}, clusterObj())
+		f.settle(f.clusters, "cluster")
+		if n := len(f.volumes()); n != 2 {
+			t.Fatalf("B%d: before a restart, %d Volumes.", bug, n)
+		}
+		f.clusters = newClusterReconciler(f.clusters.(*ClusterReconciler).reconciler)
+		f.settle(f.clusters, "cluster")
+		if n := len(f.volumes()); n != 4 {
+			t.Errorf("B%d: after a restart, %d Volumes, want 4.", bug, n)
+		}
+	}
+}
+
+func TestStuckAfterCreateErrorNeverRetries(t *testing.T) {
+	failed := false
+	funcs := interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+		if _, ok := obj.(*storagev1.Volume); ok && !failed {
+			failed = true
+			return apierrors.NewInternalError(errors.New("injected"))
+		}
+		return c.Create(ctx, obj, opts...)
+	}}
+	f := newBuggyFleet(t, StuckAfterCreateError, funcs, clusterObj())
+	f.settle(f.clusters, "cluster")
+	if c, n := f.cluster(), len(f.volumes()); n != 0 || c.Status.Phase != fleetv1.Provisioning || !strings.HasPrefix(c.Status.Message, gaveUp) {
+		t.Errorf("After one failed create, %d Volumes and the Cluster is %+v.", n, c.Status)
+	}
+}
+
+func TestIgnoresSpecDuringProvisioning(t *testing.T) {
+	f := newBuggyFleet(t, IgnoresSpecDuringProvisioning, interceptor.Funcs{}, clusterObj())
+	f.settle(f.clusters, "cluster")
+	c := f.cluster()
+	c.Spec.Volumes = 3
+	if err := f.c.Update(t.Context(), c); err != nil {
+		t.Fatal(err)
+	}
+	f.settle(f.clusters, "cluster")
+	f.readyVolumes()
+	f.settle(f.clusters, "cluster")
+	if c, n := f.cluster(), len(f.volumes()); n != 2 || c.Status.Phase != fleetv1.Ready || c.Status.ObservedGeneration != c.Generation {
+		t.Errorf("With 3 Volumes wanted, %d Volumes and the Cluster is %+v at generation %d.", n, c.Status, c.Generation)
 	}
 }

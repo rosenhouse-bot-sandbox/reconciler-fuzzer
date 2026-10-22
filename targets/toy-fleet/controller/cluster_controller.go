@@ -2,7 +2,10 @@ package controller
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
+	"slices"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -21,7 +24,33 @@ import (
 const ClusterLabel = "fleet.toy/cluster"
 
 // ClusterReconciler moves a Cluster through its phases and keeps its Volumes.
-type ClusterReconciler struct{ reconciler }
+type ClusterReconciler struct {
+	reconciler
+	// memory holds what the seeded bugs remember between reconciles.
+	memory map[types.UID]*clusterMemory
+	// nonce is this process's Volume name suffix under
+	// RenamedVolumesAfterRestart.
+	nonce string
+}
+
+type clusterMemory struct {
+	regressedAt int64                // PhaseRegresses
+	volumes     []string             // DuplicateVolumesAfterRestart
+	spec        *fleetv1.ClusterSpec // IgnoresSpecDuringProvisioning
+}
+
+func newClusterReconciler(base reconciler) *ClusterReconciler {
+	return &ClusterReconciler{reconciler: base, memory: map[types.UID]*clusterMemory{}, nonce: strings.ToLower(rand.Text()[:5])}
+}
+
+func (r *ClusterReconciler) remember(cluster *fleetv1.Cluster) *clusterMemory {
+	m := r.memory[cluster.UID]
+	if m == nil {
+		m = &clusterMemory{}
+		r.memory[cluster.UID] = m
+	}
+	return m
+}
 
 func (r *ClusterReconciler) SetupWithManager(m ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(m).
@@ -49,49 +78,118 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		cluster.Status.Phase = fleetv1.Pending
 		return ctrl.Result{}, r.writeStatus(ctx, cluster, old, cluster.Status)
 	}
-	ready, err := r.syncVolumes(ctx, cluster)
+	if r.Bug == StuckAfterCreateError && strings.HasPrefix(old.Message, gaveUp) {
+		return ctrl.Result{}, nil
+	}
+	spec := r.specToProvision(cluster)
+	ready, err := r.syncVolumes(ctx, cluster, spec)
+	if err != nil && r.Bug == StuckAfterCreateError {
+		cluster.Status.Phase, cluster.Status.Message = fleetv1.Provisioning, gaveUp+err.Error()
+		return ctrl.Result{}, r.writeStatus(ctx, cluster, old, cluster.Status)
+	}
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	status := fleetv1.ClusterStatus{ReadyVolumes: ready}
 	status.ObservedGeneration = cluster.Generation
-	status.Phase, status.Message = fleetv1.Provisioning, fmt.Sprintf("%d of %d Volumes ready", ready, cluster.Spec.Volumes)
-	if ready == cluster.Spec.Volumes {
+	status.Phase, status.Message = fleetv1.Provisioning, fmt.Sprintf("%d of %d Volumes ready", ready, spec.Volumes)
+	if ready == spec.Volumes {
 		status.Phase, status.Message = fleetv1.Ready, ""
+	}
+	if m := r.remember(cluster); r.Bug == PhaseRegresses && status.Phase == fleetv1.Ready &&
+		old.Phase == fleetv1.Ready && old.ObservedGeneration == cluster.Generation && m.regressedAt != cluster.Generation {
+		m.regressedAt = cluster.Generation
+		status.Phase, status.Message = fleetv1.Provisioning, "resyncing"
 	}
 	cluster.Status = status
 	return ctrl.Result{}, r.writeStatus(ctx, cluster, old, status)
 }
 
-// syncVolumes creates, updates and deletes the Cluster's Volumes to match its
+// gaveUp starts the message of a Cluster StuckAfterCreateError abandoned.
+const gaveUp = "gave up: "
+
+// specToProvision is the Cluster's spec, or under
+// IgnoresSpecDuringProvisioning the one it saw when it last left Ready.
+func (r *ClusterReconciler) specToProvision(cluster *fleetv1.Cluster) fleetv1.ClusterSpec {
+	if r.Bug != IgnoresSpecDuringProvisioning {
+		return cluster.Spec
+	}
+	m := r.remember(cluster)
+	if m.spec == nil || cluster.Status.Phase == fleetv1.Ready && cluster.Status.ObservedGeneration != cluster.Generation {
+		m.spec = cluster.Spec.DeepCopy()
+	}
+	return *m.spec
+}
+
+// volumeName names the Cluster's ith Volume, or is empty for a new Volume
+// under DuplicateVolumesAfterRestart.
+func (r *ClusterReconciler) volumeName(cluster *fleetv1.Cluster, i int32) string {
+	switch r.Bug {
+	case DuplicateVolumesAfterRestart:
+		if m := r.remember(cluster); int(i) < len(m.volumes) {
+			return m.volumes[i]
+		}
+		return ""
+	case RenamedVolumesAfterRestart:
+		return fmt.Sprintf("%s-vol-%d-%s", cluster.Name, i, r.nonce)
+	}
+	return fmt.Sprintf("%s-vol-%d", cluster.Name, i)
+}
+
+// knows says whether this process may delete the Volume. Only the
+// restart bugs forget Volumes.
+func (r *ClusterReconciler) knows(cluster *fleetv1.Cluster, v *storagev1.Volume) bool {
+	switch r.Bug {
+	case DuplicateVolumesAfterRestart:
+		return slices.Contains(r.remember(cluster).volumes, v.Name)
+	case RenamedVolumesAfterRestart:
+		return strings.HasSuffix(v.Name, "-"+r.nonce)
+	}
+	return true
+}
+
+// syncVolumes creates, updates and deletes the Cluster's Volumes to match
 // spec, and counts those ready.
-func (r *ClusterReconciler) syncVolumes(ctx context.Context, cluster *fleetv1.Cluster) (int32, error) {
+func (r *ClusterReconciler) syncVolumes(ctx context.Context, cluster *fleetv1.Cluster, spec fleetv1.ClusterSpec) (int32, error) {
 	volumes, err := r.ownedVolumes(ctx, r.Client, cluster)
 	if err != nil {
 		return 0, err
 	}
 	want := map[string]bool{}
 	var ready int32
-	for i := range cluster.Spec.Volumes {
-		name := fmt.Sprintf("%s-vol-%d", cluster.Name, i)
-		want[name] = true
+	for i := range spec.Volumes {
+		name := r.volumeName(cluster, i)
 		volume := &storagev1.Volume{ObjectMeta: metav1.ObjectMeta{Namespace: cluster.Namespace, Name: name}}
-		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, volume, func() error {
-			volume.Spec.Size = cluster.Spec.VolumeSize
+		if name == "" {
+			volume.GenerateName = fmt.Sprintf("%s-vol-%d-", cluster.Name, i)
+		}
+		mutate := func() error {
+			volume.Spec.Size = spec.VolumeSize
 			if volume.Labels == nil {
 				volume.Labels = map[string]string{}
 			}
 			volume.Labels[ClusterLabel] = cluster.Name
 			return controllerutil.SetControllerReference(cluster, volume, r.Scheme)
-		}); err != nil {
+		}
+		if name == "" {
+			if err := mutate(); err != nil {
+				return 0, err
+			}
+			if err := r.Create(ctx, volume); err != nil {
+				return 0, fmt.Errorf("creating Volume %s: %w", volume.GenerateName, err)
+			}
+			m := r.remember(cluster)
+			m.volumes = append(m.volumes, volume.Name)
+		} else if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, volume, mutate); err != nil {
 			return 0, fmt.Errorf("ensuring Volume %s: %w", name, err)
 		}
-		if volumeReady(volume) {
+		want[volume.Name] = true
+		if volumeReady(volume) || r.Bug == ReadyBeforeVolumes {
 			ready++
 		}
 	}
 	for i := range volumes {
-		if v := &volumes[i]; !want[v.Name] && v.DeletionTimestamp.IsZero() {
+		if v := &volumes[i]; !want[v.Name] && r.knows(cluster, v) && v.DeletionTimestamp.IsZero() {
 			if err := r.Delete(ctx, v); client.IgnoreNotFound(err) != nil {
 				return 0, fmt.Errorf("deleting Volume %s: %w", v.Name, err)
 			}

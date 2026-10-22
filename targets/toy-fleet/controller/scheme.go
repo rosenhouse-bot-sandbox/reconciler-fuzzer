@@ -48,7 +48,7 @@ func Setup(m ctrl.Manager, bug Bug) error {
 	}
 	base := reconciler{Client: m.GetClient(), APIReader: m.GetAPIReader(), Scheme: m.GetScheme(), Bug: bug}
 	for _, r := range []interface{ SetupWithManager(ctrl.Manager) error }{
-		&ClusterReconciler{base}, &DatabaseReconciler{base}, &UserReconciler{base},
+		newClusterReconciler(base), &DatabaseReconciler{base}, &UserReconciler{base},
 	} {
 		if err := r.SetupWithManager(m); err != nil {
 			return err
