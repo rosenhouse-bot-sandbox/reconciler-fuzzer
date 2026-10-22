@@ -44,3 +44,32 @@ func TestRunNamesTheConfigKeyOfAKindNoCRDServes(t *testing.T) {
 		})
 	}
 }
+
+// A launch.env without KUBECONFIG must not leave the controller on the
+// shell's cluster.
+func TestTheControllerGetsTheHarnessKubeconfigByDefault(t *testing.T) {
+	t.Setenv("KUBECONFIG", "/home/me/.kube/production")
+	toyDir, err := filepath.Abs(toy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	got := filepath.Join(dir, "got")
+	config := fmt.Sprintf("launch: {binary: /bin/sh, args: [-c, 'echo \"$KUBECONFIG\" > %[2]s; sleep 60']}\ncrds: [%[1]s/crds/]\nprimary: {kind: toy.reconciler-fuzzer/v1/Widget, sample: %[1]s/widget.yaml, ready: \"true\"}\ntimeouts: {settle: 3s, stable: 1s}\n",
+		toyDir, got)
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "out")
+	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{{Do: plan.Create, Slot: "a"}}}}}
+	if _, err := Run(context.Background(), Options{ConfigPath: filepath.Join(dir, "config.yaml"), Plan: p, Out: out}); err != nil {
+		t.Fatal(err)
+	}
+	text, err := os.ReadFile(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(out, "kubeconfig") + "\n"; string(text) != want {
+		t.Errorf("The controller got KUBECONFIG %q, want %q.", text, want)
+	}
+}
