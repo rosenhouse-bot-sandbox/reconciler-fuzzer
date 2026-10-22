@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -92,8 +93,8 @@ func (r *ClusterReconciler) syncVolumes(ctx context.Context, cluster *fleetv1.Cl
 	}
 	for i := range volumes {
 		if v := &volumes[i]; !want[v.Name] && v.DeletionTimestamp.IsZero() {
-			if err := r.Delete(ctx, v); client.IgnoreNotFound(err) != nil {
-				return 0, fmt.Errorf("deleting Volume %s: %w", v.Name, err)
+			if err := r.deleteVolume(ctx, v); err != nil {
+				return 0, err
 			}
 		}
 	}
@@ -120,9 +121,15 @@ func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Clust
 	if err != nil {
 		return err
 	}
+	if r.Bug == GiveUpOnStuckVolume && cluster.Status.Message == manualCleanup {
+		return nil
+	}
 	old := cluster.Status
 	cluster.Status.Phase = fleetv1.Deleting
 	switch {
+	case r.Bug == GiveUpOnStuckVolume && dependents == 0 && slices.ContainsFunc(volumes, volumeFailed):
+		cluster.Status.Message = manualCleanup
+		return r.writeStatus(ctx, cluster, old, cluster.Status)
 	case dependents > 0:
 		cluster.Status.Message = fmt.Sprintf("waiting for %d Databases to go", dependents)
 	case len(volumes) > 0:
@@ -138,16 +145,41 @@ func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Clust
 	}
 	for i := range volumes {
 		if v := &volumes[i]; v.DeletionTimestamp.IsZero() {
-			if err := r.Delete(ctx, v); client.IgnoreNotFound(err) != nil {
-				return fmt.Errorf("deleting Volume %s: %w", v.Name, err)
+			if err := r.deleteVolume(ctx, v); err != nil {
+				return err
+			}
+		} else if r.Bug == StripVolumeFinalizers && len(v.Finalizers) > 0 {
+			v.Finalizers = nil
+			if err := r.Update(ctx, v); client.IgnoreNotFound(err) != nil {
+				return fmt.Errorf("stripping Volume %s: %w", v.Name, err)
 			}
 		}
 	}
-	if len(volumes) > 0 {
+	if len(volumes) > 0 && r.Bug != ReleaseBeforeVolumesGo {
 		return nil // A Volume's deletion requeues the Cluster.
 	}
 	controllerutil.RemoveFinalizer(cluster, fleetv1.ClusterFinalizer)
 	return client.IgnoreNotFound(r.Update(ctx, cluster))
+}
+
+// manualCleanup is the message of a Cluster that GiveUpOnStuckVolume
+// stopped finalizing.
+const manualCleanup = "a Volume failed; clean up by hand"
+
+func (r *ClusterReconciler) deleteVolume(ctx context.Context, v *storagev1.Volume) error {
+	var opts []client.DeleteOption
+	if r.Bug == OrphanVolumes {
+		opts = append(opts, client.PropagationPolicy(metav1.DeletePropagationOrphan))
+	}
+	if err := r.Delete(ctx, v, opts...); client.IgnoreNotFound(err) != nil {
+		return fmt.Errorf("deleting Volume %s: %w", v.Name, err)
+	}
+	return nil
+}
+
+// volumeFailed says whether the Volume's Ready condition is False.
+func volumeFailed(v storagev1.Volume) bool {
+	return meta.IsStatusConditionFalse(v.Status.Conditions, "Ready")
 }
 
 // ownedVolumes lists, through reader, the Volumes the Cluster controls.

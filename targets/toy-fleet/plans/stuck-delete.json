@@ -1,0 +1,10 @@
+{
+  "steps": [
+    {"actions": [{"do": "create", "slot": "a", "object": {"apiVersion": "toy.reconciler-fuzzer/v1", "kind": "Cluster", "metadata": {"name": "cluster"}, "spec": {"volumes": 2, "volumeSize": "small"}}}]},
+    {
+      "period": "3s",
+      "faults": [{"match": {"group": "storage.thirdparty", "resource": "volumes"}, "stuck": true}],
+      "actions": [{"do": "delete", "slot": "a", "at": "1s"}]
+    }
+  ]
+}
