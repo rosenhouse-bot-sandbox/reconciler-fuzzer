@@ -1,0 +1,7 @@
+{
+  "steps": [
+    {"actions": [{"do": "create", "slot": "a"}]},
+    {"actions": [{"do": "restart", "args": ["--version=2"], "crds": ["../crds-v2/"]}]},
+    {"actions": [{"do": "update", "slot": "a", "patch": {"spec": {"volumes": 3}}}]}
+  ]
+}
