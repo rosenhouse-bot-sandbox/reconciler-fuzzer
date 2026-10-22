@@ -1,0 +1,7 @@
+{
+  "steps": [
+    {"actions": [{"do": "create", "slot": "a"}]},
+    {"actions": [{"do": "restart", "binary": "../../../bin/toy-fleet", "args": ["--bug=0"]}]},
+    {"actions": [{"do": "update", "slot": "a", "patch": {"spec": {"volumes": 3}}}]}
+  ]
+}
