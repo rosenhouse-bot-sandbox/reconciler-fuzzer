@@ -24,20 +24,19 @@ models:
     stages: readyCondition
     after: 300ms
     dependency: {track: 1s}
-# Generation fills each reference's field with a CR of its `to` kind. Honest
-# fails a `from` CR that reports ready before the controller saw its `to` CR
-# ready. With onDelete: block, a `to` CR that waits in deletion for its
-# `from` CRs counts as settled, and Ordered fails a `to` CR that goes while a
-# `from` CR names it. With onDelete: cascade, Ordered fails a `from` CR that
-# outlives its `to` CR.
+# Generation fills each reference's name field with an object of its `to`
+# kind. Honest fails a `from` CR that reports ready before the controller saw
+# its `to` object ready. With onDelete: block, a `to` object that waits in
+# deletion while a `from` CR names it counts as settled and as ready, and
+# Ordered fails a `to` object that goes while a `from` CR names it.
 references:
   - from: toy.reconciler-fuzzer/v1/Database
     to: toy.reconciler-fuzzer/v1/Cluster
-    name: self.spec.clusterRef
+    name: spec.clusterRef
     onDelete: block
   - from: toy.reconciler-fuzzer/v1/User
     to: toy.reconciler-fuzzer/v1/Database
-    name: self.spec.databaseRef
+    name: spec.databaseRef
     onDelete: block
 values:
   mutate: [spec.volumes, spec.volumeSize]

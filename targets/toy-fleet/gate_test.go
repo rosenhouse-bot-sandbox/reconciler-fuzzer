@@ -62,8 +62,8 @@ var referenceGate = []gateRow{
 	{"../../plans/create-together", 0, "", 0, "", referencesConfig},
 	{"../../plans/delete-cluster-first", 0, "", 0, "", referencesConfig},
 	{"../../plans/delete-database-first", 0, "", 0, "", referencesConfig},
-	{"../../plans/delete-cluster-first", 20, "Ordered: released a CR that another names", 1, "clusters.toy.reconciler-fuzzer", referencesConfig},
-	{"../../plans/delete-database-first", 21, "Ordered: released a CR that another names", 1, "databases.toy.reconciler-fuzzer", referencesConfig},
+	{"../../plans/delete-cluster-first", 20, "Ordered: released an object that another names", 1, "clusters.toy.reconciler-fuzzer", referencesConfig},
+	{"../../plans/delete-database-first", 21, "Ordered: released an object that another names", 1, "databases.toy.reconciler-fuzzer", referencesConfig},
 	{"../../plans/create-together", 23, "Honest: reported ready before seeing its dependency ready", 0, "databases.toy.reconciler-fuzzer", referencesConfig},
 }
 
