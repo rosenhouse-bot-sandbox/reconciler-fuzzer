@@ -16,6 +16,14 @@ func TestUpgradeConfigsLoad(t *testing.T) {
 	}
 }
 
+// TestAConfigCanDeclareAnUpgrade wants launch.upgrades, the args and CRDs
+// of each later version, which generated plans upgrade to.
+func TestAConfigCanDeclareAnUpgrade(t *testing.T) {
+	if _, err := config.Load("upgrade/proposed/config.yaml"); err != nil {
+		t.Error(err)
+	}
+}
+
 func TestUpgradePlansLoad(t *testing.T) { loadAll(t, "upgrade/plans/*.json") }
 
 // TestRestartActionsLoadWithUpgradeFields wants a restart that names the

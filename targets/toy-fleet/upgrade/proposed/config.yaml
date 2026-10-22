@@ -1,0 +1,32 @@
+# config.yaml, plus the upgrade that generated plans draw. Paths resolve
+# against this file's directory.
+launch:
+  binary: ../../../../bin/toy-fleet
+  args:
+    - --bug=0
+  env:
+    KUBECONFIG: ${systems.kube.kubeconfig}
+    WATCH_NAMESPACE: ${systems.kube.namespace}
+  rbac:
+    - ../../rbac/role.yaml
+  upgrades:
+    - args: [--version=2]
+      crds: [../crds-v2/]
+crds:
+  - ../../crds/
+primary:
+  kind: toy.reconciler-fuzzer/v1/Cluster
+  sample: ../../cluster.yaml
+  ready: >-
+    has(self.status) && has(self.status.observedGeneration) && self.status.observedGeneration == self.metadata.generation
+    && has(self.status.phase) && self.status.phase == 'Ready'
+models:
+  - kind: storage.thirdparty/v1/Volume
+    stages: readyCondition
+    after: 300ms
+    dependency: {track: 1s}
+values:
+  mutate: [spec.volumes, spec.volumeSize]
+timeouts:
+  settle: 10s
+  stable: 2s
