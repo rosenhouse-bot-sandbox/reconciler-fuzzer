@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/run"
@@ -43,6 +44,16 @@ func TestGate(t *testing.T) {
 // references should pass.
 func TestReferencesJudgeTheOrderAcrossKinds(t *testing.T) {
 	runGate(t, referenceGate)
+}
+
+// TestCleanBlamesAChildOnTheCRThatOwnsIt wants Clean to see that Database
+// db, which a plan created and which outlives its released Cluster, still
+// owns its ConfigMap.
+func TestCleanBlamesAChildOnTheCRThatOwnsIt(t *testing.T) {
+	report := runPlan(t, "config.yaml", "ordering/gaps/plans/blocked-delete.json", 20)
+	if strings.Contains(report, "db-db (rule 4, slot a)") {
+		t.Errorf("Clean blamed Database db's ConfigMap on Cluster slot a. report.md:\n%s", report)
+	}
 }
 
 // runGate runs each row's plan under its bug, and wants the row's findings

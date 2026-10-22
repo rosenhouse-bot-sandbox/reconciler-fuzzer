@@ -2,6 +2,7 @@ package main_test
 
 import (
 	"cmp"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/generate"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 )
 
@@ -173,5 +175,41 @@ func TestReferencesConfigLoads(t *testing.T) {
 	}
 	if _, err := config.Load(referencesConfig); err != nil {
 		t.Error(err)
+	}
+}
+
+// TestGeneratedPlansCreateAndDeleteReferencingCRs wants generated plans to
+// create and delete the kinds the references name, so that seeds reach the
+// ordering across kinds.
+func TestGeneratedPlansCreateAndDeleteReferencingCRs(t *testing.T) {
+	c, err := config.Load(referencesConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := generate.New(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	made := map[string]bool{}
+	for seed := range uint64(50) {
+		p, err := g.Plan(seed + 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		slots := map[string]string{}
+		for _, step := range p.Steps {
+			for _, a := range step.Actions {
+				var o struct{ Kind string }
+				if a.Do == plan.Create && json.Unmarshal(a.Object, &o) == nil && o.Kind != "" {
+					slots[a.Slot] = o.Kind
+				}
+				made[string(a.Do)+" "+slots[a.Slot]] = true
+			}
+		}
+	}
+	for _, want := range []string{"create Database", "delete Database", "create User", "delete User"} {
+		if !made[want] {
+			t.Errorf("No plan of seeds 1 to 50 has a %s.", want)
+		}
 	}
 }
