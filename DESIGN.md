@@ -126,8 +126,7 @@ outcomes included.
 /<c>/<id>` as `get`, `update`, `patch` and `delete`, for each collection `<c>`
 the listing names. A ref is `{system, resource: c, name: id}`; an object needs
 a string `id` and a `version`, its resourceVersion; its UID is
-`<system>/<c>/<id>`. Restore ignores `version`. Its error is `{"error":
-{"code", "message"}}`.
+`<system>/<c>/<id>`. Restore ignores `version`. `crud.go` documents its error.
 
 **The `vault` and `s3` maps** read a Vault server's KV version 2 mounts, and an
 S3 server's buckets and objects. Their package comments define them. Paths and
@@ -320,14 +319,14 @@ restore damaged resources` (entry 22).
 controller instance. Summary: `duplicate resources`.
 
 **Honest** and Backoff judge the whole run (`honest.go`, `backoff.go`). A CR's
-dependencies are the dependency instances it owns by rules 1 to 3. When the
-controller writes the CR `ready`, or raises its observedGeneration while
-`ready`, its last `seen` of each dependency must show its last write's version
-or a later one, which its `ready` accepts: `reported ready before seeing its
-dependency ready`. With `required`, it needs a dependency of each kind:
-`reported ready with no dependency`. With `track: d`, a CR fails that stays
-`ready` `d` after the controller saw a dependency not ready: `stayed ready
-after seeing its dependency not ready`.
+dependencies are the dependency instances it owns by rules 1 to 3 (entries 47
+and 77). When the controller writes the CR `ready`, or raises its
+observedGeneration while `ready`, its last `seen` of each dependency must show
+its last write's version or a later one, which its `ready` accepts: `reported
+ready before seeing its dependency ready`. With `required`, it needs a
+dependency of each kind: `reported ready with no dependency`. With `track: d`,
+a CR fails that stays `ready` `d` after the controller saw a dependency not
+ready: `stayed ready after seeing its dependency not ready`.
 
 **Backoff.** Failing controller calls with one system, verb, object,
 subresource and status form a **run**; a create's object is its `requestName`.
@@ -497,3 +496,4 @@ Each entry changes a check, exception, `System` interface or ignore list.
 74. A fake's write without a resourceVersion is a change only if the observer saw one, for ACK.
 75. Restore ignores Vault's `current_version` and `versions`, and S3's `versionId`.
 76. `primary.periodic` paths name list items with `[*]`, so ACK exempts only condition stamps.
+77. Honest skips a dependency the controller deleted with a `delete`, or last saw deleted, whatever the observer's lag, so a scale-down passes (#124).

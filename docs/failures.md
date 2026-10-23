@@ -147,13 +147,16 @@ Two live controller resources share a kind, namespace, owning CR and role
 ### Honest
 
 A CR reported ready while a dependency was not, as the controller's own
-reads showed it. Each line names the CR's slot and the dependency:
+reads showed it. A dependency stops counting once the controller sends a
+successful `delete` of it, and while the controller last saw it deleted.
+A `deletecollection` or an owner's cascade is not such a `delete`. Each
+line names the CR's slot and the dependency:
 
 - `reported ready before seeing its dependency ready`: `not seen` means
   the controller never read the dependency after its last write to it;
   `seen not ready` means its last read showed it not ready.
 - `reported ready with no dependency`: under `dependency.required`, the
-  CR owned none.
+  CR owned none that counts.
 - `stayed ready after seeing its dependency not ready`: the CR stayed
   ready longer than `track`.
 

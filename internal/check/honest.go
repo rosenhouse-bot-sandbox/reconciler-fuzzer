@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 	"time"
 
@@ -25,7 +26,7 @@ func Honest(ix *trace.Index, s Spec) []Finding {
 	if len(deps) == 0 {
 		return nil
 	}
-	h := &honesty{ix: ix, s: s, w: owner.New(ix, s.Owners), steps: ix.Steps(), found: map[findingKey]*Finding{}}
+	h := &honesty{ix: ix, s: s, w: owner.New(ix, s.Owners), steps: ix.Steps(), deletes: controllerDeletes(ix), found: map[findingKey]*Finding{}}
 	order, crs := crVersions(ix, s)
 	for _, uid := range order {
 		versions := crs[uid]
@@ -45,11 +46,12 @@ func Honest(ix *trace.Index, s Spec) []Finding {
 }
 
 type honesty struct {
-	ix    *trace.Index
-	s     Spec
-	w     *owner.World
-	steps []trace.StepSpan
-	found map[findingKey]*Finding
+	ix      *trace.Index
+	s       Spec
+	w       *owner.World
+	steps   []trace.StepSpan
+	deletes map[trace.Ref][]time.Duration
+	found   map[findingKey]*Finding
 }
 
 type findingKey struct {
@@ -109,22 +111,22 @@ const (
 )
 
 // dependencies are the instances of m's kind at t whose rule 1 to 3 owning CR
-// is uid: the live ones not being deleted, and the gone ones the controller
-// last saw live and nothing has replaced. An instance counts from its first
-// version, or from the controller's first sight of it if that is earlier.
+// is uid. An instance counts from when it appeared until the controller
+// deletes it, and not while the controller last saw it deleted. A live one
+// counts unless it is being deleted, and a gone one only if the controller
+// last saw it live and nothing has replaced it.
 func (h *honesty) dependencies(uid string, m Model, t time.Duration) []owner.Instance {
 	var owned []owner.Instance
 	for _, i := range h.w.All() {
-		created := i.Created
-		if seens := h.ix.Seen(trace.Controller, i.UID); len(seens) > 0 {
-			created = min(created, seens[0].At)
+		if !m.covers(i.Ref) || h.appeared(i) > t || h.controllerDeleted(i, t) {
+			continue
 		}
-		if !m.covers(i.Ref) || created > t {
+		seen, found := lastSeen(h.ix.Seen(trace.Controller, i.UID), t)
+		if found && seen.Seen.Deleted {
 			continue
 		}
 		if i.Gone != 0 && i.Gone <= t {
-			seen, found := lastSeen(h.ix.Seen(trace.Controller, i.UID), t)
-			if latest, _ := h.w.Latest(i.Ref, t); !found || seen.Seen.Deleted || !i.Live(seen.At) || latest.UID != i.UID {
+			if latest, _ := h.w.Latest(i.Ref, t); !found || !i.Live(seen.At) || latest.UID != i.UID {
 				continue
 			}
 		} else if deleting(h.w.Body(i, t)) {
@@ -135,6 +137,36 @@ func (h *honesty) dependencies(uid string, m Model, t time.Duration) []owner.Ins
 		}
 	}
 	return owned
+}
+
+// appeared is when the trace first shows i: its first version, or the
+// controller's first sight of it if that is earlier.
+func (h *honesty) appeared(i owner.Instance) time.Duration {
+	if seens := h.ix.Seen(trace.Controller, i.UID); len(seens) > 0 {
+		return min(i.Created, seens[0].At)
+	}
+	return i.Created
+}
+
+// controllerDeleted reports whether the controller sent a `delete` of i's
+// ref, with no subresource, by t, and the server answered with a 2xx. A
+// delete sent before i appeared does not count, as it may have hit an
+// earlier instance of i's ref.
+func (h *honesty) controllerDeleted(i owner.Instance, t time.Duration) bool {
+	appeared := h.appeared(i)
+	return slices.ContainsFunc(h.deletes[i.Ref], func(sent time.Duration) bool { return sent >= appeared && sent <= t })
+}
+
+// controllerDeletes returns, by ref, the send times of the controller's
+// successful `delete`s with no subresource.
+func controllerDeletes(ix *trace.Index) map[trace.Ref][]time.Duration {
+	sent := map[trace.Ref][]time.Duration{}
+	for _, e := range ix.Calls(trace.Controller, -1, math.MaxInt64) {
+		if c := e.Call; c.Verb == "delete" && c.Subresource == "" && succeeded(*c) {
+			sent[c.Object()] = append(sent[c.Object()], e.At-c.Latency)
+		}
+	}
+	return sent
 }
 
 func deleting(body json.RawMessage) bool {
@@ -254,10 +286,11 @@ func (h *honesty) allOf(m Model) []owner.Instance {
 	})
 }
 
-// streak reports whether dep lives through to, and every Seen of it after
-// from until to shows it live and not ready.
+// streak reports whether dep lives through to, the controller has not
+// deleted it by then, and every Seen of it after from until to shows it live
+// and not ready.
 func (h *honesty) streak(dep owner.Instance, m Model, from, to time.Duration) bool {
-	if !dep.Live(to) {
+	if !dep.Live(to) || h.controllerDeleted(dep, to) {
 		return false
 	}
 	return !slices.ContainsFunc(h.ix.Seen(trace.Controller, dep.UID), func(e trace.Event) bool {
