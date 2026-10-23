@@ -89,7 +89,7 @@ func TestEveryToyHasABugMatrixTest(t *testing.T) {
 		toy := filepath.Dir(main)
 		source, _ := os.ReadFile(filepath.Join(toy, "bugmatrix_test.go"))
 		if !isBugMatrixTest(string(source)) {
-			t.Errorf("%s has no bugmatrix_test.go with TestBugMatrixIsCurrent and an update flag. make bug-matrix runs them.", toy)
+			t.Errorf("%s has no bugmatrix_test.go with TestBugMatrixIsCurrent and an update flag. make bug-matrix runs that test with -update.", toy)
 		}
 	}
 }
