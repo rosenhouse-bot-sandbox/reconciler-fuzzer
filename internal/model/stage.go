@@ -35,8 +35,7 @@ type Stage struct {
 	gvr    schema.GroupVersionResource
 	w      stageWriter
 	record func(trace.Event)
-	// readyFields and stuckFields patch the model's literal status fields
-	// into a Ready True write and a stuck write.
+
 	readyFields, stuckFields map[string]any
 
 	// sweeping serializes sweeps, so a fault's start and end write in

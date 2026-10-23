@@ -193,9 +193,9 @@ const ReadyConditionCEL = `has(self.status) && has(self.status.conditions) && se
 type Model struct {
 	Kind  schema.GroupVersionKind
 	Stage string
-	// Status holds literal fields the stage adds to each status write but a
-	// stuck one, which adds StuckStatus in their place. StuckStatus defaults
-	// to Status.
+	// Status holds literal fields the stage sets in each status write, and
+	// StuckStatus those it sets in their place while a stuck fault lasts.
+	// Load sets an unset StuckStatus to Status.
 	Status, StuckStatus map[string]any
 	After               time.Duration
 	// Dependency is nil unless the kind is a readiness dependency of the

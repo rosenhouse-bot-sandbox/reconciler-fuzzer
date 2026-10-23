@@ -389,11 +389,11 @@ timeouts: {settle: 30s, stable: 3s, backoffCap: 60s}    # defaults
 ```
 
 A model's kind is neither the primary's nor another model's; its stage is
-`readyCondition`, `stuckStatus` defaults to `status`, and `dependency.required`
-defaults to true. A fake's name matches `[a-z][a-z0-9-]*`. A `command[0]` with
-a slash resolves against the file's directory. `vault` needs a `token`.
-`access: read` says the controller only reads the fake. `values.fixtures` may
-name a system's fixtures file, whose entries' body paths `changeFixture` sets.
+`readyCondition`, and `dependency.required` defaults to true. A fake's name
+matches `[a-z][a-z0-9-]*`. A `command[0]` with a slash resolves against the
+file's directory. `vault` needs a `token`. `access: read` says the controller
+only reads the fake. `values.fixtures` may name a system's fixtures file, whose
+entries' body paths `changeFixture` sets.
 
 ## 14. Generation, replay and shrinking
 

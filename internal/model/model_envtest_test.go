@@ -222,7 +222,8 @@ func TestAStageMakesAGadgetReadyThenStuckThenRecovered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	await(t, "stuck", false, `"phase":"Pending"`)
+	await(t, "stuck", false, "Stuck")
+	await(t, "pending", false, `"phase":"Pending"`)
 	end()
 	await(t, "recovered", true, "fault 1 ended")
 	await(t, "running", true, `"phase":"Running"`)
