@@ -35,6 +35,9 @@ type Stage struct {
 	gvr    schema.GroupVersionResource
 	w      stageWriter
 	record func(trace.Event)
+	// readyFields and stuckFields patch the model's literal status fields
+	// into a Ready True write and a stuck write.
+	readyFields, stuckFields map[string]any
 
 	// sweeping serializes sweeps, so a fault's start and end write in
 	// order with the loop's writes.
@@ -108,7 +111,32 @@ func NewStage(k *kube.Kube, m config.Model) (*Stage, error) {
 }
 
 func newStage(gvr schema.GroupVersionResource, m config.Model, w stageWriter, record func(trace.Event)) *Stage {
-	return &Stage{m: m, gvr: gvr, w: w, record: record, objects: map[trace.Ref]*held{}, wake: make(chan struct{}, 1)}
+	return &Stage{
+		m: m, gvr: gvr, w: w, record: record,
+		readyFields: replacing(m.Status, m.StuckStatus), stuckFields: replacing(m.StuckStatus, m.Status),
+		objects: map[trace.Ref]*held{}, wake: make(chan struct{}, 1),
+	}
+}
+
+// replacing returns a merge patch that sets fields in place of others, which
+// an earlier write may have set. It removes each field of others that fields
+// lacks, in nested objects too.
+func replacing(fields, others map[string]any) map[string]any {
+	patch := map[string]any{}
+	for key := range others {
+		if _, found := fields[key]; !found {
+			patch[key] = nil
+		}
+	}
+	for key, field := range fields {
+		inner, isObject := field.(map[string]any)
+		otherInner, otherIsObject := others[key].(map[string]any)
+		if isObject && otherIsObject {
+			field = replacing(inner, otherInner)
+		}
+		patch[key] = field
+	}
+	return patch
 }
 
 func (s *Stage) Name() string { return string(s.caller()) }
@@ -297,27 +325,23 @@ func (s *Stage) decide(h *held, now time.Time) []stageOp {
 	if h.deleting {
 		return ops
 	}
-	status := func(c metav1.Condition) stageOp {
+	status := func(fields map[string]any, c metav1.Condition) stageOp {
 		c.Type, c.ObservedGeneration, c.LastTransitionTime = "Ready", h.generation, metav1.NewTime(now)
-		fields := map[string]any{}
-		if s.m.Status != nil {
-			raw, _ := json.Marshal(s.m.Status)
-			json.Unmarshal(raw, &fields)
-		}
-		fields["conditions"] = []any{c}
-		return stageOp{ref: h.ref, uid: h.uid, rv: h.rv, status: fields}
+		patch := maps.Clone(fields)
+		patch["conditions"] = []any{c}
+		return stageOp{ref: h.ref, uid: h.uid, rv: h.rv, status: patch}
 	}
 	switch {
 	case s.active(h, true):
 		h.fresh = ""
 		if r := h.ready; r == nil || r.Status != "False" || r.Reason != trace.StuckReason || r.ObservedGeneration != h.generation {
-			ops = append(ops, status(metav1.Condition{Status: metav1.ConditionFalse, Reason: trace.StuckReason, Message: "a stuck fault holds it"}))
+			ops = append(ops, status(s.stuckFields, metav1.Condition{Status: metav1.ConditionFalse, Reason: trace.StuckReason, Message: "a stuck fault holds it"}))
 		}
 	case h.fresh != "":
-		ops = append(ops, status(metav1.Condition{Status: metav1.ConditionTrue, Reason: "Modelled", Message: h.fresh}))
+		ops = append(ops, status(s.readyFields, metav1.Condition{Status: metav1.ConditionTrue, Reason: "Modelled", Message: h.fresh}))
 	case h.ready != nil && h.ready.Status == "True" && h.ready.ObservedGeneration == h.generation:
 	case !now.Before(h.heardAt.Add(s.m.After)):
-		ops = append(ops, status(metav1.Condition{Status: metav1.ConditionTrue, Reason: "Modelled", Message: "modelled ready"}))
+		ops = append(ops, status(s.readyFields, metav1.Condition{Status: metav1.ConditionTrue, Reason: "Modelled", Message: "modelled ready"}))
 	default:
 		h.due = h.heardAt.Add(s.m.After)
 		h.timer = time.AfterFunc(h.due.Sub(now), func() {
