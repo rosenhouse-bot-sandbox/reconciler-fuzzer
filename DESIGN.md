@@ -126,8 +126,7 @@ outcomes included.
 /<c>/<id>` as `get`, `update`, `patch` and `delete`, for each collection `<c>`
 the listing names. A ref is `{system, resource: c, name: id}`; an object needs
 a string `id` and a `version`, its resourceVersion; its UID is
-`<system>/<c>/<id>`. Restore ignores `version`. Its error is `{"error":
-{"code", "message"}}`.
+`<system>/<c>/<id>`. Restore ignores `version`. `crud.go` documents its error.
 
 **The `vault` and `s3` maps** read a Vault server's KV version 2 mounts, and an
 S3 server's buckets and objects. Their package comments define them. Paths and
@@ -320,14 +319,14 @@ restore damaged resources` (entry 22).
 controller instance. Summary: `duplicate resources`.
 
 **Honest** and Backoff judge the whole run (`honest.go`, `backoff.go`). A CR's
-dependencies are the dependency instances it owns by rules 1 to 3. When the
-controller writes the CR `ready`, or raises its observedGeneration while
-`ready`, its last `seen` of each dependency must show its last write's version
-or a later one, which its `ready` accepts: `reported ready before seeing its
-dependency ready`. With `required`, it needs a dependency of each kind:
-`reported ready with no dependency`. With `track: d`, a CR fails that stays
-`ready` `d` after the controller saw a dependency not ready: `stayed ready
-after seeing its dependency not ready`.
+dependencies are the dependency instances it owns by rules 1 to 3 (entries 47
+and 77). When the controller writes the CR `ready`, or raises its
+observedGeneration while `ready`, its last `seen` of each dependency must show
+its last write's version or a later one, which its `ready` accepts: `reported
+ready before seeing its dependency ready`. With `required`, it needs a
+dependency of each kind: `reported ready with no dependency`. With `track: d`,
+a CR fails that stays `ready` `d` after the controller saw a dependency not
+ready: `stayed ready after seeing its dependency not ready`.
 
 **Backoff.** Failing controller calls with one system, verb, object,
 subresource and status form a **run**; a create's object is its `requestName`.
@@ -436,27 +435,27 @@ error.
 
 **Make targets.** `make help` lists them; CI and the nightly call them.
 
-**Toys.** `targets/toy-widget` holds the Widget configs: `gadget/` adds a
-modelled Gadget, and `tenant/` and `grant/` cross scopes. In
-`targets/toy-bucket`, each Bucket CR owns one bucket in the `crudfake` system
-`cloud`; its bugs start at B30, and `halted/` runs `--halt` under
-`primary.halted`.
+**Toys.** A toy is a directory in `targets/` with a `main.go`. `build`,
+`generate`, `test-generated` and `bug-matrix` run every toy.
+`targets/toy-widget` holds the Widget configs: `gadget/` adds a modelled
+Gadget, and `tenant/` and `grant/` cross scopes. In `targets/toy-bucket`, each
+Bucket CR owns one bucket in the `crudfake` system `cloud`; its bugs start at
+B30, and `halted/` runs `--halt` under `primary.halted`.
 
 Each config's `plans/` holds its gated bugs' and B0's plans. A toy's
-`gate_envtest_test.go` runs `gate_test.go`'s table, which `docs/bug-matrix.md`
-renders. B0 gives no findings and no notes on every committed plan, and no
-findings on the first 20 seeds of each config (toy-bucket: the first 20 that
-draw a fault on `cloud`).
+`gate_envtest_test.go` runs `gate_test.go`'s table, and its `bugmatrix_test.go`
+renders the table as its own section of `docs/bug-matrix.md`. B0 gives no
+findings and no notes on every committed plan, and no findings on the first 20
+seeds of each config (toy-bucket: the first 20 that draw a fault on `cloud`).
 
 **Examples.** `examples/<name>` adopts cert-manager, external-secrets on Vault,
 and ACK's s3-controller on moto. Plans and listed seeds give no findings,
 negative controls fail Clean or a property, and `bugs/` plans find known real
-bugs, such as cert-manager's #63, which `test-example-cert-manager` needs in 1
-of 3 runs; `repro-<name>` prints their rates.
+bugs, such as cert-manager's #63; `repro-<name>` prints their rates.
 
 **Testing.** Red/green TDD: a test must fail when its code is mutated. Envtest
 tests, few, live in `*_envtest_test.go` behind `//go:build envtest`. Root tests
-check the README's commands, the workflows' make targets, and this file.
+check the README's commands, the Makefile, the workflows and this file.
 
 ## 17. Decision log
 
@@ -497,3 +496,4 @@ Each entry changes a check, exception, `System` interface or ignore list.
 74. A fake's write without a resourceVersion is a change only if the observer saw one, for ACK.
 75. Restore ignores Vault's `current_version` and `versions`, and S3's `versionId`.
 76. `primary.periodic` paths name list items with `[*]`, so ACK exempts only condition stamps.
+77. Honest skips a dependency the controller deleted with a `delete`, or last saw deleted, whatever the observer's lag, so a scale-down passes (#124).

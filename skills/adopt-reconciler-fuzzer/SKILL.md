@@ -255,7 +255,7 @@ Vault fixture, add a step that writes a new version, `{"do": "changeFixture", "t
 that deletes and creates slot `a` with `"faults": [{"match": {"resource": "secrets"},
 "holdWatch": true}]` tests how the controller acts on a stale cache. A report note that the
 `holdWatch` held no watch means the controller watches no such kind, or the match is wrong.
-`<module>/targets/toy-widget/plans/` and `<module>/targets/toy-bucket/plans/` hold more.
+`<module>/targets/*/plans/` hold more.
 Run it from the config's directory, in the background, and act on the exit code:
 
 ```sh

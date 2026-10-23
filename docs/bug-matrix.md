@@ -1,6 +1,6 @@
 # Bug matrix
 
-This file is generated from targets/toy-widget/gate_test.go and targets/toy-bucket/gate_test.go by `make bug-matrix`.
+`make bug-matrix` generates this file from the gate_test.go of each toy in targets/.
 `make test-envtest` proves each row: the plan, run against the bug, reports the check's finding at that step, or no finding for check none.
 
 | Bug | Description | Plan | Check | Step |
