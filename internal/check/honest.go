@@ -109,22 +109,28 @@ const (
 )
 
 // dependencies are the instances of m's kind at t whose rule 1 to 3 owning CR
-// is uid: the live ones not being deleted, and the gone ones the controller
-// last saw live and nothing has replaced. An instance counts from its first
-// version, or from the controller's first sight of it if that is earlier.
+// is uid. An instance counts from its first version, or from the
+// controller's first sight of it if that is earlier. It does not count once
+// the controller deletes it, or while the controller last saw it deleted.
+// Otherwise a live one counts unless it is being deleted, and a gone one
+// counts if the controller last saw it live and nothing has replaced it.
 func (h *honesty) dependencies(uid string, m Model, t time.Duration) []owner.Instance {
 	var owned []owner.Instance
 	for _, i := range h.w.All() {
+		seens := h.ix.Seen(trace.Controller, i.UID)
 		created := i.Created
-		if seens := h.ix.Seen(trace.Controller, i.UID); len(seens) > 0 {
+		if len(seens) > 0 {
 			created = min(created, seens[0].At)
 		}
 		if !m.covers(i.Ref) || created > t {
 			continue
 		}
+		seen, found := lastSeen(seens, t)
+		if found && seen.Seen.Deleted || h.deleted(i, created, t) {
+			continue
+		}
 		if i.Gone != 0 && i.Gone <= t {
-			seen, found := lastSeen(h.ix.Seen(trace.Controller, i.UID), t)
-			if latest, _ := h.w.Latest(i.Ref, t); !found || seen.Seen.Deleted || !i.Live(seen.At) || latest.UID != i.UID {
+			if latest, _ := h.w.Latest(i.Ref, t); !found || !i.Live(seen.At) || latest.UID != i.UID {
 				continue
 			}
 		} else if deleting(h.w.Body(i, t)) {
@@ -135,6 +141,16 @@ func (h *honesty) dependencies(uid string, m Model, t time.Duration) []owner.Ins
 		}
 	}
 	return owned
+}
+
+// deleted reports whether the controller deleted i by t: a DELETE of i's
+// ref, sent once i existed, that the server answered with a 2xx.
+func (h *honesty) deleted(i owner.Instance, created, t time.Duration) bool {
+	return slices.ContainsFunc(h.ix.Calls(trace.Controller, -1, t), func(e trace.Event) bool {
+		c := e.Call
+		return c.Verb == "delete" && c.Subresource == "" && c.Object() == i.Ref &&
+			c.Status >= 200 && c.Status <= 299 && e.At-c.Latency >= created
+	})
 }
 
 func deleting(body json.RawMessage) bool {
@@ -197,10 +213,11 @@ func (h *honesty) seenSince(seen, write trace.Event) bool {
 	return seen.At > write.At
 }
 
-// ready reports whether a Seen event shows a live version m's ready accepts.
+// ready reports whether a Seen event shows a version m's ready accepts. It
+// ignores Seen.Deleted.
 func (h *honesty) ready(seen trace.Event, m Model) bool {
 	v, found := h.ix.VersionOf(seen.Seen.Ref, seen.Seen.RV)
-	return found && !seen.Seen.Deleted && satisfies(m.Ready, decode(v.Body))
+	return found && satisfies(m.Ready, decode(v.Body))
 }
 
 // judgeTrack fails a CR that stays ready for track after the controller
