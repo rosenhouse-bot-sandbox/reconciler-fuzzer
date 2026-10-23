@@ -54,8 +54,8 @@ type Values struct {
 type Launch struct {
 	Binary string
 	Args   []string
-	// Env overrides the environment the controller inherits. KUBECONFIG
-	// defaults to ${systems.kube.kubeconfig}.
+	// Env overrides the environment the controller inherits. An unset or
+	// empty KUBECONFIG is ${systems.kube.kubeconfig}.
 	Env map[string]string
 	// RBAC holds Role and ClusterRole manifests that the controller's
 	// identity is bound to.
@@ -338,8 +338,12 @@ func load(path string) (*Config, error) {
 		return nil, err
 	}
 	dir := filepath.Dir(abs)
-	env := map[string]string{"KUBECONFIG": "${systems.kube.kubeconfig}"}
+	env := map[string]string{}
 	maps.Copy(env, d.Launch.Env)
+	// client-go reads an empty KUBECONFIG as unset.
+	if env["KUBECONFIG"] == "" {
+		env["KUBECONFIG"] = "${systems.kube.kubeconfig}"
+	}
 	c := &Config{Launch: Launch{Args: d.Launch.Args, Env: env}}
 
 	if d.Launch.Binary == "" {
