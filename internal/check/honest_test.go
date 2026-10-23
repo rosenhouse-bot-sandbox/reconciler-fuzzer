@@ -244,9 +244,82 @@ func TestHonestPassesAReadyFromAStaleReadOfAGoneDependency(t *testing.T) {
 }
 
 func TestHonestFailsAReadyAfterSeeingItsDependencyDeleted(t *testing.T) {
+	for name, order := range map[string]func(r *tt.Script){
+		"the observer records the delete first": func(r *tt.Script) {
+			r.Delete(trace.GC, gadgetA).SeeDeleted(ctl, gadgetA).Ready(widgetA)
+		},
+		"the controller sees the delete first": func(r *tt.Script) {
+			r.SeeDeleted(ctl, gadgetA).Ready(widgetA).Delete(trace.GC, gadgetA)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := gadgetRun(trace.Dependency{Required: true})
+			order(r)
+			requireFinding(t, honest(t, r), "Honest", 0, noDependency, "kube/toy/widgets", "slot a")
+		})
+	}
+}
+
+// TestHonestSkipsADependencyTheControllerDeleted scales slot a down. The
+// controller deletes Gadget b, which it saw not ready, and then reports
+// ready on Gadget a. The delete's watch event and its observer record
+// each come before or after the ready write.
+func TestHonestSkipsADependencyTheControllerDeleted(t *testing.T) {
+	gadgetB := tt.Ref("toy/gadgets", "ns", "b")
+	watched := func(r *tt.Script) trace.Event {
+		e := tt.Seen(ctl, gadgetB, r.UID(gadgetB), "90")
+		e.Seen.Deleted = true
+		return e
+	}
+	recorded := func(r *tt.Script) trace.Event { return tt.Deleted(gadgetB, r.UID(gadgetB), "90", gadget(r, false)) }
+	for name, order := range map[string]func(r *tt.Script){
+		"both after the ready write":  func(r *tt.Script) { r.Ready(widgetA).Add(watched(r), recorded(r)) },
+		"the watch event first":       func(r *tt.Script) { r.Add(watched(r)).Ready(widgetA).Add(recorded(r)) },
+		"the observer record first":   func(r *tt.Script) { r.Add(recorded(r)).Ready(widgetA).Add(watched(r)) },
+		"both before the ready write": func(r *tt.Script) { r.Add(watched(r), recorded(r)).Ready(widgetA) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := gadgetRun(trace.Dependency{Required: true})
+			r.See(ctl, gadgetA)
+			r.Create(ctl, gadgetB, gadget(r, false))
+			r.See(ctl, gadgetB).Add(tt.Call(ctl, "delete", gadgetB, 200, "90"))
+			order(r)
+			requireNone(t, honest(t, r))
+		})
+	}
+}
+
+// The server can delete an object and lose the response.
+func TestHonestSkipsADependencyTheControllerDeletedWithAnUnknownOutcome(t *testing.T) {
 	r := gadgetRun(trace.Dependency{})
-	r.SeeDeleted(ctl, gadgetA).Ready(widgetA).Delete(trace.GC, gadgetA)
-	requireFinding(t, honest(t, r), "Honest", 0, beforeSeeing, "kube/toy/gadgets", "seen not ready")
+	r.Update(gadgetModel, gadgetA, gadget(r, false)).See(ctl, gadgetA)
+	dropped := tt.Call(ctl, "delete", gadgetA, 200, "90")
+	dropped.Call.Injected = trace.DropResponse
+	r.Add(dropped).Ready(widgetA)
+	requireNone(t, honest(t, r))
+}
+
+func TestHonestCountsADependencyTheControllerDidNotDelete(t *testing.T) {
+	for name, del := range map[string]func(r *tt.Script){
+		"the delete failed": func(r *tt.Script) { r.Call(ctl, "delete", gadgetA, 500) },
+		"the delete named a subresource": func(r *tt.Script) {
+			tagging := tt.Call(ctl, "delete", gadgetA, 204, "")
+			tagging.Call.Subresource = "tagging"
+			r.Add(tagging)
+		},
+		"the delete removed an earlier Gadget of that name": func(r *tt.Script) {
+			r.Delete(ctl, gadgetA)
+			r.Create(ctl, gadgetA, gadget(r, false))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := gadgetRun(trace.Dependency{Required: true})
+			r.Update(gadgetModel, gadgetA, gadget(r, false)).See(ctl, gadgetA)
+			del(r)
+			r.See(ctl, gadgetA).Ready(widgetA)
+			requireFinding(t, honest(t, r), "Honest", 0, beforeSeeing, "kube/toy/gadgets", "slot a", "gadgets.toy ns/a seen not ready")
+		})
+	}
 }
 
 func TestHonestCountsASeenOfTheWritesVersionRecordedBeforeItsResponse(t *testing.T) {
