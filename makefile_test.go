@@ -44,7 +44,7 @@ func TestMakeTargetsCoverEveryToy(t *testing.T) {
 }
 
 // TestVerifyGenerateChecksEveryToysGeneratedFiles runs verify-generate, without
-// generate, in a repository where each toy has one uncommitted file.
+// generate, on uncommitted files in a new repository.
 func TestVerifyGenerateChecksEveryToysGeneratedFiles(t *testing.T) {
 	dir := t.TempDir()
 	if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {

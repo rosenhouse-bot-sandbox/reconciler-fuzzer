@@ -84,7 +84,7 @@ help::
 	@echo "  fmt                               Fail if any file needs gofmt."
 	@echo "  vet                               Run go vet, envtest files included."
 	@echo "  test                              Run the unit tests, the size test and the bug-matrix check."
-	@echo "  test-envtest                      Run the envtest tests, the toy's gate included."
+	@echo "  test-envtest                      Run the envtest tests, the toys' gates included."
 	@echo "  test-generated                    Run the toys' generated plans under B0, and shrink one under B3."
 	@echo "  bug-matrix                        Rewrite docs/bug-matrix.md from the toys' gate tables."
 	@echo "  test-example-cert-manager         Run the cert-manager plans, seeds, negative control and #63 plan."
@@ -143,8 +143,9 @@ build:
 .PHONY: generate $(TOYS:%=generate-%)
 generate: $(TOYS:%=generate-%)
 
-# controller-gen reads the toy's whole tree, so its API packages may nest. It
-# writes each one's deepcopy code beside it, and the CRDs to the toy's crds/.
+# controller-gen reads the toy's whole tree, so an API package may sit at any
+# depth. It writes deepcopy code beside each API package, and CRDs to the toy's
+# crds/.
 $(TOYS:%=generate-%): generate-%:
 	go run sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_GEN_VERSION) \
 		object crd paths=./targets/$*/... output:crd:artifacts:config=targets/$*/crds
@@ -184,8 +185,8 @@ test-envtest: setup
 test-generated: setup
 	KUBEBUILDER_ASSETS="$$($(ENVTEST_USE))" go test -tags envtest -count=1 -p 2 -parallel 3 -timeout 50m -run '$(GENERATED)' $(TOY_PACKAGES)
 
-# Each toy's TestBugMatrixIsCurrent rewrites its own section of the file
-# under -update. -p 1 runs one toy at a time.
+# With -update, each toy's TestBugMatrixIsCurrent rewrites its own section of
+# docs/bug-matrix.md. -p 1 runs the toys one at a time, since they share the file.
 .PHONY: bug-matrix
 bug-matrix:
 	go test -count=1 -p 1 -run TestBugMatrixIsCurrent $(TOY_PACKAGES) -args -update

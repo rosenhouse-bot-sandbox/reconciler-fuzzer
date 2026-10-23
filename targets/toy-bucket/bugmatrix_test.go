@@ -107,8 +107,8 @@ func TestBugMatrixIsCurrent(t *testing.T) {
 	}
 }
 
-// spliceSection puts rendered in place of this toy's section of md, or at
-// its end.
+// spliceSection puts rendered in place of this toy's section of md, or
+// appends it if md has none.
 func spliceSection(md, rendered string) string {
 	head, rest, _ := strings.Cut(md, section)
 	if i := strings.Index(rest, "\n## "); i >= 0 {
