@@ -153,7 +153,8 @@ reads showed it. Each line names the CR's slot and the dependency:
   the controller never read the dependency after its last write to it;
   `seen not ready` means its last read showed it not ready.
 - `reported ready with no dependency`: under `dependency.required`, the
-  CR owned none.
+  CR owned none. A dependency the controller deleted, or last saw
+  deleted, does not count.
 - `stayed ready after seeing its dependency not ready`: the CR stayed
   ready longer than `track`.
 

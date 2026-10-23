@@ -126,8 +126,7 @@ outcomes included.
 /<c>/<id>` as `get`, `update`, `patch` and `delete`, for each collection `<c>`
 the listing names. A ref is `{system, resource: c, name: id}`; an object needs
 a string `id` and a `version`, its resourceVersion; its UID is
-`<system>/<c>/<id>`. Restore ignores `version`. Its error is `{"error":
-{"code", "message"}}`.
+`<system>/<c>/<id>`. Restore ignores `version`.
 
 **The `vault` and `s3` maps** read a Vault server's KV version 2 mounts, and an
 S3 server's buckets and objects. Their package comments define them. Paths and
@@ -497,3 +496,4 @@ Each entry changes a check, exception, `System` interface or ignore list.
 74. A fake's write without a resourceVersion is a change only if the observer saw one, for ACK.
 75. Restore ignores Vault's `current_version` and `versions`, and S3's `versionId`.
 76. `primary.periodic` paths name list items with `[*]`, so ACK exempts only condition stamps.
+77. Honest skips a dependency the controller deleted or last saw deleted, whatever the observer's lag, so a scale-down passes (#124).
