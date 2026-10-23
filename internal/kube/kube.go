@@ -61,8 +61,9 @@ type Options struct {
 	// Vars expand as ${key} in the fixtures, such as
 	// systems.vault.url.
 	Vars map[string]string
-	// Watch lists kinds the observer watches from the start. It adds any
-	// other kind a listener sees a request for.
+	// Watch lists kinds the observer watches from the start, as it does
+	// each installed CRD and each kind a fixture or the RBAC names. It adds
+	// any other kind a listener sees a request for.
 	Watch []schema.GroupVersionKind
 	// Seen lists the dependency kinds whose objects the controller
 	// listener records as Seen events.
@@ -193,25 +194,30 @@ func (k *Kube) start(ctx context.Context, env *system.Env) (system.Endpoints, er
 	if len(setup.missing) > 0 {
 		kinds = append(kinds, corev1.SchemeGroupVersion.WithKind("Namespace"))
 	}
-	var configured []schema.GroupResource
 	for _, gvk := range kinds {
 		mapping, err := k.mapping(gvk)
 		if err != nil {
 			return system.Endpoints{}, err
 		}
-		gr := mapping.Resource.GroupResource()
-		if err := k.observer.watch(gr); err != nil {
+		if err := k.observer.watch(mapping.Resource.GroupResource()); err != nil {
 			return system.Endpoints{}, err
 		}
-		configured = append(configured, gr)
+	}
+	// Watching each installed CRD lets a property see that it has no
+	// objects. One the observer cannot watch is left out of Kinds.
+	for _, crd := range k.env.CRDs {
+		k.observer.watch(schema.GroupResource{Group: crd.Spec.Group, Resource: crd.Spec.Names.Plural})
 	}
 	// A kind the RBAC names but the server lacks is watched once a listener
 	// sees a request for it.
 	for _, gr := range ruleKinds(roles, clusterRoles) {
 		k.observer.watch(gr)
-		configured = append(configured, gr)
 	}
-	k.kinds = declaredKinds(k.env.CRDs, configured, k.observer.watched())
+	// No listener has forwarded a request yet, so the observer watches only
+	// the kinds above.
+	for _, gvr := range k.observer.watched() {
+		k.kinds = append(k.kinds, trace.Ref{System: Name, Group: gvr.Group, Resource: gvr.Resource})
+	}
 	if err := k.createFixtures(ctx, setup.namespaces); err != nil {
 		return system.Endpoints{}, err
 	}
@@ -539,25 +545,9 @@ func (k *Kube) Subscribe(hear func(trace.Version)) {
 	k.observer.hear = append(k.observer.hear, hear)
 }
 
-// Kinds names each installed CRD and each kind Start watches, by a ref with
-// no namespace or name. Call it after Start.
+// Kinds names each kind Start watches, by a ref with no namespace or name.
+// Call it after Start.
 func (k *Kube) Kinds() []trace.Ref { return slices.Clone(k.kinds) }
-
-// declaredKinds names each CRD, and each configured kind the observer
-// watches.
-func declaredKinds(crds []*apiextensionsv1.CustomResourceDefinition, configured []schema.GroupResource, watched []schema.GroupVersionResource) []trace.Ref {
-	var kinds []trace.Ref
-	for _, crd := range crds {
-		kinds = append(kinds, trace.Ref{System: Name, Group: crd.Spec.Group, Resource: crd.Spec.Names.Plural})
-	}
-	for _, gvr := range watched {
-		if slices.Contains(configured, gvr.GroupResource()) {
-			kinds = append(kinds, trace.Ref{System: Name, Group: gvr.Group, Resource: gvr.Resource})
-		}
-	}
-	slices.SortFunc(kinds, trace.CompareRefs)
-	return slices.Compact(kinds)
-}
 
 // StatusKinds lists the installed CRDs' kinds that have a status
 // subresource. Call it after Start.

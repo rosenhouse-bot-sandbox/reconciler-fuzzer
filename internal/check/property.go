@@ -1,7 +1,6 @@
 package check
 
 import (
-	"cmp"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -115,9 +114,6 @@ func worldKeys(ix *trace.Index, w *owner.World) map[string]map[string]bool {
 		}
 		for _, kind := range run.Kinds {
 			add(kind)
-		}
-		for _, o := range run.Owns {
-			add(trace.Ref{System: cmp.Or(o.System, "kube"), Group: o.Kind.Group, Resource: o.Kind.Resource})
 		}
 	}
 	for _, i := range w.All() {

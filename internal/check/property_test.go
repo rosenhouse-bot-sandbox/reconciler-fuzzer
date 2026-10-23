@@ -145,16 +145,7 @@ var grants = trace.Ref{System: "kube", Group: "toy.reconciler-fuzzer", Resource:
 func TestADeclaredKindWithNoInstanceIsEmpty(t *testing.T) {
 	r := newRun(0)
 	r.Spec.Kinds = []trace.Ref{grants}
-	r.Spec.Systems = []trace.System{{Name: "cloud", API: "crud"}}
-	r.Spec.Owns = []trace.Owns{
-		{Kind: trace.Kind{Version: "v1", Kind: "Secret", Resource: "secrets"}, Name: "self.metadata.name"},
-		{System: "cloud", Kind: trace.Kind{Resource: "buckets"}, Name: "self.metadata.name"},
-	}
-	r.Spec.Properties = []trace.Property{
-		{Name: "no-stuck-grants", Expr: "world.kube['grants.toy.reconciler-fuzzer'].all(g, !has(g.metadata.deletionTimestamp))", When: "step"},
-		{Name: "no-secrets", Expr: "size(world.kube.secrets) == 0", When: "step"},
-		{Name: "no-buckets", Expr: "size(world.cloud.buckets) == 0", When: "step"},
-	}
+	r.Spec.Properties = []trace.Property{{Name: "no-stuck-grants", Expr: "world.kube['grants.toy.reconciler-fuzzer'].all(g, !has(g.metadata.deletionTimestamp))", When: "step"}}
 	r.Begin()
 	withChild(r, "a", true)
 	r.EndFaults().Settle()
@@ -163,6 +154,7 @@ func TestADeclaredKindWithNoInstanceIsEmpty(t *testing.T) {
 
 func TestAPropertyThatCannotBeEvaluated(t *testing.T) {
 	r := newRun(0)
+	// The run declares grants, but not secrets.
 	r.Spec.Kinds = []trace.Ref{grants}
 	r.Spec.Properties = []trace.Property{{Name: "typo", Expr: "size(world.kube.secrets) == 0", When: "always"}}
 	r.Begin()

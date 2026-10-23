@@ -215,9 +215,9 @@ systems:
 - `properties: [{name, expr, when}]` holds CEL that must hold at each settled step's end, or at
   every version with `when: always`. It sees `crs` and `world.<system>.<key>`, such as
   `world.kube.secrets`. Write one when the user names an invariant the checks cannot know, such
-  as "the Secret holds Vault's current value". Ask the user before adding one. A kind the run
-  declares always has a key, so a property needs no `'k' in world.kube` guard for it: a
-  `primary.owns` kind, or one the `run` event of `trace.jsonl` lists in `kinds`, such as an
+  as "the Secret holds Vault's current value". Ask the user before adding one. A kind the
+  harness watches from the start always has a key, so a property needs no `'k' in world.kube`
+  guard for it. The `run` event of `trace.jsonl` lists these kinds in `kinds`, such as each
   installed CRD.
 - `primary.periodic: {every, paths}` names the CR fields the controller rewrites on a timer,
   such as `status.refreshTime`, or `status.conditions[*].lastTransitionTime` for a field of

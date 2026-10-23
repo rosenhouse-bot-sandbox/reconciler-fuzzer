@@ -268,11 +268,9 @@ properties:
           && s.data.token == base64.encode(bytes(v.data.value)))))
 ```
 
-A kind the run declares maps to an empty list while no object of it exists. The `run` event of
-`trace.jsonl` lists the declared kube kinds in `kinds`: each installed CRD, and each kind the
-harness watches from the start, such as the primary's or one `launch.rbac` names. Each
-`primary.owns` kind is declared too, on kube or a fake. Any other kind has a key only if the
-run has an object of it.
+A kind the harness watches from the start, such as an installed CRD or a kind `launch.rbac`
+names, maps to an empty list while no object of it exists. The `run` event of `trace.jsonl`
+lists these kinds in `kinds`. Any other kind has a key only if the run has an object of it.
 
 `firstWrittenUnder(object, path)` names the CR that owned the object when its value at `path`
 first appeared, across deletes and recreates. cert-manager's `fresh-key` property uses it. A
