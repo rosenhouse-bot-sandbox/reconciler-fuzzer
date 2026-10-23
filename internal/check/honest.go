@@ -26,7 +26,7 @@ func Honest(ix *trace.Index, s Spec) []Finding {
 	if len(deps) == 0 {
 		return nil
 	}
-	h := &honesty{ix: ix, s: s, w: owner.New(ix, s.Owners), steps: ix.Steps(), found: map[findingKey]*Finding{}}
+	h := &honesty{ix: ix, s: s, w: owner.New(ix, s.Owners), steps: ix.Steps(), deletes: controllerDeletes(ix), found: map[findingKey]*Finding{}}
 	order, crs := crVersions(ix, s)
 	for _, uid := range order {
 		versions := crs[uid]
@@ -46,11 +46,12 @@ func Honest(ix *trace.Index, s Spec) []Finding {
 }
 
 type honesty struct {
-	ix    *trace.Index
-	s     Spec
-	w     *owner.World
-	steps []trace.StepSpan
-	found map[findingKey]*Finding
+	ix      *trace.Index
+	s       Spec
+	w       *owner.World
+	steps   []trace.StepSpan
+	deletes map[trace.Ref][]time.Duration
+	found   map[findingKey]*Finding
 }
 
 type findingKey struct {
@@ -147,16 +148,25 @@ func (h *honesty) appeared(i owner.Instance) time.Duration {
 	return i.Created
 }
 
-// controllerDeleted reports whether the controller sent a DELETE of i by t
-// that the server answered with a 2xx. A DELETE sent before i appeared does
-// not count, as it may have hit an earlier instance of i's ref.
+// controllerDeleted reports whether the controller sent a `delete` of i's
+// ref, with no subresource, by t, and the server answered with a 2xx. A
+// delete sent before i appeared does not count, as it may have hit an
+// earlier instance of i's ref.
 func (h *honesty) controllerDeleted(i owner.Instance, t time.Duration) bool {
 	appeared := h.appeared(i)
-	return slices.ContainsFunc(h.ix.Calls(trace.Controller, -1, math.MaxInt64), func(e trace.Event) bool {
-		c, sent := e.Call, e.At-e.Call.Latency
-		return c.Verb == "delete" && c.Subresource == "" && c.Object() == i.Ref && succeeded(*c) &&
-			sent >= appeared && sent <= t
-	})
+	return slices.ContainsFunc(h.deletes[i.Ref], func(sent time.Duration) bool { return sent >= appeared && sent <= t })
+}
+
+// controllerDeletes returns, by ref, the send times of the deletes that
+// controllerDeleted counts.
+func controllerDeletes(ix *trace.Index) map[trace.Ref][]time.Duration {
+	sent := map[trace.Ref][]time.Duration{}
+	for _, e := range ix.Calls(trace.Controller, -1, math.MaxInt64) {
+		if c := e.Call; c.Verb == "delete" && c.Subresource == "" && succeeded(*c) {
+			sent[c.Object()] = append(sent[c.Object()], e.At-c.Latency)
+		}
+	}
+	return sent
 }
 
 func deleting(body json.RawMessage) bool {
