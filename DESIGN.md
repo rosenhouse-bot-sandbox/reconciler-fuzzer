@@ -143,9 +143,9 @@ listeners and the observer, and creates the fixtures. Fixtures expand
 `${systems.<fake>.<key>}`. `Vars` holds `kubeconfig`, `namespace` and `url`.
 Harness actions return once the observer has recorded their effect. The
 system's poll interval is `stable`. The observer list-watches cluster-wide each
-kind the config, a fixture, `launch.rbac` or a CRD names (the run event's
-`kinds`), then any kind a listener records a call on, and records one `version`
-per (ref, resourceVersion). `Subscribe` hands each version to the models.
+CRD and each served kind the config, a fixture or `launch.rbac` names (the run
+event's `kinds`), then any kind a listener records a call on. It records one
+`version` per (ref, resourceVersion). `Subscribe` hands versions to the models.
 
 ## 7. Models and fake services
 

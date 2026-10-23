@@ -139,7 +139,6 @@ func TestPropertyVariables(t *testing.T) {
 	requireSummaries(t, judgeWith(t, r, check.Property), "1 property one-cr does not hold", "2 property one-cr does not hold")
 }
 
-// grants is the kind of the toy's Grant CRD.
 var grants = trace.Ref{System: "kube", Group: "toy.reconciler-fuzzer", Resource: "grants"}
 
 func TestADeclaredKindWithNoInstanceIsEmpty(t *testing.T) {

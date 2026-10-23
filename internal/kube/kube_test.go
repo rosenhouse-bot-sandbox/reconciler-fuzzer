@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -336,6 +337,39 @@ func TestObserverCannotWatchAKindTheMapperFindsInAnotherGroup(t *testing.T) {
 	// finds them in apps. The observer would record them as core objects.
 	if gvr, err := o.watchable(schema.GroupResource{Resource: "deployments"}); !gvr.Empty() || err != nil {
 		t.Errorf("watchable(deployments) = %v, %v, want nothing", gvr, err)
+	}
+}
+
+// gatheringMapper answers ResourceFor only once every caller has asked.
+type gatheringMapper struct {
+	staticMapper
+	callers *sync.WaitGroup
+}
+
+func (m gatheringMapper) ResourceFor(gvr schema.GroupVersionResource) (schema.GroupVersionResource, error) {
+	m.callers.Done()
+	m.callers.Wait()
+	return m.staticMapper.ResourceFor(gvr)
+}
+
+func TestObserverWatchesKindsTogether(t *testing.T) {
+	mapper := meta.NewDefaultRESTMapper(nil)
+	mapper.Add(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}, meta.RESTScopeNamespace)
+	mapper.Add(schema.GroupVersionKind{Version: "v1", Kind: "Secret"}, meta.RESTScopeNamespace)
+	kinds := []schema.GroupResource{{Resource: "configmaps"}, {Resource: "secrets"}}
+	var callers sync.WaitGroup
+	callers.Add(len(kinds))
+	// The server serves neither kind, so no informer starts.
+	o := &observer{mapper: gatheringMapper{staticMapper{mapper}, &callers}, discovery: servesDeployments{}, kinds: map[schema.GroupResource]schema.GroupVersionResource{}}
+	done := make(chan struct{})
+	go func() {
+		o.watchAll(kinds)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("watchAll watches one kind at a time")
 	}
 }
 

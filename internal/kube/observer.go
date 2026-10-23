@@ -116,10 +116,21 @@ func (o *observer) watch(gr schema.GroupResource) error {
 	return nil
 }
 
+// watchAll watches each of grs, and waits for their initial lists. The
+// watches run together, since the first list of a new CRD can take a second.
+// It leaves out a kind it cannot watch.
+func (o *observer) watchAll(grs []schema.GroupResource) {
+	var watches sync.WaitGroup
+	for _, gr := range grs {
+		watches.Go(func() { o.watch(gr) })
+	}
+	watches.Wait()
+}
+
 // watchable maps gr to its preferred version, or to nothing when the server
-// cannot list and watch it. The mapper finds a resource the core group
-// lacks, such as deployments, in another group. That maps to nothing too,
-// since see records versions under gr.
+// cannot list and watch it. It maps a resource that the mapper finds only in
+// another group, such as deployments asked for in the core group, to nothing,
+// because see records versions under gr.
 func (o *observer) watchable(gr schema.GroupResource) (schema.GroupVersionResource, error) {
 	partial := schema.GroupVersionResource{Group: gr.Group, Resource: gr.Resource}
 	gvr, err := o.mapper.ResourceFor(partial)

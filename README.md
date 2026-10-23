@@ -270,7 +270,8 @@ properties:
 
 A kind the harness watches from the start, such as an installed CRD or a kind `launch.rbac`
 names, maps to an empty list while no object of it exists. The `run` event of `trace.jsonl`
-lists these kinds in `kinds`. Any other kind has a key only if the trace holds an object of it.
+lists these kinds in `kinds`. Any other kind, and any fake collection, has a key only if the
+trace holds an object of it.
 
 `firstWrittenUnder(object, path)` names the CR that owned the object when its value at `path`
 first appeared, across deletes and recreates. cert-manager's `fresh-key` property uses it. A

@@ -218,7 +218,7 @@ systems:
   as "the Secret holds Vault's current value". Ask the user before adding one. A kind the
   harness watches from the start always has a key, so a property needs no `'k' in world.kube`
   guard for it. The `run` event of `trace.jsonl` lists these kinds in `kinds`, such as each
-  installed CRD.
+  installed CRD. Guard any other kind, or a fake collection, with `'k' in world.<system>`.
 - `primary.periodic: {every, paths}` names the CR fields the controller rewrites on a timer,
   such as `status.refreshTime`, or `status.conditions[*].lastTransitionTime` for a field of
   every list item. Name the narrowest path: a broader one also excuses real flapping. Without

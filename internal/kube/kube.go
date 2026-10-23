@@ -178,15 +178,6 @@ func (k *Kube) start(ctx context.Context, env *system.Env) (system.Endpoints, er
 	if err != nil {
 		return system.Endpoints{}, err
 	}
-	harness, err := k.listen(trace.Harness, admin)
-	if err != nil {
-		return system.Endpoints{}, err
-	}
-	k.harness, err = dynamic.NewForConfig(&rest.Config{Host: harness.URL(), QPS: -1})
-	if err != nil {
-		return system.Endpoints{}, err
-	}
-
 	kinds := slices.Clone(k.o.Watch)
 	for _, fixture := range fixtures {
 		kinds = append(kinds, fixture.GroupVersionKind())
@@ -204,19 +195,25 @@ func (k *Kube) start(ctx context.Context, env *system.Env) (system.Endpoints, er
 		}
 	}
 	// Watching each installed CRD lets a property see that it has no
-	// objects. One the observer cannot watch is left out of Kinds.
+	// objects. The observer cannot watch a CRD that serves no version, or a
+	// kind the RBAC names but the server lacks. It tries again once a
+	// listener sees a request for such a kind.
+	grs := ruleKinds(roles, clusterRoles)
 	for _, crd := range k.env.CRDs {
-		k.observer.watch(schema.GroupResource{Group: crd.Spec.Group, Resource: crd.Spec.Names.Plural})
+		grs = append(grs, schema.GroupResource{Group: crd.Spec.Group, Resource: crd.Spec.Names.Plural})
 	}
-	// A kind the RBAC names but the server lacks is watched once a listener
-	// sees a request for it.
-	for _, gr := range ruleKinds(roles, clusterRoles) {
-		k.observer.watch(gr)
-	}
-	// No listener has forwarded a request yet, so the observer watches only
-	// the kinds above.
+	k.observer.watchAll(grs)
+	// No listener exists yet, so the observer watches only the kinds above.
 	for _, gvr := range k.observer.watched() {
 		k.kinds = append(k.kinds, trace.Ref{System: Name, Group: gvr.Group, Resource: gvr.Resource})
+	}
+	harness, err := k.listen(trace.Harness, admin)
+	if err != nil {
+		return system.Endpoints{}, err
+	}
+	k.harness, err = dynamic.NewForConfig(&rest.Config{Host: harness.URL(), QPS: -1})
+	if err != nil {
+		return system.Endpoints{}, err
 	}
 	if err := k.createFixtures(ctx, setup.namespaces); err != nil {
 		return system.Endpoints{}, err
