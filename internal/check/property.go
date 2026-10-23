@@ -102,11 +102,11 @@ func (p *properties) times(property PropertySpec) []judgeTime {
 // any instance has.
 func worldKeys(ix *trace.Index, w *owner.World) map[string]map[string]bool {
 	keys := map[string]map[string]bool{"kube": {}}
-	add := func(kind trace.Ref) {
-		if keys[kind.System] == nil {
-			keys[kind.System] = map[string]bool{}
+	add := func(ref trace.Ref) {
+		if keys[ref.System] == nil {
+			keys[ref.System] = map[string]bool{}
 		}
-		keys[kind.System][worldKey(kind)] = true
+		keys[ref.System][worldKey(ref)] = true
 	}
 	if run, ok := ix.Run(); ok {
 		for _, system := range run.Systems {

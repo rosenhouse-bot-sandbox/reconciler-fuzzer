@@ -288,14 +288,14 @@ func TestKube(t *testing.T) {
 		if !slices.ContainsFunc(k.observer.watched(), func(gvr schema.GroupVersionResource) bool { return gvr.Resource == "secrets" }) {
 			t.Fatal("The observer does not watch secrets, which a controller call named.")
 		}
-		toy := func(resource string) trace.Ref {
+		crd := func(resource string) trace.Ref {
 			return trace.Ref{System: Name, Group: "toy.reconciler-fuzzer", Resource: resource}
 		}
 		want := []trace.Ref{
 			{System: Name, Resource: "configmaps"},
 			{System: Name, Resource: "namespaces"},
 			{System: Name, Group: "rbac.authorization.k8s.io", Resource: "clusterroles"},
-			toy("gadgets"), toy("grants"), toy("tenants"), toy("widgets"),
+			crd("gadgets"), crd("grants"), crd("tenants"), crd("widgets"),
 		}
 		if got := k.Kinds(); !slices.Equal(got, want) {
 			t.Errorf("Kinds = %+v, want %+v.", got, want)

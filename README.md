@@ -268,6 +268,10 @@ properties:
           && s.data.token == base64.encode(bytes(v.data.value)))))
 ```
 
+`world.kube` maps each installed CRD, and each kind that `primary`, `models`, `fixtures` or
+`launch.rbac` names, to an empty list while no object of it exists. Any other kind has a key
+only if the run has an object of it.
+
 `firstWrittenUnder(object, path)` names the CR that owned the object when its value at `path`
 first appeared, across deletes and recreates. cert-manager's `fresh-key` property uses it. A
 failing property's details say which instance and CR such a value came from.
