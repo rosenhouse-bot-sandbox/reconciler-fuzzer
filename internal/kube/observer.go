@@ -3,6 +3,7 @@ package kube
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -118,13 +119,19 @@ func (o *observer) watch(gr schema.GroupResource) error {
 
 // watchAll watches each of grs, and waits for their initial lists. The
 // watches run together, since the first list of a new CRD can take a second.
-// It leaves out a kind it cannot watch.
-func (o *observer) watchAll(grs []schema.GroupResource) {
+// It returns their errors, except for a kind the server does not serve.
+func (o *observer) watchAll(grs []schema.GroupResource) error {
+	errs := make([]error, len(grs))
 	var watches sync.WaitGroup
-	for _, gr := range grs {
-		watches.Go(func() { o.watch(gr) })
+	for i, gr := range grs {
+		watches.Go(func() {
+			if err := o.watch(gr); !meta.IsNoMatchError(err) {
+				errs[i] = err
+			}
+		})
 	}
 	watches.Wait()
+	return errors.Join(errs...)
 }
 
 // watchable maps gr to its preferred version, or to nothing when the server

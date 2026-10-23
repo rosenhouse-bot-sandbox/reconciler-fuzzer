@@ -373,6 +373,23 @@ func TestObserverWatchesKindsTogether(t *testing.T) {
 	}
 }
 
+// slowFailingDiscovery fails each group version after a pause.
+type slowFailingDiscovery struct{ discovery.DiscoveryInterface }
+
+func (slowFailingDiscovery) ServerResourcesForGroupVersion(string) (*metav1.APIResourceList, error) {
+	time.Sleep(20 * time.Millisecond)
+	return nil, errors.New("discovery failed")
+}
+
+func TestObserverReportsWatchErrorsOtherThanNoMatch(t *testing.T) {
+	o := &observer{mapper: newStaticMapper(), discovery: slowFailingDiscovery{}, kinds: map[schema.GroupResource]schema.GroupVersionResource{}}
+	// The mapper knows no widgets.
+	err := o.watchAll([]schema.GroupResource{{Resource: "configmaps"}, {Group: "toy", Resource: "widgets"}})
+	if err == nil || !strings.Contains(err.Error(), "discovery failed") || strings.Contains(err.Error(), "widgets") {
+		t.Errorf("watchAll = %v, want the discovery error alone", err)
+	}
+}
+
 func TestWaitGoneReturnsAnErrorOtherThanNotFound(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

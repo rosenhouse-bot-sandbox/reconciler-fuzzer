@@ -112,8 +112,7 @@ then aborts the client's connection. `killAfter` also kills the controller,
 harness-caused, before aborting. Neither picks or counts a watch. `holdWatch`
 names a kube kind by `group` and `resource`, and picks no request: while it
 lasts, every controller watch of the kind forwards nothing, and at its end each
-stream delivers what it held, in order. Its fault event's `hold` names the
-kind.
+stream delivers what it held, in order.
 
 **Seen.** A listener records a `seen` for each object of its `Seen` kinds, or
 of every kind with `SeenAll`, that a 2xx response shows its caller. An
@@ -143,9 +142,10 @@ listeners and the observer, and creates the fixtures. Fixtures expand
 `${systems.<fake>.<key>}`. `Vars` holds `kubeconfig`, `namespace` and `url`.
 Harness actions return once the observer has recorded their effect. The
 system's poll interval is `stable`. The observer list-watches cluster-wide each
-CRD and each served kind the config, a fixture or `launch.rbac` names (the run
-event's `kinds`), then any kind a listener records a call on. It records one
-`version` per (ref, resourceVersion). `Subscribe` hands versions to the models.
+installed CRD and each served kind the config, a fixture or `launch.rbac`
+names, except ignored kinds (§10). These are the run event's `kinds`. It then
+watches any kind a listener records a call on, and records one `version` per
+(ref, resourceVersion).
 
 ## 7. Models and fake services
 
