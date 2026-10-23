@@ -293,11 +293,12 @@ func TestRuleKindsSkipsWildcardsSubresourcesAndIgnoredKinds(t *testing.T) {
 	}
 }
 
-// staticMapper is a RESTMapper that knows ConfigMaps only.
+// staticMapper is a RESTMapper whose Reset does nothing.
 type staticMapper struct{ meta.RESTMapper }
 
 func (staticMapper) Reset() {}
 
+// newStaticMapper knows ConfigMaps only.
 func newStaticMapper() staticMapper {
 	mapper := meta.NewDefaultRESTMapper(nil)
 	mapper.Add(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}, meta.RESTScopeNamespace)

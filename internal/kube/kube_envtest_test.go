@@ -79,7 +79,7 @@ func TestKube(t *testing.T) {
 		CRDs:     []string{toy + "crds"},
 		RBAC:     []string{toy + "rbac/role.yaml", "testdata/role-elsewhere.yaml"},
 		Fixtures: []string{toy + "widget-config.yaml", "testdata/scoped-fixtures.yaml"},
-		Watch:    []schema.GroupVersionKind{widgetGVK},
+		Watch:    []schema.GroupVersionKind{widgetGVK, {Group: "apps", Version: "v1", Kind: "Deployment"}},
 		Seen:     []schema.GroupVersionKind{widgetGVK},
 		Warm:     []map[string]any{{"apiVersion": "toy.reconciler-fuzzer/v1", "kind": "Widget", "metadata": map[string]any{"name": "warm"}, "spec": map[string]any{"count": int64(1)}}},
 	})
@@ -291,6 +291,7 @@ func TestKube(t *testing.T) {
 		want := []trace.Ref{
 			{System: Name, Resource: "configmaps"},
 			{System: Name, Resource: "namespaces"},
+			{System: Name, Group: "apps", Resource: "deployments"}, // Only Watch names it.
 			{System: Name, Group: "batch", Resource: "cronjobs"},
 			{System: Name, Group: "rbac.authorization.k8s.io", Resource: "clusterroles"},
 			toyCRD("gadgets"), toyCRD("grants"), toyCRD("tenants"), toyCRD("widgets"),
