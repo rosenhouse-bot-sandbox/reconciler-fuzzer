@@ -97,7 +97,6 @@ launch:
   binary: ../../bin/manager
   args: [--leader-elect=false, --health-probe-bind-address=0, --metrics-bind-address=0]
   env:
-    KUBECONFIG: ${systems.kube.kubeconfig}
     WATCH_NAMESPACE: ${systems.kube.namespace}
     ENABLE_WEBHOOKS: "false"
   rbac: [../../config/rbac/role.yaml]
@@ -126,8 +125,9 @@ Fill each key from the project:
 
 - `launch.args` and `env`: drop each flag and variable the controller does not read. `0` turns
   off fixed ports, so runs cannot clash. Only `${systems.kube.kubeconfig}`, `namespace` and
-  `url`, and each fake's `${systems.<name>.url}`, expand. Pass the kubeconfig as a flag if the
-  controller does not read `KUBECONFIG`.
+  `url`, and each fake's `${systems.<name>.url}`, expand. `KUBECONFIG` defaults to
+  `${systems.kube.kubeconfig}`. Pass the kubeconfig as a flag if the controller does not read
+  `KUBECONFIG`.
 - `launch.rbac`: the Roles and ClusterRoles the controller runs with. Generation draws faults
   from the requests they grant. For another namespace, use a ClusterRole, or a Role with
   `metadata.namespace`.

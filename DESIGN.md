@@ -359,7 +359,7 @@ against the file's directory. `config.go` documents each key.
 launch:
   binary: ../../bin/toy-bucket
   args: [--bug=0]
-  env: {KUBECONFIG: "${systems.kube.kubeconfig}", CLOUD_ENDPOINT: "${systems.cloud.url}"}
+  env: {CLOUD_ENDPOINT: "${systems.cloud.url}"}   # KUBECONFIG defaults to ${systems.kube.kubeconfig}
   rbac: [rbac/role.yaml]
 crds: [crds/]
 primary:
