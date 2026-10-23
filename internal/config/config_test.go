@@ -141,16 +141,17 @@ func TestDefaults(t *testing.T) {
 
 func TestLaunchEnvKubeconfigDefaultsToTheHarnessKubeconfig(t *testing.T) {
 	for name, c := range map[string]struct {
-		env  string
-		want map[string]string
+		launch string
+		want   map[string]string
 	}{
-		"no env":         {"", map[string]string{"KUBECONFIG": "${systems.kube.kubeconfig}"}},
-		"other env":      {"  env: {X: x}\n", map[string]string{"KUBECONFIG": "${systems.kube.kubeconfig}", "X": "x"}},
-		"own KUBECONFIG": {"  env: {KUBECONFIG: /etc/kubeconfig}\n", map[string]string{"KUBECONFIG": "/etc/kubeconfig"}},
-		"empty":          {"  env: {KUBECONFIG: ''}\n", map[string]string{"KUBECONFIG": "${systems.kube.kubeconfig}"}},
+		"no env":           {"", map[string]string{"KUBECONFIG": "${systems.kube.kubeconfig}"}},
+		"other env":        {"  env: {X: x}\n", map[string]string{"KUBECONFIG": "${systems.kube.kubeconfig}", "X": "x"}},
+		"own KUBECONFIG":   {"  env: {KUBECONFIG: /etc/kubeconfig}\n", map[string]string{"KUBECONFIG": "/etc/kubeconfig"}},
+		"empty":            {"  env: {KUBECONFIG: ''}\n", map[string]string{"KUBECONFIG": "${systems.kube.kubeconfig}"}},
+		"--kubeconfig arg": {"  args: [--kubeconfig=/etc/kubeconfig]\n", map[string]string{"KUBECONFIG": "${systems.kube.kubeconfig}"}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			loaded, err := config.Load(writeConfig(t, strings.Replace(minimal(t), "launch:\n", "launch:\n"+c.env, 1)))
+			loaded, err := config.Load(writeConfig(t, strings.Replace(minimal(t), "launch:\n", "launch:\n"+c.launch, 1)))
 			if err != nil {
 				t.Fatal(err)
 			}
