@@ -21,6 +21,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 
@@ -311,6 +312,29 @@ func TestObserverRetriesAKindItCouldNotMap(t *testing.T) {
 	}
 	if _, kept := o.kinds[gr]; kept {
 		t.Error("the observer keeps a kind it could not map, so it never tries it again")
+	}
+}
+
+// servesDeployments is a discovery client whose every group version serves
+// deployments.
+type servesDeployments struct{ discovery.DiscoveryInterface }
+
+func (servesDeployments) ServerResourcesForGroupVersion(string) (*metav1.APIResourceList, error) {
+	return &metav1.APIResourceList{APIResources: []metav1.APIResource{{Name: "deployments", Verbs: []string{"list", "watch"}}}}, nil
+}
+
+func TestObserverCannotWatchAKindTheMapperFindsInAnotherGroup(t *testing.T) {
+	mapper := meta.NewDefaultRESTMapper(nil)
+	mapper.Add(schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}, meta.RESTScopeNamespace)
+	o := &observer{mapper: staticMapper{mapper}, discovery: servesDeployments{}}
+	want := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+	if gvr, err := o.watchable(want.GroupResource()); gvr != want || err != nil {
+		t.Errorf("watchable(deployments.apps) = %v, %v, want %v", gvr, err, want)
+	}
+	// An RBAC rule can name deployments in the core group, and the mapper
+	// finds them in apps. The observer would record them as core objects.
+	if gvr, err := o.watchable(schema.GroupResource{Resource: "deployments"}); !gvr.Empty() || err != nil {
+		t.Errorf("watchable(deployments) = %v, %v, want nothing", gvr, err)
 	}
 }
 

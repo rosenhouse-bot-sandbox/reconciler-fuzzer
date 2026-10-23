@@ -145,7 +145,10 @@ var grants = trace.Ref{System: "kube", Group: "toy.reconciler-fuzzer", Resource:
 func TestADeclaredKindWithNoInstanceIsEmpty(t *testing.T) {
 	r := newRun(0)
 	r.Spec.Kinds = []trace.Ref{grants}
-	r.Spec.Properties = []trace.Property{{Name: "no-stuck-grants", Expr: "world.kube['grants.toy.reconciler-fuzzer'].all(g, !has(g.metadata.deletionTimestamp))", When: "step"}}
+	r.Spec.Properties = []trace.Property{
+		{Name: "no-stuck-grants", Expr: "world.kube['grants.toy.reconciler-fuzzer'].all(g, !has(g.metadata.deletionTimestamp))", When: "step"},
+		{Name: "no-grants", Expr: "size(world.kube['grants.toy.reconciler-fuzzer']) == 0", When: "always"},
+	}
 	r.Begin()
 	withChild(r, "a", true)
 	r.EndFaults().Settle()

@@ -75,7 +75,8 @@ assigns `Seq`, a total order, and `At`, the time since the run started. Each
 event sets one field: `run` (the config the checks need, after the fixtures),
 `phase`, `action`, `fault`, `call`, `watchEnd`, `version` (an observed body),
 `work` (a model's or fake's pending work), `seen` (what a response showed a
-caller, §5) or `proc` (a controller start or exit). `event.go` documents each.
+caller, §5) or `proc` (a controller start or exit). `trace/event.go` documents
+each.
 
 A `Ref` is `{system, group, resource, namespace, name}`. The trace stores
 bodies, not readiness or gone states, so `judge` rejudges an old trace under a
@@ -142,10 +143,10 @@ name, and `update` otherwise.
 listeners and the observer, and creates the fixtures. Fixtures expand
 `${systems.<fake>.<key>}`. `Vars` holds `kubeconfig`, `namespace` and `url`.
 Harness actions return once the observer has recorded their effect. The
-system's poll interval is `stable`. The observer list-watches kinds
-cluster-wide, from the configured kinds, each installed CRD and any kind a
-listener records a call on, and records one `version` per (ref,
-resourceVersion). `Subscribe` hands each version to the models.
+system's poll interval is `stable`. The observer list-watches cluster-wide each
+kind the config, a fixture, `launch.rbac` or a CRD names (the run event's
+`kinds`), then any kind a listener records a call on, and records one `version`
+per (ref, resourceVersion). `Subscribe` hands each version to the models.
 
 ## 7. Models and fake services
 
@@ -339,13 +340,12 @@ failing request in a tight loop`. It skips 409s on a held kind until `stable /
 `always` one at each `version` event. Its CEL sees `crs`, the live CRs' bodies,
 and `world.<system>.<key>`, the live instances' bodies, where a key is
 `<resource>` or `<resource>.<group>` on kube and the collection on a fake. Each
-kind the observer watches from the start, which the run event's `kinds` lists,
-is a key even with no instance. `firstWrittenUnder(object, path)` takes a kube
-body and a list of keys. It finds the earliest version of the object's ref, of
-any instance, with the object's value at the path, and returns the UID of that
-version's owning CR by rules 1 to 3, or `""`; a finding's details say where
-such values came from. The string and base64 CEL extensions apply. Summaries:
-`property <name> does not hold`, `could not be evaluated`.
+kind in the run event's `kinds` has a key. `firstWrittenUnder(object, path)`
+takes a kube body and a list of keys. It finds the earliest version of the
+object's ref, of any instance, with the object's value at the path, and returns
+the UID of that version's owning CR by rules 1 to 3, or `""`; a finding's
+details say where such values came from. The string and base64 CEL extensions
+apply. Summaries: `property <name> does not hold`, `could not be evaluated`.
 
 **Corpus.** `check/testdata/corpus/` holds traces of known bugs and false
 positives (`corpus_test.go`).

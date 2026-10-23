@@ -117,7 +117,9 @@ func (o *observer) watch(gr schema.GroupResource) error {
 }
 
 // watchable maps gr to its preferred version, or to nothing when the server
-// cannot list and watch it.
+// cannot list and watch it. The mapper finds a resource the core group
+// lacks, such as deployments, in another group. That maps to nothing too,
+// since see records versions under gr.
 func (o *observer) watchable(gr schema.GroupResource) (schema.GroupVersionResource, error) {
 	partial := schema.GroupVersionResource{Group: gr.Group, Resource: gr.Resource}
 	gvr, err := o.mapper.ResourceFor(partial)
@@ -127,6 +129,9 @@ func (o *observer) watchable(gr schema.GroupResource) (schema.GroupVersionResour
 	}
 	if err != nil {
 		return schema.GroupVersionResource{}, fmt.Errorf("mapping %s: %w", gr, err)
+	}
+	if gvr.GroupResource() != gr {
+		return schema.GroupVersionResource{}, nil
 	}
 	resources, err := o.discovery.ServerResourcesForGroupVersion(gvr.GroupVersion().String())
 	if err != nil {

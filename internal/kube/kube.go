@@ -545,8 +545,8 @@ func (k *Kube) Subscribe(hear func(trace.Version)) {
 	k.observer.hear = append(k.observer.hear, hear)
 }
 
-// Kinds names each kind Start watches, by a ref with no namespace or name.
-// Call it after Start.
+// Kinds names each kind the observer watches from the start, by a ref with
+// no namespace or name. Call it after Start.
 func (k *Kube) Kinds() []trace.Ref { return slices.Clone(k.kinds) }
 
 // StatusKinds lists the installed CRDs' kinds that have a status

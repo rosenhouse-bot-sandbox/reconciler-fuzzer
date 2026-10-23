@@ -92,8 +92,8 @@ timeouts: {settle: 10s, stable: 1s}
 }
 
 // TestAPropertyOverAnInstalledCRDWithNoObjectHolds runs a property over the
-// toy's grants CRD, which the run event lists in kinds. The controller only
-// lists widgets, so no Grant exists.
+// toy's grants CRD, which the run event in trace.jsonl lists in kinds. The
+// controller only lists widgets, so no Grant exists.
 func TestAPropertyOverAnInstalledCRDWithNoObjectHolds(t *testing.T) {
 	toyDir, err := filepath.Abs(toy)
 	if err != nil {
