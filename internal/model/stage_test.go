@@ -359,33 +359,38 @@ func TestStuckKeepsMatchingObjectsNotReadyUntilItEnds(t *testing.T) {
 	}
 }
 
-func TestStuckWritesTheStuckStatusUntilItEnds(t *testing.T) {
+func TestStuckReplacesTheStatusFieldsUntilItEnds(t *testing.T) {
 	for name, c := range map[string]struct {
-		status, stuckStatus, stuckWrite, endWrite string
+		status, stuckStatus, readyWrite, stuckWrite string
 	}{
 		"a Pod":     {`{"phase":"Running"}`, `{"phase":"Running"}`, `{"phase":"Running"}`, `{"phase":"Running"}`},
-		"a PVC":     {`{"phase":"Bound"}`, `{"phase":"Pending"}`, `{"phase":"Pending"}`, `{"phase":"Bound"}`},
-		"a Job":     {`{"succeeded":1}`, `{"active":1}`, `{"active":1,"succeeded":null}`, `{"active":null,"succeeded":1}`},
-		"a Service": {`{"loadBalancer":{"ingress":[{"ip":"10.0.0.1"}]}}`, `{"loadBalancer":{}}`, `{"loadBalancer":{"ingress":null}}`, `{"loadBalancer":{"ingress":[{"ip":"10.0.0.1"}]}}`},
+		"a PVC":     {`{"phase":"Bound"}`, `{"phase":"Pending"}`, `{"phase":"Bound"}`, `{"phase":"Pending"}`},
+		"a Job":     {`{"succeeded":1}`, `{"active":1}`, `{"active":null,"succeeded":1}`, `{"active":1,"succeeded":null}`},
+		"a Service": {`{"loadBalancer":{"ingress":[{"ip":"10.0.0.1"}]}}`, `{"loadBalancer":{}}`, `{"loadBalancer":{"ingress":[{"ip":"10.0.0.1"}]}}`, `{"loadBalancer":{"ingress":null}}`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s, w, _ := testStageWith(t, jsonObject(t, c.status), jsonObject(t, c.stuckStatus))
-			g := gadget{name: "g", uid: "u", rv: "1", generation: 1, ready: readyFor(1)}
+			g := gadget{name: "g", uid: "u", rv: "1", generation: 1}
+			s.hear(g.version())
+			readyWrite := w.await(t, 1)[0]
+			g.rv, g.ready = readyWrite.rv, readyFor(1)
 			s.hear(g.version())
 			end, err := s.Fault(stuck(""))
 			if err != nil {
 				t.Fatal(err)
 			}
-			stuckWrite := w.await(t, 1)[0]
+			stuckWrite := w.await(t, 2)[1]
 			g.rv, g.ready = stuckWrite.rv, &condition{"False", "Stuck", 1}
 			s.hear(g.version())
 			end()
-			endWrite := w.await(t, 2)[1]
-			if ready, got := readyCondition(t, stuckWrite)["status"], literalFields(stuckWrite); ready != "False" || got != c.stuckWrite {
-				t.Errorf("The stuck write set Ready %v and %s, want False and %s.", ready, got, c.stuckWrite)
-			}
-			if ready, got := readyCondition(t, endWrite)["status"], literalFields(endWrite); ready != "True" || got != c.endWrite {
-				t.Errorf("The end's write set Ready %v and %s, want True and %s.", ready, got, c.endWrite)
+			endWrite := w.await(t, 3)[2]
+			for _, want := range []struct {
+				name, ready, fields string
+				write               write
+			}{{"first", "True", c.readyWrite, readyWrite}, {"stuck", "False", c.stuckWrite, stuckWrite}, {"end's", "True", c.readyWrite, endWrite}} {
+				if ready, fields := readyCondition(t, want.write)["status"], literalFields(want.write); ready != want.ready || fields != want.fields {
+					t.Errorf("The %s write set Ready %v and %s, want %s and %s.", want.name, ready, fields, want.ready, want.fields)
+				}
 			}
 		})
 	}

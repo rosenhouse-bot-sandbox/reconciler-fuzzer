@@ -70,8 +70,8 @@ List the kinds it watches, reads and creates. For each, note who sets its status
 - Another controller, such as a CRD's from another project: it needs a `models:` entry
   (step 4).
 - A Pod's kubelet, a Job's or a PVC's controller: a model sets only a `Ready` condition and
-  literal `status:` fields, such as `{phase: Bound}`. If the controller reads more than that,
-  tell the user.
+  literal `status:` fields, such as `{phase: Bound}`, or `stuckStatus:` fields under a `stuck`
+  fault, such as `{phase: Pending}`. If the controller reads more than that, tell the user.
 - A Deployment's, StatefulSet's, DaemonSet's or ReplicaSet's controller: a model cannot set
   `status.observedGeneration` or replica counts that follow the spec. Tell the user that
   reconciler-fuzzer cannot test this controller yet.
@@ -157,7 +157,9 @@ Fill each key from the project:
   dependencies, so leave `dependency` off a kind the CR names by reference, such as an
   issuer or a store. `required: false` allows a CR to be ready with none. Set `track` when the
   controller should notice a dependency going not ready. `status:` adds literal fields to each
-  status write the model makes; it replaces the whole `conditions` list.
+  status write the model makes; it replaces the whole `conditions` list. `stuckStatus:`
+  replaces those fields while a `stuck` fault lasts, and defaults to `status:`. Set it when
+  `status:` means done, such as `{phase: Bound}`, or the controller never sees the fault.
 - `budgets` and `timeouts`: leave them out at first. Raise `timeouts.settle` for a slow
   controller, and `stable` for one that requeues with a delay by design. Ask the user first.
 
