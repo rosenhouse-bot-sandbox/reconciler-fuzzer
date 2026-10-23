@@ -15,7 +15,8 @@ func TestCacheOptionsFollowTheWatchNamespace(t *testing.T) {
 	if got := cacheOptions(""); got.DefaultNamespaces != nil {
 		t.Errorf("no namespace gave %v", got.DefaultNamespaces)
 	}
-	if got := cacheOptions("ns"); len(got.DefaultNamespaces) != 1 {
-		t.Errorf("ns gave %v", got.DefaultNamespaces)
+	got := cacheOptions("ns").DefaultNamespaces
+	if _, ok := got["ns"]; !ok || len(got) != 1 {
+		t.Errorf("ns gave %v", got)
 	}
 }

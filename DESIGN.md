@@ -442,11 +442,11 @@ a Cluster owns modelled third-party Volumes, a Database names a Cluster, and a
 User a Database. Its bugs start at B100, and `database/` fuzzes Databases.
 
 Each config's `plans/` holds its gated bugs' and B0's plans. A toy's
-`gate_envtest_test.go` runs `gate_test.go`'s gate, and its `bugmatrix_test.go`
-renders the gate as its own section of `docs/bug-matrix.md`. B0 gives no
-findings and no notes on every committed plan, and no findings on the first 20
-seeds of each config (toy-bucket: the first 20 that draw a fault on `cloud`;
-toy-fleet: of `config.yaml` only, because of #128).
+`gate_envtest_test.go` runs `gate_test.go`'s bug rows and B0, and its
+`bugmatrix_test.go` renders them as its own section of `docs/bug-matrix.md`. B0
+gives no findings and no notes on every committed plan, and no findings on the
+first 20 seeds of each config (toy-bucket: the first 20 that draw a fault on
+`cloud`; toy-fleet: of `config.yaml` only, because of #128).
 
 **Examples.** `examples/<name>` adopts cert-manager, external-secrets on Vault,
 and ACK's s3-controller on moto. Plans and listed seeds give no findings,

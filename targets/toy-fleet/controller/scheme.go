@@ -21,6 +21,9 @@ const (
 	databaseRefField = "spec.databaseRef"
 )
 
+func clusterRef(o client.Object) []string  { return []string{o.(*fleetv1.Database).Spec.ClusterRef} }
+func databaseRef(o client.Object) []string { return []string{o.(*fleetv1.User).Spec.DatabaseRef} }
+
 // NewScheme registers the built-in kinds, the fleet's and the Volume.
 func NewScheme() (*runtime.Scheme, error) {
 	scheme := runtime.NewScheme()
@@ -36,14 +39,10 @@ func NewScheme() (*runtime.Scheme, error) {
 func Setup(m ctrl.Manager, bug Bug) error {
 	ctx := context.Background()
 	indexer := m.GetFieldIndexer()
-	if err := indexer.IndexField(ctx, &fleetv1.Database{}, clusterRefField, func(o client.Object) []string {
-		return []string{o.(*fleetv1.Database).Spec.ClusterRef}
-	}); err != nil {
+	if err := indexer.IndexField(ctx, &fleetv1.Database{}, clusterRefField, clusterRef); err != nil {
 		return fmt.Errorf("indexing Databases: %w", err)
 	}
-	if err := indexer.IndexField(ctx, &fleetv1.User{}, databaseRefField, func(o client.Object) []string {
-		return []string{o.(*fleetv1.User).Spec.DatabaseRef}
-	}); err != nil {
+	if err := indexer.IndexField(ctx, &fleetv1.User{}, databaseRefField, databaseRef); err != nil {
 		return fmt.Errorf("indexing Users: %w", err)
 	}
 	base := reconciler{Client: m.GetClient(), APIReader: m.GetAPIReader(), Scheme: m.GetScheme(), Bug: bug}

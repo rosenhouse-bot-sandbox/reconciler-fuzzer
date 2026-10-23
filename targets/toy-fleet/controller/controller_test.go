@@ -22,22 +22,29 @@ import (
 const ns = "ns"
 
 type fleet struct {
-	t                         *testing.T
-	c                         client.Client
-	clusters, databases, user reconcile.Reconciler
+	t         *testing.T
+	c         client.Client
+	clusters  *ClusterReconciler
+	databases *DatabaseReconciler
+	users     *UserReconciler
 }
 
-func newFleet(t *testing.T, objects ...client.Object) *fleet {
+func newClient(t *testing.T, objects ...client.Object) client.Client {
+	t.Helper()
 	scheme, err := NewScheme()
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).
+	return fake.NewClientBuilder().WithScheme(scheme).
 		WithStatusSubresource(&fleetv1.Cluster{}, &fleetv1.Database{}, &fleetv1.User{}, &storagev1.Volume{}).
-		WithIndex(&fleetv1.Database{}, clusterRefField, func(o client.Object) []string { return []string{o.(*fleetv1.Database).Spec.ClusterRef} }).
-		WithIndex(&fleetv1.User{}, databaseRefField, func(o client.Object) []string { return []string{o.(*fleetv1.User).Spec.DatabaseRef} }).
+		WithIndex(&fleetv1.Database{}, clusterRefField, clusterRef).
+		WithIndex(&fleetv1.User{}, databaseRefField, databaseRef).
 		WithObjects(objects...).Build()
-	base := reconciler{Client: c, APIReader: c, Scheme: scheme}
+}
+
+func newFleet(t *testing.T, objects ...client.Object) *fleet {
+	c := newClient(t, objects...)
+	base := reconciler{Client: c, APIReader: c, Scheme: c.Scheme()}
 	return &fleet{t, c, &ClusterReconciler{base}, &DatabaseReconciler{base}, &UserReconciler{base}}
 }
 
@@ -48,7 +55,7 @@ func (f *fleet) reconcileOnce(r reconcile.Reconciler, name string) {
 	}
 }
 
-// settle reconciles name with r until it stops changing anything.
+// settle reconciles name with r ten times, enough for every fleet here.
 func (f *fleet) settle(r reconcile.Reconciler, name string) {
 	f.t.Helper()
 	for range 10 {
@@ -103,6 +110,14 @@ func (f *fleet) delete(obj client.Object) {
 	if err := f.c.Delete(f.t.Context(), obj); err != nil {
 		f.t.Fatal(err)
 	}
+}
+
+// deleting marks o deleted, and held by finalizer.
+func deleting[T client.Object](o T, finalizer string) T {
+	now := metav1.Now()
+	o.SetFinalizers([]string{finalizer})
+	o.SetDeletionTimestamp(&now)
+	return o
 }
 
 func clusterObj() *fleetv1.Cluster {
@@ -251,7 +266,7 @@ func TestDatabaseWaitsForItsClusterAndHoldsDeletionForUsers(t *testing.T) {
 	elsewhere := &fleetv1.User{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "bob"}, Spec: fleetv1.UserSpec{DatabaseRef: "other"}}
 	f := newFleet(t, databaseObj(), userObj(), elsewhere)
 	f.settle(f.databases, "db")
-	f.settle(f.user, "alice")
+	f.settle(f.users, "alice")
 	db := &fleetv1.Database{}
 	if err := f.get("db", db); err != nil || db.Status.Phase != fleetv1.Pending || db.Status.Message != "waiting for Cluster cluster" {
 		t.Fatalf("Without a Cluster, the Database is %+v, %v.", db.Status, err)
@@ -272,7 +287,7 @@ func TestDatabaseWaitsForItsClusterAndHoldsDeletionForUsers(t *testing.T) {
 	f.readyVolumes()
 	f.settle(f.clusters, "cluster")
 	f.settle(f.databases, "db")
-	f.settle(f.user, "alice")
+	f.settle(f.users, "alice")
 	cm := &corev1.ConfigMap{}
 	if err := f.get("db-db", cm); err != nil || cm.Data["engine"] != "postgres" || !metav1.IsControlledBy(cm, db) {
 		t.Fatalf("The Database's ConfigMap is %v, owned by %v, %v.", cm.Data, cm.OwnerReferences, err)
@@ -306,7 +321,7 @@ func TestADeletingClusterHostsOnlyReadyDatabases(t *testing.T) {
 
 func TestUserWaitsForItsDatabase(t *testing.T) {
 	f := newFleet(t, userObj())
-	f.settle(f.user, "alice")
+	f.settle(f.users, "alice")
 	user := &fleetv1.User{}
 	if err := f.get("alice", user); err != nil || user.Status.Phase != fleetv1.Pending || user.Status.Message != "waiting for Database db" {
 		t.Fatalf("Without a Database, the User is %+v, %v.", user.Status, err)
@@ -316,16 +331,60 @@ func TestUserWaitsForItsDatabase(t *testing.T) {
 // Another finalizer can hold a CR after the controller removes its own. The
 // controller then writes the CR no more.
 func TestFinalizeLeavesACRItReleased(t *testing.T) {
-	now := metav1.Now()
-	cluster, db := clusterObj(), databaseObj()
-	for _, o := range []*metav1.ObjectMeta{&cluster.ObjectMeta, &db.ObjectMeta} {
-		o.Finalizers, o.DeletionTimestamp = []string{metav1.FinalizerDeleteDependents}, &now
-	}
+	cluster, db := deleting(clusterObj(), metav1.FinalizerDeleteDependents), deleting(databaseObj(), metav1.FinalizerDeleteDependents)
 	f := newFleet(t, cluster, db)
 	f.settle(f.clusters, "cluster")
 	f.settle(f.databases, "db")
 	if err := f.get("db", db); err != nil || db.Status.Phase != "" || f.cluster().Status.Phase != "" {
 		t.Errorf("The released Cluster is %+v, and the Database %+v, %v; want no status.", f.cluster().Status, db.Status, err)
+	}
+}
+
+// The cache can miss a new Database or Volume, so finalize lists them past it.
+func TestClusterFinalizeCountsDependentsTheCacheMisses(t *testing.T) {
+	volume := &storagev1.Volume{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "cluster-vol-0", Labels: map[string]string{ClusterLabel: "cluster"},
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: fleetv1.GroupVersion.String(), Kind: "Cluster", Name: "cluster", UID: "c1", Controller: ptr.To(true)}}}}
+	for kind, dependent := range map[string]client.Object{"Databases": databaseObj(), "Volumes": volume} {
+		cluster := deleting(clusterObj(), fleetv1.ClusterFinalizer)
+		cluster.UID = "c1"
+		f := newFleet(t, cluster)
+		f.clusters.APIReader = newClient(t, dependent)
+		f.settle(f.clusters, "cluster")
+		if c := f.cluster(); c.Status.Message != "waiting for 1 "+kind+" to go" {
+			t.Errorf("With %s the cache misses, the deleted Cluster is %+v.", kind, c.Status)
+		}
+	}
+}
+
+// The cache can miss a new User, so finalize lists Users past it.
+func TestDatabaseFinalizeCountsUsersTheCacheMisses(t *testing.T) {
+	db := deleting(databaseObj(), fleetv1.DatabaseFinalizer)
+	f := newFleet(t, db)
+	f.databases.APIReader = newClient(t, userObj())
+	f.settle(f.databases, "db")
+	if err := f.get("db", db); err != nil || db.Status.Message != "waiting for 1 Users to go" {
+		t.Fatalf("With a User the cache misses, the deleted Database is %+v, %v.", db.Status, err)
+	}
+}
+
+// A change to a Cluster requeues the Databases that name it, and a change to
+// a Database the Users.
+func TestAChangeRequeuesWhatNamesIt(t *testing.T) {
+	inOther := func(o client.Object) client.Object {
+		o.SetNamespace("other")
+		return o
+	}
+	elsewhere := &fleetv1.Database{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "elsewhere"}, Spec: fleetv1.DatabaseSpec{ClusterRef: "other"}}
+	bob := &fleetv1.User{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "bob"}, Spec: fleetv1.UserSpec{DatabaseRef: "other"}}
+	f := newFleet(t, databaseObj(), userObj(), elsewhere, bob, inOther(databaseObj()), inOther(userObj()))
+	only := func(name string) []reconcile.Request {
+		return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: ns, Name: name}}}
+	}
+	if got := f.databases.databasesOf(t.Context(), clusterObj()); !slices.Equal(got, only("db")) {
+		t.Errorf("A Cluster's change requeues %v, want its Database.", got)
+	}
+	if got := f.users.usersOf(t.Context(), databaseObj()); !slices.Equal(got, only("alice")) {
+		t.Errorf("A Database's change requeues %v, want its User.", got)
 	}
 }
 
@@ -348,7 +407,7 @@ func TestUserIsLeftAloneWhileDeleting(t *testing.T) {
 	f.settle(f.clusters, "cluster")
 	f.settle(f.databases, "db")
 	f.delete(user)
-	f.settle(f.user, "alice")
+	f.settle(f.users, "alice")
 	if err := f.get("alice-credentials", &corev1.Secret{}); !apierrors.IsNotFound(err) {
 		t.Errorf("The deleting User's Secret gives %v, want not found.", err)
 	}

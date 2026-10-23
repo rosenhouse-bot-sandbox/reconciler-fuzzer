@@ -73,7 +73,6 @@ func (r *UserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 func (r *UserReconciler) syncSecret(ctx context.Context, user *fleetv1.User) error {
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: user.Namespace, Name: user.Name + "-credentials"}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
-		secret.StringData = nil
 		secret.Data = map[string][]byte{
 			"database": []byte(user.Spec.DatabaseRef),
 			"username": []byte(user.Name),
