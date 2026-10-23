@@ -346,9 +346,10 @@ func TestHonestSkipsADependencyTheControllerDeletedWithAnUnknownOutcome(t *testi
 }
 
 // The model makes slot a's Gadget not ready, and the controller sees it.
-// Then the controller sends a DELETE that does not end that Gadget before
-// its ready write: it fails, names a subresource, hits an earlier Gadget of
-// that name, or comes after the write.
+// Then the controller sends a DELETE, yet a Gadget a that it saw not ready
+// still counts at the ready write. The DELETE fails, names a subresource,
+// comes after the write, or hits a Gadget a that the controller then
+// replaces. A 404 is no sight of another caller's delete.
 func TestHonestCountsADependencyTheControllerDidNotDelete(t *testing.T) {
 	for name, then := range map[string]func(r *tt.Script){
 		"the delete failed": func(r *tt.Script) {

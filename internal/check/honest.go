@@ -157,8 +157,8 @@ func (h *honesty) controllerDeleted(i owner.Instance, t time.Duration) bool {
 	return slices.ContainsFunc(h.deletes[i.Ref], func(sent time.Duration) bool { return sent >= appeared && sent <= t })
 }
 
-// controllerDeletes returns, by ref, the send times of the deletes that
-// controllerDeleted counts.
+// controllerDeletes returns, by ref, the send times of the controller's
+// successful `delete`s with no subresource.
 func controllerDeletes(ix *trace.Index) map[trace.Ref][]time.Duration {
 	sent := map[trace.Ref][]time.Duration{}
 	for _, e := range ix.Calls(trace.Controller, -1, math.MaxInt64) {
