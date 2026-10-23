@@ -4,6 +4,7 @@
 package kube
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -85,6 +86,7 @@ type Kube struct {
 	observer  *observer
 	upstream  *url.URL
 	record    func(trace.Event)
+	kinds     []trace.Ref
 
 	mu        sync.Mutex
 	listeners []*interpose.Listener
@@ -206,6 +208,9 @@ func (k *Kube) start(ctx context.Context, env *system.Env) (system.Endpoints, er
 	for _, gr := range ruleKinds(roles, clusterRoles) {
 		k.observer.watch(gr)
 	}
+	// No listener has forwarded a request yet, so the observer watches only
+	// the kinds above.
+	k.kinds = declaredKinds(k.env.CRDs, k.observer.watched())
 	if err := k.createFixtures(ctx, setup.namespaces); err != nil {
 		return system.Endpoints{}, err
 	}
@@ -533,7 +538,24 @@ func (k *Kube) Subscribe(hear func(trace.Version)) {
 	k.observer.hear = append(k.observer.hear, hear)
 }
 
-func (k *Kube) Kinds() []trace.Ref { return nil }
+// Kinds names each installed CRD, and each kind the observer watched before
+// any listener forwarded a request, by a ref with no namespace or name.
+// Call it after Start.
+func (k *Kube) Kinds() []trace.Ref { return slices.Clone(k.kinds) }
+
+func declaredKinds(crds []*apiextensionsv1.CustomResourceDefinition, watched []schema.GroupVersionResource) []trace.Ref {
+	var kinds []trace.Ref
+	for _, crd := range crds {
+		kinds = append(kinds, trace.Ref{System: Name, Group: crd.Spec.Group, Resource: crd.Spec.Names.Plural})
+	}
+	for _, gvr := range watched {
+		kinds = append(kinds, trace.Ref{System: Name, Group: gvr.Group, Resource: gvr.Resource})
+	}
+	slices.SortFunc(kinds, func(a, b trace.Ref) int {
+		return cmp.Or(strings.Compare(a.Group, b.Group), strings.Compare(a.Resource, b.Resource))
+	})
+	return slices.Compact(kinds)
+}
 
 // StatusKinds lists the installed CRDs' kinds that have a status
 // subresource. Call it after Start.

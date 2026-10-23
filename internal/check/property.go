@@ -60,7 +60,7 @@ type properties struct {
 	*view
 	t time.Duration
 	// keys holds an empty world: each system, and each of its kinds that
-	// the trace holds.
+	// the run declares or the trace holds.
 	keys    map[string]map[string]bool
 	decoded map[uint64]map[string]any
 	// origins says, for each firstWrittenUnder call of an evaluation, where
@@ -98,19 +98,26 @@ func (p *properties) times(property PropertySpec) []judgeTime {
 	return times
 }
 
-// worldKeys holds kube and each fake, and each kind any instance has.
+// worldKeys holds kube and each fake, and each kind the run declares or
+// any instance has.
 func worldKeys(ix *trace.Index, w *owner.World) map[string]map[string]bool {
 	keys := map[string]map[string]bool{"kube": {}}
+	add := func(kind trace.Ref) {
+		if keys[kind.System] == nil {
+			keys[kind.System] = map[string]bool{}
+		}
+		keys[kind.System][worldKey(kind)] = true
+	}
 	if run, ok := ix.Run(); ok {
 		for _, system := range run.Systems {
 			keys[system.Name] = map[string]bool{}
 		}
+		for _, kind := range run.Kinds {
+			add(kind)
+		}
 	}
 	for _, i := range w.All() {
-		if keys[i.Ref.System] == nil {
-			keys[i.Ref.System] = map[string]bool{}
-		}
-		keys[i.Ref.System][worldKey(i.Ref)] = true
+		add(i.Ref)
 	}
 	return keys
 }

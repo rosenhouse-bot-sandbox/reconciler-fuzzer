@@ -369,7 +369,7 @@ func runEvent(cfg *config.Config, k *kube.Kube, planSteps int) (trace.Event, err
 	return trace.Event{Run: &trace.Run{
 		Namespace: k.Namespace(), Primary: primary, PlanSteps: planSteps,
 		Ready: cfg.Primary.Ready, Stable: cfg.Timeouts.Stable, Reads: cfg.Budgets.Reads, Writes: cfg.Budgets.Writes,
-		Retain: cfg.Primary.Retain, Models: models, StatusKinds: k.StatusKinds(),
+		Retain: cfg.Primary.Retain, Models: models, StatusKinds: k.StatusKinds(), Kinds: k.Kinds(),
 		Owners: owners, Owns: owns, Halted: cfg.Primary.Halted, Systems: owner.Systems(cfg),
 		Properties: owner.Properties(cfg), Periodic: owner.Periodic(cfg),
 	}}, nil
