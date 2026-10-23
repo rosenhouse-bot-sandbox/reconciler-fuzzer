@@ -108,8 +108,9 @@ timeouts: {settle: 30s, stable: 3s}
 
 - Paths resolve against the config file's directory.
 - The controller's `KUBECONFIG` defaults to `${systems.kube.kubeconfig}`, the kubeconfig the
-  harness writes for it. A controller that does not read `KUBECONFIG` takes
-  `--kubeconfig=${systems.kube.kubeconfig}` in `args` instead.
+  harness writes for it. Pass `--kubeconfig=${systems.kube.kubeconfig}` in `args` if the
+  controller does not read `KUBECONFIG`, as when it calls `clientcmd.BuildConfigFromFlags`
+  with an empty path.
 - `args` turns off the scaffold's fixed ports, so runs cannot clash on them. If it has
   webhooks, set `ENABLE_WEBHOOKS: "false"` in `env`.
 - `ready` is CEL over the CR. It must be true only once the controller has acted on the
