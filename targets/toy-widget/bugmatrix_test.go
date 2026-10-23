@@ -36,9 +36,9 @@ var update = flag.Bool("update", false, "write ../../docs/bug-matrix.md")
 
 const bugMatrixPath = "../../docs/bug-matrix.md"
 
-// bucketSection starts the part of docs/bug-matrix.md that
-// targets/toy-bucket renders.
-const bucketSection = "\n## Bucket toy\n"
+// otherSection starts each section of docs/bug-matrix.md that another toy
+// renders.
+const otherSection = "\n## "
 
 func TestBugMatrixIsCurrent(t *testing.T) {
 	var all []string
@@ -51,9 +51,9 @@ func TestBugMatrixIsCurrent(t *testing.T) {
 	}
 	want := renderBugMatrix(all)
 	got, err := os.ReadFile(bugMatrixPath)
-	head, bucket := splitBugMatrix(string(got))
+	head, others := splitBugMatrix(string(got))
 	if *update {
-		if err := os.WriteFile(bugMatrixPath, []byte(want+bucket), 0o644); err != nil {
+		if err := os.WriteFile(bugMatrixPath, []byte(want+others), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		return
@@ -63,18 +63,18 @@ func TestBugMatrixIsCurrent(t *testing.T) {
 	}
 }
 
-// splitBugMatrix splits md before the bucket toy's section.
-func splitBugMatrix(md string) (head, bucket string) {
-	if i := strings.Index(md, bucketSection); i >= 0 {
+// splitBugMatrix splits md before the first other toy's section.
+func splitBugMatrix(md string) (head, others string) {
+	if i := strings.Index(md, otherSection); i >= 0 {
 		return md[:i], md[i:]
 	}
 	return md, ""
 }
 
-func TestSplitBugMatrixKeepsTheBucketSection(t *testing.T) {
-	head, bucket := splitBugMatrix("# Bug matrix\n\n| B0 |\n\n## Bucket toy\n\n| B30 |\n")
-	if head != "# Bug matrix\n\n| B0 |\n" || bucket != "\n## Bucket toy\n\n| B30 |\n" {
-		t.Errorf("split into %q and %q", head, bucket)
+func TestSplitBugMatrixKeepsTheOtherToysSections(t *testing.T) {
+	const head, others = "# Bug matrix\n\n| B0 |\n", "\n## Other toy\n\n| B101 |\n\n## Bucket toy\n\n| B30 |\n"
+	if gotHead, gotOthers := splitBugMatrix(head + others); gotHead != head || gotOthers != others {
+		t.Errorf("split into %q and %q", gotHead, gotOthers)
 	}
 }
 
@@ -128,7 +128,7 @@ func renderBugMatrix(plans []string) string {
 	})
 	var b strings.Builder
 	b.WriteString("# Bug matrix\n\n" +
-		"This file is generated from targets/toy-widget/gate_test.go and targets/toy-bucket/gate_test.go by `make bug-matrix`.\n" +
+		"`make bug-matrix` generates this file from the gate_test.go of each toy in targets/.\n" +
 		"`make test-envtest` proves each row: the plan, run against the bug, reports the check's finding at that step, or no finding for check none.\n\n" +
 		"| Bug | Description | Plan | Check | Step |\n|---|---|---|---|---|\n")
 	fmt.Fprintf(&b, "| B0 | %s | all %d committed plans | none | |\n", bugs[0], len(plans))

@@ -440,7 +440,7 @@ error.
 modelled Gadget, and `tenant/` and `grant/` cross scopes. In
 `targets/toy-bucket`, each Bucket CR owns one bucket in the `crudfake` system
 `cloud`; its bugs start at B30, and `halted/` runs `--halt` under
-`primary.halted`.
+`primary.halted`. The make targets loop over each directory in `targets/`.
 
 Each config's `plans/` holds its gated bugs' and B0's plans. A toy's
 `gate_envtest_test.go` runs `gate_test.go`'s table, which `docs/bug-matrix.md`
