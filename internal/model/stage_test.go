@@ -405,7 +405,8 @@ func jsonObject(t *testing.T, s string) map[string]any {
 	return object
 }
 
-// literalFields returns the status a write sets, but its conditions, as JSON.
+// literalFields returns, as JSON, the status fields a write sets other than
+// conditions.
 func literalFields(w write) string {
 	status, _ := w.patch["status"].(map[string]any)
 	fields := maps.Clone(status)
