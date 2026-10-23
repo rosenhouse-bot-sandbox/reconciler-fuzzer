@@ -1,7 +1,7 @@
 package controller
 
 import (
-	"context"
+	"slices"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -9,9 +9,11 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	fleetv1 "github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/targets/toy-fleet/api/v1"
 	storagev1 "github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/targets/toy-fleet/thirdparty/storage/v1"
@@ -22,9 +24,7 @@ const ns = "ns"
 type fleet struct {
 	t                         *testing.T
 	c                         client.Client
-	clusters, databases, user interface {
-		Reconcile(context.Context, ctrl.Request) (ctrl.Result, error)
-	}
+	clusters, databases, user reconcile.Reconciler
 }
 
 func newFleet(t *testing.T, objects ...client.Object) *fleet {
@@ -41,15 +41,18 @@ func newFleet(t *testing.T, objects ...client.Object) *fleet {
 	return &fleet{t, c, &ClusterReconciler{base}, &DatabaseReconciler{base}, &UserReconciler{base}}
 }
 
+func (f *fleet) reconcileOnce(r reconcile.Reconciler, name string) {
+	f.t.Helper()
+	if _, err := r.Reconcile(f.t.Context(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: name}}); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
 // settle reconciles name with r until it stops changing anything.
-func (f *fleet) settle(r interface {
-	Reconcile(context.Context, ctrl.Request) (ctrl.Result, error)
-}, name string) {
+func (f *fleet) settle(r reconcile.Reconciler, name string) {
 	f.t.Helper()
 	for range 10 {
-		if _, err := r.Reconcile(f.t.Context(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: name}}); err != nil {
-			f.t.Fatal(err)
-		}
+		f.reconcileOnce(r, name)
 	}
 }
 
@@ -79,6 +82,20 @@ func (f *fleet) readyVolumes() {
 			f.t.Fatal(err)
 		}
 	}
+}
+
+// volumes lists each Volume as its name and size.
+func (f *fleet) volumes() []string {
+	f.t.Helper()
+	list := &storagev1.VolumeList{}
+	if err := f.c.List(f.t.Context(), list); err != nil {
+		f.t.Fatal(err)
+	}
+	var volumes []string
+	for _, v := range list.Items {
+		volumes = append(volumes, v.Name+" "+v.Spec.Size)
+	}
+	return volumes
 }
 
 func (f *fleet) delete(obj client.Object) {
@@ -113,8 +130,73 @@ func TestClusterIsReadyOnlyOnceItsVolumesAre(t *testing.T) {
 	}
 }
 
+func TestClusterIsPendingBeforeItCreatesVolumes(t *testing.T) {
+	f := newFleet(t, clusterObj())
+	f.reconcileOnce(f.clusters, "cluster") // It adds its finalizer.
+	f.reconcileOnce(f.clusters, "cluster")
+	if c, volumes := f.cluster(), f.volumes(); c.Status.Phase != fleetv1.Pending || len(volumes) > 0 {
+		t.Fatalf("After its finalizer, the Cluster is %+v with Volumes %q.", c.Status, volumes)
+	}
+}
+
+func TestClusterResizesItsVolumesAndDeletesSurplusOnes(t *testing.T) {
+	f := newFleet(t, clusterObj())
+	f.settle(f.clusters, "cluster")
+	f.readyVolumes()
+	c := f.cluster()
+	c.Spec.Volumes, c.Spec.VolumeSize = 1, "large"
+	if err := f.c.Update(t.Context(), c); err != nil {
+		t.Fatal(err)
+	}
+	f.settle(f.clusters, "cluster")
+	if got := f.volumes(); !slices.Equal(got, []string{"cluster-vol-0 large"}) {
+		t.Fatalf("After a change to 1 large Volume, the Cluster has %q.", got)
+	}
+}
+
+func TestClusterLeavesTheVolumesOfAnEarlierClusterOfItsName(t *testing.T) {
+	earlier := &storagev1.Volume{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "cluster-vol-2", Labels: map[string]string{ClusterLabel: "cluster"},
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: fleetv1.GroupVersion.String(), Kind: "Cluster", Name: "cluster", UID: "earlier", Controller: ptr.To(true)}}},
+		Spec: storagev1.VolumeSpec{Size: "small"}}
+	f := newFleet(t, clusterObj(), earlier)
+	f.settle(f.clusters, "cluster")
+	f.delete(f.cluster())
+	f.settle(f.clusters, "cluster")
+	if err := f.get("cluster", &fleetv1.Cluster{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("The deleted Cluster gives %v, want not found.", err)
+	}
+	if got := f.volumes(); !slices.Equal(got, []string{"cluster-vol-2 small"}) {
+		t.Fatalf("After the Cluster's deletion, the Volumes are %q, want the earlier Cluster's.", got)
+	}
+}
+
+func TestVolumeReadyNeedsReadyTrueForItsGenerationWhileLive(t *testing.T) {
+	volume := func(status metav1.ConditionStatus, observed int64) *storagev1.Volume {
+		v := &storagev1.Volume{ObjectMeta: metav1.ObjectMeta{Generation: 2}}
+		meta.SetStatusCondition(&v.Status.Conditions, metav1.Condition{Type: "Ready", Status: status, Reason: "Test", ObservedGeneration: observed})
+		return v
+	}
+	if !volumeReady(volume(metav1.ConditionTrue, 2)) {
+		t.Error("A Volume with Ready True for its generation is not ready.")
+	}
+	deleting := volume(metav1.ConditionTrue, 2)
+	now := metav1.Now()
+	deleting.DeletionTimestamp = &now
+	for name, v := range map[string]*storagev1.Volume{
+		"no condition":        {},
+		"Ready False":         volume(metav1.ConditionFalse, 2),
+		"an older generation": volume(metav1.ConditionTrue, 1),
+		"deleting":            deleting,
+	} {
+		if volumeReady(v) {
+			t.Errorf("A Volume with %s is ready.", name)
+		}
+	}
+}
+
 func TestClusterDeletionWaitsForDatabasesThenVolumes(t *testing.T) {
-	f := newFleet(t, clusterObj(), databaseObj())
+	elsewhere := &fleetv1.Database{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "elsewhere"}, Spec: fleetv1.DatabaseSpec{ClusterRef: "other", Engine: "mysql"}}
+	f := newFleet(t, clusterObj(), databaseObj(), elsewhere)
 	f.settle(f.clusters, "cluster")
 	f.readyVolumes()
 	f.settle(f.clusters, "cluster")
@@ -166,7 +248,8 @@ func TestClusterDeletionWaitsForDatabasesThenVolumes(t *testing.T) {
 }
 
 func TestDatabaseWaitsForItsClusterAndHoldsDeletionForUsers(t *testing.T) {
-	f := newFleet(t, databaseObj(), userObj())
+	elsewhere := &fleetv1.User{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "bob"}, Spec: fleetv1.UserSpec{DatabaseRef: "other"}}
+	f := newFleet(t, databaseObj(), userObj(), elsewhere)
 	f.settle(f.databases, "db")
 	f.settle(f.user, "alice")
 	db := &fleetv1.Database{}
@@ -182,17 +265,21 @@ func TestDatabaseWaitsForItsClusterAndHoldsDeletionForUsers(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.settle(f.clusters, "cluster")
+	f.settle(f.databases, "db")
+	if err := f.get("db", db); err != nil || db.Status.Phase != fleetv1.Pending || db.Status.Message != "waiting for Cluster cluster to be Ready" {
+		t.Fatalf("On a Provisioning Cluster, the Database is %+v, %v.", db.Status, err)
+	}
 	f.readyVolumes()
 	f.settle(f.clusters, "cluster")
 	f.settle(f.databases, "db")
 	f.settle(f.user, "alice")
 	cm := &corev1.ConfigMap{}
-	if err := f.get("db-db", cm); err != nil || cm.Data["engine"] != "postgres" {
-		t.Fatalf("The Database's ConfigMap is %v, %v.", cm.Data, err)
+	if err := f.get("db-db", cm); err != nil || cm.Data["engine"] != "postgres" || !metav1.IsControlledBy(cm, db) {
+		t.Fatalf("The Database's ConfigMap is %v, owned by %v, %v.", cm.Data, cm.OwnerReferences, err)
 	}
 	secret := &corev1.Secret{}
-	if err := f.get("alice-credentials", secret); err != nil || string(secret.Data["password"]) != Password(userObj()) {
-		t.Fatalf("The User's Secret is %v, %v.", secret.Data, err)
+	if err := f.get("alice-credentials", secret); err != nil || string(secret.Data["password"]) != Password(userObj()) || !metav1.IsControlledBy(secret, user) {
+		t.Fatalf("The User's Secret is %v, owned by %v, %v.", secret.Data, secret.OwnerReferences, err)
 	}
 
 	if err := f.get("db", db); err != nil {
@@ -207,6 +294,73 @@ func TestDatabaseWaitsForItsClusterAndHoldsDeletionForUsers(t *testing.T) {
 	f.settle(f.databases, "db")
 	if err := f.get("db", db); !apierrors.IsNotFound(err) {
 		t.Fatalf("Once its User is gone, the Database gives %v, want not found.", err)
+	}
+}
+
+func TestADeletingClusterHostsOnlyReadyDatabases(t *testing.T) {
+	cluster := &fleetv1.Cluster{Status: fleetv1.ClusterStatus{CommonStatus: fleetv1.CommonStatus{Phase: fleetv1.Deleting}}}
+	if ready, pending := hosts(cluster, fleetv1.Ready), hosts(cluster, fleetv1.Pending); !ready || pending {
+		t.Errorf("A Deleting Cluster hosts a Ready Database: %v, and a Pending one: %v; want true and false.", ready, pending)
+	}
+}
+
+func TestUserWaitsForItsDatabase(t *testing.T) {
+	f := newFleet(t, userObj())
+	f.settle(f.user, "alice")
+	user := &fleetv1.User{}
+	if err := f.get("alice", user); err != nil || user.Status.Phase != fleetv1.Pending || user.Status.Message != "waiting for Database db" {
+		t.Fatalf("Without a Database, the User is %+v, %v.", user.Status, err)
+	}
+}
+
+// Another finalizer can hold a CR after the controller removes its own. The
+// controller then writes the CR no more.
+func TestFinalizeLeavesACRItReleased(t *testing.T) {
+	now := metav1.Now()
+	cluster, db := clusterObj(), databaseObj()
+	for _, o := range []*metav1.ObjectMeta{&cluster.ObjectMeta, &db.ObjectMeta} {
+		o.Finalizers, o.DeletionTimestamp = []string{metav1.FinalizerDeleteDependents}, &now
+	}
+	f := newFleet(t, cluster, db)
+	f.settle(f.clusters, "cluster")
+	f.settle(f.databases, "db")
+	if err := f.get("db", db); err != nil || db.Status.Phase != "" || f.cluster().Status.Phase != "" {
+		t.Errorf("The released Cluster is %+v, and the Database %+v, %v; want no status.", f.cluster().Status, db.Status, err)
+	}
+}
+
+func TestPasswordFollowsTheUID(t *testing.T) {
+	recreated := userObj()
+	recreated.UID = "u2"
+	if Password(userObj()) != Password(userObj()) || Password(userObj()) == Password(recreated) {
+		t.Error("Want one password for each UID.")
+	}
+}
+
+// The garbage collector deletes a deleting User's Secret, so the controller
+// must not write it again.
+func TestUserIsLeftAloneWhileDeleting(t *testing.T) {
+	user := userObj()
+	user.Finalizers = []string{metav1.FinalizerDeleteDependents}
+	f := newFleet(t, clusterObj(), databaseObj(), user)
+	f.settle(f.clusters, "cluster")
+	f.readyVolumes()
+	f.settle(f.clusters, "cluster")
+	f.settle(f.databases, "db")
+	f.delete(user)
+	f.settle(f.user, "alice")
+	if err := f.get("alice-credentials", &corev1.Secret{}); !apierrors.IsNotFound(err) {
+		t.Errorf("The deleting User's Secret gives %v, want not found.", err)
+	}
+}
+
+func TestReconcileWritesNoUnchangedStatus(t *testing.T) {
+	f := newFleet(t, clusterObj())
+	f.settle(f.clusters, "cluster")
+	before := f.cluster().ResourceVersion
+	f.reconcileOnce(f.clusters, "cluster")
+	if after := f.cluster().ResourceVersion; after != before {
+		t.Errorf("A settled Cluster went from resourceVersion %s to %s.", before, after)
 	}
 }
 

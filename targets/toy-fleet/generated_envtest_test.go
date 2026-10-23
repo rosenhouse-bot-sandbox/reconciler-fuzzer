@@ -1,0 +1,79 @@
+//go:build envtest
+
+package main_test
+
+import (
+	"fmt"
+	"strings"
+	"sync/atomic"
+	"testing"
+
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/generate"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/run"
+)
+
+// TestGeneratedPlansWithFaultsPassB0 runs each config's first 20 plans with a
+// fault. It fails if fewer than 3 of them had a fault that picked a request
+// or held an object, so it catches faults that stop firing.
+func TestGeneratedPlansWithFaultsPassB0(t *testing.T) {
+	for _, path := range configs {
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+			generatedPlansPassB0(t, path)
+		})
+	}
+}
+
+func generatedPlansPassB0(t *testing.T, path string) {
+	const plans, firing = 20, 3
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := generate.New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fired atomic.Int32
+	t.Cleanup(func() {
+		if n := fired.Load(); n < firing {
+			t.Errorf("A fault fired in %d of %d plans, want at least %d.", n, plans, firing)
+		}
+	})
+	for seed, n := uint64(1), 0; n < plans; seed++ {
+		p, err := g.Plan(seed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if faults(p) == 0 {
+			continue
+		}
+		n++
+		t.Run(fmt.Sprintf("seed %d", seed), func(t *testing.T) {
+			t.Parallel()
+			report, text := run1(t, path, run.Options{Plan: p}, 0)
+			if len(report.Findings) != 0 {
+				t.Errorf("Found %d, want none. report.md:\n%s", len(report.Findings), text)
+			}
+			unpicked := 0
+			for _, note := range report.Notes {
+				if strings.HasSuffix(note, "picked no request.") || strings.HasSuffix(note, "held no object.") {
+					unpicked++
+				}
+			}
+			if unpicked < faults(p) {
+				fired.Add(1)
+			}
+		})
+	}
+}
+
+func faults(p *plan.Plan) int {
+	n := 0
+	for _, s := range p.Steps {
+		n += len(s.Faults)
+	}
+	return n
+}

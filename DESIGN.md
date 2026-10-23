@@ -112,8 +112,7 @@ then aborts the client's connection. `killAfter` also kills the controller,
 harness-caused, before aborting. Neither picks or counts a watch. `holdWatch`
 names a kube kind by `group` and `resource`, and picks no request: while it
 lasts, every controller watch of the kind forwards nothing, and at its end each
-stream delivers what it held, in order. Its fault event's `hold` names the
-kind.
+stream delivers what it held, in order.
 
 **Seen.** A listener records a `seen` for each object of its `Seen` kinds, or
 of every kind with `SeenAll`, that a 2xx response shows its caller. An
@@ -186,7 +185,6 @@ on a `crud` fake. `Patch` and `Delete` send the map's `Write` through the
 harness listener, and return after an observer pass that started after the
 answer. An answer the map's `Gone` accepts is `system.ErrGone`.
 
-`make setup` installs a checksummed Vault and a hash-pinned moto under `bin/`.
 `crudfake` serves the `crud` map's API, with asynchronous states and strict 404
 and 409 answers (`crudfake.go`).
 
@@ -440,11 +438,13 @@ error.
 `targets/toy-widget` holds the Widget configs: `gadget/` adds a modelled
 Gadget, and `tenant/` and `grant/` cross scopes. In `targets/toy-bucket`, each
 Bucket CR owns one bucket in the `crudfake` system `cloud`; its bugs start at
-B30, and `halted/` runs `--halt` under `primary.halted`.
+B30, and `halted/` runs `--halt` under `primary.halted`. In `targets/toy-fleet`,
+a Cluster owns modelled third-party Volumes, a Database names a Cluster, and a
+User a Database. Its bugs start at B100, and `database/` fuzzes Databases.
 
 Each config's `plans/` holds its gated bugs' and B0's plans. A toy's
-`gate_envtest_test.go` runs `gate_test.go`'s table, and its `bugmatrix_test.go`
-renders the table as its own section of `docs/bug-matrix.md`. B0 gives no
+`gate_envtest_test.go` runs `gate_test.go`'s gate, and its `bugmatrix_test.go`
+renders the gate as its own section of `docs/bug-matrix.md`. B0 gives no
 findings and no notes on every committed plan, and no findings on the first 20
 seeds of each config (toy-bucket: the first 20 that draw a fault on `cloud`).
 
