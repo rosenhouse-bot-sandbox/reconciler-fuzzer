@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strconv"
@@ -109,14 +110,15 @@ func (w *stageWorks) get() []bool {
 const after = 60 * time.Millisecond
 
 func testStage(t *testing.T) (*Stage, *fakeStageWriter, *stageWorks) {
-	return testStageWith(t, map[string]any{"phase": "Running"})
+	running := map[string]any{"phase": "Running"}
+	return testStageWith(t, running, running)
 }
 
-func testStageWith(t *testing.T, status map[string]any) (*Stage, *fakeStageWriter, *stageWorks) {
+func testStageWith(t *testing.T, status, stuckStatus map[string]any) (*Stage, *fakeStageWriter, *stageWorks) {
 	t.Helper()
 	w := &fakeStageWriter{}
 	works := &stageWorks{}
-	m := config.Model{Kind: gadgetGVR.GroupVersion().WithKind("Gadget"), Stage: config.ReadyCondition, After: after, Status: status}
+	m := config.Model{Kind: gadgetGVR.GroupVersion().WithKind("Gadget"), Stage: config.ReadyCondition, After: after, Status: status, StuckStatus: stuckStatus}
 	s := newStage(gadgetGVR, m, w, works.record)
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel, s.done = cancel, make(chan struct{})
@@ -208,7 +210,7 @@ func TestStageWritesReadyAfterTheDelay(t *testing.T) {
 }
 
 func TestStageWritesOnlyTheConditionWithoutStatusFields(t *testing.T) {
-	s, w, _ := testStageWith(t, nil)
+	s, w, _ := testStageWith(t, nil, nil)
 	s.hear(gadget{name: "g", uid: "u", rv: "1", generation: 1}.version())
 	if got := w.await(t, 1)[0].patch["status"].(map[string]any); len(got) != 1 {
 		t.Errorf("Wrote status %v, want only conditions.", got)
@@ -355,6 +357,56 @@ func TestStuckKeepsMatchingObjectsNotReadyUntilItEnds(t *testing.T) {
 	if c := readyCondition(t, writes[2]); writes[2].ref.Name != "g1" || c["status"] != "True" || c["message"] != "fault 1 ended" || c["observedGeneration"] != 2.0 {
 		t.Errorf("end wrote %+v, want g1 Ready True with message 'fault 1 ended'.", writes[2])
 	}
+}
+
+func TestStuckWritesTheStuckStatusUntilItEnds(t *testing.T) {
+	for name, c := range map[string]struct {
+		status, stuckStatus, stuckWrite, endWrite string
+	}{
+		"a Pod":     {`{"phase":"Running"}`, `{"phase":"Running"}`, `{"phase":"Running"}`, `{"phase":"Running"}`},
+		"a PVC":     {`{"phase":"Bound"}`, `{"phase":"Pending"}`, `{"phase":"Pending"}`, `{"phase":"Bound"}`},
+		"a Job":     {`{"succeeded":1}`, `{"active":1}`, `{"active":1,"succeeded":null}`, `{"active":null,"succeeded":1}`},
+		"a Service": {`{"loadBalancer":{"ingress":[{"ip":"10.0.0.1"}]}}`, `{"loadBalancer":{}}`, `{"loadBalancer":{"ingress":null}}`, `{"loadBalancer":{"ingress":[{"ip":"10.0.0.1"}]}}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, w, _ := testStageWith(t, jsonObject(t, c.status), jsonObject(t, c.stuckStatus))
+			g := gadget{name: "g", uid: "u", rv: "1", generation: 1, ready: readyFor(1)}
+			s.hear(g.version())
+			end, err := s.Fault(stuck(""))
+			if err != nil {
+				t.Fatal(err)
+			}
+			stuckWrite := w.await(t, 1)[0]
+			g.rv, g.ready = stuckWrite.rv, &condition{"False", "Stuck", 1}
+			s.hear(g.version())
+			end()
+			endWrite := w.await(t, 2)[1]
+			if ready, got := readyCondition(t, stuckWrite)["status"], literalFields(stuckWrite); ready != "False" || got != c.stuckWrite {
+				t.Errorf("The stuck write set Ready %v and %s, want False and %s.", ready, got, c.stuckWrite)
+			}
+			if ready, got := readyCondition(t, endWrite)["status"], literalFields(endWrite); ready != "True" || got != c.endWrite {
+				t.Errorf("The end's write set Ready %v and %s, want True and %s.", ready, got, c.endWrite)
+			}
+		})
+	}
+}
+
+func jsonObject(t *testing.T, s string) map[string]any {
+	t.Helper()
+	var object map[string]any
+	if err := json.Unmarshal([]byte(s), &object); err != nil {
+		t.Fatal(err)
+	}
+	return object
+}
+
+// literalFields returns the status a write sets, but its conditions, as JSON.
+func literalFields(w write) string {
+	status, _ := w.patch["status"].(map[string]any)
+	fields := maps.Clone(status)
+	delete(fields, "conditions")
+	raw, _ := json.Marshal(fields)
+	return string(raw)
 }
 
 func TestAFaultsEndRewritesAReadyObjectWithItsCount(t *testing.T) {

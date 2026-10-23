@@ -313,6 +313,26 @@ func TestModels(t *testing.T) {
 	}
 }
 
+func TestStuckStatusDefaultsToStatus(t *testing.T) {
+	c, err := config.Load(writeConfig(t, minimal(t)+`models:
+  - {kind: v1/Pod, after: 0s, status: {phase: Running}}
+  - {kind: v1/PersistentVolumeClaim, after: 0s, status: {phase: Bound}, stuckStatus: {phase: Pending}}
+  - {kind: v1/Service, after: 0s, status: {loadBalancer: {ingress: [{ip: 10.0.0.1}]}}, stuckStatus: {}}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []map[string]any{{"phase": "Running"}, {"phase": "Pending"}, {}}
+	if len(c.Models) != len(want) {
+		t.Fatalf("models = %+v", c.Models)
+	}
+	for i, m := range c.Models {
+		if !reflect.DeepEqual(m.StuckStatus, want[i]) {
+			t.Errorf("%s stuckStatus = %#v, want %#v", m.Kind.Kind, m.StuckStatus, want[i])
+		}
+	}
+}
+
 func TestModelsRefuseMistakes(t *testing.T) {
 	for _, models := range []string{
 		"- {after: 1s}",

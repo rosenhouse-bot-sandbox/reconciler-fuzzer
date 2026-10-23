@@ -194,8 +194,9 @@ type Model struct {
 	Kind  schema.GroupVersionKind
 	Stage string
 	// Status holds literal fields the stage adds to every status write.
-	Status map[string]any
-	After  time.Duration
+	Status      map[string]any
+	StuckStatus map[string]any
+	After       time.Duration
 	// Dependency is nil unless the kind is a readiness dependency of the
 	// primary.
 	Dependency *Dependency
