@@ -40,7 +40,7 @@ jobs:
           cache: true
       - run: make test
 
-  # The envtest and generated tiers run both toys, toy-widget and toy-bucket.
+  # The envtest and generated tiers run every toy in targets/.
   # make setup installs Vault and moto, which the envtest tier uses.
   envtest:
     runs-on: ubuntu-24.04
