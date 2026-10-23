@@ -83,8 +83,7 @@ type Run struct {
 	StatusKinds []Kind `json:"statusKinds,omitempty"`
 	// Kinds names each kube kind the run declares, by a ref with no
 	// namespace or name: each installed CRD, and each kind the observer
-	// watches from the start. Those are the primary's, the models', the
-	// owns entries', the fixtures' and the ones the RBAC names.
+	// watches from the start, such as the primary's or one the RBAC names.
 	Kinds []Ref `json:"kinds,omitempty"`
 	// Owners maps a system's name to its owner CEL, owning-CR rule 2.
 	Owners map[string]string `json:"owners,omitempty"`

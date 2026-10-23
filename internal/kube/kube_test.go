@@ -381,6 +381,18 @@ func TestStatusKindsListsServedStorageVersionsWithStatus(t *testing.T) {
 	}
 }
 
+func TestDeclaredKindsAreTheCRDsAndTheConfiguredKindsTheObserverWatches(t *testing.T) {
+	got := declaredKinds(
+		[]*apiextensionsv1.CustomResourceDefinition{crd("a.io", "Widget", "widgets"), crd("a.io", "Grant", "grants")},
+		[]schema.GroupResource{{Group: "a.io", Resource: "widgets"}, {Resource: "configmaps"}, {Group: "b.io", Resource: "unserved"}},
+		[]schema.GroupVersionResource{{Group: "a.io", Version: "v1", Resource: "widgets"}, {Version: "v1", Resource: "configmaps"}, {Version: "v1", Resource: "secrets"}},
+	)
+	want := []trace.Ref{{System: Name, Resource: "configmaps"}, {System: Name, Group: "a.io", Resource: "grants"}, {System: Name, Group: "a.io", Resource: "widgets"}}
+	if !slices.Equal(got, want) {
+		t.Errorf("Got %+v, want %+v.", got, want)
+	}
+}
+
 func TestALateSubscriberFirstHearsEachLiveObjectsLatestVersion(t *testing.T) {
 	o := newObserver()
 	k := &Kube{observer: o}

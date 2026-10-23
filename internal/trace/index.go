@@ -314,11 +314,12 @@ func (ix *Index) Live(group, resource string, t time.Duration) []Version {
 		}
 		live = append(live, *versions[n-1].Version)
 	}
-	slices.SortFunc(live, func(a, b Version) int { return compareRefs(a.Ref, b.Ref) })
+	slices.SortFunc(live, func(a, b Version) int { return CompareRefs(a.Ref, b.Ref) })
 	return live
 }
 
-func compareRefs(a, b Ref) int {
+// CompareRefs orders refs by system, group, resource, namespace and name.
+func CompareRefs(a, b Ref) int {
 	return cmp.Or(cmp.Compare(a.System, b.System), cmp.Compare(a.Group, b.Group), cmp.Compare(a.Resource, b.Resource),
 		cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name))
 }

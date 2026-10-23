@@ -90,9 +90,8 @@ timeouts: {settle: 10s, stable: 1s}
 	}
 }
 
-// TestAPropertyOverAnInstalledCRDWithNoObjectHolds judges #148's property.
-// The run installs the toy's grants CRD, and creates no Grant. The
-// controller only lists widgets.
+// TestAPropertyOverAnInstalledCRDWithNoObjectHolds runs a property over the
+// toy's grants CRD. The controller only lists widgets, so no Grant exists.
 func TestAPropertyOverAnInstalledCRDWithNoObjectHolds(t *testing.T) {
 	toyDir, err := filepath.Abs(toy)
 	if err != nil {

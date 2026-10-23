@@ -75,7 +75,8 @@ assigns `Seq`, a total order, and `At`, the time since the run started. Each
 event sets one field: `run` (the config the checks need, after the fixtures),
 `phase`, `action`, `fault`, `call`, `watchEnd`, `version` (an observed body),
 `work` (a model's or fake's pending work), `seen` (what a response showed a
-caller, §5) or `proc` (a controller start or exit). `event.go` documents each.
+caller, §5) or `proc` (a controller start or exit). `trace/event.go` documents
+each.
 
 A `Ref` is `{system, group, resource, namespace, name}`. The trace stores
 bodies, not readiness or gone states, so `judge` rejudges an old trace under a
@@ -111,7 +112,8 @@ then aborts the client's connection. `killAfter` also kills the controller,
 harness-caused, before aborting. Neither picks or counts a watch. `holdWatch`
 names a kube kind by `group` and `resource`, and picks no request: while it
 lasts, every controller watch of the kind forwards nothing, and at its end each
-watch delivers what it held, in order. Its fault event's `hold` names the kind.
+stream delivers what it held, in order. Its fault event's `hold` names the
+kind.
 
 **Seen.** A listener records a `seen` for each object of its `Seen` kinds, or
 of every kind with `SeenAll`, that a 2xx response shows its caller. An
@@ -338,14 +340,12 @@ failing request in a tight loop`. It skips 409s on a held kind until `stable /
 `always` one at each `version` event. Its CEL sees `crs`, the live CRs' bodies,
 and `world.<system>.<key>`, the live instances' bodies, where a key is
 `<resource>` or `<resource>.<group>` on kube and the collection on a fake. A
-kind the run event's `kinds` declares, an installed CRD or one the observer
-watches from the start, is a key even with no instance; another key needs one.
+kind the run event's `kinds` or `owns` names is a key even with no instance.
 `firstWrittenUnder(object, path)` takes a kube body and a list of keys. It
-finds the earliest version of the object's ref, of any instance, with the
-object's value at the path, and returns the UID of that version's owning CR by
-rules 1 to 3, or `""`; a finding's details say where such values came from. The
-string and base64 CEL extensions apply. Summaries: `property <name> does not
-hold`, `could not be evaluated`.
+returns the UID of the rule 1 to 3 owning CR of the earliest version of the
+object's ref, of any instance, with the object's value at the path, or `""`; a
+finding says where such values came from. The string and base64 CEL extensions
+apply. Summaries: `property <name> does not hold`, `could not be evaluated`.
 
 **Corpus.** `check/testdata/corpus/` holds traces of known bugs and false
 positives (`corpus_test.go`).

@@ -325,13 +325,8 @@ func (w *World) Instances(t time.Duration) []Instance {
 			live = append(live, i)
 		}
 	}
-	slices.SortStableFunc(live, func(a, b Instance) int { return compareRefs(a.Ref, b.Ref) })
+	slices.SortStableFunc(live, func(a, b Instance) int { return trace.CompareRefs(a.Ref, b.Ref) })
 	return live
-}
-
-func compareRefs(a, b trace.Ref) int {
-	return cmp.Or(cmp.Compare(a.System, b.System), cmp.Compare(a.Group, b.Group), cmp.Compare(a.Resource, b.Resource),
-		cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name))
 }
 
 // All returns every instance, live or gone, in order of first version.

@@ -4,7 +4,6 @@
 package kube
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -194,23 +193,25 @@ func (k *Kube) start(ctx context.Context, env *system.Env) (system.Endpoints, er
 	if len(setup.missing) > 0 {
 		kinds = append(kinds, corev1.SchemeGroupVersion.WithKind("Namespace"))
 	}
+	var configured []schema.GroupResource
 	for _, gvk := range kinds {
 		mapping, err := k.mapping(gvk)
 		if err != nil {
 			return system.Endpoints{}, err
 		}
-		if err := k.observer.watch(mapping.Resource.GroupResource()); err != nil {
+		gr := mapping.Resource.GroupResource()
+		if err := k.observer.watch(gr); err != nil {
 			return system.Endpoints{}, err
 		}
+		configured = append(configured, gr)
 	}
 	// A kind the RBAC names but the server lacks is watched once a listener
 	// sees a request for it.
 	for _, gr := range ruleKinds(roles, clusterRoles) {
 		k.observer.watch(gr)
+		configured = append(configured, gr)
 	}
-	// No listener has forwarded a request yet, so the observer watches only
-	// the kinds above.
-	k.kinds = declaredKinds(k.env.CRDs, k.observer.watched())
+	k.kinds = declaredKinds(k.env.CRDs, configured, k.observer.watched())
 	if err := k.createFixtures(ctx, setup.namespaces); err != nil {
 		return system.Endpoints{}, err
 	}
@@ -538,22 +539,23 @@ func (k *Kube) Subscribe(hear func(trace.Version)) {
 	k.observer.hear = append(k.observer.hear, hear)
 }
 
-// Kinds names each installed CRD, and each kind the observer watched before
-// any listener forwarded a request, by a ref with no namespace or name.
-// Call it after Start.
+// Kinds names each installed CRD and each kind Start watches, by a ref with
+// no namespace or name. Call it after Start.
 func (k *Kube) Kinds() []trace.Ref { return slices.Clone(k.kinds) }
 
-func declaredKinds(crds []*apiextensionsv1.CustomResourceDefinition, watched []schema.GroupVersionResource) []trace.Ref {
+// declaredKinds names each CRD, and each configured kind the observer
+// watches.
+func declaredKinds(crds []*apiextensionsv1.CustomResourceDefinition, configured []schema.GroupResource, watched []schema.GroupVersionResource) []trace.Ref {
 	var kinds []trace.Ref
 	for _, crd := range crds {
 		kinds = append(kinds, trace.Ref{System: Name, Group: crd.Spec.Group, Resource: crd.Spec.Names.Plural})
 	}
 	for _, gvr := range watched {
-		kinds = append(kinds, trace.Ref{System: Name, Group: gvr.Group, Resource: gvr.Resource})
+		if slices.Contains(configured, gvr.GroupResource()) {
+			kinds = append(kinds, trace.Ref{System: Name, Group: gvr.Group, Resource: gvr.Resource})
+		}
 	}
-	slices.SortFunc(kinds, func(a, b trace.Ref) int {
-		return cmp.Or(strings.Compare(a.Group, b.Group), strings.Compare(a.Resource, b.Resource))
-	})
+	slices.SortFunc(kinds, trace.CompareRefs)
 	return slices.Compact(kinds)
 }
 
