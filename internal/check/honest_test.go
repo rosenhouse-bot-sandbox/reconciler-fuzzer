@@ -273,7 +273,8 @@ func TestHonestFailsAReadyAfterSeeingItsDependencyDeleted(t *testing.T) {
 // controller deletes Gadget b, which it saw not ready, and then reports
 // ready on Gadget a. It sends the delete before the ready write. Each
 // subtest names the delete's events that come before the ready write: its
-// response, its watch event and its observer record.
+// response, its watch event and its observer record. A response after the
+// ready write comes the tick after it, 2 ticks after the delete was sent.
 func TestHonestSkipsADependencyTheControllerDeleted(t *testing.T) {
 	gadgetB := tt.Ref("toy/gadgets", "ns", "b")
 	response := func(latency time.Duration) trace.Event {
@@ -281,6 +282,7 @@ func TestHonestSkipsADependencyTheControllerDeleted(t *testing.T) {
 		e.Call.Latency = latency
 		return e
 	}
+	late := 2 * tt.Tick
 	watched := func(r *tt.Script) trace.Event {
 		e := tt.Seen(ctl, gadgetB, r.UID(gadgetB), "90")
 		e.Seen.Deleted = true
@@ -288,8 +290,17 @@ func TestHonestSkipsADependencyTheControllerDeleted(t *testing.T) {
 	}
 	recorded := func(r *tt.Script) trace.Event { return tt.Deleted(gadgetB, r.UID(gadgetB), "90", gadget(r, false)) }
 	for name, order := range map[string]func(r *tt.Script){
+		"none": func(r *tt.Script) {
+			r.Ready(widgetA).Add(response(late), watched(r), recorded(r))
+		},
 		"the response": func(r *tt.Script) {
 			r.Add(response(0)).Ready(widgetA).Add(watched(r), recorded(r))
+		},
+		"the watch event": func(r *tt.Script) {
+			r.Add(watched(r)).Ready(widgetA).Add(response(late), recorded(r))
+		},
+		"the observer record": func(r *tt.Script) {
+			r.Add(recorded(r)).Ready(widgetA).Add(response(late), watched(r))
 		},
 		"the response and watch event": func(r *tt.Script) {
 			r.Add(response(0), watched(r)).Ready(widgetA).Add(recorded(r))
@@ -297,11 +308,11 @@ func TestHonestSkipsADependencyTheControllerDeleted(t *testing.T) {
 		"the response and observer record": func(r *tt.Script) {
 			r.Add(response(0), recorded(r)).Ready(widgetA).Add(watched(r))
 		},
+		"the watch event and observer record": func(r *tt.Script) {
+			r.Add(watched(r), recorded(r)).Ready(widgetA).Add(response(late))
+		},
 		"all three": func(r *tt.Script) {
 			r.Add(response(0), watched(r), recorded(r)).Ready(widgetA)
-		},
-		"the observer record": func(r *tt.Script) {
-			r.Add(recorded(r)).Ready(widgetA).Add(response(3*tt.Tick), watched(r))
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
