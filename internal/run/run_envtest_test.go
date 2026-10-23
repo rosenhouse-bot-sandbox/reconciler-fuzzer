@@ -90,6 +90,42 @@ timeouts: {settle: 10s, stable: 1s}
 	}
 }
 
+// TestAPropertyOverAnInstalledCRDWithNoObjectHolds judges #148's property.
+// The run installs the toy's grants CRD, and creates no Grant. The
+// controller only lists widgets.
+func TestAPropertyOverAnInstalledCRDWithNoObjectHolds(t *testing.T) {
+	toyDir, err := filepath.Abs(toy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	config := fmt.Sprintf(`launch:
+  binary: /bin/sh
+  args: [-c, 'while true; do curl -sf ${systems.kube.url}/apis/toy.reconciler-fuzzer/v1/widgets >/dev/null; sleep 1; done']
+  rbac: [%[1]s/rbac/role.yaml]
+crds: [%[1]s/crds/]
+primary:
+  kind: toy.reconciler-fuzzer/v1/Widget
+  sample: %[1]s/widget.yaml
+  ready: "true"
+timeouts: {settle: 10s, stable: 1s}
+properties:
+  - name: no-stuck-grants
+    expr: "world.kube['grants.toy.reconciler-fuzzer'].all(g, !has(g.metadata.deletionTimestamp))"
+`, toyDir)
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{{Do: plan.Create, Slot: "a"}}}}}
+	report, err := Run(context.Background(), Options{ConfigPath: filepath.Join(dir, "config.yaml"), Plan: p, Out: filepath.Join(dir, "out")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Findings) > 0 {
+		t.Errorf("findings %+v, want none", report.Findings)
+	}
+}
+
 // reader is a controller that reads the Vault secret a fixture names.
 const reader = `while true; do curl -sf -H "X-Vault-Token: $VAULT_TOKEN" "$VAULT_URL/v1/secret/data/app/db" >/dev/null; sleep 1; done`
 

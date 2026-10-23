@@ -533,6 +533,8 @@ func (k *Kube) Subscribe(hear func(trace.Version)) {
 	k.observer.hear = append(k.observer.hear, hear)
 }
 
+func (k *Kube) Kinds() []trace.Ref { return nil }
+
 // StatusKinds lists the installed CRDs' kinds that have a status
 // subresource. Call it after Start.
 func (k *Kube) StatusKinds() []trace.Kind { return statusKinds(k.env.CRDs) }

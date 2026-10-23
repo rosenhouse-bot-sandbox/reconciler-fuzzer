@@ -139,8 +139,23 @@ func TestPropertyVariables(t *testing.T) {
 	requireSummaries(t, judgeWith(t, r, check.Property), "1 property one-cr does not hold", "2 property one-cr does not hold")
 }
 
+// grants is a CRD of the toy that its runs install, and #148's property
+// covers.
+var grants = trace.Ref{System: "kube", Group: "toy.reconciler-fuzzer", Resource: "grants"}
+
+func TestADeclaredKindWithNoInstanceIsEmpty(t *testing.T) {
+	r := newRun(0)
+	r.Spec.Kinds = []trace.Ref{grants}
+	r.Spec.Properties = []trace.Property{{Name: "no-stuck-grants", Expr: "world.kube['grants.toy.reconciler-fuzzer'].all(g, !has(g.metadata.deletionTimestamp))", When: "step"}}
+	r.Begin()
+	withChild(r, "a", true)
+	r.EndFaults().Settle()
+	requireSummaries(t, judgeWith(t, r, check.Property))
+}
+
 func TestAPropertyThatCannotBeEvaluated(t *testing.T) {
 	r := newRun(0)
+	r.Spec.Kinds = []trace.Ref{grants}
 	r.Spec.Properties = []trace.Property{{Name: "typo", Expr: "size(world.kube.secrets) == 0", When: "always"}}
 	r.Begin()
 	withChild(r, "a", true)
