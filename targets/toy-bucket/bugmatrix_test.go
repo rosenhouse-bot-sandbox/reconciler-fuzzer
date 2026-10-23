@@ -79,8 +79,8 @@ func TestRenderBugMatrix(t *testing.T) {
 	}
 }
 
-// TestBugMatrixIsCurrent owns the file from its section on. targets/toy-widget
-// owns the rest.
+// TestBugMatrixIsCurrent owns this toy's section of the file, up to the next
+// toy's section. A missing file reads as empty, so -update can rebuild it.
 func TestBugMatrixIsCurrent(t *testing.T) {
 	var all []string
 	for _, config := range configs {
@@ -92,18 +92,36 @@ func TestBugMatrixIsCurrent(t *testing.T) {
 	}
 	want := renderBugMatrix(all)
 	got, err := os.ReadFile(bugMatrixPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	head, current, _ := strings.Cut(string(got), section)
+	updated := spliceSection(string(got), want)
 	if *update {
-		if err := os.WriteFile(bugMatrixPath, []byte(head+want), 0o644); err != nil {
+		if err := os.WriteFile(bugMatrixPath, []byte(updated), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		return
 	}
-	if section+current != want {
+	if err != nil || updated != string(got) {
 		t.Errorf("docs/bug-matrix.md is stale. Run 'make bug-matrix'.")
+	}
+}
+
+// spliceSection puts rendered in place of this toy's section of md, or
+// appends it if md has none.
+func spliceSection(md, rendered string) string {
+	head, rest, _ := strings.Cut(md, section)
+	if i := strings.Index(rest, "\n## "); i >= 0 {
+		return head + rendered + rest[i:]
+	}
+	return head + rendered
+}
+
+func TestSpliceSectionKeepsTheOtherToysSections(t *testing.T) {
+	const head, other = "# Bug matrix\n\n| B0 |\n", "\n## Other toy\n\n| B101 |\n"
+	const old, fresh = section + "\n| B30 old |\n", section + "\n| B30 |\n"
+	if got := spliceSection(head+old+other, fresh); got != head+fresh+other {
+		t.Errorf("Replacing the section gave %q.", got)
+	}
+	if got := spliceSection(head+other, fresh); got != head+other+fresh {
+		t.Errorf("Adding the section gave %q.", got)
 	}
 }
 
