@@ -5,6 +5,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -53,7 +54,9 @@ type Values struct {
 type Launch struct {
 	Binary string
 	Args   []string
-	Env    map[string]string
+	// Env overrides the environment the controller inherits. KUBECONFIG
+	// defaults to ${systems.kube.kubeconfig}.
+	Env map[string]string
 	// RBAC holds Role and ClusterRole manifests that the controller's
 	// identity is bound to.
 	RBAC []string
@@ -335,7 +338,9 @@ func load(path string) (*Config, error) {
 		return nil, err
 	}
 	dir := filepath.Dir(abs)
-	c := &Config{Launch: Launch{Args: d.Launch.Args, Env: d.Launch.Env}}
+	env := map[string]string{"KUBECONFIG": "${systems.kube.kubeconfig}"}
+	maps.Copy(env, d.Launch.Env)
+	c := &Config{Launch: Launch{Args: d.Launch.Args, Env: env}}
 
 	if d.Launch.Binary == "" {
 		return nil, errors.New("launch.binary is required")
