@@ -55,7 +55,7 @@ func TestVerifyGenerateChecksEveryToysGeneratedFiles(t *testing.T) {
 		t.Fatalf("verify-generate fails on an uncommitted main.go: %v\n%s", err, out)
 	}
 	for _, generated := range []string{
-		"targets/toy-a/crds/toy_widgets.yaml",
+		"targets/toy-a/crds/example.com_things.yaml",
 		"targets/toy-b/thirdparty/storage/v1/zz_generated.deepcopy.go",
 	} {
 		writeFile(t, dir, generated)
