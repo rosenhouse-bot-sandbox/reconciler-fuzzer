@@ -118,7 +118,7 @@ func workflowProblems(workflow string, targets []string) []string {
 	return problems
 }
 
-func TestTheGeneratedTierRunsEveryGeneratedTest(t *testing.T) {
+func TestGeneratedSelectsEveryGeneratedTest(t *testing.T) {
 	makefile, err := os.ReadFile("Makefile")
 	if err != nil {
 		t.Fatal(err)
@@ -135,40 +135,38 @@ func TestTheGeneratedTierRunsEveryGeneratedTest(t *testing.T) {
 		}
 		tests[filepath.Dir(path)] = string(source)
 	}
-	for _, problem := range generatedTierProblems(string(makefile), tests) {
+	for _, problem := range generatedSelectionProblems(string(makefile), tests) {
 		t.Error(problem)
 	}
 }
 
-func TestGeneratedTierProblemsCatchesMistakes(t *testing.T) {
-	const makefile = "GENERATED = TestA|TestB\n\ntest-generated: setup\n\tgo test -run '$(GENERATED)' ./targets/x ./targets/y\n"
+func TestGeneratedSelectionProblemsCatchesMistakes(t *testing.T) {
+	const makefile = "GENERATED = TestA|TestB\n"
 	tests := map[string]string{"targets/x": "func TestA(t *testing.T) {}\n", "targets/y": "func TestB(t *testing.T) {}\nfunc helper() {}\n"}
-	if problems := generatedTierProblems(makefile, tests); len(problems) > 0 {
+	if problems := generatedSelectionProblems(makefile, tests); len(problems) > 0 {
 		t.Fatalf("a good Makefile gave %q", problems)
 	}
 	for name, mutated := range map[string]string{
 		"test left out of GENERATED": strings.Replace(makefile, "|TestB", "", 1),
-		"package left out":           strings.Replace(makefile, " ./targets/y", "", 1),
 		"no GENERATED":               strings.Replace(makefile, "GENERATED =", "OTHER =", 1),
 	} {
-		if problems := generatedTierProblems(mutated, tests); len(problems) == 0 {
+		if problems := generatedSelectionProblems(mutated, tests); len(problems) == 0 {
 			t.Errorf("%s: no problem found", name)
 		}
 	}
 }
 
 var (
-	generatedVar    = regexp.MustCompile(`(?m)^GENERATED = (.+)$`)
-	generatedRecipe = regexp.MustCompile(`(?m)^test-generated:.*\n\t(.*)$`)
-	testFunc        = regexp.MustCompile(`(?m)^func (Test\w+)\(`)
+	generatedVar = regexp.MustCompile(`(?m)^GENERATED = (.+)$`)
+	testFunc     = regexp.MustCompile(`(?m)^func (Test\w+)\(`)
 )
 
-// generatedTierProblems lists each test of tests, keyed by package
-// directory, that the Makefile's test-generated target does not run.
-func generatedTierProblems(makefile string, tests map[string]string) []string {
-	variable, recipe := generatedVar.FindStringSubmatch(makefile), generatedRecipe.FindStringSubmatch(makefile)
-	if variable == nil || recipe == nil {
-		return []string{"the Makefile has no GENERATED variable or test-generated recipe"}
+// generatedSelectionProblems lists each test of tests, keyed by package
+// directory, that the Makefile's GENERATED pattern does not select.
+func generatedSelectionProblems(makefile string, tests map[string]string) []string {
+	variable := generatedVar.FindStringSubmatch(makefile)
+	if variable == nil {
+		return []string{"the Makefile has no GENERATED variable"}
 	}
 	selected, err := regexp.Compile(variable[1])
 	if err != nil {
@@ -176,9 +174,6 @@ func generatedTierProblems(makefile string, tests map[string]string) []string {
 	}
 	var problems []string
 	for dir, source := range tests {
-		if !slices.Contains(strings.Fields(recipe[1]), "./"+dir) {
-			problems = append(problems, "test-generated does not run ./"+dir)
-		}
 		for _, test := range testFunc.FindAllStringSubmatch(source, -1) {
 			if !selected.MatchString(test[1]) {
 				problems = append(problems, "GENERATED does not select "+dir+"."+test[1])
