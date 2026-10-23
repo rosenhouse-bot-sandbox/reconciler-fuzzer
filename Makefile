@@ -34,8 +34,8 @@ HUNT_OUT := reconciler-fuzzer-out
 # A repro runs each plan in REPRO_PLANS, or else the example's bugs/ plans,
 # REPRO_RUNS times.
 REPRO_RUNS ?= 20
-# Each directory in targets/ is a toy, with its main package at its root.
-TOYS := $(patsubst targets/%/,%,$(sort $(wildcard targets/*/)))
+# Each directory in targets/ with a main.go is a toy.
+TOYS := $(patsubst targets/%/main.go,%,$(sort $(wildcard targets/*/main.go)))
 TOY_PACKAGES := $(TOYS:%=./targets/%)
 # The toys' generated tiers run apart from the envtest tier.
 GENERATED = TestGeneratedPlansWithFaultsPassB0|TestAGeneratedFailingPlanShrinks|TestGeneratedBucketPlansWithCloudFaultsPassB0
@@ -80,6 +80,7 @@ help::
 	@echo "  assets-path                       Print the KUBEBUILDER_ASSETS directory and nothing else."
 	@echo "  build                             Build bin/reconciler-fuzzer, bin/crudfake and bin/<toy> for each toy in targets/."
 	@echo "  generate                          Write the toys' deepcopy code and CRD YAML."
+	@echo "  generate-<toy>                    Write one toy's deepcopy code and CRD YAML."
 	@echo "  verify-generate                   Fail if a generated file is stale."
 	@echo "  fmt                               Fail if any file needs gofmt."
 	@echo "  vet                               Run go vet, envtest files included."
