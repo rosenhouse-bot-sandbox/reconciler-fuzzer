@@ -148,8 +148,8 @@ func (h *honesty) appeared(i owner.Instance) time.Duration {
 }
 
 // controllerDeleted reports whether the controller sent a DELETE of i by t
-// that the server answered with a 2xx. A DELETE sent before i appeared hit
-// an earlier instance of its ref.
+// that the server answered with a 2xx. A DELETE sent before i appeared does
+// not count, as it may have hit an earlier instance of i's ref.
 func (h *honesty) controllerDeleted(i owner.Instance, t time.Duration) bool {
 	appeared := h.appeared(i)
 	return slices.ContainsFunc(h.ix.Calls(trace.Controller, -1, math.MaxInt64), func(e trace.Event) bool {
@@ -219,11 +219,10 @@ func (h *honesty) seenSince(seen, write trace.Event) bool {
 	return seen.At > write.At
 }
 
-// ready reports whether a Seen event shows a version m's ready accepts. It
-// ignores Seen.Deleted.
+// ready reports whether a Seen event shows a live version m's ready accepts.
 func (h *honesty) ready(seen trace.Event, m Model) bool {
 	v, found := h.ix.VersionOf(seen.Seen.Ref, seen.Seen.RV)
-	return found && satisfies(m.Ready, decode(v.Body))
+	return found && !seen.Seen.Deleted && satisfies(m.Ready, decode(v.Body))
 }
 
 // judgeTrack fails a CR that stays ready for track after the controller

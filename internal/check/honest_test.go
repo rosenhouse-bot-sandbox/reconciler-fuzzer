@@ -247,7 +247,7 @@ func TestHonestPassesAReadyFromAStaleReadOfAGoneDependency(t *testing.T) {
 }
 
 // The GC deletes slot a's only Gadget, and the controller sees the delete
-// before it reports ready.
+// before it reports ready. Without required, the CR may be ready with none.
 func TestHonestFailsAReadyAfterSeeingItsDependencyDeleted(t *testing.T) {
 	for name, order := range map[string]func(r *tt.Script){
 		"the observer records the delete first": func(r *tt.Script) {
@@ -261,6 +261,10 @@ func TestHonestFailsAReadyAfterSeeingItsDependencyDeleted(t *testing.T) {
 			r := gadgetRun(trace.Dependency{Required: true})
 			order(r)
 			requireFinding(t, honest(t, r), "Honest", 0, noDependency, "kube/toy/widgets", "slot a")
+
+			r = gadgetRun(trace.Dependency{})
+			order(r)
+			requireNone(t, honest(t, r))
 		})
 	}
 }
