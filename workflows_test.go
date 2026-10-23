@@ -118,10 +118,7 @@ func workflowProblems(workflow string, targets []string) []string {
 	return problems
 }
 
-// TestTheGeneratedTierRunsEveryGeneratedTest checks that GENERATED selects
-// each generated test. TestMakeTargetsCoverEveryToy checks that
-// test-generated runs each toy.
-func TestTheGeneratedTierRunsEveryGeneratedTest(t *testing.T) {
+func TestGeneratedSelectsEveryGeneratedTest(t *testing.T) {
 	makefile, err := os.ReadFile("Makefile")
 	if err != nil {
 		t.Fatal(err)
@@ -138,22 +135,22 @@ func TestTheGeneratedTierRunsEveryGeneratedTest(t *testing.T) {
 		}
 		tests[filepath.Dir(path)] = string(source)
 	}
-	for _, problem := range generatedTierProblems(string(makefile), tests) {
+	for _, problem := range generatedSelectionProblems(string(makefile), tests) {
 		t.Error(problem)
 	}
 }
 
-func TestGeneratedTierProblemsCatchesMistakes(t *testing.T) {
+func TestGeneratedSelectionProblemsCatchesMistakes(t *testing.T) {
 	const makefile = "GENERATED = TestA|TestB\n"
 	tests := map[string]string{"targets/x": "func TestA(t *testing.T) {}\n", "targets/y": "func TestB(t *testing.T) {}\nfunc helper() {}\n"}
-	if problems := generatedTierProblems(makefile, tests); len(problems) > 0 {
+	if problems := generatedSelectionProblems(makefile, tests); len(problems) > 0 {
 		t.Fatalf("a good Makefile gave %q", problems)
 	}
 	for name, mutated := range map[string]string{
 		"test left out of GENERATED": strings.Replace(makefile, "|TestB", "", 1),
 		"no GENERATED":               strings.Replace(makefile, "GENERATED =", "OTHER =", 1),
 	} {
-		if problems := generatedTierProblems(mutated, tests); len(problems) == 0 {
+		if problems := generatedSelectionProblems(mutated, tests); len(problems) == 0 {
 			t.Errorf("%s: no problem found", name)
 		}
 	}
@@ -164,9 +161,9 @@ var (
 	testFunc     = regexp.MustCompile(`(?m)^func (Test\w+)\(`)
 )
 
-// generatedTierProblems lists each test of tests, keyed by package
+// generatedSelectionProblems lists each test of tests, keyed by package
 // directory, that the Makefile's GENERATED pattern does not select.
-func generatedTierProblems(makefile string, tests map[string]string) []string {
+func generatedSelectionProblems(makefile string, tests map[string]string) []string {
 	variable := generatedVar.FindStringSubmatch(makefile)
 	if variable == nil {
 		return []string{"the Makefile has no GENERATED variable"}

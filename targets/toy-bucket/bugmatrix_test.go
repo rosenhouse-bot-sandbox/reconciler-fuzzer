@@ -80,7 +80,7 @@ func TestRenderBugMatrix(t *testing.T) {
 }
 
 // TestBugMatrixIsCurrent owns this toy's section of the file, up to the next
-// toy's section.
+// toy's section. A missing file reads as empty, so -update can rebuild it.
 func TestBugMatrixIsCurrent(t *testing.T) {
 	var all []string
 	for _, config := range configs {
@@ -92,9 +92,6 @@ func TestBugMatrixIsCurrent(t *testing.T) {
 	}
 	want := renderBugMatrix(all)
 	got, err := os.ReadFile(bugMatrixPath)
-	if err != nil {
-		t.Fatal(err)
-	}
 	updated := spliceSection(string(got), want)
 	if *update {
 		if err := os.WriteFile(bugMatrixPath, []byte(updated), 0o644); err != nil {
@@ -102,7 +99,7 @@ func TestBugMatrixIsCurrent(t *testing.T) {
 		}
 		return
 	}
-	if updated != string(got) {
+	if err != nil || updated != string(got) {
 		t.Errorf("docs/bug-matrix.md is stale. Run 'make bug-matrix'.")
 	}
 }
