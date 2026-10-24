@@ -53,13 +53,16 @@ func Converge(ix *trace.Index, s Spec) (findings []Finding, notes []string) {
 }
 
 // builtinStatusKinds are built-in kinds whose status another controller
-// writes, each with literal status fields that a model can add. A model
-// cannot track a Deployment's or StatefulSet's observedGeneration, so
-// those kinds are left out.
+// writes, each with the status keys of the models entry that report.md
+// suggests. A stuck Pod stays Running, as one that fails its readiness probe
+// does. A stuck PVC is Pending. A stuck Job shows one active Pod and no
+// succeeded one. The API server refuses to lower a done Job's succeeded, so
+// that Job stays done. A model cannot track a Deployment's or StatefulSet's
+// observedGeneration, so those kinds are left out.
 var builtinStatusKinds = map[trace.Kind]string{
-	{Group: "batch", Version: "v1", Kind: "Job", Resource: "jobs"}:                     "{succeeded: 1}",
-	{Version: "v1", Kind: "Pod", Resource: "pods"}:                                     "{phase: Running}",
-	{Version: "v1", Kind: "PersistentVolumeClaim", Resource: "persistentvolumeclaims"}: "{phase: Bound}",
+	{Group: "batch", Version: "v1", Kind: "Job", Resource: "jobs"}:                     "status: {succeeded: 1}, stuckStatus: {active: 1}",
+	{Version: "v1", Kind: "Pod", Resource: "pods"}:                                     "status: {phase: Running}",
+	{Version: "v1", Kind: "PersistentVolumeClaim", Resource: "persistentvolumeclaims"}: "status: {phase: Bound}, stuckStatus: {phase: Pending}",
 }
 
 // unmodelledKinds names each status kind that the controller read or
@@ -92,18 +95,31 @@ func unmodelledKinds(ix *trace.Index, t time.Duration, s Spec) []string {
 		if written[k] || s.modelled(trace.Ref{System: "kube", Group: k.Group, Resource: k.Resource}) || k.Group == s.PrimaryGroup && k.Resource == s.PrimaryResource || !slices.ContainsFunc(ix.Live(k.Group, k.Resource, t), noStatus) {
 			continue
 		}
-		gvk := k.Version + "/" + k.Kind
-		if k.Group != "" {
-			gvk = k.Group + "/" + gvk
+		line := fmt.Sprintf("The controller reads %s, whose status nothing models. If another controller sets it, add to models: - %s", kindName(k), suggestedModel(k))
+		if _, builtin := builtinStatusKinds[k]; builtin {
+			line += ", and set its status fields to the ones the controller reads"
 		}
-		entry := fmt.Sprintf("{kind: %s, stages: readyCondition, after: 200ms}", gvk)
-		if status, builtin := builtinStatusKinds[k]; builtin {
-			entry = fmt.Sprintf("{kind: %s, stages: readyCondition, after: 200ms, status: %s}, with status holding the fields the controller reads", gvk, status)
-		}
-		lines = append(lines, fmt.Sprintf("The controller reads %s, whose status nothing models. If another controller sets it, add to models: - %s", gvk, entry))
+		lines = append(lines, line)
 	}
 	slices.Sort(lines)
 	return lines
+}
+
+// suggestedModel returns the models entry that report.md suggests for k.
+func suggestedModel(k trace.Kind) string {
+	entry := "{kind: " + kindName(k) + ", stages: readyCondition, after: 200ms"
+	if keys, builtin := builtinStatusKinds[k]; builtin {
+		entry += ", " + keys
+	}
+	return entry + "}"
+}
+
+// kindName names k as a config does, such as batch/v1/Job.
+func kindName(k trace.Kind) string {
+	if k.Group == "" {
+		return k.Version + "/" + k.Kind
+	}
+	return k.Group + "/" + k.Version + "/" + k.Kind
 }
 
 func noStatus(v trace.Version) bool {
