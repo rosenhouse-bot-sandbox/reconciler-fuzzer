@@ -732,6 +732,20 @@ func TestExecuteKeepsAKilledControllerDown(t *testing.T) {
 	}
 }
 
+func TestExecuteRestartsAControllerKilledAfterASlotWaitEndedTheFaults(t *testing.T) {
+	f := newFixture(t, nil)
+	faultHoldsDeletedCRs(f, 0)
+	p := recreateUnder(50*time.Millisecond, holdWidgets)
+	p.Steps[1].Actions = append(p.Steps[1].Actions, plan.Action{Do: plan.Kill})
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	got := f.process.all()
+	if i := slices.Index(got, "kill"); i < 0 || i+1 == len(got) || got[i+1] != "supervise(true)" {
+		t.Errorf("process calls = %q, want supervise(true) right after the kill", got)
+	}
+}
+
 func TestExecuteHonoursOffsetsAndPeriod(t *testing.T) {
 	f := newFixture(t, nil)
 	p := &plan.Plan{Steps: []plan.Step{{

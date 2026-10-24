@@ -19,7 +19,8 @@ type Plan struct {
 }
 
 // Step is one unit of a run. Its fault period lasts Period, or until its
-// last action ends if that is later.
+// last action ends if that is later. Its faults last as long, unless a
+// create's wait for its slot ends them sooner.
 type Step struct {
 	Period  Duration `json:"period,omitempty"`
 	Actions []Action `json:"actions,omitempty"`

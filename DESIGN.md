@@ -42,7 +42,7 @@ adopted controllers, and `docs/` the bug matrix, failures and findings.
 | `system` | The `System` interface and its value types. |
 | `kube` | envtest, namespace, RBAC identity, listeners, observer, harness CRUD. |
 | `fake` | A fake service as a System: its process, listeners, observer, fixtures, faults and damage. |
-| `crudfake` | The JSON server `cmd/crudfake` runs. |
+| `crudfake` | The JSON server `cmd/crudfake` runs, with asynchronous states and strict 404 and 409 answers. |
 | `model` | The `gc` and `namespace` models, and stage models. |
 | `launch` | The controller process. |
 | `config` | Strict YAML loader, CEL, `${...}` expansion. |
@@ -188,9 +188,9 @@ answer. An answer the map's `Gone` accepts is `system.ErrGone`.
 ## 8. Plans
 
 An action's `do` is `create`, `update`, `delete` (optionally `Foreground`),
-`restart`, `kill` (the controller stays down until the step's faults end, §9),
-`damage` (of an instance the controller created) or `changeFixture` (of a
-fixture, on any system). `plan.go` documents each.
+`restart`, `kill` (the controller stays down until the fault period ends or a
+slot wait restarts it, §9), `damage` (of an instance the controller created)
+or `changeFixture` (of a fixture, on any system). `plan.go` documents each.
 
 A `target` has `system` (default `kube`), `group`, `resource`, `namespace`,
 `name`, `role` and `nth` (default 1). Empty fields match anything.

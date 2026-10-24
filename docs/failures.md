@@ -53,10 +53,11 @@ with such notes may need a different fault.
 that a create gave up waiting until its slot's previous CR no longer
 existed. Once the step's `period` has passed, the wait ends the step's
 faults and restarts a killed controller. It gives up as long after the
-faults end as the step's deadline allows (DESIGN.md §9). The rest of the
-note names the `deletionTimestamp` and finalizers of the CR with that name,
-or says that it is not being deleted. The run then skips to the
-`delete all` and `restart` steps that the runner appends.
+faults end as the step's deadline allows (DESIGN.md §9). When the
+observer last recorded a live CR with that name, the rest of the note names
+its `deletionTimestamp` and finalizers, or says that it is not being
+deleted. The run then skips to the `delete all` and `restart` steps that
+the runner appends.
 
 `cloud: unmapped request POST /v2/buckets/b-1/acl` means the system's API
 map could not place a controller request on a resource. No check judges
