@@ -142,8 +142,8 @@ values: {fixtures: {settings.yaml: [data.theme]}}   # with primaries, only fixtu
 
 - Every check judges the CRs of each listed kind by their own entry, and the settle condition
   waits for each. A CR that the controller creates is also judged as its owner's resource, so
-  Clean fails it when it outlives that owner. Restore treats a damage under such a CR as a
-  damage under its owner.
+  Clean fails it when it outlives that owner. A `damage` in the owner's slot can target the
+  CR's resources, and Restore treats a damage under the CR as a damage under its owner.
 - A plan creates only CRs of listed kinds, and `run` refuses any other create. A create
   without an object makes the first entry's sample.
 - Generated plans draw each create's kind from the list. They do not yet fill a field that
