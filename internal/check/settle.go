@@ -157,7 +157,7 @@ func crClauses(ix *trace.Index, p Primary, cr trace.Version, t time.Duration, s 
 
 // halted reports whether p.Halted accepts cr's body and the controller
 // made a call of unknown outcome, by t, on cr or on an instance cr owns: by
-// rules 1 to 3, or by rule 4 as the one CR alive at its creation.
+// rules 1 to 3, or by rule 4 as the one CR in its set.
 func halted(ix *trace.Index, p Primary, cr trace.Version, body map[string]any, t time.Duration, s Spec) bool {
 	if p.Halted == nil {
 		return false

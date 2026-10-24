@@ -153,8 +153,9 @@ Fill each key from the project:
   the harness creates that namespace.
 - An entry's `owns`, and `systems`: a child without an ownerReference to its CR, such as one in
   another namespace, or a cluster-scoped child of a namespaced CR, needs one. Otherwise Clean
-  judges it only by the CRs alive at its creation. `owns: [{kind, name, namespace?}]` holds
-  CEL over the CR that names the child; a cluster-scoped kind takes no `namespace`.
+  judges it only by the CRs alive at its creation that the controller did not create.
+  `owns: [{kind, name, namespace?}]` holds CEL over the CR that names the child; a
+  cluster-scoped kind takes no `namespace`.
   `systems: [{name: kube, owner}]` holds CEL over a child that yields its CR's UID,
   `namespace/name` or name, such as an owner label. Prefer the UID: a bare name that
   matches CRs in two other namespaces, or CRs of two kinds, names none.

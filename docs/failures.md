@@ -113,8 +113,9 @@ clause 4 findings follow from it.
 A controller resource outlived its owning CR. Each line names the
 resource, the owner rule of DESIGN.md §11 that tied it to a CR (1:
 ownerReferences; 2: `systems[].owner`; 3: an entry's `owns`; 4: the CRs
-live at its creation), and that CR's slot. A CR that the controller
-created has no slot, so the line names its kind and name instead:
+live at its creation that the controller did not create), and that CR's
+slot. A CR that the controller created has no slot, so the line names its
+kind and name instead:
 
 ```
 configmaps rf-9485af8b/widget-0 (rule 4, slot a)
@@ -152,8 +153,8 @@ instead of a CR.
 
 ### Unique: duplicate resources
 
-Two live controller resources share a kind, namespace, owning CR and role
-(DESIGN.md §11).
+Two live controller resources share a kind, namespace, owning CR or
+unlisted owner, and role (DESIGN.md §11).
 
 ### Honest
 

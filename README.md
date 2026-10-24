@@ -182,8 +182,8 @@ systems:
 - `owner` takes CEL over the child. It yields the CR's UID, `namespace/name` or name. A bare name
   prefers a CR in the child's namespace, and names no CR when it matches CRs in two other namespaces.
   A name that CRs of two kinds share names no CR.
-- Without either, Clean blames such a child on every CR that lived when it was created, so it
-  fails only once all of them are gone.
+- Without either, Clean blames such a child on every CR that lived when it was created, except
+  those that the controller created. It fails only once all of them are gone.
 
 ### Objects another controller sets ready
 

@@ -272,11 +272,11 @@ from the config, or else the run event.
   version, or one its system's `gone` CEL accepts.
 - Its **creator** is the caller whose create, or 201 apply, answered with
   its UID, or `cluster`.
-- Its **owning CR** at `t` comes from the first rule that matches
-  (`owner.go`): 1, its ownerReferences reach a CR; 2, its system's
-  `owner` CEL names a CR by UID, `namespace/name` or name, unless CRs of
-  two kinds share that name; 3, an `owns` entry over a CR of its entry's
-  kind names it; 4, otherwise, the set of other CRs live at its creation.
+- Its **owning CR** at `t` comes from the first rule that matches (`owner.go`):
+  1, its ownerReferences reach a CR; 2, its system's `owner` CEL names a CR by
+  UID, `namespace/name` or name, unless CRs of two kinds share that name; 3, an
+  `owns` entry over a CR of its entry's kind names it; 4, otherwise, the set of
+  other CRs live at its creation that the controller did not create (entry 79).
   While its ownerReferences reach a live instance that the controller did not
   create, directly or through live instances that it did create, and none
   reaches a CR, rule 1 gives that **unlisted owner** and no CR (entry 80). An
@@ -287,7 +287,8 @@ from the config, or else the run event.
   fake's is empty.
 - The **controller's resources** at `t` are its live instances, minus
   ignored kinds (§10).
-- A **group** is a (system, group, resource, namespace, owning CRs, role).
+- A **group** is a (system, group, resource, namespace, owning CRs or
+  unlisted owner, role).
 
 ## 12. Checks
 
@@ -321,9 +322,9 @@ owner not at all. Summary: `left resources behind`.
 resources at the two ends by group, without volatile fields (entries 21 and 40,
 the map's, and a CR kind's `periodic.paths`). Where no `damage` touched the
 root, each instance must stay, with no new one and an equal body:
-`replaced resources`, `changed resources`. Where one did, each damaged group
-must be live again while its owner lives, and each group's kind must stay
-under the root: `did not restore damaged resources` (entries 22 and 82).
+`replaced resources`, `changed resources`. Where one did, each group's kind
+must stay under the root, a damaged group's role too, and the group itself
+while its owner lives: `did not restore damaged resources` (entries 22 and 82).
 
 **Unique.** At each settled step's end, a group holds at most one live
 controller instance. Summary: `duplicate resources`.
@@ -345,8 +346,7 @@ A success breaks it. So does a new generation of its object, or of the
 object's rule 1 to 3 CR. When the object is no CR and has no such CR, any CR's
 new generation breaks it. With `n` CRs live, it fails when each gap between
 calls `5n + 1` to `10n + 1` is under 100 ms: `retried a failing request in a
-tight loop`. It skips 409s on a held
-kind until `stable / 4` after the hold.
+tight loop`. It skips 409s on a held kind until `stable / 4` after the hold.
 
 **Property.** A `step` property is judged at each settled step's end, and an
 `always` one at each `version` event. Its CEL sees `crs`, the live CRs' bodies,
@@ -522,7 +522,7 @@ Each entry changes a check, exception, `System` interface or ignore list.
 76. `primary.periodic` paths name list items with `[*]`, so ACK exempts only condition stamps.
 77. Honest skips a dependency the controller deleted with a `delete`, or last saw deleted, whatever the observer's lag, so a scale-down passes (#124).
 78. A property sees each kind in the run event's `kinds` or `owns` as an empty list while it has no object (#148).
-79. Every check judges each kind `primaries` lists, and a CR the controller creates is also its owner's resource (#126).
+79. Every check judges each kind `primaries` lists, and a CR the controller creates is also its owner's resource (#126). Rule 4 sets leave such CRs out, so a resource remade after one keeps its group.
 80. A live unlisted owner, such as a fixture, keeps what it owns, directly or through the controller's live objects, from rules 2 to 4, so deleting a CR blames none of it (#128). An object the controller made is never an unlisted owner.
 81. `required` binds only the first entry's CRs, so the kinds that own no dependency pass.
-82. A `damage` touches each group under its root. An undamaged touched group, or a damaged one whose owner is gone, may empty while its kind lives under that root. So a damage under a CR that the controller made touches that CR's owner, and the controller may remake that CR.
+82. A `damage` touches each group under its root. An undamaged touched group may empty while its kind lives under that root, and a damaged one whose owner is gone while its kind and role do. So a damage under a CR that the controller made touches that CR's owner, and the controller may remake that CR.
