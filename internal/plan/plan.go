@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -191,9 +192,9 @@ func Save(path string, p *Plan) error {
 // Validate reports the first malformed step, action or fault, naming its
 // position.
 func (p *Plan) Validate() error {
-	// names maps each slot that holds a CR to that CR's namespace/name, which is
-	// sampleName for the sample and empty for a generated name. A slot an
-	// earlier delete emptied maps to emptied.
+	// names maps each slot that holds a CR to that CR's group, kind,
+	// namespace and name, which is sampleName for the sample and empty for a
+	// generated name. A slot an earlier delete emptied maps to emptied.
 	names := map[string]string{}
 	for i, step := range p.Steps {
 		if step.Period < 0 {
@@ -216,6 +217,22 @@ func (p *Plan) Validate() error {
 // ValidateKinds reports the first create whose object's group and kind
 // listed lacks. A create without an object makes the sample, of listed[0].
 func (p *Plan) ValidateKinds(listed []schema.GroupKind) error {
+	for i, step := range p.Steps {
+		for j, a := range step.Actions {
+			if a.Do != Create || a.Object == nil {
+				continue
+			}
+			o, err := decodeHeader(a.Object)
+			switch {
+			case err != nil:
+				return fmt.Errorf("steps[%d].actions[%d]: %w", i, j, err)
+			case o.Kind == "":
+				return fmt.Errorf("steps[%d].actions[%d]: create of slot %q makes an object with no kind", i, j, a.Slot)
+			case !slices.Contains(listed, o.groupKind()):
+				return fmt.Errorf("steps[%d].actions[%d]: create of slot %q makes a %s, which primaries does not list", i, j, a.Slot, o.groupKind())
+			}
+		}
+	}
 	return nil
 }
 
@@ -318,25 +335,42 @@ func (a Action) validateChange(names map[string]string) error {
 	return nil
 }
 
-// createdName is the namespace/name of object, sampleName when object is
-// empty, or empty for a generated name.
+// createdName is the group, kind, namespace and name of object, sampleName
+// when object is empty, or empty for a generated name.
 func createdName(object json.RawMessage) (string, error) {
 	if object == nil {
 		return sampleName, nil
 	}
-	var o struct {
-		Metadata struct {
-			Namespace string `json:"namespace"`
-			Name      string `json:"name"`
-		} `json:"metadata"`
-	}
-	if err := json.Unmarshal(object, &o); err != nil {
-		return "", fmt.Errorf("decoding object: %w", err)
+	o, err := decodeHeader(object)
+	if err != nil {
+		return "", err
 	}
 	if o.Metadata.Name == "" {
 		return "", nil
 	}
-	return o.Metadata.Namespace + "/" + o.Metadata.Name, nil
+	return o.groupKind().String() + " " + o.Metadata.Namespace + "/" + o.Metadata.Name, nil
+}
+
+// header holds the fields that name a create's object.
+type header struct {
+	APIVersion string `json:"apiVersion"`
+	Kind       string `json:"kind"`
+	Metadata   struct {
+		Namespace string `json:"namespace"`
+		Name      string `json:"name"`
+	} `json:"metadata"`
+}
+
+func decodeHeader(object json.RawMessage) (header, error) {
+	var h header
+	if err := json.Unmarshal(object, &h); err != nil {
+		return header{}, fmt.Errorf("decoding object: %w", err)
+	}
+	return h, nil
+}
+
+func (h header) groupKind() schema.GroupKind {
+	return schema.FromAPIVersionAndKind(h.APIVersion, h.Kind).GroupKind()
 }
 
 func isObject(raw json.RawMessage) bool {

@@ -171,7 +171,7 @@ func TestSchemasThatSayTooLittleAreConfigurationErrors(t *testing.T) {
 
 func TestAMapFieldIsDrawn(t *testing.T) {
 	cfg := loadConfig(t, rulesConfig)
-	cfg.Values.Mutate = []string{"spec.config"}
+	cfg.Primaries[0].Values.Mutate = []string{"spec.config"}
 	word := regexp.MustCompile(`^[a-z0-9]{1,12}$`)
 	keyed := 0
 	for _, drawn := range generatedAt(t, cfg, "spec", "config") {
@@ -230,8 +230,8 @@ func TestAnIntOrStringFollowsItsOverlay(t *testing.T) {
 	} {
 		t.Run(testCase.overlay["type"].(string), func(t *testing.T) {
 			cfg := loadConfig(t, rulesConfig)
-			cfg.Values.Mutate = []string{"spec.surge"}
-			cfg.Values.Overlay = map[string]map[string]any{"spec.surge": testCase.overlay}
+			cfg.Primaries[0].Values.Mutate = []string{"spec.surge"}
+			cfg.Primaries[0].Values.Overlay = map[string]map[string]any{"spec.surge": testCase.overlay}
 			drawn := generatedAt(t, cfg, "spec", "surge")
 			for _, surge := range drawn {
 				if !testCase.allowed(surge) {

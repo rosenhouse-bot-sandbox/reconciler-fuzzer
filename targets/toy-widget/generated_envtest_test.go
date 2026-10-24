@@ -29,7 +29,7 @@ func generator(t *testing.T, path string) (*generate.Generator, map[string]any) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	return g, readSample(t, cfg.Primary.Sample)
+	return g, readSample(t, cfg.Primaries[0].Sample)
 }
 
 // TestGeneratedPlansWithFaultsPassB0 runs plans with a fault, or with a

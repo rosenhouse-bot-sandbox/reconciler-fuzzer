@@ -328,7 +328,7 @@ func TestCreatesAndUpdatesDrawCRDValidValues(t *testing.T) {
 
 func TestEachSlotHasItsOwnNameAndDistinctValue(t *testing.T) {
 	cfg := loadConfig(t, rulesConfig)
-	cfg.Values.Distinct = []string{"spec.left"}
+	cfg.Primaries[0].Values.Distinct = []string{"spec.left"}
 	g := newGenerator(t, cfg)
 	seen := map[string]string{}
 	for seed := uint64(1); seed <= 100; seed++ {

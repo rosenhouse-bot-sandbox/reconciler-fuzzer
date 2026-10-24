@@ -261,13 +261,13 @@ func gives(r check.Report, f check.Finding) bool {
 }
 
 func loadSample(cfg *config.Config) (map[string]any, error) {
-	data, err := os.ReadFile(cfg.Primary.Sample)
+	data, err := os.ReadFile(cfg.Primaries[0].Sample)
 	if err != nil {
 		return nil, err
 	}
 	var sample map[string]any
 	if err := yaml.Unmarshal(data, &sample); err != nil {
-		return nil, fmt.Errorf("%s: %w", cfg.Primary.Sample, err)
+		return nil, fmt.Errorf("%s: %w", cfg.Primaries[0].Sample, err)
 	}
 	return sample, nil
 }

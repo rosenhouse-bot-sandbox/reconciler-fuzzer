@@ -81,17 +81,29 @@ func TestTraceModelsNameKindsBothWays(t *testing.T) {
 
 var clusterRoleKind = schema.GroupVersionKind{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRole"}
 
-func TestOwnsKindsWatchEveryOwnsKind(t *testing.T) {
-	owns := []config.Owns{{Kind: clusterRoleKind, Name: "'x'"}, {Kind: gadgetKind, Name: "'y'"}}
-	if got := ownsKinds(owns); !reflect.DeepEqual(got, []schema.GroupVersionKind{clusterRoleKind, gadgetKind}) {
-		t.Errorf("ownsKinds = %v", got)
+func TestPrimaryKindsWatchEveryListedAndOwnsKind(t *testing.T) {
+	primaries := []config.Primary{
+		{Kind: gadgetKind, Owns: []config.Owns{{Kind: clusterRoleKind, Name: "'x'"}, {System: "cloud", Collection: "buckets", Name: "'y'"}}},
+		{Kind: sprocketKind, Owns: []config.Owns{{Kind: gadgetKind, Name: "'z'"}}},
+	}
+	if got, want := primaryKinds(primaries), []schema.GroupVersionKind{gadgetKind, clusterRoleKind, sprocketKind, gadgetKind}; !reflect.DeepEqual(got, want) {
+		t.Errorf("primaryKinds = %v, want %v", got, want)
 	}
 }
 
-func TestOwnsKindsSkipFakeCollections(t *testing.T) {
-	owns := []config.Owns{{System: "cloud", Collection: "buckets", Name: "'x'"}, {Kind: gadgetKind, Name: "'y'"}}
-	if got := ownsKinds(owns); !reflect.DeepEqual(got, []schema.GroupVersionKind{gadgetKind}) {
-		t.Errorf("ownsKinds = %v", got)
+func TestLoadSamplesReadsEachEntrysSampleInOrder(t *testing.T) {
+	dir := t.TempDir()
+	var primaries []config.Primary
+	for _, kind := range []string{"Gadget", "Sprocket"} {
+		path := filepath.Join(dir, kind+".yaml")
+		if err := os.WriteFile(path, []byte("kind: "+kind+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		primaries = append(primaries, config.Primary{Sample: path})
+	}
+	samples, err := loadSamples(primaries)
+	if want := []map[string]any{{"kind": "Gadget"}, {"kind": "Sprocket"}}; err != nil || !reflect.DeepEqual(samples, want) {
+		t.Errorf("loadSamples = %v, %v; want %v", samples, err, want)
 	}
 }
 

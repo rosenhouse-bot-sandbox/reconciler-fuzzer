@@ -13,7 +13,6 @@ func kinded(slot, apiVersion, kind, name string) Action {
 }
 
 func TestSlotsClashOnlyOnGroupKindNamespaceAndName(t *testing.T) {
-	t.Skip("enabled by the config package")
 	for name, actions := range map[string][]Action{
 		"a Database and a User": {kinded("a", "toy/v1", "Database", "app"), kinded("b", "toy/v1", "User", "app")},
 		"two groups' Widgets":   {kinded("a", "toy/v1", "Widget", "app"), kinded("b", "other/v1", "Widget", "app")},
@@ -29,7 +28,6 @@ func TestSlotsClashOnlyOnGroupKindNamespaceAndName(t *testing.T) {
 }
 
 func TestValidateKindsRefusesAnUnlistedKind(t *testing.T) {
-	t.Skip("enabled by the config package")
 	cluster, database := schema.GroupKind{Group: "toy", Kind: "Cluster"}, schema.GroupKind{Group: "toy", Kind: "Database"}
 	p := &Plan{Steps: []Step{
 		{Actions: []Action{{Do: Create, Slot: "s"}, kinded("a", "toy/v1", "Cluster", "c")}},
@@ -44,5 +42,12 @@ func TestValidateKindsRefusesAnUnlistedKind(t *testing.T) {
 	}
 	if err := p.ValidateKinds([]schema.GroupKind{{Group: "other", Kind: "Cluster"}, database}); err == nil {
 		t.Error("ValidateKinds accepts a Cluster of another group.")
+	}
+}
+
+func TestValidateKindsRefusesAnObjectWithoutKind(t *testing.T) {
+	p := &Plan{Steps: []Step{{Actions: []Action{{Do: Create, Slot: "a", Object: json.RawMessage(`{"apiVersion":"toy/v1","metadata":{"name":"c"}}`)}}}}}
+	if err := p.ValidateKinds([]schema.GroupKind{{Group: "toy", Kind: "Cluster"}}); err == nil || !strings.Contains(err.Error(), "no kind") {
+		t.Errorf("ValidateKinds = %v, want an error that says the object has no kind.", err)
 	}
 }

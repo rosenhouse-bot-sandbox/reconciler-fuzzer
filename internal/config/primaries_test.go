@@ -32,7 +32,6 @@ fixtures: [fixture.yaml]
 `
 
 func TestPrimariesLoadEachEntry(t *testing.T) {
-	t.Skip("enabled by the config package")
 	c, err := config.Load(writeConfig(t, twoPrimaries))
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +61,6 @@ func TestPrimariesLoadEachEntry(t *testing.T) {
 }
 
 func TestReadyOfSeveralPrimariesTakesTheCRsKind(t *testing.T) {
-	t.Skip("enabled by the config package")
 	c, err := config.Load(writeConfig(t, twoPrimaries))
 	if err != nil {
 		t.Fatal(err)
@@ -79,13 +77,23 @@ func TestReadyOfSeveralPrimariesTakesTheCRsKind(t *testing.T) {
 	if _, err := c.Ready(cr("User")); err == nil {
 		t.Error("Ready(User) gives no error, though primaries lists no User.")
 	}
-	if keep, err := c.Retain(map[string]any{"apiVersion": "toy/v1", "kind": "Database", "keep": true}); keep || err != nil {
-		t.Errorf("Retain(Database) = %v, %v; want false, as only Cluster sets retain.", keep, err)
+	flagged := func(kind string) map[string]any {
+		return map[string]any{"apiVersion": "toy/v1", "kind": kind, "keep": true, "halted": true}
+	}
+	for name, judge := range map[string]func(map[string]any) (bool, error){"Retain": c.Retain, "Halted": c.Halted} {
+		if got, err := judge(flagged("Cluster")); !got || err != nil {
+			t.Errorf("%s(Cluster) = %v, %v; want true.", name, got, err)
+		}
+		if got, err := judge(flagged("Database")); got || err != nil {
+			t.Errorf("%s(Database) = %v, %v; want false, as only Cluster sets it.", name, got, err)
+		}
+		if _, err := judge(flagged("User")); err == nil {
+			t.Errorf("%s(User) gives no error, though primaries lists no User.", name)
+		}
 	}
 }
 
 func TestPrimaryIsOneEntryWithTheTopLevelValues(t *testing.T) {
-	t.Skip("enabled by the config package")
 	values := "values: {overlay: {spec.size: {maximum: 3}}, mutate: [spec.size], fixtures: {fixture.yaml: [data.label]}}\n"
 	short, err := config.Load(writeConfig(t, minimal(t)+values))
 	if err != nil {
@@ -113,10 +121,14 @@ values: {fixtures: {fixture.yaml: [data.label]}}
 	if s.Kind != l.Kind || s.Ready != l.Ready || filepath.Base(s.Sample) != filepath.Base(l.Sample) || !reflect.DeepEqual(s.Values, l.Values) {
 		t.Errorf("primary loads as %+v, primaries as %+v; want the same entry.", s, l)
 	}
+	for _, c := range []*config.Config{short, long} {
+		if got := c.FixtureValues[c.Fixtures[0]]; !slices.Equal(got, []string{"data.label"}) {
+			t.Errorf("FixtureValues = %v, want fixture.yaml's data.label.", c.FixtureValues)
+		}
+	}
 }
 
 func TestPrimariesRefusals(t *testing.T) {
-	t.Skip("enabled by the config package")
 	entry := "  - {kind: toy/v1/Cluster, sample: sample.yaml, ready: \"true\"}\n"
 	head := "launch: {binary: bin/controller, rbac: [role.yaml]}\ncrds: [crd.yaml]\n"
 	for name, c := range map[string]struct{ config, want string }{
@@ -127,6 +139,14 @@ func TestPrimariesRefusals(t *testing.T) {
 		"values inside primary":     {head + "primary: {kind: toy/v1/Cluster, sample: sample.yaml, ready: \"true\", values: {mutate: [spec.size]}}\n", "primary.values"},
 		"a model of a listed kind":  {head + "primaries:\n" + entry + "models: [{kind: toy/v1/Cluster, after: 1s}]\n", "models[0].kind"},
 		"an owns entry's own index": {head + "primaries:\n" + entry + "  - {kind: toy/v1/Database, sample: sample.yaml, ready: \"true\", owns: [{kind: v1/Secret}]}\n", "primaries[1].owns[0].name"},
+		"neither key":               {head, "primaries or primary is required"},
+		"an entry without kind":     {head + "primaries:\n" + entry + "  - {sample: sample.yaml, ready: \"true\"}\n", "primaries[1].kind is required"},
+		"an entry without sample":   {head + "primaries:\n" + entry + "  - {kind: toy/v1/Database, ready: \"true\"}\n", "primaries[1].sample is required"},
+		"top-level overlay":         {head + "primaries:\n" + entry + "values: {overlay: {spec.size: {maximum: 3}}}\n", "values.overlay"},
+		"top-level distinct":        {head + "primaries:\n" + entry + "values: {distinct: [spec.name]}\n", "values.distinct"},
+		"a retain's own index":      {head + "primaries:\n" + entry + "  - {kind: toy/v1/Database, sample: sample.yaml, ready: \"true\", retain: \"'x'\"}\n", "primaries[1].retain"},
+		"a periodic's own index":    {head + "primaries:\n" + entry + "  - {kind: toy/v1/Database, sample: sample.yaml, ready: \"true\", periodic: {every: 1s}}\n", "primaries[1].periodic.paths"},
+		"an unknown entry key":      {head + "primaries:\n" + entry + "  - {kind: toy/v1/Database, sample: sample.yaml, ready: \"true\", mutate: [spec.size]}\n", "primaries[1].mutate is not a key; primaries[1] takes kind, sample, ready, retain, halted, periodic, owns and values"},
 	} {
 		if _, err := config.Load(writeConfig(t, c.config)); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: Load = %v, want an error that names %s.", name, err, c.want)
@@ -135,13 +155,30 @@ func TestPrimariesRefusals(t *testing.T) {
 }
 
 func TestAFixtureOfAListedKindFails(t *testing.T) {
-	t.Skip("enabled by the config package")
-	path := writeConfig(t, twoPrimaries)
-	fixture := "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: settings}\n---\napiVersion: toy/v1\nkind: Database\nmetadata: {name: db}\n"
+	for _, c := range []struct{ config, fixture, kind string }{
+		{twoPrimaries, "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: settings}\n---\napiVersion: toy/v1\nkind: Database\nmetadata: {name: db}\n", "Database"},
+		{minimal(t), "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: settings}\n", "ConfigMap"},
+	} {
+		path := writeFixture(t, c.config, c.fixture)
+		if _, err := config.Load(path); err == nil || !strings.Contains(err.Error(), "fixture.yaml") || !strings.Contains(err.Error(), c.kind) {
+			t.Errorf("Load = %v, want an error that names fixture.yaml and %s.", err, c.kind)
+		}
+	}
+}
+
+func TestAFixtureLoadsBeforeItsKeysExpand(t *testing.T) {
+	path := writeFixture(t, twoPrimaries, "apiVersion: v1\nkind: Secret\nmetadata: {name: token}\nstringData: {url: ${systems.kube.url}}\n")
+	if _, err := config.Load(path); err != nil {
+		t.Error(err)
+	}
+}
+
+// writeFixture writes config, as writeConfig does, beside fixture.yaml
+// holding fixture.
+func writeFixture(t *testing.T, config, fixture string) string {
+	path := writeConfig(t, config)
 	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "fixture.yaml"), []byte(fixture), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := config.Load(path); err == nil || !strings.Contains(err.Error(), "fixture.yaml") || !strings.Contains(err.Error(), "Database") {
-		t.Errorf("Load = %v, want an error that names fixture.yaml and Database.", err)
-	}
+	return path
 }

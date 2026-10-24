@@ -78,8 +78,8 @@ type Runner struct {
 	// Actors maps a system name to what damages its objects.
 	Actors       map[string]Actor
 	FirstSettled FirstSettled
-	// Sample is the primary sample's body, which a create without an
-	// object uses.
+	// Sample is the first entry's sample, which a create without an object
+	// uses.
 	Sample map[string]any
 	// Select resolves a damage or changeFixture target. owner.World.Select
 	// implements it.
@@ -150,7 +150,7 @@ func Run(ctx context.Context, o Options) (check.Report, error) {
 	} else if err := p.Validate(); err != nil {
 		return check.Report{}, err
 	}
-	sample, err := loadSample(cfg.Primary.Sample)
+	samples, err := loadSamples(cfg.Primaries)
 	if err != nil {
 		return check.Report{}, err
 	}
@@ -164,7 +164,7 @@ func Run(ctx context.Context, o Options) (check.Report, error) {
 	if err != nil {
 		return check.Report{}, err
 	}
-	err = execute(ctx, o, cfg, p, sample, rec)
+	err = execute(ctx, o, cfg, p, samples, rec)
 	if closeErr := rec.Close(); err == nil {
 		err = closeErr
 	}
@@ -184,8 +184,9 @@ func Run(ctx context.Context, o Options) (check.Report, error) {
 }
 
 // execute starts the fake services, the Kubernetes system, the models and
-// the controller, runs the plan and stops them.
-func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, sample map[string]any, rec *trace.Recorder) (err error) {
+// the controller, runs the plan and stops them. samples are the entries'
+// samples, in config order.
+func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, samples []map[string]any, rec *trace.Recorder) (err error) {
 	env := &system.Env{Record: rec.Record, Dir: o.Out, Seed: p.Seed}
 	vars := map[string]map[string]string{}
 	controllerListeners := map[string]*interpose.Listener{}
@@ -208,8 +209,8 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 	}
 	watch, seen := modelKinds(cfg.Models)
 	k := kube.New(kube.Options{
-		CRDs: cfg.CRDs, RBAC: cfg.Launch.RBAC, Fixtures: cfg.Fixtures, Vars: flatten(vars), Warm: []map[string]any{sample},
-		Watch: slices.Concat([]schema.GroupVersionKind{cfg.Primary.Kind}, watch, ownsKinds(cfg.Primary.Owns)), Seen: seen,
+		CRDs: cfg.CRDs, RBAC: cfg.Launch.RBAC, Fixtures: cfg.Fixtures, Vars: flatten(vars), Warm: samples,
+		Watch: slices.Concat(primaryKinds(cfg.Primaries), watch), Seen: seen,
 	})
 	endpoints, err := k.Start(ctx, env)
 	if err != nil {
@@ -282,7 +283,7 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 		FirstSettled: func(ix *trace.Index, from, to time.Duration) (time.Duration, bool) {
 			return check.FirstSettled(ix, from, to, spec)
 		},
-		Sample: sample,
+		Sample: samples[0],
 		Failed: func() error {
 			var errs []error
 			for _, f := range fakes {
@@ -404,14 +405,16 @@ func traceModels(models []config.Model, ref func(schema.GroupVersionKind, string
 	return described, nil
 }
 
-// ownsKinds returns the kube kinds of the owns entries.
-func ownsKinds(owns []config.Owns) []schema.GroupVersionKind {
+// primaryKinds returns each entry's kind and the kube kinds of its owns.
+func primaryKinds(primaries []config.Primary) []schema.GroupVersionKind {
 	var kinds []schema.GroupVersionKind
-	for _, o := range owns {
-		if o.System != "" {
-			continue
+	for _, p := range primaries {
+		kinds = append(kinds, p.Kind)
+		for _, o := range p.Owns {
+			if o.System == "" {
+				kinds = append(kinds, o.Kind)
+			}
 		}
-		kinds = append(kinds, o.Kind)
 	}
 	return kinds
 }
@@ -438,14 +441,19 @@ func expandLaunch(l config.Launch, extra []string, systemVars map[string]map[str
 	return o, nil
 }
 
-func loadSample(path string) (map[string]any, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
+// loadSamples reads each entry's sample, in config order.
+func loadSamples(primaries []config.Primary) ([]map[string]any, error) {
+	var samples []map[string]any
+	for _, p := range primaries {
+		data, err := os.ReadFile(p.Sample)
+		if err != nil {
+			return nil, err
+		}
+		var sample map[string]any
+		if err := yaml.Unmarshal(data, &sample); err != nil {
+			return nil, fmt.Errorf("loading sample %s: %w", p.Sample, err)
+		}
+		samples = append(samples, sample)
 	}
-	var sample map[string]any
-	if err := yaml.Unmarshal(data, &sample); err != nil {
-		return nil, fmt.Errorf("loading sample %s: %w", path, err)
-	}
-	return sample, nil
+	return samples, nil
 }
