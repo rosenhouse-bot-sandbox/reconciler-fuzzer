@@ -102,7 +102,7 @@ func (e *execution) step(ctx context.Context, n int, step plan.Step) error {
 	}
 	err := e.faultPeriod(ctx, p)
 	if err != nil && !errors.Is(err, errSlotTaken) {
-		p.endFaults()
+		p.stopFaults()
 		return err
 	}
 	taken := err
@@ -110,7 +110,7 @@ func (e *execution) step(ctx context.Context, n int, step plan.Step) error {
 		return err
 	}
 	endFaults := e.Recorder.Now()
-	deadline, backoffBound := Deadline(endFaults, p.faultsEnded.Sub(p.start), e.maxPoll(step), e.Config.Timeouts)
+	deadline, backoffBound := Deadline(endFaults, p.faultsStopped.Sub(p.start), e.maxPoll(step), e.Config.Timeouts)
 	e.Recorder.Record(trace.Event{Phase: &trace.Phase{Step: n, Name: trace.EndFaults, Deadline: deadline, BackoffBound: backoffBound}})
 	if err := e.settle(ctx, n, deadline); err != nil {
 		return err
@@ -149,36 +149,37 @@ type startedFault struct {
 	model string
 }
 
-// period is step n's fault period. Its faults end once: when a create still
-// waits for its slot after Period, or else when the fault period ends.
+// period is step n's fault period, which the EndFaults phase ends. Its
+// faults stop once: when a create still waits for its slot after Period, or
+// else when the fault period ends.
 type period struct {
 	*execution
-	n           int
-	step        plan.Step
-	start       time.Time
-	started     []startedFault
-	faultsEnded time.Time
+	n             int
+	step          plan.Step
+	start         time.Time
+	started       []startedFault
+	faultsStopped time.Time
 }
 
 // periodEnd is when Period passes. The fault period may last longer.
 func (p *period) periodEnd() time.Time { return p.start.Add(time.Duration(p.step.Period)) }
 
-// endFaults ends the started faults, once.
-func (p *period) endFaults() {
-	if !p.faultsEnded.IsZero() {
+// stopFaults ends the started faults, once.
+func (p *period) stopFaults() {
+	if !p.faultsStopped.IsZero() {
 		return
 	}
-	p.faultsEnded = time.Now()
+	p.faultsStopped = time.Now()
 	for i, f := range p.started {
 		f.end()
 		p.Recorder.Record(faultEvent(p.n, i, p.step.Faults[i], f.model, true))
 	}
 }
 
-// resume ends the faults and resumes supervision, which restarts a killed
+// resume stops the faults and resumes supervision, which restarts a killed
 // controller.
 func (p *period) resume() error {
-	p.endFaults()
+	p.stopFaults()
 	return p.Process.Supervise(true)
 }
 
@@ -216,10 +217,13 @@ func (e *execution) faultPeriod(ctx context.Context, p *period) error {
 
 // awaitGone waits for ref, a slot's previous CR, to go. The step's faults or
 // a kill may hold it, so once Period passes, awaitGone ends them and waits
-// at most the settle timeout more. A create after Period first polls once,
-// so that a free slot keeps the faults.
+// at most the settle timeout more.
 func (p *period) awaitGone(ctx context.Context, ref trace.Ref) error {
-	if timedOut, err := p.waitGone(ctx, ref, max(time.Until(p.periodEnd()), PollInterval)); !timedOut {
+	if untilPeriodEnd := time.Until(p.periodEnd()); untilPeriodEnd > 0 {
+		if timedOut, err := p.waitGone(ctx, ref, untilPeriodEnd); !timedOut {
+			return err
+		}
+	} else if gone, err := p.Cluster.Gone(ctx, ref); gone || err != nil {
 		return err
 	}
 	if err := p.resume(); err != nil {
@@ -243,26 +247,22 @@ func (e *execution) waitGone(ctx context.Context, ref trace.Ref, timeout time.Du
 }
 
 // slotTaken names what holds ref, the slot's previous CR: the
-// deletionTimestamp and finalizers of its last version the observer
-// recorded.
+// deletionTimestamp and finalizers of the last version the observer
+// recorded, unless that version is a deletion.
 func (e *execution) slotTaken(ref trace.Ref) error {
 	taken := fmt.Errorf("%w after the %v settle timeout", errSlotTaken, e.Config.Timeouts.Settle)
 	e.ix.Append(e.Recorder.EventsSince(e.ix.Len())...)
-	for _, event := range slices.Backward(e.ix.Events()) {
-		if v := event.Version; v != nil && v.Ref == ref && !v.Deleted {
-			var cr struct {
-				Metadata struct {
-					DeletionTimestamp string   `json:"deletionTimestamp"`
-					Finalizers        []string `json:"finalizers"`
-				} `json:"metadata"`
-			}
-			if json.Unmarshal(v.Body, &cr) != nil {
-				return taken
-			}
-			return fmt.Errorf("%w: deletionTimestamp %s, finalizers %v", taken, cmp.Or(cr.Metadata.DeletionTimestamp, "none"), cr.Metadata.Finalizers)
-		}
+	var cr struct {
+		Metadata struct {
+			DeletionTimestamp string   `json:"deletionTimestamp"`
+			Finalizers        []string `json:"finalizers"`
+		} `json:"metadata"`
 	}
-	return taken
+	v, found := e.ix.Latest(ref)
+	if !found || v.Deleted || json.Unmarshal(v.Body, &cr) != nil {
+		return taken
+	}
+	return fmt.Errorf("%w: deletionTimestamp %s, finalizers %v", taken, cmp.Or(cr.Metadata.DeletionTimestamp, "none"), cr.Metadata.Finalizers)
 }
 
 // faultEvent records a fault's start or end. A holdWatch's names its kind.

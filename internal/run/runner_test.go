@@ -58,8 +58,10 @@ type fakeCluster struct {
 	*calls
 	createErr error
 	created   []map[string]any
-	// waitGone replaces WaitGone's answer when set.
+	// waitGone, when set, makes deleted CRs linger: Gone reports them there,
+	// and WaitGone answers with waitGone.
 	waitGone  func(ctx context.Context) error
+	goneErr   error
 	deleteErr error
 }
 
@@ -83,6 +85,11 @@ func (c *fakeCluster) Delete(_ context.Context, ref trace.Ref, propagation plan.
 		c.add("delete %s %s", ref.Name, propagation)
 	}
 	return c.deleteErr
+}
+
+func (c *fakeCluster) Gone(_ context.Context, ref trace.Ref) (bool, error) {
+	c.add("gone %s", ref.Name)
+	return c.waitGone == nil, c.goneErr
 }
 
 func (c *fakeCluster) WaitGone(ctx context.Context, ref trace.Ref) error {
@@ -228,7 +235,7 @@ func TestExecuteCreatesFromSample(t *testing.T) {
 	if err := f.runner.Execute(context.Background(), p); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.cluster.all()[:3]; !reflect.DeepEqual(got, []string{"create sample", "delete sample", "waitGone sample"}) {
+	if got := f.cluster.all()[:3]; !reflect.DeepEqual(got, []string{"create sample", "delete sample", "gone sample"}) {
 		t.Errorf("cluster calls = %q", got)
 	}
 	if _, mutated := f.runner.Sample["mutated"]; mutated || f.cluster.created[1]["mutated"] != true {
@@ -245,7 +252,7 @@ func TestExecuteWaitsForADeletedSlotBeforeCreating(t *testing.T) {
 	if err := f.runner.Execute(context.Background(), p); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"create first", "delete first", "waitGone first", "create second", "delete second"}
+	want := []string{"create first", "delete first", "gone first", "create second", "delete second"}
 	if got := f.cluster.all(); !reflect.DeepEqual(got, want) {
 		t.Errorf("cluster calls = %q, want %q", got, want)
 	}
@@ -299,8 +306,8 @@ func actionErrors(events []trace.Event) []string {
 	return errs
 }
 
-// faultHoldsDeletedCRs makes a deleted CR go only lingers after a kube
-// fault ends.
+// faultHoldsDeletedCRs makes a deleted CR go once a kube fault has ended
+// and lingers has passed.
 func faultHoldsDeletedCRs(f *fixture, lingers time.Duration) {
 	ended := make(chan struct{})
 	f.runner.Listeners["kube"] = fakeTarget{calls: f.faults, onEnd: func() { close(ended) }}
@@ -398,7 +405,6 @@ func TestExecuteRestartsAKilledControllerWhileACreateWaits(t *testing.T) {
 
 func TestExecuteKeepsTheFaultsForACreateAfterThePeriodIntoAFreeSlot(t *testing.T) {
 	f := newFixture(t, nil)
-	f.cluster.waitGone = func(ctx context.Context) error { return ctx.Err() }
 	p := recreateUnder(50*time.Millisecond, holdWidgets)
 	p.Steps[1].Actions[1].At = plan.Duration(150 * time.Millisecond)
 	if err := f.runner.Execute(context.Background(), p); err != nil {
@@ -447,7 +453,7 @@ func TestSlotTakenNamesWhatTheObserverLastSawHoldTheCR(t *testing.T) {
 		want   string
 	}{
 		{"held", []trace.Event{held}, taken + ": deletionTimestamp 2026-10-24T09:06:40Z, finalizers [toy/cleanup]"},
-		{"gone since", []trace.Event{held, gone}, taken + ": deletionTimestamp 2026-10-24T09:06:40Z, finalizers [toy/cleanup]"},
+		{"gone since", []trace.Event{held, gone}, taken},
 		{"unrecorded", nil, taken},
 		{"undecodable", []trace.Event{undecodable}, taken},
 	} {
@@ -492,6 +498,15 @@ func TestExecuteReturnsTheRunsDeadlineDuringTheSlotWait(t *testing.T) {
 	}
 	if got, want := actionErrors(f.rec.Events()), []string{context.DeadlineExceeded.Error()}; !reflect.DeepEqual(got, want) {
 		t.Errorf("action errors = %q, want %q", got, want)
+	}
+}
+
+func TestExecuteReturnsAGoneError(t *testing.T) {
+	f := newFixture(t, nil)
+	f.cluster.goneErr = errors.New("forbidden")
+	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{{Do: plan.Create, Slot: "a"}, {Do: plan.Delete, Slot: "a"}, {Do: plan.Create, Slot: "a"}}}}}
+	if err := f.runner.Execute(context.Background(), p); err == nil || !strings.Contains(err.Error(), "forbidden") {
+		t.Fatalf("Execute = %v, want the check's error", err)
 	}
 }
 

@@ -188,9 +188,9 @@ answer. An answer the map's `Gone` accepts is `system.ErrGone`.
 ## 8. Plans
 
 An action's `do` is `create`, `update`, `delete` (optionally `Foreground`),
-`restart`, `kill` (the controller stays down until the faults end), `damage`
-(of an instance the controller created) or `changeFixture` (of a fixture, on
-any system). `plan.go` documents each.
+`restart`, `kill` (the controller stays down until end faults), `damage` (of an
+instance the controller created) or `changeFixture` (of a fixture, on any
+system). `plan.go` documents each.
 
 A `target` has `system` (default `kube`), `group`, `resource`, `namespace`,
 `name`, `role` and `nth` (default 1). Empty fields match anything.

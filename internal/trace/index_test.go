@@ -389,6 +389,20 @@ func TestPrevious(t *testing.T) {
 	}
 }
 
+func TestLatest(t *testing.T) {
+	var b tt.Builder
+	b.Add(tt.Version(widgetA, "u", "1", nil)).
+		Add(tt.Version(widgetA, "u", "2", nil)).
+		Add(tt.Version(widgetB, "w", "5", nil))
+	ix := b.Index()
+	if v, found := ix.Latest(widgetA); !found || v.RV != "2" {
+		t.Errorf("Latest(a) = %+v, %v; want version 2", v, found)
+	}
+	if v, found := ix.Latest(cm); found {
+		t.Errorf("Latest(c) = %+v, want none", v)
+	}
+}
+
 // A fake's partial write carries no resourceVersion, so the observer's
 // next version says whether it changed anything.
 func TestChangedJudgesAFakesWriteWithNoRVByTheObserver(t *testing.T) {

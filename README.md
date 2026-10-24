@@ -168,7 +168,8 @@ models:
   also fails one with no Gadget. `track: d` fails a CR that stays ready longer than `d` after
   the controller saw its Gadget not ready.
 - Generated plans then draw two model faults. `stuck` keeps Gadgets not ready, and `slowDelete`
-  holds their deletion, until the fault period ends. A plan step writes one as
+  holds their deletion, until the fault period ends, or until `period` passes while a create
+  waits for a deleted CR. A plan step writes one as
   `{"match": {"group": "example.com", "resource": "gadgets"}, "stuck": true}`.
 - `status:` adds literal fields to the model's status writes, such as a PVC's `{phase: Bound}`.
   While `stuck` lasts, the `stuckStatus:` fields, such as `{phase: Pending}`, replace them.

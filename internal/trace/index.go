@@ -347,6 +347,15 @@ func (ix *Index) VersionOf(ref Ref, rv string) (Version, bool) {
 	return *e.Version, true
 }
 
+// Latest is the last version of ref that the observer recorded.
+func (ix *Index) Latest(ref Ref) (Version, bool) {
+	versions := ix.versions[Ref{System: ref.System, Group: ref.Group, Resource: ref.Resource}][ref]
+	if len(versions) == 0 {
+		return Version{}, false
+	}
+	return *versions[len(versions)-1].Version, true
+}
+
 // Previous is the version of ref, of the same instance, that the observer
 // recorded just before ref's version rv.
 func (ix *Index) Previous(ref Ref, rv string) (Version, bool) {
