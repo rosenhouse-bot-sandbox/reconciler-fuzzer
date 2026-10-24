@@ -312,6 +312,10 @@ func faultHoldsDeletedCRs(f *fixture, lingers time.Duration) {
 	ended := make(chan struct{})
 	f.runner.Listeners["kube"] = fakeTarget{calls: f.faults, onEnd: func() { close(ended) }}
 	f.cluster.waitGone = func(ctx context.Context) error {
+		// Like kube.WaitGone's first GET, a wait past its deadline fails.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		select {
 		case <-ended:
 		case <-ctx.Done():
@@ -507,7 +511,7 @@ func TestExecuteReturnsAGoneError(t *testing.T) {
 	f.cluster.goneErr = errors.New("forbidden")
 	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{{Do: plan.Create, Slot: "a"}, {Do: plan.Delete, Slot: "a"}, {Do: plan.Create, Slot: "a"}}}}}
 	if err := f.runner.Execute(context.Background(), p); err == nil || !strings.Contains(err.Error(), "forbidden") {
-		t.Fatalf("Execute = %v, want the check's error", err)
+		t.Fatalf("Execute = %v, want Gone's error", err)
 	}
 }
 

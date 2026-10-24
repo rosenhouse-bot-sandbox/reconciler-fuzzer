@@ -216,8 +216,8 @@ func (e *execution) faultPeriod(ctx context.Context, p *period) error {
 }
 
 // awaitGone waits for ref, a slot's previous CR, to go. The step's faults or
-// a kill may hold it, so once Period passes, awaitGone ends them and waits
-// at most the settle timeout more.
+// a kill may hold it, so once Period passes with ref still there, awaitGone
+// ends them and waits at most the settle timeout more.
 func (p *period) awaitGone(ctx context.Context, ref trace.Ref) error {
 	if untilPeriodEnd := time.Until(p.periodEnd()); untilPeriodEnd > 0 {
 		if timedOut, err := p.waitGone(ctx, ref, untilPeriodEnd); !timedOut {
