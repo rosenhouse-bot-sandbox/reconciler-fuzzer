@@ -103,15 +103,15 @@ listeners forward the caller's `Authorization`; the kube listeners drop it.
 
 A fault matches by verb, group, resource, subresource and name. An empty field
 matches anything. Subresource `-` matches only a request without one. `nth: k`
-picks the k-th matching request since the fault started; `nth: 0` picks every
-one. The first active fault that picks a request applies: `error{code,
-retryAfter}` answers with the map's error, `delay{d}` holds the request, and
-`drop` aborts it unforwarded, with status 0. `dropResponse` forwards it,
-records the answer, then aborts the client's connection. `killAfter` also kills
-the controller, harness-caused, before aborting. Neither picks or counts a
-watch. `holdWatch` names a kube kind by `group` and `resource`, and picks no
-request: while it lasts, every controller watch of the kind forwards nothing,
-and at its end each stream delivers what it held, in order.
+picks the k-th match since the fault started; `nth: 0` picks every one. The
+first active fault that picks a request applies: `error{code, retryAfter}`
+answers with the map's error, `delay{d}` holds the request, and `drop` aborts
+it unforwarded, with status 0. `dropResponse` forwards it, records the answer,
+then aborts the client's connection. `killAfter` also kills the controller,
+harness-caused, before aborting. Neither picks or counts a watch. `holdWatch`
+names a kube kind by `group` (empty is the core group) and `resource`, and
+picks no request: while it lasts, every controller watch of the kind forwards
+nothing, and at its end each stream delivers what it held, in order.
 
 **Seen.** A listener records a `seen` for each object of its `Seen` kinds, or
 of every kind with `SeenAll`, that a 2xx response shows its caller. An

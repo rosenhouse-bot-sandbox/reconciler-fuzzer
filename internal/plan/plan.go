@@ -113,7 +113,8 @@ type Fault struct {
 	// SlowDelete holds each matching object's deletion until the fault ends.
 	SlowDelete bool `json:"slowDelete,omitempty"`
 	// HoldWatch pauses the controller's watch events of the kind Match's
-	// group and resource name, and delivers them in order when it ends.
+	// group and resource name, and delivers them in order when it ends. An
+	// empty group names the core group.
 	HoldWatch bool `json:"holdWatch,omitempty"`
 }
 
