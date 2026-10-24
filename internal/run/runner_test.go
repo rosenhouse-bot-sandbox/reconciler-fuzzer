@@ -480,6 +480,22 @@ func TestExecuteKeepsTheFaultsWhenTheSlotFreesWithinThePeriod(t *testing.T) {
 	}
 }
 
+func TestExecuteKeepsTheFaultsWhenTheSlotFreesAsThePeriodEnds(t *testing.T) {
+	f := newFixture(t, nil)
+	f.cluster.waitGone = func(ctx context.Context) error {
+		<-ctx.Done()
+		f.cluster.waitGone = nil // The CR goes as the wait gives up.
+		return ctx.Err()
+	}
+	if err := f.runner.Execute(context.Background(), recreateUnder(100*time.Millisecond, holdWidgets)); err != nil {
+		t.Fatal(err)
+	}
+	want := recreated("fault 1.0 start", "action 1.0 delete a first", "action 1.1 create a second", "fault 1.0 end")
+	if got := summarize(f.rec.Events()); !reflect.DeepEqual(got, want) {
+		t.Errorf("events:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
 func TestExecuteEndsTheFaultsForACreateAfterThePeriodIntoAHeldSlot(t *testing.T) {
 	f := newFixture(t, nil)
 	faultHoldsDeletedCRs(f, 0)
@@ -753,7 +769,14 @@ func TestExecuteReturnsAWaitGoneError(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newFixture(t, nil)
-			f.cluster.waitGone = func(context.Context) error { return errors.New("forbidden") }
+			waits := 0
+			f.cluster.waitGone = func(context.Context) error {
+				// A create that goes on waiting after the error succeeds.
+				if waits++; waits == 1 {
+					return errors.New("forbidden")
+				}
+				return nil
+			}
 			p := &plan.Plan{Steps: []plan.Step{{Period: plan.Duration(c.period), Actions: []plan.Action{
 				{Do: plan.Create, Slot: "a"}, {Do: plan.Delete, Slot: "a"}, {Do: plan.Create, Slot: "a"},
 			}}}}

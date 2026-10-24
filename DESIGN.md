@@ -212,13 +212,13 @@ decodes strictly and validates each action's slot and fields (`plan.go`).
 every live CR, and step `planSteps + 1`, which restarts the controller (§17,
 entry 4).
 
-**Deadline.** `endFaults + settle + min(faults, backoffCap) + maxPoll`. `faults`
-runs from the step's start until its fault period ends, or until a create's slot
-wait ends its faults. `maxPoll` is the longest poll interval of the systems the
-step's faults and `damage` and `changeFixture` actions name, and of every fake
-when the step changes a CR. A fake's poll is its `poll`, by default `stable`.
-The runner gives a model fault to the first model or fake that `Takes` it; none
-is a harness error. A create into an emptied slot waits until its previous CR no
+**Deadline.** `endFaults + settle + min(faults, backoffCap) + maxPoll`.
+`endFaults` is the end of the fault period. `faults` runs from the step's start
+until then, or until a create's slot wait ends the faults sooner. `maxPoll` is
+the longest poll interval of the systems the step's faults and `damage` and
+`changeFixture` actions name, and of every fake when the step changes a CR. The
+runner gives a model fault to the first model or fake that `Takes` it; none is a
+harness error. A create into an emptied slot waits until its previous CR no
 longer exists. Once `period` has passed, the wait ends the step's faults and
 restarts a killed controller. It gives up `deadline - endFaults` after the later
 of the faults' end and the slot's delete, and the plan ends after the step. Any

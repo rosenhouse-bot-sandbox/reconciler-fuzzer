@@ -238,7 +238,8 @@ func (s *stepRun) awaitGone(ctx context.Context, d deletion) error {
 		if timedOut, err := s.waitGone(ctx, d.ref, s.periodEnd()); !timedOut {
 			return err
 		}
-	} else if gone, err := s.Cluster.Gone(ctx, d.ref); gone || err != nil {
+	}
+	if gone, err := s.Cluster.Gone(ctx, d.ref); gone || err != nil {
 		return err
 	}
 	if err := s.resume(); err != nil {
@@ -266,9 +267,9 @@ func (e *execution) waitGone(ctx context.Context, ref trace.Ref, until time.Time
 	return false, err
 }
 
-// slotTaken is the error of a create that gave up after waiting waited for
-// ref, the slot's previous CR. The error describes the last version of ref
-// that the observer recorded, which may be of another CR with the same name.
+// slotTaken is the error of a create that waited for ref, the slot's
+// previous CR, and gave up. The error describes the last version of ref that
+// the observer recorded, which may be of another CR with the same name.
 func (e *execution) slotTaken(ref trace.Ref, waited time.Duration) error {
 	taken := fmt.Errorf("%w after the create waited %v", errSlotTaken, waited.Round(time.Millisecond))
 	e.ix.Append(e.Recorder.EventsSince(e.ix.Len())...)
