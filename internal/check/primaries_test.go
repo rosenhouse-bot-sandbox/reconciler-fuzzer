@@ -302,26 +302,34 @@ func TestRestoreIgnoresPeriodicPathsWithTheOtherVolatileFields(t *testing.T) {
 	body := func(n int, at, tier, message string) map[string]any {
 		b := refreshed(n, "t1", map[string]any{"message": message})
 		metadata := b["metadata"].(map[string]any)
-		metadata["annotations"] = map[string]any{"refreshed": at}
+		if at != "" {
+			metadata["annotations"] = map[string]any{"refreshed": at}
+		}
 		metadata["labels"] = map[string]any{"tier": tier}
 		return b
 	}
-	for tier, want := range map[string]string{"x": "", "y": "databases.toy ns/a (rule 1, slot a): metadata.labels"} {
+	for name, tc := range map[string]struct{ before, tier, want string }{
+		"a refresh":                    {"t1", "x", ""},
+		"a first refresh":              {"", "x", ""},
+		"a refresh and a label change": {"t1", "y", "databases.toy ns/a (rule 1, slot a): metadata.labels"},
+	} {
 		r := fleetRun(2, clusters, databases)
 		r.Spec.Primaries[1].Periodic = &trace.Periodic{Every: refreshEvery, Paths: []string{"metadata.annotations.refreshed"}}
 		r.Spec.Models = []trace.Model{{Kind: databases, Ready: config.ReadyConditionCEL}}
 		r.Begin()
 		uid := r.CreateCR("a", clusterA)
-		r.Create(ctl, databaseA, tt.OwnedBy(body(1, "t1", "x", ""), uid, true))
+		r.Create(ctl, databaseA, tt.OwnedBy(body(1, tc.before, "x", ""), uid, true))
 		r.Ready(clusterA).EndFaults().Settle()
 		r.Begin().Restart()
-		r.Update(trace.ModelCaller("toy", "databases"), databaseA, tt.OwnedBy(body(2, "t1", "x", "synced"), uid, true))
-		r.Update(ctl, databaseA, tt.OwnedBy(body(3, "t2", tier, "synced"), uid, true))
+		r.Update(trace.ModelCaller("toy", "databases"), databaseA, tt.OwnedBy(body(2, tc.before, "x", "synced"), uid, true))
+		r.Update(ctl, databaseA, tt.OwnedBy(body(3, "t2", tc.tier, "synced"), uid, true))
 		r.EndFaults().Settle()
-		if findings := restore(t, r); want == "" {
-			requireNone(t, findings)
-		} else {
-			requireFinding(t, findings, "Restore", 1, "changed resources", "kube/toy/databases", want)
+		findings := restore(t, r)
+		switch {
+		case tc.want == "" && len(findings) > 0:
+			t.Errorf("%s: findings = %+v, want none", name, findings)
+		case tc.want != "":
+			requireFinding(t, findings, "Restore", 1, "changed resources", "kube/toy/databases", tc.want)
 		}
 	}
 }

@@ -277,17 +277,13 @@ func differOnlyUnder(a, b json.RawMessage, paths []string) bool {
 	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
 		return false
 	}
-	for _, side := range []map[string]any{x, y} {
-		if metadata, _ := side["metadata"].(map[string]any); metadata != nil {
-			delete(metadata, "resourceVersion")
-			delete(metadata, "managedFields")
-			delete(metadata, "generation")
-		}
-	}
+	dropWriteFields(x)
+	dropWriteFields(y)
 	return onlyUnder(leafDiff("", x, y, nil), paths)
 }
 
-// onlyUnder reports whether diff holds paths, each under one of periodic.
+// onlyUnder reports whether diff is non-empty and each of its paths lies
+// under one of periodic.
 func onlyUnder(diff, periodic []string) bool {
 	return len(diff) > 0 && !slices.ContainsFunc(diff, func(path string) bool {
 		return !slices.ContainsFunc(periodic, func(p string) bool { return under(path, p) })
@@ -295,7 +291,8 @@ func onlyUnder(diff, periodic []string) bool {
 }
 
 // leafDiff appends the dotted paths at which a and b differ, descending
-// into maps both sides hold, and into lists of one length as path[*].
+// into maps, a missing one counting as empty, and into lists of one length
+// as path[*].
 func leafDiff(prefix string, a, b any, paths []string) []string {
 	if la, aList := a.([]any); aList {
 		if lb, bList := b.([]any); bList && len(la) == len(lb) {
@@ -305,8 +302,8 @@ func leafDiff(prefix string, a, b any, paths []string) []string {
 			return slices.Compact(paths)
 		}
 	}
-	ma, aMap := a.(map[string]any)
-	mb, bMap := b.(map[string]any)
+	ma, aMap := asMap(a)
+	mb, bMap := asMap(b)
 	if !aMap || !bMap {
 		x, _ := json.Marshal(a)
 		y, _ := json.Marshal(b)
@@ -323,6 +320,15 @@ func leafDiff(prefix string, a, b any, paths []string) []string {
 		paths = leafDiff(child, ma[key], mb[key], paths)
 	}
 	return paths
+}
+
+// asMap is v as a map, a missing value as an empty one.
+func asMap(v any) (map[string]any, bool) {
+	if v == nil {
+		return map[string]any{}, true
+	}
+	m, isMap := v.(map[string]any)
+	return m, isMap
 }
 
 // under reports whether path is periodic or lies under it.

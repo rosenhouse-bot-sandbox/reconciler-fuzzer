@@ -244,7 +244,7 @@ func TestBackoffFailsATightLoopWhileSeveralCRsLive(t *testing.T) {
 	requireNone(t, check.Backoff(tl.Index(), spec))
 }
 
-func TestBackoffRunBreaksOnItsOwningCRsGeneration(t *testing.T) {
+func TestBackoffRunBreaksOnItsCRsGenerationOrAnyCRsWhenUnowned(t *testing.T) {
 	cr := func(ref trace.Ref, generation int) trace.Event {
 		return tt.Version(ref, "u"+ref.Name, "v", map[string]any{"metadata": map[string]any{"name": ref.Name, "generation": generation}})
 	}
@@ -254,9 +254,9 @@ func TestBackoffRunBreaksOnItsOwningCRsGeneration(t *testing.T) {
 		event  trace.Event
 		breaks bool
 	}{
-		"its CR's":                     {owned, cr(widgetA, 2), true},
-		"another CR's":                 {owned, cr(widgetB, 2), false},
-		"any CR's, of a shared gadget": {map[string]any{}, cr(widgetB, 2), true},
+		"its CR's":                       {owned, cr(widgetA, 2), true},
+		"another CR's":                   {owned, cr(widgetB, 2), false},
+		"any CR's, of an unowned gadget": {map[string]any{}, cr(widgetB, 2), true},
 	} {
 		tl := retries(every(10*ms, 21), func(n int) trace.Event {
 			switch n {

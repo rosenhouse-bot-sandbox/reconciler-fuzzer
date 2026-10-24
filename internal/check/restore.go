@@ -2,7 +2,6 @@ package check
 
 import (
 	"encoding/json"
-	"fmt"
 	"maps"
 	"reflect"
 	"slices"
@@ -104,11 +103,7 @@ func differ(a, b json.RawMessage, modelled bool, ignore, periodic []string) []st
 	}
 	var paths []string
 	for _, side := range []map[string]any{was, is} {
-		if metadata, _ := side["metadata"].(map[string]any); metadata != nil {
-			delete(metadata, "resourceVersion")
-			delete(metadata, "managedFields")
-			delete(metadata, "generation")
-		}
+		dropWriteFields(side)
 		if modelled {
 			delete(side, "status")
 		}
@@ -118,20 +113,33 @@ func differ(a, b json.RawMessage, modelled bool, ignore, periodic []string) []st
 	}
 	for _, key := range slices.Sorted(maps.Keys(merge(was, is))) {
 		x, y := was[key], is[key]
-		if reflect.DeepEqual(x, y) || onlyUnder(leafDiff(key, x, y, nil), periodic) {
-			continue
-		}
 		mx, okx := x.(map[string]any)
 		my, oky := y.(map[string]any)
-		if key != "metadata" || !okx || !oky {
-			paths = append(paths, key)
-			continue
-		}
-		for _, sub := range slices.Sorted(maps.Keys(merge(mx, my))) {
-			if !reflect.DeepEqual(mx[sub], my[sub]) && !onlyUnder(leafDiff("metadata."+sub, mx[sub], my[sub], nil), periodic) {
-				paths = append(paths, fmt.Sprintf("metadata.%s", sub))
+		switch {
+		case key == "metadata" && okx && oky:
+			for _, sub := range slices.Sorted(maps.Keys(merge(mx, my))) {
+				if path := "metadata." + sub; differsOutside(periodic, path, mx[sub], my[sub]) {
+					paths = append(paths, path)
+				}
 			}
+		case differsOutside(periodic, key, x, y):
+			paths = append(paths, key)
 		}
 	}
 	return paths
+}
+
+// differsOutside reports whether x and y, at path, differ outside periodic
+// paths.
+func differsOutside(periodic []string, path string, x, y any) bool {
+	return !reflect.DeepEqual(x, y) && !onlyUnder(leafDiff(path, x, y, nil), periodic)
+}
+
+// dropWriteFields deletes the metadata fields that every write changes.
+func dropWriteFields(body map[string]any) {
+	if metadata, _ := body["metadata"].(map[string]any); metadata != nil {
+		delete(metadata, "resourceVersion")
+		delete(metadata, "managedFields")
+		delete(metadata, "generation")
+	}
 }
