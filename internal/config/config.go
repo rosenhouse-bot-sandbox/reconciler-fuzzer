@@ -209,15 +209,16 @@ type Model struct {
 	// A nil StuckStatus means Status, and an empty one means no fields.
 	Status, StuckStatus map[string]any
 	After               time.Duration
-	// Dependency is nil unless the kind is a readiness dependency of the
-	// primary.
+	// Dependency is nil unless the readiness of the CRs that own objects of
+	// the kind depends on them.
 	Dependency *Dependency
 }
 
-// Dependency marks a model kind as one the primary's readiness depends on.
+// Dependency marks a model kind, or a fake's resources, as ones whose
+// readiness their owning CR's readiness depends on.
 type Dependency struct {
-	// Required demands at least one owned dependency when a CR becomes
-	// Ready. It defaults to true.
+	// Required demands at least one owned dependency when a CR of the first
+	// Primaries entry becomes Ready. It defaults to true.
 	Required bool
 	// Track, when set, fails a CR that stays Ready longer than Track after
 	// the controller read a not-ready dependency.

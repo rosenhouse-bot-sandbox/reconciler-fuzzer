@@ -65,17 +65,20 @@ func TestReadyOfSeveralPrimariesTakesTheCRsKind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cr := func(kind string) map[string]any {
-		return map[string]any{"apiVersion": "toy/v1", "kind": kind, "status": map[string]any{"ready": true}}
+	cr := func(apiVersion, kind string) map[string]any {
+		return map[string]any{"apiVersion": apiVersion, "kind": kind, "status": map[string]any{"ready": true}}
 	}
-	if ready, err := c.Ready(cr("Cluster")); !ready || err != nil {
+	if ready, err := c.Ready(cr("toy/v1", "Cluster")); !ready || err != nil {
 		t.Errorf("Ready(Cluster) = %v, %v; want true.", ready, err)
 	}
-	if ready, err := c.Ready(cr("Database")); ready || err != nil {
+	if ready, err := c.Ready(cr("toy/v1", "Database")); ready || err != nil {
 		t.Errorf("Ready(Database) = %v, %v; want false.", ready, err)
 	}
-	if _, err := c.Ready(cr("User")); err == nil {
+	if _, err := c.Ready(cr("toy/v1", "User")); err == nil {
 		t.Error("Ready(User) gives no error, though primaries lists no User.")
+	}
+	if _, err := c.Ready(cr("other/v1", "Cluster")); err == nil {
+		t.Error("Ready of another group's Cluster gives no error.")
 	}
 	flagged := func(kind string) map[string]any {
 		return map[string]any{"apiVersion": "toy/v1", "kind": kind, "keep": true, "halted": true}
@@ -137,7 +140,7 @@ func TestPrimariesRefusals(t *testing.T) {
 		"primary and primaries":     {head + "primaries:\n" + entry + "primary: {kind: toy/v1/Database, sample: sample.yaml, ready: \"true\"}\n", "not both"},
 		"top-level mutate":          {head + "primaries:\n" + entry + "values: {mutate: [spec.size]}\n", "values.mutate"},
 		"values inside primary":     {head + "primary: {kind: toy/v1/Cluster, sample: sample.yaml, ready: \"true\", values: {mutate: [spec.size]}}\n", "primary.values"},
-		"a model of a listed kind":  {head + "primaries:\n" + entry + "models: [{kind: toy/v1/Cluster, after: 1s}]\n", "models[0].kind"},
+		"a model of a listed kind":  {head + "primaries:\n" + entry + "  - {kind: toy/v1/Database, sample: sample.yaml, ready: \"true\"}\nmodels: [{kind: toy/v1/Database, after: 1s}]\n", "models[0].kind"},
 		"an owns entry's own index": {head + "primaries:\n" + entry + "  - {kind: toy/v1/Database, sample: sample.yaml, ready: \"true\", owns: [{kind: v1/Secret}]}\n", "primaries[1].owns[0].name"},
 		"neither key":               {head, "primaries or primary is required"},
 		"an entry without kind":     {head + "primaries:\n" + entry + "  - {sample: sample.yaml, ready: \"true\"}\n", "primaries[1].kind is required"},

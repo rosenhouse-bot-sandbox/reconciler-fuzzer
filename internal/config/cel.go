@@ -44,7 +44,7 @@ func evalBool(program cel.Program, self map[string]any, expr string) (bool, erro
 	return value, nil
 }
 
-// CompileReady compiles a ready expression as Load compiles primary.ready.
+// CompileReady compiles a ready expression as Load compiles an entry's ready.
 func CompileReady(expr string) (func(self map[string]any) (bool, error), error) {
 	program, err := compile(expr)
 	if err != nil {
