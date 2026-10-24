@@ -294,6 +294,8 @@ func TestExecuteWaitsForADeletedSlotBeforeCreating(t *testing.T) {
 
 func TestExecuteEndsThePlanWhenADeletedSlotStaysTaken(t *testing.T) {
 	f := newFixture(t, nil)
+	// Ending a fault can take a while, as a model's sweep does.
+	f.runner.Listeners["kube"] = fakeTarget{calls: f.faults, onEnd: func() { time.Sleep(100 * time.Millisecond) }}
 	recordTheDeletion := sync.OnceFunc(func() {
 		f.rec.Record(trace.Event{Version: &trace.Version{
 			Ref: trace.Ref{System: "kube", Resource: "widgets", Namespace: "ns", Name: "first"}, UID: "u1", RV: "2",

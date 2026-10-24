@@ -256,9 +256,9 @@ func (e *execution) waitGone(ctx context.Context, ref trace.Ref, until time.Time
 }
 
 // slotTaken is the error of a create whose wait for ref, the slot's previous
-// CR, timed out. The wait ended waited after the step's faults stopped. The
-// error describes the last version of ref that the observer recorded, which
-// may be of another CR with the same name.
+// CR, timed out waited after the step's faults stopped. The error describes
+// the last version of ref that the observer recorded, which may be of another
+// CR with the same name.
 func (e *execution) slotTaken(ref trace.Ref, waited time.Duration) error {
 	taken := fmt.Errorf("%w %v after the step's faults ended", errSlotTaken, waited.Round(time.Millisecond))
 	e.ix.Append(e.Recorder.EventsSince(e.ix.Len())...)

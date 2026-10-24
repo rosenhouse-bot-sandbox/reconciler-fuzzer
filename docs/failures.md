@@ -55,8 +55,8 @@ existed. Once the step's `period` has passed, the wait ends the step's
 faults and restarts a killed controller. It gives up as long after the
 faults end as the step's deadline allows (DESIGN.md §9). The rest of the
 note names the `deletionTimestamp` and finalizers of the CR with that name,
-or says that it is not being deleted. The run then skips to the two steps
-that the runner appends.
+or says that it is not being deleted. The run then skips to the
+`delete all` and `restart` steps that the runner appends.
 
 `cloud: unmapped request POST /v2/buckets/b-1/acl` means the system's API
 map could not place a controller request on a resource. No check judges
