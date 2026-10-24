@@ -150,6 +150,9 @@ func Run(ctx context.Context, o Options) (check.Report, error) {
 	} else if err := p.Validate(); err != nil {
 		return check.Report{}, err
 	}
+	if err := p.ValidateKinds(cfg.ListedKinds()); err != nil {
+		return check.Report{}, err
+	}
 	samples, err := loadSamples(cfg.Primaries)
 	if err != nil {
 		return check.Report{}, err
