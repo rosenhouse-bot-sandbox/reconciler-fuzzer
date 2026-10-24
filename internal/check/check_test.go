@@ -285,10 +285,10 @@ func TestJudgeRunsConvergeThenCrash(t *testing.T) {
 func TestJudgeNotesAFailedAction(t *testing.T) {
 	b := cleanRun()
 	failed := tt.Action(1, "create", widgetA)
-	failed.Action.Index, failed.Action.Error = 2, "the slot's name is still taken 1s after the step's faults ended"
+	failed.Action.Index, failed.Action.Error = 2, "the slot's name is still taken after the create waited 1s"
 	b.At(10 * s).Add(failed)
 	notes := check.Judge(b.Index(), spec).Notes
-	if len(notes) != 1 || notes[0] != "Step 1, action 2 (create) failed at 10s: the slot's name is still taken 1s after the step's faults ended" {
+	if len(notes) != 1 || notes[0] != "Step 1, action 2 (create) failed at 10s: the slot's name is still taken after the create waited 1s" {
 		t.Fatalf("notes = %q", notes)
 	}
 }

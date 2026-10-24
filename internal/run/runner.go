@@ -23,7 +23,7 @@ import (
 // records Phase, Action and Fault events. It returns an error only when the harness itself fails; a
 // controller that does not settle is a finding, not an error.
 func (r *Runner) Execute(ctx context.Context, p *plan.Plan) error {
-	e := &execution{Runner: r, live: map[string]trace.Ref{}, deleted: map[string]trace.Ref{}, ix: trace.NewIndex(nil)}
+	e := &execution{Runner: r, live: map[string]trace.Ref{}, deleted: map[string]deletion{}, ix: trace.NewIndex(nil)}
 	for n, step := range p.Steps {
 		err := e.step(ctx, n, step)
 		if errors.Is(err, errSlotTaken) {
@@ -84,10 +84,16 @@ func Deadline(endFaults, faultsLasted, maxPoll time.Duration, t config.Timeouts)
 type execution struct {
 	*Runner
 	live map[string]trace.Ref
-	// deleted holds the last CR deleted from each slot, which a later
-	// create of the slot waits out.
-	deleted map[string]trace.Ref
+	// deleted holds the last deletion from each slot, which a later create
+	// of the slot waits out.
+	deleted map[string]deletion
 	ix      *trace.Index
+}
+
+// deletion is a CR that a delete action removed from its slot, and when.
+type deletion struct {
+	ref trace.Ref
+	at  time.Time
 }
 
 func (e *execution) phase(step int, name trace.PhaseName) {
@@ -222,26 +228,31 @@ func (s *stepRun) faultPeriod(ctx context.Context) error {
 	return sleepUntil(ctx, s.periodEnd())
 }
 
-// awaitGone waits until ref, the slot's previous CR, no longer exists. The
-// step's faults or a kill may hold ref. So once Period has passed with ref
-// still there, awaitGone ends them. It then waits until the allowance after
-// the faults stopped has passed.
-func (s *stepRun) awaitGone(ctx context.Context, ref trace.Ref) error {
-	if time.Now().Before(s.periodEnd()) {
-		if timedOut, err := s.waitGone(ctx, ref, s.periodEnd()); !timedOut {
+// awaitGone waits until d's CR, the slot's previous one, no longer exists.
+// The step's faults or a kill may hold it. So once Period has passed with
+// the CR still there, awaitGone ends them. It gives up once the allowance
+// has passed since the faults stopped, or since d if that is later.
+func (s *stepRun) awaitGone(ctx context.Context, d deletion) error {
+	begun := time.Now()
+	if begun.Before(s.periodEnd()) {
+		if timedOut, err := s.waitGone(ctx, d.ref, s.periodEnd()); !timedOut {
 			return err
 		}
-	} else if gone, err := s.Cluster.Gone(ctx, ref); gone || err != nil {
+	} else if gone, err := s.Cluster.Gone(ctx, d.ref); gone || err != nil {
 		return err
 	}
 	if err := s.resume(); err != nil {
 		return err
 	}
+	from := s.faultsStopped
+	if d.at.After(from) {
+		from = d.at
+	}
 	allowance, _ := s.allowance()
-	if timedOut, err := s.waitGone(ctx, ref, s.faultsStopped.Add(allowance)); !timedOut {
+	if timedOut, err := s.waitGone(ctx, d.ref, from.Add(allowance)); !timedOut {
 		return err
 	}
-	return s.slotTaken(ref, allowance)
+	return s.slotTaken(d.ref, time.Since(begun))
 }
 
 // waitGone waits until ref names no object, or until the time until.
@@ -255,12 +266,11 @@ func (e *execution) waitGone(ctx context.Context, ref trace.Ref, until time.Time
 	return false, err
 }
 
-// slotTaken is the error of a create whose wait for ref, the slot's previous
-// CR, timed out. waited is how long after the step's faults stopped it timed
-// out. The error describes the last version of ref that the observer
-// recorded, which may be of another CR with the same name.
+// slotTaken is the error of a create that gave up after waiting waited for
+// ref, the slot's previous CR. The error describes the last version of ref
+// that the observer recorded, which may be of another CR with the same name.
 func (e *execution) slotTaken(ref trace.Ref, waited time.Duration) error {
-	taken := fmt.Errorf("%w %v after the step's faults ended", errSlotTaken, waited.Round(time.Millisecond))
+	taken := fmt.Errorf("%w after the create waited %v", errSlotTaken, waited.Round(time.Millisecond))
 	e.ix.Append(e.Recorder.EventsSince(e.ix.Len())...)
 	var cr struct {
 		Metadata struct {
@@ -342,7 +352,7 @@ func (e *execution) act(ctx context.Context, a plan.Action, s *stepRun) (*trace.
 			return nil, err
 		}
 		delete(e.live, a.Slot)
-		e.deleted[a.Slot] = ref
+		e.deleted[a.Slot] = deletion{ref, time.Now()}
 		if err := e.Cluster.Delete(ctx, ref, a.Propagation); !errors.Is(err, system.ErrGone) {
 			return &ref, err
 		}

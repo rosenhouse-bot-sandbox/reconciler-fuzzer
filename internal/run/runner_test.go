@@ -332,15 +332,24 @@ func TestExecuteEndsThePlanWhenADeletedSlotStaysTaken(t *testing.T) {
 	faultEnd, _ := findFaultEnd(events, 1)
 	create, _ := findAction(events, 1, 1)
 	allowed, _ := Deadline(0, faultLasted(t, events), f.runner.Config.Poll("kube"), timeouts)
-	if waited := create.At - faultEnd.At; waited < allowed-20*time.Millisecond || waited > allowed+100*time.Millisecond {
-		t.Errorf("the create waited %v after the fault ended, want the %v that Deadline allows", waited, allowed)
+	if gaveUp := create.At - faultEnd.At; gaveUp < allowed-20*time.Millisecond || gaveUp > allowed+100*time.Millisecond {
+		t.Errorf("the create gave up %v after the fault ended, want the %v that Deadline allows", gaveUp, allowed)
 	}
-	note := regexp.MustCompile(`^the slot's name is still taken (\S+) after the step's faults ended: ` +
-		`the CR with that name has deletionTimestamp 2026-10-24T09:06:40Z and finalizers \[toy/cleanup toy/audit\]$`)
+	checkWaitNote(t, events, create, `: the CR with that name has deletionTimestamp 2026-10-24T09:06:40Z and finalizers [toy/cleanup toy/audit]`)
+}
+
+// checkWaitNote checks that a create's error notes how long it waited, and
+// then rest. The create began to wait once the step's previous action was
+// recorded.
+func checkWaitNote(t *testing.T, events []trace.Event, create trace.Event, rest string) {
+	t.Helper()
+	previous, _ := findAction(events, create.Action.Step, create.Action.Index-1)
+	waited := create.At - previous.At
+	note := regexp.MustCompile(`^the slot's name is still taken after the create waited (\S+)` + regexp.QuoteMeta(rest) + `$`)
 	if m := note.FindStringSubmatch(create.Action.Error); m == nil {
 		t.Errorf("action error = %q, want a match of %s", create.Action.Error, note)
-	} else if named, _ := time.ParseDuration(m[1]); (named - allowed).Abs() > 20*time.Millisecond {
-		t.Errorf("the note names %s, want about %v", m[1], allowed)
+	} else if named, _ := time.ParseDuration(m[1]); (named - waited).Abs() > 20*time.Millisecond {
+		t.Errorf("the note names %s, want the %v that the create waited", m[1], waited)
 	}
 }
 
@@ -428,7 +437,7 @@ func TestExecuteEndsTheFaultsAtThePeriodWhileACreateWaits(t *testing.T) {
 	if got := summarize(f.rec.Events()); !reflect.DeepEqual(got, want) {
 		t.Errorf("events:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	if lasted := faultLasted(t, f.rec.Events()); lasted < period-5*time.Millisecond || lasted >= timeouts.Settle {
+	if lasted := faultLasted(t, f.rec.Events()); lasted < period-5*time.Millisecond || lasted > period+100*time.Millisecond {
 		t.Errorf("the fault lasted %v, want the period %v", lasted, period)
 	}
 }
@@ -566,13 +575,13 @@ func TestExecuteBoundsTheBackoffByHowLongTheFaultsLasted(t *testing.T) {
 	}
 }
 
-func TestExecuteCountsEverySlotWaitFromTheEndOfTheFaults(t *testing.T) {
+func TestExecuteCountsTheWaitForACRDeletedDuringTheFaultsFromTheirEnd(t *testing.T) {
 	f := newFixture(t, nil)
 	faultHoldsDeletedCRs(f, 200*time.Millisecond)
 	deletesOnceTheFaultEnds := f.cluster.waitGone
 	waits := 0
 	f.cluster.waitGone = func(ctx context.Context) error {
-		// The first create waits twice: until the period ends, then until
+		// Slot a's create waits twice: until the period ends, then until
 		// its slot is free.
 		if waits++; waits <= 2 {
 			return deletesOnceTheFaultEnds(ctx)
@@ -581,10 +590,10 @@ func TestExecuteCountsEverySlotWaitFromTheEndOfTheFaults(t *testing.T) {
 		return ctx.Err()
 	}
 	p := &plan.Plan{Steps: []plan.Step{
-		{Actions: []plan.Action{{Do: plan.Create, Slot: "a", Object: widget("first")}}},
-		{Period: plan.Duration(50 * time.Millisecond), Faults: holdWidgets, Actions: []plan.Action{
-			{Do: plan.Delete, Slot: "a"}, {Do: plan.Create, Slot: "a", Object: widget("second")},
-			{Do: plan.Delete, Slot: "a"}, {Do: plan.Create, Slot: "a", Object: widget("third")},
+		{Actions: []plan.Action{{Do: plan.Create, Slot: "a", Object: widget("a1")}, {Do: plan.Create, Slot: "b", Object: widget("b1")}}},
+		{Period: plan.Duration(100 * time.Millisecond), Faults: holdWidgets, Actions: []plan.Action{
+			{Do: plan.Delete, Slot: "a"}, {Do: plan.Delete, Slot: "b"},
+			{Do: plan.Create, Slot: "a", Object: widget("a2")}, {Do: plan.Create, Slot: "b", Object: widget("b2")},
 		}},
 	}}
 	if err := f.runner.Execute(context.Background(), p); err != nil {
@@ -592,13 +601,46 @@ func TestExecuteCountsEverySlotWaitFromTheEndOfTheFaults(t *testing.T) {
 	}
 	events := f.rec.Events()
 	if got := actionErrors(events); len(got) != 1 {
-		t.Fatalf("action errors = %q, want the third create's", got)
+		t.Fatalf("action errors = %q, want slot b's create's", got)
 	}
 	faultEnd, _ := findFaultEnd(events, 1)
-	third, _ := findAction(events, 1, 3)
+	b, _ := findAction(events, 1, 3)
 	allowance, _ := Deadline(0, faultLasted(t, events), f.runner.Config.Poll("kube"), timeouts)
-	if waited := third.At - faultEnd.At; waited < allowance-20*time.Millisecond || waited > allowance+100*time.Millisecond {
-		t.Errorf("the third create gave up %v after the fault ended, want the %v that Deadline allows", waited, allowance)
+	if gaveUp := b.At - faultEnd.At; gaveUp < allowance-20*time.Millisecond || gaveUp > allowance+100*time.Millisecond {
+		t.Errorf("slot b's create gave up %v after the fault ended, want the %v that Deadline allows", gaveUp, allowance)
+	}
+	checkWaitNote(t, events, b, "")
+}
+
+func TestExecuteCountsTheWaitForACRDeletedAfterTheFaultsFromItsDelete(t *testing.T) {
+	f := newFixture(t, nil)
+	f.cluster.waitGone = func(ctx context.Context) error {
+		// Like kube.WaitGone's first GET, a wait past its deadline fails.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		select {
+		case <-time.After(100 * time.Millisecond):
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	p := recreateUnder(0, nil, plan.Action{Do: plan.Delete, Slot: "a"}, plan.Action{Do: plan.Create, Slot: "a", Object: widget("between")})
+	later := plan.Duration(2 * timeouts.Settle)
+	p.Steps[1].Actions[2].At, p.Steps[1].Actions[3].At = later, later
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if errs := actionErrors(f.rec.Events()); len(errs) != 0 {
+		t.Errorf("action errors = %q, want none", errs)
+	}
+	want := []string{
+		"create first", "delete first", "gone first", "waitGone first", "create between",
+		"delete between", "gone between", "waitGone between", "create second", `patch second {"spec":{"count":2}}`, "delete second",
+	}
+	if got := f.cluster.all(); !reflect.DeepEqual(got, want) {
+		t.Errorf("cluster calls = %q, want %q", got, want)
 	}
 }
 
@@ -611,7 +653,7 @@ func TestSlotTakenNamesWhatTheObserverLastSawHoldTheCR(t *testing.T) {
 	replaced := trace.Event{Version: &trace.Version{Ref: ref, UID: "u2", RV: "4",
 		Body: json.RawMessage(`{"metadata":{"finalizers":["toy/cleanup"]}}`)}}
 	undecodable := trace.Event{Version: &trace.Version{Ref: ref, UID: "u1", RV: "2", Body: json.RawMessage(`[]`)}}
-	const taken = "the slot's name is still taken 1.5s after the step's faults ended"
+	const taken = "the slot's name is still taken after the create waited 1.5s"
 	for _, c := range []struct {
 		name   string
 		events []trace.Event
@@ -677,11 +719,23 @@ func TestExecuteReturnsAGoneError(t *testing.T) {
 }
 
 func TestExecuteReturnsAWaitGoneError(t *testing.T) {
-	f := newFixture(t, nil)
-	f.cluster.waitGone = func(context.Context) error { return errors.New("forbidden") }
-	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{{Do: plan.Create, Slot: "a"}, {Do: plan.Delete, Slot: "a"}, {Do: plan.Create, Slot: "a"}}}}}
-	if err := f.runner.Execute(context.Background(), p); err == nil || !strings.Contains(err.Error(), "forbidden") {
-		t.Fatalf("Execute = %v, want the wait's error", err)
+	for _, c := range []struct {
+		name   string
+		period time.Duration
+	}{
+		{"before the period ends", 100 * time.Millisecond},
+		{"after the period", 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t, nil)
+			f.cluster.waitGone = func(context.Context) error { return errors.New("forbidden") }
+			p := &plan.Plan{Steps: []plan.Step{{Period: plan.Duration(c.period), Actions: []plan.Action{
+				{Do: plan.Create, Slot: "a"}, {Do: plan.Delete, Slot: "a"}, {Do: plan.Create, Slot: "a"},
+			}}}}
+			if err := f.runner.Execute(context.Background(), p); err == nil || !strings.Contains(err.Error(), "forbidden") {
+				t.Fatalf("Execute = %v, want the wait's error", err)
+			}
+		})
 	}
 }
 
