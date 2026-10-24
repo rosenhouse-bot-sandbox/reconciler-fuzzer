@@ -30,9 +30,6 @@ func TestGate(t *testing.T) {
 		}
 		for _, name := range names {
 			t.Run(filepath.Join(filepath.Dir(config), name)+" passes B0", func(t *testing.T) {
-				if name == "secondary-update" || name == "damage-volume" {
-					t.Skip("enabled by the toy-fleet package")
-				}
 				t.Parallel()
 				_, report := run1(t, config, run.Options{PlanPath: planPath(config, name)}, 0)
 				if report != "No findings.\n" {

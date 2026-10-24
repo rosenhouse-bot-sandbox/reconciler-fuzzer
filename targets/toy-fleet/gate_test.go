@@ -9,9 +9,13 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 )
 
-const databaseConfig = "database/config.yaml"
+const (
+	clusterConfig  = "cluster/config.yaml"
+	databaseConfig = "database/config.yaml"
+)
 
-// configs are the toy's configs. B0 passes every plan in plans/ beside each.
+// configs are the toy's configs with plans. B0 passes every plan in plans/
+// beside each.
 var configs = []string{"config.yaml", databaseConfig}
 
 func planPath(config, plan string) string {
@@ -42,7 +46,6 @@ func TestEveryPlanLoads(t *testing.T) {
 }
 
 func TestEveryPlanCreatesOnlyListedKinds(t *testing.T) {
-	t.Skip("enabled by the toy-fleet package")
 	for _, path := range configs {
 		c, err := config.Load(path)
 		if err != nil {
