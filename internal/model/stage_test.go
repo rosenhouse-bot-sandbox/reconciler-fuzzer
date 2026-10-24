@@ -661,7 +661,7 @@ func TestAModelFinalizerCountsAfterFromTheFirstDeletingVersion(t *testing.T) {
 	deleted := time.Now()
 	g.rv, g.deleting = "2", true
 	s.hear(g.version())
-	time.Sleep(hold * 3 / 4)
+	time.Sleep(hold / 2)
 	g.rv, g.finalizers = "3", []string{cleanup}
 	s.hear(g.version())
 	removed := w.await(t, 1)[0]
@@ -671,12 +671,13 @@ func TestAModelFinalizerCountsAfterFromTheFirstDeletingVersion(t *testing.T) {
 	}
 }
 
-// removedOnTime fails t unless the stage sent removed hold to 4/3 hold after
-// deleted.
+// removedOnTime fails t unless the stage sent removed between hold and
+// hold+100ms after deleted.
 func removedOnTime(t *testing.T, removed write, deleted time.Time, hold time.Duration) {
 	t.Helper()
-	if elapsed := removed.at.Sub(deleted); elapsed < hold || elapsed > hold+hold/3 {
-		t.Errorf("Removed the finalizer %v after the deletion, want %v to %v.", elapsed, hold, hold+hold/3)
+	latest := hold + 100*time.Millisecond
+	if elapsed := removed.at.Sub(deleted); elapsed < hold || elapsed > latest {
+		t.Errorf("Removed the finalizer %v after the deletion, want %v to %v.", elapsed, hold, latest)
 	}
 }
 

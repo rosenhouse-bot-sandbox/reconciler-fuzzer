@@ -169,8 +169,8 @@ Fill each key from the project:
   object, and removes it `after` past the deletion. Keep `after` under `timeouts.stable`, or
   a step can settle before the controller reacts to the release.
 - `budgets` and `timeouts`: leave them out at first. Raise `timeouts.settle` for a slow
-  controller, or for one that waits out `finalizer` holds one by one. Raise `stable` for one
-  that requeues with a delay by design. Ask the user first.
+  controller, or one that waits out `finalizer` holds one by one, and `stable` for one that
+  requeues with a delay by design. Ask the user first.
 
 ### External APIs
 

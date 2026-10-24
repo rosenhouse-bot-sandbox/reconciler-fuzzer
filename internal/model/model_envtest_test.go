@@ -274,7 +274,7 @@ func TestAStageHoldsAGadgetsDeletionWithItsFinalizer(t *testing.T) {
 	if err := k.WaitGone(ctx, ref); err != nil {
 		t.Fatalf("The gadget is not gone: %v", err)
 	}
-	if elapsed := time.Since(deleted); elapsed < hold || elapsed >= 2*hold {
-		t.Errorf("The gadget was gone %v after its delete, want %v to %v.", elapsed, hold, 2*hold)
+	if elapsed := time.Since(deleted); elapsed < hold || elapsed > hold+time.Second {
+		t.Errorf("The gadget was gone %v after its delete, want %v to %v.", elapsed, hold, hold+time.Second)
 	}
 }
