@@ -49,6 +49,7 @@
       ]
     },
     {
+      "period": "1s",
       "actions": [
         {
           "do": "delete",
@@ -57,6 +58,7 @@
       ]
     },
     {
+      "period": "1s",
       "actions": [
         {
           "do": "delete",
