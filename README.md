@@ -170,6 +170,10 @@ models:
 - Generated plans then draw two model faults. `stuck` keeps Gadgets not ready, and `slowDelete`
   holds their deletion, until the fault period ends. A plan step writes one as
   `{"match": {"group": "example.com", "resource": "gadgets"}, "stuck": true}`.
+- `finalizer: {name: example.com/cleanup, after: 500ms}` plays a controller that holds each
+  Gadget's deletion with its own finalizer, as a storage controller does. The model keeps the
+  finalizer on each live Gadget, and removes it 500 ms after the Gadget's deletion starts.
+  Without this key, only `slowDelete` holds a Gadget's deletion.
 - `status:` adds literal fields to the model's status writes, such as a PVC's `{phase: Bound}`.
   While `stuck` lasts, the `stuckStatus:` fields, such as `{phase: Pending}`, replace them.
   `stuckStatus:` defaults to `status:`. Each write removes the fields that only the other key
@@ -180,6 +184,8 @@ models:
 [targets/toy-widget/gadget](targets/toy-widget/gadget) runs the toy with a Gadget model.
 Another toy, in [targets/toy-fleet](targets/toy-fleet), reconciles Cluster, Database and User
 CRs, and its config models the third-party Volumes each Cluster owns.
+[targets/toy-fleet/protect](targets/toy-fleet/protect/config.yaml) also holds each Volume's
+deletion with a model finalizer.
 
 ### Fake services
 

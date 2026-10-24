@@ -60,12 +60,11 @@ Only `check` decides what is a bug.
 
 `system.System` has `Name() string`, `Start(ctx, env) (Endpoints, error)`,
 `Snapshot(ctx) ([]Resource, error)`, `Pending() bool` and `Fault(plan.Fault)
-(end func(), err error)`. `Endpoints` holds the controller and harness
-listeners and `Vars`, which expand as `${systems.<name>.<key>}` in launch args
-and env, and kube fixtures. Request faults go to a system's controller
-listener. Model faults go to the stage model or fake service that `Takes` them.
-Damage goes to the system the target names. Checks read `work` events, never
-`Pending`.
+(end func(), err error)`. `Endpoints` holds the controller and harness listeners
+and `Vars`, which expand as `${systems.<name>.<key>}` in launch args and env,
+and kube fixtures. Request faults go to a system's controller listener. Model
+faults go to the stage model or fake service that `Takes` them. Damage goes to
+the system the target names. Checks read `work` events, never `Pending`.
 
 ## 4. Trace
 
@@ -139,25 +138,25 @@ name, and `update` otherwise.
 `kube.Start` starts envtest, the run namespace, the controller's identity, both
 listeners and the observer, and creates the fixtures. Fixtures expand
 `${systems.<fake>.<key>}`. `Vars` holds `kubeconfig`, `namespace` and `url`.
-Harness actions return once the observer has recorded their effect. The
-observer list-watches cluster-wide each installed CRD, each served kind the
-config or a fixture names, and each served kind `launch.rbac` names that is not
-ignored (§10). These are the run event's `kinds`. It then watches any kind a
-listener records a call on, and records one `version` per
-(ref, resourceVersion).
+Harness actions return once the observer has recorded their effect. The observer
+list-watches cluster-wide each installed CRD, each served kind the config or a
+fixture names, and each served kind `launch.rbac` names that is not ignored
+(§10). These are the run event's `kinds`. It then watches any kind a listener
+records a call on, and records one `version` per (ref, resourceVersion).
 
 ## 7. Models and fake services
 
 `run.Run` starts the fakes, `kube`, the models, then the controller. A model
 writes through its own listener from `k.Listen`, hears versions through
 `k.Subscribe`, and records `work` as its work starts and ends. `gc` collects an
-instance whose owners a live read finds gone, following Kubernetes'
-cross-scope, foreground and orphan rules (`gc.go`). `namespace` finishes a
-terminating namespace. `model.NewStage` makes a stage model per `models:`
-entry, named `trace.ModelCaller` of its kind, which writes `Ready` True and the
-`status:` fields `after` a generation's first version. `stuck` writes matching
-objects `Ready` False and the `stuckStatus:` fields instead, and `slowDelete`
-adds a finalizer. Either's end writes `Ready` True and the `status:` fields.
+instance whose owners a live read finds gone (`gc.go`). `namespace` finishes a
+terminating namespace. `model.NewStage` makes a stage model per `models:` entry,
+named `trace.ModelCaller` of its kind, which writes `Ready` True and the
+`status:` fields `after` a generation's first version. With `finalizer:`, it
+keeps that finalizer on each live object, and removes it `finalizer.after` past
+the first deleting version it hears. `stuck` writes matching objects `Ready`
+False and the `stuckStatus:` fields instead, and `slowDelete` adds its own
+finalizer. Either's end writes `Ready` True and the `status:` fields.
 
 **Fake services.** `fake.New` makes a System of a `systems:` entry with a
 `process`. Start runs it in the config's directory with
@@ -439,7 +438,8 @@ and `tenant/` and `grant/` cross scopes. In `targets/toy-bucket`, each Bucket CR
 owns one bucket in the `crudfake` system `cloud`; its bugs start at B30, and
 `halted/` runs `--halt` under `primary.halted`. In `targets/toy-fleet`, a
 Cluster owns modelled third-party Volumes, a Database names a Cluster, and a
-User a Database. Its bugs start at B100, and `database/` fuzzes Databases.
+User a Database. Its bugs start at B100, `database/` fuzzes Databases, and in
+`protect/` the Volume model's finalizer holds each Volume's deletion.
 
 Each config's `plans/` holds its gated bugs' and B0's plans. A toy's
 `gate_envtest_test.go` runs `gate_test.go`'s bug rows and B0, and its

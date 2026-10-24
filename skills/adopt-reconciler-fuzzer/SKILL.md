@@ -163,7 +163,10 @@ Fill each key from the project:
   done, such as `{phase: Bound}`. Otherwise a controller that reads only those fields never
   sees the fault. For a Job, set `stuckStatus: {active: 1}`. A Job created during the fault
   then stays unfinished. The API server refuses to lower a done Job's `succeeded`, so that Job
-  stays done and `Ready`. The model retries the refused write until the fault ends.
+  stays done and `Ready`. The model retries the refused write until the fault ends. Add
+  `finalizer: {name, after}` when the other controller puts its own finalizer on each object,
+  as a storage controller does. The model keeps that finalizer on each live object, and
+  removes it `after` past the object's deletion.
 - `budgets` and `timeouts`: leave them out at first. Raise `timeouts.settle` for a slow
   controller, and `stable` for one that requeues with a delay by design. Ask the user first.
 
