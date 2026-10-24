@@ -282,3 +282,35 @@ func TestPropertySeesAnEmptyKindThatAnyEntryOwns(t *testing.T) {
 	r.Ready(clusterA).EndFaults().Settle()
 	requireNone(t, judgeWith(t, r, check.Property))
 }
+
+func TestBackoffRunOnACRBreaksOnANewGenerationOfItsOwner(t *testing.T) {
+	cluster := func(generation int) map[string]any {
+		return map[string]any{"metadata": map[string]any{"name": "a", "generation": generation}}
+	}
+	r := fleetRun(1, clusters, databases)
+	r.Begin()
+	uid := r.Create(trace.Harness, clusterA, cluster(1))
+	r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", false), uid, true))
+	for range 12 {
+		r.Call(ctl, "update", databaseB, 422)
+	}
+	r.Update(trace.Harness, clusterA, cluster(2))
+	for range 12 {
+		r.Call(ctl, "update", databaseB, 422)
+	}
+	requireNone(t, judgeWith(t, r, check.Backoff))
+}
+
+func TestRestoreIgnoresARefreshOfACRTheControllerCreated(t *testing.T) {
+	databaseA := tt.Ref("toy/databases", "ns", "a")
+	r := fleetRun(2, clusters, databases)
+	r.Spec.Primaries[1].Periodic = &trace.Periodic{Every: refreshEvery, Paths: []string{"status.refreshTime"}}
+	r.Begin()
+	uid := r.CreateCR("a", clusterA)
+	r.Create(ctl, databaseA, tt.OwnedBy(refreshed(1, "t1", nil), uid, true))
+	r.Ready(clusterA).EndFaults().Settle()
+	r.Begin().Restart()
+	r.Update(ctl, databaseA, tt.OwnedBy(refreshed(2, "t2", nil), uid, true))
+	r.EndFaults().Settle()
+	requireNone(t, restore(t, r))
+}

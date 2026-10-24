@@ -425,10 +425,11 @@ func (w *World) Primary(i Instance) bool { return slices.ContainsFunc(w.listed, 
 
 // Owner is the instance's owning CR at t: the first rule that matches.
 func (w *World) Owner(i Instance, t time.Duration) Owner {
-	if cr, found := w.follow(i, t, map[string]bool{}); found {
+	refs := w.ownerReferences(i, t)
+	if cr, found := w.follow(i, refs, t, map[string]bool{}); found {
 		return Owner{Rule: 1, CRs: []string{cr}}
 	}
-	if owner, found := w.unlisted(i, t); found {
+	if owner, found := w.unlisted(refs, t); found {
 		return Owner{Rule: 1, Unlisted: owner}
 	}
 	if cr, found := w.named(i, t); found {
@@ -549,10 +550,10 @@ func (w *World) names(rule OwnsRule, cr, i Instance, t time.Duration) bool {
 	return namespace == i.Ref.Namespace
 }
 
-// follow walks i's ownerReferences at t, controller first, to a CR.
-func (w *World) follow(i Instance, t time.Duration, seen map[string]bool) (string, bool) {
+// follow walks refs, i's ownerReferences at t, to a CR.
+func (w *World) follow(i Instance, refs []ownerReference, t time.Duration, seen map[string]bool) (string, bool) {
 	seen[i.UID] = true
-	for _, ref := range w.ownerReferences(i, t) {
+	for _, ref := range refs {
 		next, found := w.Instance(ref.UID)
 		if !found || seen[next.UID] {
 			continue
@@ -560,17 +561,17 @@ func (w *World) follow(i Instance, t time.Duration, seen map[string]bool) (strin
 		if w.Primary(next) {
 			return next.UID, true
 		}
-		if cr, found := w.follow(next, t, seen); found {
+		if cr, found := w.follow(next, w.ownerReferences(next, t), t, seen); found {
 			return cr, true
 		}
 	}
 	return "", false
 }
 
-// unlisted finds the first instance live at t that i's ownerReferences
-// name, controller first, and that is not a CR.
-func (w *World) unlisted(i Instance, t time.Duration) (string, bool) {
-	for _, ref := range w.ownerReferences(i, t) {
+// unlisted finds the first instance live at t that refs name and that is
+// not a CR.
+func (w *World) unlisted(refs []ownerReference, t time.Duration) (string, bool) {
+	for _, ref := range refs {
 		if owner, found := w.Instance(ref.UID); found && owner.Live(t) && !w.Primary(owner) {
 			return owner.UID, true
 		}
@@ -619,16 +620,20 @@ func (w *World) Select(creator trace.Caller, target plan.Target, slot string, t 
 	system := cmp.Or(target.System, "kube")
 	cr := ""
 	if slot != "" {
-		n := slices.IndexFunc(w.instances, func(i Instance) bool { return i.Live(t) && w.slots[i.UID] == slot })
-		switch {
-		case n < 0:
-			return trace.Ref{}, ErrNoMatch
-		case !w.Primary(w.instances[n]):
-			held := w.instances[n].Ref
-			kind := schema.GroupResource{Group: held.Group, Resource: held.Resource}
-			return trace.Ref{}, fmt.Errorf("%w: slot %s holds %s %s, which primaries does not list", ErrNoMatch, slot, kind, held.Name)
+		var held Instance
+		for _, i := range w.instances {
+			if i.Live(t) && w.slots[i.UID] == slot {
+				held = i
+			}
 		}
-		cr = w.instances[n].UID
+		switch {
+		case held.UID == "":
+			return trace.Ref{}, ErrNoMatch
+		case !w.Primary(held):
+			kind := schema.GroupResource{Group: held.Ref.Group, Resource: held.Ref.Resource}
+			return trace.Ref{}, fmt.Errorf("%w: slot %s holds %s %s, which primaries does not list", ErrNoMatch, slot, kind, held.Ref.Name)
+		}
+		cr = held.UID
 	}
 	nth := max(target.Nth, 1)
 	for _, i := range w.instances {

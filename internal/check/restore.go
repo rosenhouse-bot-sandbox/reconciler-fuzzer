@@ -42,7 +42,7 @@ func Restore(ix *trace.Index, s Spec) []Finding {
 			for _, i := range was {
 				if j := slices.IndexFunc(is, func(j owner.Instance) bool { return j.UID == i.UID }); j < 0 {
 					replaced[k] = append(replaced[k], v.describeAll([]owner.Instance{i}, from)...)
-				} else if paths := differ(v.w.Body(i, from), v.w.Body(is[j], to), v.s.modelled(i.Ref), v.s.Ignore[i.Ref.System]); len(paths) > 0 {
+				} else if paths := differ(v.w.Body(i, from), v.w.Body(is[j], to), v.s.modelled(i.Ref), v.s.Ignore[i.Ref.System]); len(paths) > 0 && !v.refreshed(i, from, to) {
 					changed[k] = append(changed[k], v.describeAll([]owner.Instance{i}, from)[0]+": "+strings.Join(paths, ", "))
 				}
 			}
@@ -78,6 +78,13 @@ func (v *view) damaged(step int, t time.Duration) (map[group]bool, func(key stri
 	return groups, func(key string) bool {
 		return keys[key] || slices.ContainsFunc(v.owners[key].CRs, func(uid string) bool { return crs[uid] })
 	}
+}
+
+// refreshed reports whether i is a CR whose body changed from from to to
+// only under its kind's periodic paths.
+func (v *view) refreshed(i owner.Instance, from, to time.Duration) bool {
+	p, listed := v.s.primary(i.Ref)
+	return listed && p.Periodic != nil && differOnlyUnder(v.w.Body(i, from), v.w.Body(i, to), p.Periodic.Paths)
 }
 
 func merge[K comparable, V any](a, b map[K]V) map[K]V {

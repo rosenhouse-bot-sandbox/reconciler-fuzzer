@@ -281,6 +281,18 @@ func TestSelectPicksTheNthMatchInCreationOrder(t *testing.T) {
 	}
 }
 
+func TestSelectMatchesTheNewestLiveCRInASlot(t *testing.T) {
+	widgetA2, child := tt.Ref("toy/widgets", "ns", "a2"), tt.Ref("configmaps", "ns", "a2-0")
+	tl := children()
+	tl.At(7*s, tt.Create(trace.Harness, widgetA2, "ua2", "7"), tt.Version(widgetA2, "ua2", "7", tt.Object("a2")),
+		tt.SlotAction(1, "create", "a", widgetA2)).
+		At(8*s, tt.Create(ctl, child, "c-a2", "8"), tt.Version(child, "c-a2", "8", tt.OwnedBy(tt.Object("a2-0"), "ua2", true)))
+	w := owner.New(tl.Index(), owner.Rules{})
+	if ref, err := w.Select(ctl, plan.Target{Resource: "configmaps"}, "a", 9*s); err != nil || ref != child {
+		t.Errorf("Select in slot a = %+v, %v; want %+v.", ref, err, child)
+	}
+}
+
 func TestSelectSkipsGoneInstancesAndTheSlotsGoneCR(t *testing.T) {
 	tl := children()
 	tl.At(7*s, tt.Deleted(tt.Ref("configmaps", "ns", "a-0"), "c-a0", "x", tt.Object("a-0"))).

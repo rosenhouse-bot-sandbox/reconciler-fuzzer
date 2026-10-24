@@ -455,6 +455,7 @@ func TestSpecForWithoutAConfigReadsTheRunEvent(t *testing.T) {
 	for name, mistake := range map[string]func(r *trace.Run){
 		"no primaries": func(r *trace.Run) { r.Primaries = nil },
 		"a bad ready":  func(r *trace.Run) { r.Primaries[0].Ready = "self.(" },
+		"a bad retain": func(r *trace.Run) { r.Primaries[0].Retain = "self.(" },
 	} {
 		bad := *run.Run
 		bad.Primaries = slices.Clone(run.Run.Primaries)

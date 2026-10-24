@@ -274,6 +274,23 @@ func TestBackoffRunBreaksOnlyOnItsOwnCRsGeneration(t *testing.T) {
 	}
 }
 
+func TestBackoffRunOnACRBreaksOnItsNewGeneration(t *testing.T) {
+	widget := func(generation int) map[string]any {
+		return map[string]any{"metadata": map[string]any{"name": "a", "generation": generation}}
+	}
+	r := newRun(1)
+	r.Begin()
+	r.Create(trace.Harness, widgetA, widget(1))
+	for range 8 {
+		r.Call(ctl, "update", widgetA, 422)
+	}
+	r.Update(trace.Harness, widgetA, widget(2))
+	for range 8 {
+		r.Call(ctl, "update", widgetA, 422)
+	}
+	requireNone(t, judgeWith(t, r, check.Backoff))
+}
+
 func TestBackoffRunBreaksOnlyOnASuccessOfTheSameRequest(t *testing.T) {
 	for name, edit := range map[string]func(c *trace.Call){
 		"another verb":        func(c *trace.Call) { c.Verb = "update" },

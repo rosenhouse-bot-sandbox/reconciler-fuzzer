@@ -267,23 +267,26 @@ func onlyPeriodic(ix *trace.Index, e trace.Event, periodic *trace.Periodic) bool
 	}
 	is, found := ix.VersionOf(ref, c.ResultRV)
 	was, foundWas := ix.Previous(ref, c.ResultRV)
-	if c.ResultRV == "" || !found || !foundWas {
+	return c.ResultRV != "" && found && foundWas && differOnlyUnder(was.Body, is.Body, periodic.Paths)
+}
+
+// differOnlyUnder reports whether bodies a and b differ, apart from what
+// every write changes, and only under paths.
+func differOnlyUnder(a, b json.RawMessage, paths []string) bool {
+	var x, y map[string]any
+	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
 		return false
 	}
-	var a, b map[string]any
-	if json.Unmarshal(was.Body, &a) != nil || json.Unmarshal(is.Body, &b) != nil {
-		return false
-	}
-	for _, side := range []map[string]any{a, b} {
+	for _, side := range []map[string]any{x, y} {
 		if metadata, _ := side["metadata"].(map[string]any); metadata != nil {
 			delete(metadata, "resourceVersion")
 			delete(metadata, "managedFields")
 			delete(metadata, "generation")
 		}
 	}
-	paths := leafDiff("", a, b, nil)
-	return len(paths) > 0 && !slices.ContainsFunc(paths, func(path string) bool {
-		return !slices.ContainsFunc(periodic.Paths, func(p string) bool { return under(path, p) })
+	diff := leafDiff("", x, y, nil)
+	return len(diff) > 0 && !slices.ContainsFunc(diff, func(path string) bool {
+		return !slices.ContainsFunc(paths, func(p string) bool { return under(path, p) })
 	})
 }
 
