@@ -193,6 +193,24 @@ func find(events []trace.Event, step int, name trace.PhaseName) (trace.Event, bo
 	return trace.Event{}, false
 }
 
+func findFaultEnd(events []trace.Event) (trace.Event, bool) {
+	for _, e := range events {
+		if e.Fault != nil && e.Fault.Ended {
+			return e, true
+		}
+	}
+	return trace.Event{}, false
+}
+
+func findAction(events []trace.Event, step, index int) (trace.Event, bool) {
+	for _, e := range events {
+		if e.Action != nil && e.Action.Step == step && e.Action.Index == index {
+			return e, true
+		}
+	}
+	return trace.Event{}, false
+}
+
 func TestExecuteRecordsStepsInOrder(t *testing.T) {
 	f := newFixture(t, nil)
 	p := &plan.Plan{Steps: []plan.Step{
@@ -302,38 +320,19 @@ func TestExecuteEndsThePlanWhenADeletedSlotStaysTaken(t *testing.T) {
 	if got := summarize(events); !reflect.DeepEqual(got, want) {
 		t.Fatalf("events:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	start, _ := find(events, 1, trace.FaultPeriod)
 	faultEnd, _ := findFaultEnd(events)
 	create, _ := findAction(events, 1, 1)
-	budget, _ := Deadline(0, faultEnd.At-start.At, timeouts.Stable, timeouts)
-	if waited := create.At - faultEnd.At; waited < budget-20*time.Millisecond || waited > budget+100*time.Millisecond {
-		t.Errorf("the create waited %v after the fault ended, want Deadline's %v", waited, budget)
+	allowed, _ := Deadline(0, faultLasted(t, events), f.runner.Config.Poll("kube"), timeouts)
+	if waited := create.At - faultEnd.At; waited < allowed-20*time.Millisecond || waited > allowed+100*time.Millisecond {
+		t.Errorf("the create waited %v after the fault ended, want the %v that Deadline allows", waited, allowed)
 	}
 	note := regexp.MustCompile(`^the slot's name is still taken (\S+) after the step's faults ended: ` +
 		`its previous CR has deletionTimestamp 2026-10-24T09:06:40Z and finalizers \[toy/cleanup toy/audit\]$`)
 	if m := note.FindStringSubmatch(create.Action.Error); m == nil {
 		t.Errorf("action error = %q, want a match of %s", create.Action.Error, note)
-	} else if named, _ := time.ParseDuration(m[1]); (named - budget).Abs() > 20*time.Millisecond {
-		t.Errorf("the note names %s, want about %v", m[1], budget)
+	} else if named, _ := time.ParseDuration(m[1]); (named - allowed).Abs() > 20*time.Millisecond {
+		t.Errorf("the note names %s, want about %v", m[1], allowed)
 	}
-}
-
-func findFaultEnd(events []trace.Event) (trace.Event, bool) {
-	for _, e := range events {
-		if e.Fault != nil && e.Fault.Ended {
-			return e, true
-		}
-	}
-	return trace.Event{}, false
-}
-
-func findAction(events []trace.Event, step, index int) (trace.Event, bool) {
-	for _, e := range events {
-		if e.Action != nil && e.Action.Step == step && e.Action.Index == index {
-			return e, true
-		}
-	}
-	return trace.Event{}, false
 }
 
 func actionErrors(events []trace.Event) []string {

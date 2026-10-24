@@ -66,9 +66,9 @@ func (r *Runner) Quiet(ctx context.Context) error {
 	}
 }
 
-// errSlotTaken says that a CR still had a create's slot name when the
-// create's wait timed out. The step still settles, and then the plan skips
-// to its appended steps.
+// errSlotTaken says that a create's wait for its slot's previous CR timed
+// out. The step still settles, and then the plan skips to its appended
+// steps.
 var errSlotTaken = errors.New("the slot's name is still taken")
 
 var errNoMatch = errors.New("no instance matches")
