@@ -267,8 +267,9 @@ that deletes and creates slot `a` with `"faults": [{"match": {"resource": "secre
 "holdWatch": true}]` tests how the controller acts on a stale cache. A report note that the
 `holdWatch` held no watch means the controller watches no such kind, or the match is wrong.
 A note that a `stuck` fault held no object means no object matched, or the API server refused
-each stuck write, as it does for a done Job. `trace.jsonl` records a refused write as a model
-call with status 422. Check `stuckStatus:` against the kind's status schema.
+each stuck write. `trace.jsonl` records a refused write as a model call with status 422. The
+API server refuses every stuck write to a done Job. Otherwise, check `stuckStatus:` against the
+kind's status schema.
 `<module>/targets/*/plans/` hold more.
 Run it from the config's directory, in the background, and act on the exit code:
 

@@ -5,6 +5,8 @@ package check
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -15,7 +17,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
-	"sigs.k8s.io/yaml"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/kube"
@@ -45,13 +46,15 @@ func TestSuggestedBuiltinModelsWorkOnARealAPIServer(t *testing.T) {
 			ready: map[string]any{"phase": "Bound"}, stuck: map[string]any{"phase": "Pending"}},
 		{name: "job-created-under-stuck", kind: "Job", spec: job, createdUnderStuck: true,
 			ready: map[string]any{"succeeded": 1, "active": nil}, stuck: map[string]any{"active": 1, "succeeded": nil}},
-		// The API server refuses to lower succeeded, so a done Job stays done.
+		// The API server refuses to lower a done Job's succeeded.
 		{name: "done-job", kind: "Job", spec: job, ready: map[string]any{"succeeded": 1, "active": nil}, refused: true},
 	}
 
 	ctx := context.Background()
+	kinds := map[string]trace.Kind{}
 	var watch []schema.GroupVersionKind
 	for kind := range builtinStatusKinds {
+		kinds[kind.Kind] = kind
 		watch = append(watch, schema.GroupVersionKind{Group: kind.Group, Version: kind.Version, Kind: kind.Kind})
 		if !slices.ContainsFunc(rows, func(r row) bool { return r.kind == kind.Kind }) {
 			t.Errorf("No row checks the suggested model of %s.", kind.Kind)
@@ -65,17 +68,9 @@ func TestSuggestedBuiltinModelsWorkOnARealAPIServer(t *testing.T) {
 	}
 	t.Cleanup(func() { k.Stop(ctx) })
 	harness := dynamic.NewForConfigOrDie(&rest.Config{Host: endpoints.Harness.URL()})
-	kinds, stages := map[string]trace.Kind{}, map[string]*model.Stage{}
-	for kind, keys := range builtinStatusKinds {
-		var suggested struct {
-			Status      map[string]any `json:"status"`
-			StuckStatus map[string]any `json:"stuckStatus"`
-		}
-		if err := yaml.UnmarshalStrict([]byte("{"+keys+"}"), &suggested); err != nil {
-			t.Fatalf("The suggestion for %s: %v", kind.Kind, err)
-		}
-		gvk := schema.GroupVersionKind{Group: kind.Group, Version: kind.Version, Kind: kind.Kind}
-		s, err := model.NewStage(k, config.Model{Kind: gvk, Stage: config.ReadyCondition, After: 100 * time.Millisecond, Status: suggested.Status, StuckStatus: suggested.StuckStatus})
+	stages := map[string]*model.Stage{}
+	for _, m := range loadSuggestedModels(t) {
+		s, err := model.NewStage(k, m)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -83,7 +78,7 @@ func TestSuggestedBuiltinModelsWorkOnARealAPIServer(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { s.Stop(ctx) })
-		kinds[kind.Kind], stages[kind.Kind] = kind, s
+		stages[m.Kind.Kind] = s
 	}
 
 	for _, c := range rows {
@@ -124,13 +119,16 @@ func TestSuggestedBuiltinModelsWorkOnARealAPIServer(t *testing.T) {
 				await("True", c.ready)
 				end = startStuck()
 			}
+			caller := trace.Caller(s.Name())
 			if c.refused {
-				calls.awaitRefused(t, trace.Caller(s.Name()), c.name)
+				calls.awaitMore(t, caller, c.name, 422, 0)
 				await("True", c.ready)
 			} else {
 				await("False", c.stuck)
 			}
+			accepted := calls.count(caller, c.name, 200)
 			end()
+			calls.awaitMore(t, caller, c.name, 200, accepted)
 			await("True", c.ready)
 			for deadline := time.Now().Add(10 * time.Second); s.Pending(); time.Sleep(20 * time.Millisecond) {
 				if time.Now().After(deadline) {
@@ -141,7 +139,30 @@ func TestSuggestedBuiltinModelsWorkOnARealAPIServer(t *testing.T) {
 	}
 }
 
-// readyIn returns the status of status's Ready condition.
+// loadSuggestedModels loads the models entry that report.md suggests for
+// each built-in kind, as a config would.
+func loadSuggestedModels(t *testing.T) []config.Model {
+	t.Helper()
+	dir := t.TempDir()
+	content := "launch: {binary: controller}\nprimary: {kind: v1/ConfigMap, sample: sample.yaml, ready: \"true\"}\nmodels:\n"
+	for kind := range builtinStatusKinds {
+		content += "  - " + suggestedModel(kind) + "\n"
+	}
+	for file, data := range map[string]string{"sample.yaml": "", "config.yaml": content} {
+		if err := os.WriteFile(filepath.Join(dir, file), []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c, err := config.Load(filepath.Join(dir, "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c.Models
+}
+
+// readyIn returns the Ready condition's status, such as "True". It does not
+// use ReadyConditionCEL, which is false for a PVC or a Job, because their
+// conditions lose observedGeneration (#163).
 func readyIn(status map[string]any) any {
 	conditions, _ := status["conditions"].([]any)
 	for _, c := range conditions {
@@ -177,19 +198,26 @@ func (r *recordedCalls) record(e trace.Event) {
 	}
 }
 
-// awaitRefused waits until the API server refuses a status write by caller
-// to the object name.
-func (r *recordedCalls) awaitRefused(t *testing.T, caller trace.Caller, name string) {
-	t.Helper()
-	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
-		r.mu.Lock()
-		refused := slices.ContainsFunc(r.calls, func(c trace.Call) bool {
-			return c.Caller == caller && c.Ref.Name == name && c.Subresource == "status" && c.Status == 422
-		})
-		r.mu.Unlock()
-		if refused {
-			return
+// count returns how many status writes by caller to the object name got
+// the response code.
+func (r *recordedCalls) count(caller trace.Caller, name string, code int) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, c := range r.calls {
+		if c.Caller == caller && c.Ref.Name == name && c.Subresource == "status" && c.Status == code {
+			n++
 		}
 	}
-	t.Fatalf("The API server refused no status write by %s to %s.", caller, name)
+	return n
+}
+
+// awaitMore waits until more than n such writes got the response code.
+func (r *recordedCalls) awaitMore(t *testing.T, caller trace.Caller, name string, code, n int) {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); r.count(caller, name, code) <= n; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%s made no more than %d status writes to %s that got %d.", caller, n, name, code)
+		}
+	}
 }

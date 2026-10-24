@@ -95,18 +95,31 @@ func unmodelledKinds(ix *trace.Index, t time.Duration, s Spec) []string {
 		if written[k] || s.modelled(trace.Ref{System: "kube", Group: k.Group, Resource: k.Resource}) || k.Group == s.PrimaryGroup && k.Resource == s.PrimaryResource || !slices.ContainsFunc(ix.Live(k.Group, k.Resource, t), noStatus) {
 			continue
 		}
-		gvk := k.Version + "/" + k.Kind
-		if k.Group != "" {
-			gvk = k.Group + "/" + gvk
+		line := fmt.Sprintf("The controller reads %s, whose status nothing models. If another controller sets it, add to models: - %s", kindName(k), suggestedModel(k))
+		if _, builtin := builtinStatusKinds[k]; builtin {
+			line += ", and set its status fields to the ones the controller reads"
 		}
-		entry := fmt.Sprintf("{kind: %s, stages: readyCondition, after: 200ms}", gvk)
-		if keys, builtin := builtinStatusKinds[k]; builtin {
-			entry = fmt.Sprintf("{kind: %s, stages: readyCondition, after: 200ms, %s}, with status and stuckStatus holding the fields the controller reads", gvk, keys)
-		}
-		lines = append(lines, fmt.Sprintf("The controller reads %s, whose status nothing models. If another controller sets it, add to models: - %s", gvk, entry))
+		lines = append(lines, line)
 	}
 	slices.Sort(lines)
 	return lines
+}
+
+// suggestedModel returns the models entry that report.md suggests for k.
+func suggestedModel(k trace.Kind) string {
+	entry := "{kind: " + kindName(k) + ", stages: readyCondition, after: 200ms"
+	if keys, builtin := builtinStatusKinds[k]; builtin {
+		entry += ", " + keys
+	}
+	return entry + "}"
+}
+
+// kindName names k as a config does, such as batch/v1/Job.
+func kindName(k trace.Kind) string {
+	if k.Group == "" {
+		return k.Version + "/" + k.Kind
+	}
+	return k.Group + "/" + k.Version + "/" + k.Kind
 }
 
 func noStatus(v trace.Version) bool {
