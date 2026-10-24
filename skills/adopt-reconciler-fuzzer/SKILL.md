@@ -166,9 +166,11 @@ Fill each key from the project:
   stays done and `Ready`. The model retries the refused write until the fault ends. Add
   `finalizer: {name, after}` when something else puts a finalizer on each object, such as
   Kubernetes' `kubernetes.io/pvc-protection` on a PVC. The model adds `name` to each live
-  object, and removes it `after` past the deletion. Keep `after` under `timeouts.settle`.
+  object, and removes it `after` past the deletion. Keep `after` under `timeouts.stable`, or
+  a step can settle before the controller reacts to the release.
 - `budgets` and `timeouts`: leave them out at first. Raise `timeouts.settle` for a slow
-  controller, and `stable` for one that requeues with a delay by design. Ask the user first.
+  controller, or for one that waits out `finalizer` holds one by one. Raise `stable` for one
+  that requeues with a delay by design. Ask the user first.
 
 ### External APIs
 

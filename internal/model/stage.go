@@ -66,9 +66,9 @@ type held struct {
 	generation int64
 	heardAt    time.Time
 	deleting   bool
-	// releaseAt is when the model's finalizer comes off: After past the first
-	// version the stage hears with a deletionTimestamp. The deletionTimestamp
-	// itself holds whole seconds.
+	// releaseAt is when the stage removes its finalizer: After past the first
+	// version it hears with a deletionTimestamp. It does not count from the
+	// deletionTimestamp, which holds whole seconds.
 	releaseAt  time.Time
 	finalizers []string
 	ready      *stageCondition

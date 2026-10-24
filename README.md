@@ -173,7 +173,9 @@ models:
 - `finalizer: {name: example.com/cleanup, after: 500ms}` plays a controller, such as a storage
   controller, that holds each Gadget's deletion with its own finalizer. The model adds the
   finalizer to each live Gadget it hears, and removes it 500 ms after it hears the deletion.
-  Keep `after` under `timeouts.settle`: a step settles only once its holds end.
+  Keep `after` under `timeouts.stable`, or a step can settle before the controller reacts to
+  the release. A step waits for every hold to end, so raise `timeouts.settle` for a controller
+  that waits out holds one by one.
 - `status:` adds literal fields to the model's status writes, such as a PVC's `{phase: Bound}`.
   While `stuck` lasts, the `stuckStatus:` fields, such as `{phase: Pending}`, replace them.
   `stuckStatus:` defaults to `status:`. Each write removes the fields that only the other key

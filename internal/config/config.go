@@ -212,7 +212,8 @@ type Model struct {
 }
 
 // Finalizer is a finalizer the model adds to each live object it hears. It
-// removes the finalizer After past the object's deletion.
+// removes the finalizer After past the first version the stage hears with a
+// deletionTimestamp.
 type Finalizer struct {
 	Name  string
 	After time.Duration

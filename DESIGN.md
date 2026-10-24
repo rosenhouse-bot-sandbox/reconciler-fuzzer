@@ -60,11 +60,12 @@ Only `check` decides what is a bug.
 
 `system.System` has `Name() string`, `Start(ctx, env) (Endpoints, error)`,
 `Snapshot(ctx) ([]Resource, error)`, `Pending() bool` and `Fault(plan.Fault)
-(end func(), err error)`. `Endpoints` holds the controller and harness listeners
-and `Vars`, which expand as `${systems.<name>.<key>}` in launch args and env,
-and kube fixtures. Request faults go to a system's controller listener. Model
-faults go to the stage model or fake service that `Takes` them. Damage goes to
-the system the target names. Checks read `work` events, never `Pending`.
+(end func(), err error)`. `Endpoints` holds the controller and harness
+listeners and `Vars`, which expand as `${systems.<name>.<key>}` in launch args
+and env, and kube fixtures. Request faults go to a system's controller
+listener. Model faults go to the stage model or fake service that `Takes` them.
+Damage goes to the system the target names. Checks read `work` events, never
+`Pending`.
 
 ## 4. Trace
 
@@ -138,25 +139,27 @@ name, and `update` otherwise.
 `kube.Start` starts envtest, the run namespace, the controller's identity, both
 listeners and the observer, and creates the fixtures. Fixtures expand
 `${systems.<fake>.<key>}`. `Vars` holds `kubeconfig`, `namespace` and `url`.
-Harness actions return once the observer has recorded their effect. The observer
-list-watches cluster-wide each installed CRD, each served kind the config or a
-fixture names, and each served kind `launch.rbac` names that is not ignored
-(§10). These are the run event's `kinds`. It then watches any kind a listener
-records a call on, and records one `version` per (ref, resourceVersion).
+Harness actions return once the observer has recorded their effect. The
+observer list-watches cluster-wide each installed CRD, each served kind the
+config or a fixture names, and each served kind `launch.rbac` names that is not
+ignored (§10). These are the run event's `kinds`. It then watches any kind a
+listener records a call on, and records one `version` per
+(ref, resourceVersion).
 
 ## 7. Models and fake services
 
 `run.Run` starts the fakes, `kube`, the models, then the controller. A model
 writes through its own listener from `k.Listen`, hears versions through
 `k.Subscribe`, and records `work` as its work starts and ends. `gc` collects an
-instance whose owners a live read finds gone, following Kubernetes' cross-scope,
-foreground and orphan rules (`gc.go`). `namespace` finishes a terminating
-namespace. `model.NewStage` makes a stage model per `models:` entry, named
-`trace.ModelCaller` of its kind, which writes `Ready` True and the `status:`
-fields `after` a generation's first version. It adds its `finalizer:` to live
-objects to hold a deletion for `finalizer.after`. `stuck` writes matching
+instance whose owners a live read finds gone, following Kubernetes'
+cross-scope, foreground and orphan rules (`gc.go`). `namespace` finishes a
+terminating namespace. `model.NewStage` makes a stage model per `models:`
+entry, named `trace.ModelCaller` of its kind, which writes `Ready` True and the
+`status:` fields `after` a generation's first version. `stuck` writes matching
 objects `Ready` False and the `stuckStatus:` fields instead, and `slowDelete`
-adds a finalizer. Either's end writes `Ready` True and the `status:` fields.
+adds its own finalizer. Either's end writes `Ready` True and the `status:`
+fields. A stage model keeps its `finalizer:` on each live object, and removes it
+`finalizer.after` past the first deleting version. Each hold is pending work.
 
 **Fake services.** `fake.New` makes a System of a `systems:` entry with a
 `process`. Start runs it in the config's directory with
@@ -398,19 +401,16 @@ fixtures file, whose entries' body paths `changeFixture` sets.
 sample, and the fixtures. rapid draws values, and the CRD's own validation, run
 in-process, rejects invalid ones. `Plan(seed)` draws 3 to 8 steps of 1 to 4
 actions and at most one fault each. Step 0 creates slot `a`. About 30% of steps
-hold one `restart`, `kill` or `damage`, so Restore has steps to judge. About
-30% of multi-action steps are bursts within 50 ms. A kube fault draws its
-request from what `launch.rbac` grants, creates weighted most (§17, entry 20).
-2 of 7 kube fault draws (of 9 with `models:`, 2 of which are `stuck` or
-`slowDelete`) hold a kind `launch.rbac` lets the controller watch, the primary
-and `primary.owns` kinds weighted most, and delete a live CR and create it
-again as it was. With fakes, half of the fault draws and of the `damage` draws
-name a fake: a request fault by verb alone, or a model fault on a `crud` fake,
-and a target by system alone. A read-only fake takes no damage and only read
-faults. `changeFixture` draws kube and system fixtures alike. `damage` only
-deletes. About 1 in 4 CR deletes is `Foreground`. A fault period lasts 0.5 s to
-`2 × stable`, plus the longest `track` for a model fault. `generate.go`
-documents the weights.
+hold one `restart`, `kill` or `damage`, so Restore has steps to judge. A kube
+fault draws its request from what `launch.rbac` grants, creates weighted most
+(§17, entry 20). 2 of 7 kube fault draws (of 9 with `models:`, 2 of which are
+`stuck` or `slowDelete`) hold a kind `launch.rbac` lets the controller watch,
+the primary and `primary.owns` kinds weighted most, and delete a live CR and
+create it again as it was. With fakes, half of the fault draws and of the
+`damage` draws name a fake: a request fault by verb alone, or a model fault on a
+`crud` fake, and a target by system alone. A read-only fake takes no damage and
+only read faults. `changeFixture` draws kube and system fixtures alike. `damage`
+only deletes. `generate.go` documents the weights, bursts and fault periods.
 
 **Hunt.** `hunt.Hunt` runs each seed, keeps runs with a new signature, replays
 each 5 times and shrinks it (`shrink.go`), trying at most 16 candidates.
