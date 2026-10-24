@@ -13,6 +13,7 @@ import (
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/kube"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/owner"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/system"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
@@ -70,8 +71,6 @@ func (r *Runner) Quiet(ctx context.Context) error {
 // previous CR to go. The step still settles, and then the plan skips to its
 // appended steps.
 var errSlotTaken = errors.New("the slot's previous CR is still there")
-
-var errNoMatch = errors.New("no instance matches")
 
 // Deadline is end faults + settle + min(fault period, backoffCap) + the
 // longest poll interval of the systems the step touched. backoffBound says
@@ -177,7 +176,7 @@ func (e *execution) faultPeriod(ctx context.Context, n int, step plan.Step, star
 			event.Error = err.Error()
 		}
 		e.Recorder.Record(trace.Event{Action: event})
-		if err != nil && !errors.Is(err, errNoMatch) {
+		if err != nil && !errors.Is(err, owner.ErrNoMatch) {
 			return started, fmt.Errorf("steps[%d].actions[%d] %s: %w", n, i, a.Do, err)
 		}
 	}
@@ -271,9 +270,9 @@ func (e *execution) act(ctx context.Context, a plan.Action) (*trace.Ref, error) 
 			creator = trace.Harness
 		}
 		e.ix.Append(e.Recorder.EventsSince(e.ix.Len())...)
-		ref, found := e.Select(e.ix, creator, *a.Target, a.Slot, e.Recorder.Now())
-		if !found {
-			return nil, errNoMatch
+		ref, err := e.Select(e.ix, creator, *a.Target, a.Slot, e.Recorder.Now())
+		if err != nil {
+			return nil, err
 		}
 		actor, known := e.Actors[ref.System]
 		if !known {
@@ -282,9 +281,9 @@ func (e *execution) act(ctx context.Context, a plan.Action) (*trace.Ref, error) 
 		if a.Patch != nil {
 			return &ref, actor.Patch(ctx, ref, a.Patch)
 		}
-		err := actor.Delete(ctx, ref, "")
+		err = actor.Delete(ctx, ref, "")
 		if errors.Is(err, system.ErrGone) {
-			return nil, fmt.Errorf("%w: %w", errNoMatch, err)
+			return nil, fmt.Errorf("%w: %w", owner.ErrNoMatch, err)
 		}
 		return &ref, err
 	}

@@ -1,6 +1,7 @@
 package owner_test
 
 import (
+	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -273,9 +274,9 @@ func TestSelectPicksTheNthMatchInCreationOrder(t *testing.T) {
 		{ctl, plan.Target{Resource: "configmaps"}, "z", ""},
 	}
 	for _, c := range cases {
-		ref, found := w.Select(c.creator, c.target, c.slot, 10*s)
-		if found != (c.want != "") || ref.Name != c.want {
-			t.Errorf("Select(%s, %+v, %q) = %+v, %v; want %q", c.creator, c.target, c.slot, ref, found, c.want)
+		ref, err := w.Select(c.creator, c.target, c.slot, 10*s)
+		if (err == nil) != (c.want != "") || ref.Name != c.want {
+			t.Errorf("Select(%s, %+v, %q) = %+v, %v; want %q", c.creator, c.target, c.slot, ref, err, c.want)
 		}
 	}
 }
@@ -288,7 +289,7 @@ func TestSelectSkipsGoneInstancesAndTheSlotsGoneCR(t *testing.T) {
 	if ref, _ := w.Select(ctl, plan.Target{Resource: "configmaps"}, "", 7*s); ref.Name != "a-1" {
 		t.Errorf("Select = %+v, want a-1", ref)
 	}
-	if ref, found := w.Select(ctl, plan.Target{Resource: "configmaps"}, "b", 8*s); found {
-		t.Errorf("Select in slot b after its CR went = %+v", ref)
+	if ref, err := w.Select(ctl, plan.Target{Resource: "configmaps"}, "b", 8*s); !errors.Is(err, owner.ErrNoMatch) {
+		t.Errorf("Select in slot b after its CR went = %+v, %v", ref, err)
 	}
 }

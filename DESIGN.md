@@ -1,7 +1,7 @@
 # reconciler-fuzzer design
 
 Issue #114 holds the proposal and its reasons. This document states what the
-code does. It stays under 500 lines. Where the code documents a rule, this
+code does. It stays under 530 lines. Where the code documents a rule, this
 document names it.
 
 ## 1. Terms
@@ -11,6 +11,7 @@ document names it.
 | Plan | The list of steps for one run, stored as `plan.json`. |
 | Step | One unit of a run: fault period, end faults, settle wait, confirm window. |
 | Action | Something the harness does once in a step, such as creating a CR or damaging an object. |
+| CR | An object of a kind that the config's `primaries` lists (§13). |
 | Slot | A letter, such as `a`, that names one CR across a plan's steps. |
 | Fault | A problem the harness causes during a fault period and then ends. |
 | Damage | A change the harness makes to an object the controller created. It is never undone. |
@@ -200,14 +201,17 @@ A `target` has `system` (default `kube`), `group`, `resource`, `namespace`,
 `owner.World.Select` resolves it when the action runs: the `nth` live instance,
 in creation order, that the controller (for `damage`) or the harness created,
 owned by the slot's live CR when a slot is set. A target that matches nothing
-records an error `no instance matches`.
+records the error `no instance matches`, which names the slot's kind when the
+slot holds an object that is not a CR.
 
 Actions run in order, each at its optional `at` offset. A fault sets one
 effect: a request fault or `holdWatch` (§5), or a model fault (§7) with no
 verb, subresource or `nth`. A fault's `system` defaults to `kube`; the runner
 refuses an unknown one. On `kube`, a model fault and a target need a
 `resource`; on a fake, an empty one matches every collection. `plan.Load`
-decodes strictly and validates each action's slot and fields (`plan.go`).
+decodes strictly and validates each action's slot and fields (`plan.go`). Two
+slots' CRs clash only with equal group, kind, namespace and name. `run.Run`
+refuses a plan that creates an object of an unlisted kind (`ValidateKinds`).
 
 ## 9. Step runner
 
@@ -229,8 +233,8 @@ target, is a harness error.
 `check.Settled(ix, t, spec)` returns the unmet clauses at `t`, or none. It
 judges the step whose fault period started last at or before `t`.
 
-1. Every live CR satisfies `ready`, or `halted` after an unknown-outcome
-   controller call on it or on an instance only it owns, and
+1. Every live CR satisfies its kind's `ready`, or `halted` after an
+   unknown-outcome controller call on it or on an instance only it owns, and
 2. carries no `deletionTimestamp`.
 3. The controller is up at `t` and has been up for at least `stable`.
 4. The controller made a 2xx request, not ignored and not of unknown
@@ -249,7 +253,7 @@ judges the step whose fault period started last at or before `t`.
    controller made at most `reads × max(1, live CRs)` gets and lists and
    at most `writes × max(1, live CRs)` mutating requests of that system,
    no-op writes included. Kube's poll interval is `stable`. A controller
-   write of a CR that changes only `primary.periodic.paths`, and comes at
+   write of a CR that changes only its kind's `periodic.paths`, and comes at
    least `every / 2` after the previous one of that CR, is not a changed
    write; the budgets still count it. A path's `[*]` names every list item.
    A fake's write without a resourceVersion is changed only if the
@@ -269,15 +273,18 @@ from the config, or else the run event.
 - Its **creator** is the caller whose create, or 201 apply, answered with
   its UID, or `cluster`.
 - Its **owning CR** at `t` comes from the first rule that matches
-  (`owner.go`): 1, its ownerReferences reach a primary instance; 2, its
-  system's `owner` CEL names a CR by UID, `namespace/name` or name; 3, a
-  `primary.owns` entry over a CR's body names it; 4, otherwise, the set
-  of CRs live at its creation. An empty set marks a **shared** instance.
+  (`owner.go`): 1, its ownerReferences reach a CR; 2, its system's
+  `owner` CEL names a CR by UID, `namespace/name` or name; 3, an `owns`
+  entry over a CR of its entry's kind names it; 4, otherwise, the set of
+  other CRs live at its creation. While an ownerReference names a live
+  instance that is not a CR, and none reaches a CR, rule 1 gives that
+  **unlisted owner** and no CR (entry 80). An instance with no CR is
+  **shared**.
 - Its **role** is its system's `role` CEL over its first body. Without
   one, a kube instance's is its `generateName`, or else its name, and a
   fake's is empty.
-- The **controller's resources** at `t` are its live instances, minus the
-  primary kind and ignored kinds (§10).
+- The **controller's resources** at `t` are its live instances, minus
+  ignored kinds (§10). A CR the controller created is also one of them.
 - A **group** is a (system, group, resource, namespace, owning CRs, role).
 
 ## 12. Checks
@@ -294,14 +301,16 @@ steps (§17, entry 15).
 **Converge.** The settle condition holds by the deadline, and still holds at
 `t* + stable`. The summary names the first unmet clause, such as `did not
 settle (clause 7)`. `backoff-bound` labels a finding whose deadline
-`backoffCap` set. `converge.go` suggests missing `models:`.
+`backoffCap` set. `converge.go` suggests missing `models:`. A step whose record
+ends too early gets a note that names that end: its confirm window's end, the
+next step's start, or the trace's last event.
 
 **Crash.** A controller exit the harness did not cause fails its step.
 
 **Clean.** At the end of a settled step with a `delete` action, a controller
 resource fails when its rule 1 to 3 CR is gone, or its rule-4 set is non-empty
 and every CR in it is gone. At the end of step `planSteps + 1`, every unshared
-controller resource fails. `primary.retain` allows a resource. Shared resources
+controller resource fails. Its CRs' `retain` allows a resource. Shared resources
 are judged only for growth since the first `create`. Summary: `left resources
 behind`.
 
@@ -321,8 +330,9 @@ dependencies are the dependency instances it owns by rules 1 to 3 (entries 47
 and 77). When the controller writes the CR `ready`, or raises its
 observedGeneration while `ready`, its last `seen` of each dependency must show
 its last write's version or a later one, which its `ready` accepts: `reported
-ready before seeing its dependency ready`. With `required`, it needs a
-dependency of each kind: `reported ready with no dependency`. With `track: d`,
+ready before seeing its dependency ready`. With `required`, a CR of the first
+`primaries` entry needs a dependency of each kind: `reported ready with no
+dependency` (entry 81). With `track: d`,
 a CR fails that stays `ready` `d` after the controller saw a dependency not
 ready: `stayed ready after seeing its dependency not ready`.
 
@@ -337,7 +347,7 @@ failing request in a tight loop`. It skips 409s on a held kind until `stable /
 `always` one at each `version` event. Its CEL sees `crs`, the live CRs' bodies,
 and `world.<system>.<key>`, the live instances' bodies, where a key is
 `<resource>` or `<resource>.<group>` on kube and the collection on a fake. Each
-kind in the run event's `kinds` or `owns` has a key.
+kind in the run event's `kinds` or in an entry's `owns` has a key.
 `firstWrittenUnder(object, path)` takes a kube body and a list of keys. It
 finds the earliest version of the object's ref, of any instance, with the
 object's value at the path, and returns the UID of that version's owning CR by
@@ -360,13 +370,15 @@ launch:
   env: {CLOUD_ENDPOINT: "${systems.cloud.url}"}   # KUBECONFIG defaults to ${systems.kube.kubeconfig}
   rbac: [rbac/role.yaml]
 crds: [crds/]
-primary:
-  kind: toy.reconciler-fuzzer/v1/Bucket
-  sample: bucket.yaml
-  ready: has(self.status) && self.status.ready
-  owns: [{kind: "cloud:buckets", name: self.status.bucketID}]   # rule 3; kube kinds are group/version/Kind
-  periodic: {every: 1h, paths: [status.refreshTime]}           # optional: clause 7 allows these writes
-values: {overlay: {spec.region: {enum: [eu, us]}}, mutate: [spec.region]}
+primaries:                                  # every kind the controller serves
+  - kind: toy.reconciler-fuzzer/v1/Bucket
+    sample: bucket.yaml
+    ready: has(self.status) && self.status.ready
+    owns: [{kind: "cloud:buckets", name: self.status.bucketID}]   # rule 3; kube kinds are group/version/Kind
+    periodic: {every: 1h, paths: [status.refreshTime]}           # optional: clause 7 allows these writes
+    values: {overlay: {spec.region: {enum: [eu, us]}}, mutate: [spec.region]}
+  - {kind: toy.reconciler-fuzzer/v1/Policy, sample: policy.yaml, ready: has(self.status)}
+values: {fixtures: {kv.yaml: [data.token]}}         # with primaries, only fixtures
 models: [{kind: toy.reconciler-fuzzer/v1/Gadget, after: 200ms, dependency: {track: 1s}}]
 systems:
   - {name: kube, owner: "self.metadata.labels['widget-uid']"}   # kube takes only owner
@@ -386,26 +398,30 @@ budgets: {reads: 2, writes: 4}                          # defaults
 timeouts: {settle: 30s, stable: 3s, backoffCap: 60s}    # defaults
 ```
 
-A model's kind is neither the primary's nor another model's; its stage is
-`readyCondition`. `dependency.required` defaults to true, and `stuckStatus` to
-`status`. A fake's name matches `[a-z][a-z0-9-]*`. A `command[0]` with a slash
-resolves against the file's directory. `vault` needs a `token`. `access: read`
-says the controller only reads the fake. `values.fixtures` may name a system's
-fixtures file, whose entries' body paths `changeFixture` sets.
+`primary` is shorthand for a one-entry `primaries`, whose `overlay`,
+`distinct` and `mutate` sit in the top-level `values`. An entry also takes
+`retain` and `halted`. No kind appears twice among `primaries` and `models`,
+and no kube fixture is a CR. A model's stage is `readyCondition`.
+`dependency.required` defaults to true, and `stuckStatus` to `status`. A fake's
+name matches `[a-z][a-z0-9-]*`. A `command[0]` with a slash resolves against
+the file's directory. `vault` needs a `token`. `access: read` says the
+controller only reads the fake. `values.fixtures` may name a system's fixtures
+file, whose entries' body paths `changeFixture` sets.
 
 ## 14. Generation, replay and shrinking
 
-`generate.New(cfg)` reads the primary CRD's schema with the overlay, the
+`generate.New(cfg)` reads each listed kind's CRD schema with its overlay, its
 sample, and the fixtures. rapid draws values, and the CRD's own validation, run
 in-process, rejects invalid ones. `Plan(seed)` draws 3 to 8 steps of 1 to 4
-actions and at most one fault each. Step 0 creates slot `a`. About 30% of steps
-hold one `restart`, `kill` or `damage`, so Restore has steps to judge. About
-30% of multi-action steps are bursts within 50 ms. A kube fault draws its
-request from what `launch.rbac` grants, creates weighted most (§17, entry 20).
-2 of 7 kube fault draws (of 9 with `models:`, 2 of which are `stuck` or
-`slowDelete`) hold a kind `launch.rbac` lets the controller watch, the primary
-and `primary.owns` kinds weighted most, and delete a live CR and create it
-again as it was. With fakes, half of the fault draws and of the `damage` draws
+actions and at most one fault each. A create draws its kind uniformly from
+`primaries`, and each CR takes its kind's `values`. Step 0 creates slot `a`.
+About 30% of steps hold one `restart`, `kill` or `damage`, so Restore has steps
+to judge. About 30% of multi-action steps are bursts within 50 ms. A kube fault
+draws its request from what `launch.rbac` grants, creates weighted most (§17,
+entry 20). 2 of 7 kube fault draws (of 9 with `models:`, 2 of which are `stuck`
+or `slowDelete`) hold a kind `launch.rbac` lets the controller watch, the
+listed and `owns` kinds weighted most, and delete a live CR and create it again
+as it was. With fakes, half of the fault draws and of the `damage` draws
 name a fake: a request fault by verb alone, or a model fault on a `crud` fake,
 and a target by system alone. A read-only fake takes no damage and only read
 faults. `changeFixture` draws kube and system fixtures alike. `damage` only
@@ -439,13 +455,15 @@ and `tenant/` and `grant/` cross scopes. In `targets/toy-bucket`, each Bucket CR
 owns one bucket in the `crudfake` system `cloud`; its bugs start at B30, and
 `halted/` runs `--halt` under `primary.halted`. In `targets/toy-fleet`, a
 Cluster owns modelled third-party Volumes, a Database names a Cluster, and a
-User a Database. Its bugs start at B100, and `database/` fuzzes Databases.
+User a Database. Its bugs start at B100. `config.yaml` lists all three kinds,
+and its generated test fuzzes `cluster/`, Clusters alone, and `database/`,
+Databases on a fixture Cluster.
 
 Each config's `plans/` holds its gated bugs' and B0's plans. A toy's
 `gate_envtest_test.go` runs `gate_test.go`'s bug rows and B0, and its
 `bugmatrix_test.go` renders them in `docs/bug-matrix.md`. B0 gives no findings
 and no notes on every committed plan, and no findings on the 20 faulted seeds
-that the toy's generated test runs for each config.
+that the toy's generated test runs for each config it fuzzes.
 
 **Examples.** `examples/<name>` adopts cert-manager, external-secrets on Vault,
 and ACK's s3-controller on moto. Plans and listed seeds give no findings,
@@ -497,3 +515,6 @@ Each entry changes a check, exception, `System` interface or ignore list.
 76. `primary.periodic` paths name list items with `[*]`, so ACK exempts only condition stamps.
 77. Honest skips a dependency the controller deleted with a `delete`, or last saw deleted, whatever the observer's lag, so a scale-down passes (#124).
 78. A property sees each kind in the run event's `kinds` or `owns` as an empty list while it has no object (#148).
+79. Every check judges each kind `primaries` lists, and a CR the controller creates is also its owner's resource (#126).
+80. A live unlisted owner keeps its children from rule 4, so deleting a CR blames none of them (#128).
+81. `required` binds only the first entry's CRs, so the kinds that own no dependency pass.

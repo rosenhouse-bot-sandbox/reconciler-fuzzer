@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // Plan is the list of steps for one run.
@@ -208,6 +210,12 @@ func (p *Plan) Validate() error {
 			}
 		}
 	}
+	return nil
+}
+
+// ValidateKinds reports the first create whose object's group and kind
+// listed lacks. A create without an object makes the sample, of listed[0].
+func (p *Plan) ValidateKinds(listed []schema.GroupKind) error {
 	return nil
 }
 

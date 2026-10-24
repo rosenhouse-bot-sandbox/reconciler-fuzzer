@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/owner"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/system"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
@@ -550,10 +551,12 @@ type selection struct {
 
 func selecting(f *fixture, found map[string]trace.Ref) *[]selection {
 	var asked []selection
-	f.runner.Select = func(ix *trace.Index, creator trace.Caller, target plan.Target, slot string, t time.Duration) (trace.Ref, bool) {
+	f.runner.Select = func(ix *trace.Index, creator trace.Caller, target plan.Target, slot string, t time.Duration) (trace.Ref, error) {
 		asked = append(asked, selection{creator, target, slot, ix.Len() == len(f.rec.Events())})
-		ref, ok := found[target.Resource]
-		return ref, ok
+		if ref, ok := found[target.Resource]; ok {
+			return ref, nil
+		}
+		return trace.Ref{}, owner.ErrNoMatch
 	}
 	return &asked
 }

@@ -22,6 +22,8 @@ import (
 
 // Spec is what the checks need from the config.
 type Spec struct {
+	// Primaries are the listed kinds, in config order.
+	Primaries []Primary
 	// Primary is the CR kind, as group and plural resource.
 	PrimaryGroup    string
 	PrimaryResource string
@@ -47,6 +49,15 @@ type Spec struct {
 	Properties []PropertySpec
 	// Periodic is nil when the config sets no primary.periodic.
 	Periodic *trace.Periodic
+}
+
+// Primary is one listed kind as the checks judge its CRs.
+type Primary struct {
+	Kind  trace.Kind
+	Ready func(cr map[string]any) (bool, error)
+	// Retain, Halted and Periodic are nil when the entry sets none.
+	Retain, Halted func(cr map[string]any) (bool, error)
+	Periodic       *trace.Periodic
 }
 
 // PropertySpec is a compiled config property.

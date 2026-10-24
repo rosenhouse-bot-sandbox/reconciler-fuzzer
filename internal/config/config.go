@@ -20,8 +20,11 @@ import (
 // Config is a loaded target config. Every path is absolute, resolved against
 // the config file's directory.
 type Config struct {
-	Launch     Launch
-	CRDs       []string
+	Launch Launch
+	CRDs   []string
+	// Primaries are the CR kinds the controller serves, in config order. A
+	// primary key loads as the one entry.
+	Primaries  []Primary
 	Primary    Primary
 	Fixtures   []string
 	Values     Values
@@ -80,6 +83,8 @@ type Primary struct {
 	Halted string
 	// Periodic is nil when unset.
 	Periodic *Periodic
+	// Values say how the generator draws CRs of Kind.
+	Values Values
 }
 
 // Periodic declares the CR writes a controller makes on a timer, such as a
@@ -469,7 +474,19 @@ func load(path string) (*Config, error) {
 	if err := c.checkLaunchVars(); err != nil {
 		return nil, err
 	}
+	only := c.Primary
+	only.Values = Values{Overlay: c.Values.Overlay, Distinct: c.Values.Distinct, Mutate: c.Values.Mutate}
+	c.Primaries = []Primary{only}
 	return c, nil
+}
+
+// ListedKinds are the group and kind of each Primaries entry, in order.
+func (c *Config) ListedKinds() []schema.GroupKind {
+	var kinds []schema.GroupKind
+	for _, p := range c.Primaries {
+		kinds = append(kinds, p.Kind.GroupKind())
+	}
+	return kinds
 }
 
 // launchVars are the keys each system's Endpoints.Vars holds. A fake with

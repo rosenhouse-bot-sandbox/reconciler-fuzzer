@@ -65,6 +65,8 @@ type Event struct {
 // Run describes the run. Fixture events precede it.
 type Run struct {
 	Namespace string `json:"namespace"`
+	// Primaries are the config's primaries entries, in order.
+	Primaries []Primary `json:"primaries,omitempty"`
 	// Primary names the CR kind; its Name is empty.
 	Primary Ref `json:"primary"`
 	// PlanSteps counts the plan's steps. The runner's delete-all step is
@@ -96,6 +98,18 @@ type Run struct {
 	// Properties are the config's properties.
 	Properties []Property `json:"properties,omitempty"`
 	// Periodic is the primary's periodic, or nil.
+	Periodic *Periodic `json:"periodic,omitempty"`
+}
+
+// Primary is one primaries entry as the checks need it. Ready, Retain and
+// Halted are CEL over self, a CR of Kind; Retain and Halted are empty when
+// unset. Owns are its owning-CR rule 3.
+type Primary struct {
+	Kind     Kind      `json:"kind"`
+	Ready    string    `json:"ready"`
+	Retain   string    `json:"retain,omitempty"`
+	Halted   string    `json:"halted,omitempty"`
+	Owns     []Owns    `json:"owns,omitempty"`
 	Periodic *Periodic `json:"periodic,omitempty"`
 }
 

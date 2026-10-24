@@ -99,9 +99,9 @@ func TestSelectOnAFakeWithNoResourceMatchesEveryCollection(t *testing.T) {
 		{plan.Target{System: "cloud", Resource: "disks"}, "d1"},
 		{plan.Target{System: "other"}, ""},
 	} {
-		ref, found := w.Select(ctl, c.target, "", 5*s)
-		if found != (c.want != "") || ref.Name != c.want {
-			t.Errorf("Select(%+v) = %+v, %v; want %q", c.target, ref, found, c.want)
+		ref, err := w.Select(ctl, c.target, "", 5*s)
+		if (err == nil) != (c.want != "") || ref.Name != c.want {
+			t.Errorf("Select(%+v) = %+v, %v; want %q", c.target, ref, err, c.want)
 		}
 	}
 }

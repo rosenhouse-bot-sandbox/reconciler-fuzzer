@@ -104,8 +104,9 @@ type Actor interface {
 }
 
 // Select resolves target at t among the live instances creator made, owned
-// by slot's CR when slot is set.
-type Select func(ix *trace.Index, creator trace.Caller, target plan.Target, slot string, t time.Duration) (trace.Ref, bool)
+// by slot's CR when slot is set. An error that is owner.ErrNoMatch says why
+// none matches.
+type Select func(ix *trace.Index, creator trace.Caller, target plan.Target, slot string, t time.Duration) (trace.Ref, error)
 
 // FaultTarget starts request faults. *interpose.Listener implements it.
 type FaultTarget interface {
@@ -289,7 +290,7 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 			}
 			return errors.Join(errs...)
 		},
-		Select: func(ix *trace.Index, creator trace.Caller, target plan.Target, slot string, t time.Duration) (trace.Ref, bool) {
+		Select: func(ix *trace.Index, creator trace.Caller, target plan.Target, slot string, t time.Duration) (trace.Ref, error) {
 			return owner.New(ix, spec.Owners).Select(creator, target, slot, t)
 		},
 	}

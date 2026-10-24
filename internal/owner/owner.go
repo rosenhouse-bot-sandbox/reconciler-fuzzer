@@ -5,6 +5,7 @@ package owner
 import (
 	"cmp"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -49,6 +50,9 @@ type Owner struct {
 	// CRs holds CR UIDs in order: one for rules 1 to 3, the set for rule 4.
 	// An empty rule-4 set marks a shared instance.
 	CRs []string
+	// Unlisted is, for rule 1 with no CR, the UID of the live instance of
+	// an unlisted kind that an ownerReference names.
+	Unlisted string
 }
 
 // Rules hold the declared owning-CR rules 2 and 3.
@@ -541,10 +545,13 @@ func boolInt(b bool) int {
 // Slot is the slot whose create action made the CR with uid, or empty.
 func (w *World) Slot(uid string) string { return w.slots[uid] }
 
+// ErrNoMatch says no instance matches a target.
+var ErrNoMatch = errors.New("no instance matches")
+
 // Select resolves target at t among the live instances that creator made.
 // A slot narrows the match to instances whose owner holds that slot's live
-// CR; an empty slot matches any owner.
-func (w *World) Select(creator trace.Caller, target plan.Target, slot string, t time.Duration) (trace.Ref, bool) {
+// CR; an empty slot matches any owner. An error wraps ErrNoMatch.
+func (w *World) Select(creator trace.Caller, target plan.Target, slot string, t time.Duration) (trace.Ref, error) {
 	system := cmp.Or(target.System, "kube")
 	cr := ""
 	if slot != "" {
@@ -554,7 +561,7 @@ func (w *World) Select(creator trace.Caller, target plan.Target, slot string, t 
 			}
 		}
 		if cr == "" {
-			return trace.Ref{}, false
+			return trace.Ref{}, ErrNoMatch
 		}
 	}
 	nth := max(target.Nth, 1)
@@ -567,10 +574,10 @@ func (w *World) Select(creator trace.Caller, target plan.Target, slot string, t 
 			continue
 		}
 		if nth--; nth == 0 {
-			return i.Ref, true
+			return i.Ref, nil
 		}
 	}
-	return trace.Ref{}, false
+	return trace.Ref{}, ErrNoMatch
 }
 
 func matches(want, got string) bool { return want == "" || want == got }
