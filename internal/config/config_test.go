@@ -139,6 +139,29 @@ func TestDefaults(t *testing.T) {
 	}
 }
 
+func TestLaunchEnvKubeconfigDefaultsToTheHarnessKubeconfig(t *testing.T) {
+	for name, c := range map[string]struct {
+		launch string
+		want   map[string]string
+	}{
+		"no env":           {"", map[string]string{"KUBECONFIG": "${systems.kube.kubeconfig}"}},
+		"other env":        {"  env: {X: x}\n", map[string]string{"KUBECONFIG": "${systems.kube.kubeconfig}", "X": "x"}},
+		"own KUBECONFIG":   {"  env: {KUBECONFIG: /etc/kubeconfig}\n", map[string]string{"KUBECONFIG": "/etc/kubeconfig"}},
+		"empty":            {"  env: {KUBECONFIG: ''}\n", map[string]string{"KUBECONFIG": "${systems.kube.kubeconfig}"}},
+		"--kubeconfig arg": {"  args: [--kubeconfig=/etc/kubeconfig]\n", map[string]string{"KUBECONFIG": "${systems.kube.kubeconfig}"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			loaded, err := config.Load(writeConfig(t, strings.Replace(minimal(t), "launch:\n", "launch:\n"+c.launch, 1)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(loaded.Launch.Env, c.want) {
+				t.Errorf("env = %v, want %v", loaded.Launch.Env, c.want)
+			}
+		})
+	}
+}
+
 func TestSetValuesOverrideDefaults(t *testing.T) {
 	c, err := config.Load(writeConfig(t, minimal(t)+"budgets: {reads: 7}\ntimeouts: {backoffCap: 1m30s}\n"))
 	if err != nil {
