@@ -239,6 +239,14 @@ func (m Model) covers(ref trace.Ref) bool {
 	return ref.System == cmp.Or(m.System, "kube") && (m.Kind.Resource == "" || m.Kind.Group == ref.Group && m.Kind.Resource == ref.Resource)
 }
 
+// periodicPaths are the periodic paths of ref's kind, if ref names a CR.
+func (s Spec) periodicPaths(ref trace.Ref) []string {
+	if p, listed := s.primary(ref); listed && p.Periodic != nil {
+		return p.Periodic.Paths
+	}
+	return nil
+}
+
 // modelled reports whether a stage model writes the status of ref's kind.
 func (s Spec) modelled(ref trace.Ref) bool {
 	return ref.System == "kube" && slices.ContainsFunc(s.Models, func(m Model) bool {

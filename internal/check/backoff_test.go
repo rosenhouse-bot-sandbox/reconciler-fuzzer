@@ -244,21 +244,24 @@ func TestBackoffFailsATightLoopWhileSeveralCRsLive(t *testing.T) {
 	requireNone(t, check.Backoff(tl.Index(), spec))
 }
 
-func TestBackoffRunBreaksOnlyOnItsOwnCRsGeneration(t *testing.T) {
+func TestBackoffRunBreaksOnItsOwningCRsGeneration(t *testing.T) {
 	cr := func(ref trace.Ref, generation int) trace.Event {
 		return tt.Version(ref, "u"+ref.Name, "v", map[string]any{"metadata": map[string]any{"name": ref.Name, "generation": generation}})
 	}
+	owned := tt.OwnedBy(map[string]any{}, "ua", true)
 	for name, tc := range map[string]struct {
+		gadget map[string]any
 		event  trace.Event
 		breaks bool
 	}{
-		"its CR's":     {cr(widgetA, 2), true},
-		"another CR's": {cr(widgetB, 2), false},
+		"its CR's":                     {owned, cr(widgetA, 2), true},
+		"another CR's":                 {owned, cr(widgetB, 2), false},
+		"any CR's, of a shared gadget": {map[string]any{}, cr(widgetB, 2), true},
 	} {
 		tl := retries(every(10*ms, 21), func(n int) trace.Event {
 			switch n {
 			case 1:
-				return tt.Version(gadgetA, "ug", "g", tt.OwnedBy(map[string]any{}, "ua", true))
+				return tt.Version(gadgetA, "ug", "g", tc.gadget)
 			case 2:
 				return cr(widgetA, 1)
 			case 3:
@@ -274,21 +277,36 @@ func TestBackoffRunBreaksOnlyOnItsOwnCRsGeneration(t *testing.T) {
 	}
 }
 
-func TestBackoffRunOnACRBreaksOnItsNewGeneration(t *testing.T) {
-	widget := func(generation int) map[string]any {
-		return map[string]any{"metadata": map[string]any{"name": "a", "generation": generation}}
+func TestBackoffRunOnACRBreaksOnItsOwnAndItsOwnersNewGeneration(t *testing.T) {
+	for name, tc := range map[string]struct {
+		run, bumped trace.Ref
+		breaks      bool
+	}{
+		"an unowned CR's own": {clusterA, clusterA, true},
+		"an owned CR's own":   {databaseB, databaseB, true},
+		"its owner's":         {databaseB, clusterA, true},
+		"a CR it owns":        {clusterA, databaseB, false},
+	} {
+		r := fleetRun(1, clusters, databases)
+		r.Begin()
+		uid := r.Create(trace.Harness, clusterA, generation("a", 1))
+		r.Create(ctl, databaseB, tt.OwnedBy(generation("b", 1), uid, true))
+		bumps := map[trace.Ref]map[string]any{clusterA: generation("a", 2), databaseB: tt.OwnedBy(generation("b", 2), uid, true)}
+		for range 12 {
+			r.Call(ctl, "update", tc.run, 422)
+		}
+		r.Update(trace.Harness, tc.bumped, bumps[tc.bumped])
+		for range 12 {
+			r.Call(ctl, "update", tc.run, 422)
+		}
+		if got := len(judgeWith(t, r, check.Backoff)) == 0; got != tc.breaks {
+			t.Errorf("a run on %s, %s generation: breaks = %v", tc.run.Name, name, got)
+		}
 	}
-	r := newRun(1)
-	r.Begin()
-	r.Create(trace.Harness, widgetA, widget(1))
-	for range 8 {
-		r.Call(ctl, "update", widgetA, 422)
-	}
-	r.Update(trace.Harness, widgetA, widget(2))
-	for range 8 {
-		r.Call(ctl, "update", widgetA, 422)
-	}
-	requireNone(t, judgeWith(t, r, check.Backoff))
+}
+
+func generation(name string, n int) map[string]any {
+	return map[string]any{"metadata": map[string]any{"name": name, "generation": n}}
 }
 
 func TestBackoffRunBreaksOnlyOnASuccessOfTheSameRequest(t *testing.T) {

@@ -42,7 +42,7 @@ func Restore(ix *trace.Index, s Spec) []Finding {
 			for _, i := range was {
 				if j := slices.IndexFunc(is, func(j owner.Instance) bool { return j.UID == i.UID }); j < 0 {
 					replaced[k] = append(replaced[k], v.describeAll([]owner.Instance{i}, from)...)
-				} else if paths := differ(v.w.Body(i, from), v.w.Body(is[j], to), v.s.modelled(i.Ref), v.s.Ignore[i.Ref.System]); len(paths) > 0 && !v.refreshed(i, from, to) {
+				} else if paths := differ(v.w.Body(i, from), v.w.Body(is[j], to), v.s.modelled(i.Ref), v.s.Ignore[i.Ref.System], v.s.periodicPaths(i.Ref)); len(paths) > 0 {
 					changed[k] = append(changed[k], v.describeAll([]owner.Instance{i}, from)[0]+": "+strings.Join(paths, ", "))
 				}
 			}
@@ -80,13 +80,6 @@ func (v *view) damaged(step int, t time.Duration) (map[group]bool, func(key stri
 	}
 }
 
-// refreshed reports whether i is a CR whose body changed from from to to
-// only under its kind's periodic paths.
-func (v *view) refreshed(i owner.Instance, from, to time.Duration) bool {
-	p, listed := v.s.primary(i.Ref)
-	return listed && p.Periodic != nil && differOnlyUnder(v.w.Body(i, from), v.w.Body(i, to), p.Periodic.Paths)
-}
-
 func merge[K comparable, V any](a, b map[K]V) map[K]V {
 	m := maps.Clone(a)
 	maps.Copy(m, b)
@@ -102,8 +95,9 @@ func sorted(details map[string][]string) map[string][]string {
 
 // differ lists the top-level fields, and metadata's fields, in which two
 // bodies differ, ignoring what every write changes, status when a model
-// writes it, and the top-level fields ignore lists.
-func differ(a, b json.RawMessage, modelled bool, ignore []string) []string {
+// writes it, the top-level fields ignore lists, and changes only under
+// periodic paths.
+func differ(a, b json.RawMessage, modelled bool, ignore, periodic []string) []string {
 	var was, is map[string]any
 	if json.Unmarshal(a, &was) != nil || json.Unmarshal(b, &is) != nil {
 		return []string{"(body)"}
@@ -124,7 +118,7 @@ func differ(a, b json.RawMessage, modelled bool, ignore []string) []string {
 	}
 	for _, key := range slices.Sorted(maps.Keys(merge(was, is))) {
 		x, y := was[key], is[key]
-		if reflect.DeepEqual(x, y) {
+		if reflect.DeepEqual(x, y) || onlyUnder(leafDiff(key, x, y, nil), periodic) {
 			continue
 		}
 		mx, okx := x.(map[string]any)
@@ -134,7 +128,7 @@ func differ(a, b json.RawMessage, modelled bool, ignore []string) []string {
 			continue
 		}
 		for _, sub := range slices.Sorted(maps.Keys(merge(mx, my))) {
-			if !reflect.DeepEqual(mx[sub], my[sub]) {
+			if !reflect.DeepEqual(mx[sub], my[sub]) && !onlyUnder(leafDiff("metadata."+sub, mx[sub], my[sub], nil), periodic) {
 				paths = append(paths, fmt.Sprintf("metadata.%s", sub))
 			}
 		}

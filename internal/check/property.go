@@ -284,9 +284,13 @@ func differOnlyUnder(a, b json.RawMessage, paths []string) bool {
 			delete(metadata, "generation")
 		}
 	}
-	diff := leafDiff("", x, y, nil)
+	return onlyUnder(leafDiff("", x, y, nil), paths)
+}
+
+// onlyUnder reports whether diff holds paths, each under one of periodic.
+func onlyUnder(diff, periodic []string) bool {
 	return len(diff) > 0 && !slices.ContainsFunc(diff, func(path string) bool {
-		return !slices.ContainsFunc(paths, func(p string) bool { return under(path, p) })
+		return !slices.ContainsFunc(periodic, func(p string) bool { return under(path, p) })
 	})
 }
 

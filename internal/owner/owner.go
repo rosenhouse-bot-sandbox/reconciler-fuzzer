@@ -425,11 +425,10 @@ func (w *World) Primary(i Instance) bool { return slices.ContainsFunc(w.listed, 
 
 // Owner is the instance's owning CR at t: the first rule that matches.
 func (w *World) Owner(i Instance, t time.Duration) Owner {
-	refs := w.ownerReferences(i, t)
-	if cr, found := w.follow(i, refs, t, map[string]bool{}); found {
+	if cr, found := w.follow(i, t, map[string]bool{}); found {
 		return Owner{Rule: 1, CRs: []string{cr}}
 	}
-	if owner, found := w.unlisted(refs, t); found {
+	if owner, found := w.unlisted(i, t); found {
 		return Owner{Rule: 1, Unlisted: owner}
 	}
 	if cr, found := w.named(i, t); found {
@@ -550,10 +549,10 @@ func (w *World) names(rule OwnsRule, cr, i Instance, t time.Duration) bool {
 	return namespace == i.Ref.Namespace
 }
 
-// follow walks refs, i's ownerReferences at t, to a CR.
-func (w *World) follow(i Instance, refs []ownerReference, t time.Duration, seen map[string]bool) (string, bool) {
+// follow walks i's ownerReferences at t to a CR.
+func (w *World) follow(i Instance, t time.Duration, seen map[string]bool) (string, bool) {
 	seen[i.UID] = true
-	for _, ref := range refs {
+	for _, ref := range w.ownerReferences(i, t) {
 		next, found := w.Instance(ref.UID)
 		if !found || seen[next.UID] {
 			continue
@@ -561,17 +560,17 @@ func (w *World) follow(i Instance, refs []ownerReference, t time.Duration, seen 
 		if w.Primary(next) {
 			return next.UID, true
 		}
-		if cr, found := w.follow(next, w.ownerReferences(next, t), t, seen); found {
+		if cr, found := w.follow(next, t, seen); found {
 			return cr, true
 		}
 	}
 	return "", false
 }
 
-// unlisted finds the first instance live at t that refs name and that is
-// not a CR.
-func (w *World) unlisted(refs []ownerReference, t time.Duration) (string, bool) {
-	for _, ref := range refs {
+// unlisted finds the first instance live at t that i's ownerReferences at t
+// name and that is not a CR.
+func (w *World) unlisted(i Instance, t time.Duration) (string, bool) {
+	for _, ref := range w.ownerReferences(i, t) {
 		if owner, found := w.Instance(ref.UID); found && owner.Live(t) && !w.Primary(owner) {
 			return owner.UID, true
 		}
@@ -581,22 +580,22 @@ func (w *World) unlisted(refs []ownerReference, t time.Duration) (string, bool) 
 
 // ownerReferences are i's ownerReferences at t, controller first.
 func (w *World) ownerReferences(i Instance, t time.Duration) []ownerReference {
-	var body struct {
-		Metadata struct {
-			OwnerReferences []ownerReference `json:"ownerReferences"`
-		} `json:"metadata"`
+	metadata, _ := w.object(i, t)["metadata"].(map[string]any)
+	items, _ := metadata["ownerReferences"].([]any)
+	var refs []ownerReference
+	for _, item := range items {
+		fields, _ := item.(map[string]any)
+		uid, _ := fields["uid"].(string)
+		controller, _ := fields["controller"].(bool)
+		refs = append(refs, ownerReference{UID: uid, Controller: controller})
 	}
-	if json.Unmarshal(w.Body(i, t), &body) != nil {
-		return nil
-	}
-	refs := body.Metadata.OwnerReferences
 	slices.SortStableFunc(refs, func(a, b ownerReference) int { return boolInt(b.Controller) - boolInt(a.Controller) })
 	return refs
 }
 
 type ownerReference struct {
-	UID        string `json:"uid"`
-	Controller bool   `json:"controller"`
+	UID        string
+	Controller bool
 }
 
 func boolInt(b bool) int {

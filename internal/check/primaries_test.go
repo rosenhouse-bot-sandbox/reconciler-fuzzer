@@ -283,24 +283,6 @@ func TestPropertySeesAnEmptyKindThatAnyEntryOwns(t *testing.T) {
 	requireNone(t, judgeWith(t, r, check.Property))
 }
 
-func TestBackoffRunOnACRBreaksOnANewGenerationOfItsOwner(t *testing.T) {
-	cluster := func(generation int) map[string]any {
-		return map[string]any{"metadata": map[string]any{"name": "a", "generation": generation}}
-	}
-	r := fleetRun(1, clusters, databases)
-	r.Begin()
-	uid := r.Create(trace.Harness, clusterA, cluster(1))
-	r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", false), uid, true))
-	for range 12 {
-		r.Call(ctl, "update", databaseB, 422)
-	}
-	r.Update(trace.Harness, clusterA, cluster(2))
-	for range 12 {
-		r.Call(ctl, "update", databaseB, 422)
-	}
-	requireNone(t, judgeWith(t, r, check.Backoff))
-}
-
 func TestRestoreIgnoresARefreshOfACRTheControllerCreated(t *testing.T) {
 	databaseA := tt.Ref("toy/databases", "ns", "a")
 	r := fleetRun(2, clusters, databases)
@@ -313,4 +295,33 @@ func TestRestoreIgnoresARefreshOfACRTheControllerCreated(t *testing.T) {
 	r.Update(ctl, databaseA, tt.OwnedBy(refreshed(2, "t2", nil), uid, true))
 	r.EndFaults().Settle()
 	requireNone(t, restore(t, r))
+}
+
+func TestRestoreIgnoresPeriodicPathsWithTheOtherVolatileFields(t *testing.T) {
+	databaseA := tt.Ref("toy/databases", "ns", "a")
+	body := func(n int, at, tier, message string) map[string]any {
+		b := refreshed(n, "t1", map[string]any{"message": message})
+		metadata := b["metadata"].(map[string]any)
+		metadata["annotations"] = map[string]any{"refreshed": at}
+		metadata["labels"] = map[string]any{"tier": tier}
+		return b
+	}
+	for tier, want := range map[string]string{"x": "", "y": "databases.toy ns/a (rule 1, slot a): metadata.labels"} {
+		r := fleetRun(2, clusters, databases)
+		r.Spec.Primaries[1].Periodic = &trace.Periodic{Every: refreshEvery, Paths: []string{"metadata.annotations.refreshed"}}
+		r.Spec.Models = []trace.Model{{Kind: databases, Ready: config.ReadyConditionCEL}}
+		r.Begin()
+		uid := r.CreateCR("a", clusterA)
+		r.Create(ctl, databaseA, tt.OwnedBy(body(1, "t1", "x", ""), uid, true))
+		r.Ready(clusterA).EndFaults().Settle()
+		r.Begin().Restart()
+		r.Update(trace.ModelCaller("toy", "databases"), databaseA, tt.OwnedBy(body(2, "t1", "x", "synced"), uid, true))
+		r.Update(ctl, databaseA, tt.OwnedBy(body(3, "t2", tier, "synced"), uid, true))
+		r.EndFaults().Settle()
+		if findings := restore(t, r); want == "" {
+			requireNone(t, findings)
+		} else {
+			requireFinding(t, findings, "Restore", 1, "changed resources", "kube/toy/databases", want)
+		}
+	}
 }
