@@ -27,6 +27,8 @@ type write struct {
 	subresource string
 	patch       map[string]any
 	rv          string
+	// at is when the stage sent the write.
+	at time.Time
 }
 
 // fakeStageWriter answers each write with the next resourceVersion from 100,
@@ -41,12 +43,12 @@ type fakeStageWriter struct {
 }
 
 func (f *fakeStageWriter) patch(_ context.Context, ref trace.Ref, subresource string, patch []byte) (string, error) {
+	w := write{ref: ref, subresource: subresource, at: time.Now()}
 	if f.during != nil {
 		f.during()
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	w := write{ref: ref, subresource: subresource}
 	json.Unmarshal(patch, &w.patch)
 	if len(f.errs) > 0 {
 		err := f.errs[0]
@@ -614,9 +616,7 @@ func TestAModelFinalizerHoldsEachDeletionForItsAfter(t *testing.T) {
 		t.Error("Pending is false while the finalizer holds the deletion.")
 	}
 	removed := w.await(t, 2)[1]
-	if elapsed := time.Since(deleted); elapsed < hold {
-		t.Errorf("Removed the finalizer %v after the deletion, want at least %v.", elapsed, hold)
-	}
+	removedOnTime(t, removed, deleted, hold)
 	if precondition(removed) != "200" || !reflect.DeepEqual(writtenFinalizers(removed), []any{"other"}) {
 		t.Errorf("Wrote %+v, want only the stage's finalizer removed at resourceVersion 200.", removed)
 	}
@@ -649,27 +649,34 @@ func TestAModelFinalizerIsNotAddedToAnObjectBeingDeleted(t *testing.T) {
 	}
 }
 
+// g's generation stays 0 when its deletion starts, as a PVC's does. g lives
+// longer than the hold first.
 func TestAModelFinalizerCountsAfterFromTheFirstDeletingVersion(t *testing.T) {
-	s, _, _ := testStageHolding(t, time.Hour)
-	deletingAt := func(g gadget) time.Time {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		return s.objects[g.ref()].deletingAt
-	}
-	g := gadget{name: "g", uid: "u", rv: "1", generation: 1, finalizers: []string{cleanup, "other"}}
+	const hold = 500 * time.Millisecond
+	s, w, _ := testStageHolding(t, hold)
+	g := gadget{name: "g", uid: "u", rv: "1", finalizers: []string{cleanup, "other"}, ready: readyFor(0)}
 	s.hear(g.version())
-	heard := time.Now()
-	g.rv, g.generation, g.deleting = "2", 2, true
+	w.still(t, 0, hold+after)
+
+	deleted := time.Now()
+	g.rv, g.deleting = "2", true
 	s.hear(g.version())
-	first := deletingAt(g)
-	if first.Before(heard) || first.After(time.Now()) {
-		t.Fatalf("deletingAt = %v, want the time the stage heard the deletion, after %v.", first, heard)
-	}
-	time.Sleep(time.Millisecond)
+	time.Sleep(hold * 3 / 4)
 	g.rv, g.finalizers = "3", []string{cleanup}
 	s.hear(g.version())
-	if got := deletingAt(g); !got.Equal(first) {
-		t.Errorf("deletingAt = %v after a later deleting version, want %v.", got, first)
+	removed := w.await(t, 1)[0]
+	removedOnTime(t, removed, deleted, hold)
+	if precondition(removed) != "3" || !reflect.DeepEqual(writtenFinalizers(removed), []any{}) {
+		t.Errorf("Wrote %+v, want the stage's finalizer removed at resourceVersion 3.", removed)
+	}
+}
+
+// removedOnTime fails t unless the stage sent removed hold to 4/3 hold after
+// deleted.
+func removedOnTime(t *testing.T, removed write, deleted time.Time, hold time.Duration) {
+	t.Helper()
+	if elapsed := removed.at.Sub(deleted); elapsed < hold || elapsed > hold+hold/3 {
+		t.Errorf("Removed the finalizer %v after the deletion, want %v to %v.", elapsed, hold, hold+hold/3)
 	}
 }
 

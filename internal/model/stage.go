@@ -66,9 +66,10 @@ type held struct {
 	generation int64
 	heardAt    time.Time
 	deleting   bool
-	// deletingAt is when the stage first heard the object being deleted. It
-	// is finer than deletionTimestamp, which holds whole seconds.
-	deletingAt time.Time
+	// releaseAt is when the model's finalizer comes off: After past the first
+	// version the stage hears with a deletionTimestamp. The deletionTimestamp
+	// itself holds whole seconds.
+	releaseAt  time.Time
 	finalizers []string
 	ready      *stageCondition
 	// awaited is the resourceVersion a sent write made, or, after a
@@ -285,8 +286,8 @@ func (s *Stage) hear(v trace.Version) {
 			h.generation, h.heardAt = body.Generation, time.Now()
 		}
 		h.rv, h.deleting, h.finalizers, h.ready = v.RV, body.DeletionTimestamp != nil, body.Finalizers, nil
-		if h.deleting && h.deletingAt.IsZero() {
-			h.deletingAt = time.Now()
+		if f := s.m.Finalizer; f != nil && h.deleting && h.releaseAt.IsZero() {
+			h.releaseAt = time.Now().Add(f.After)
 		}
 		for _, c := range body.Status.Conditions {
 			if c.Type == "Ready" {
@@ -329,7 +330,7 @@ func (s *Stage) decide(h *held, now time.Time) []stageOp {
 	h.stopTimer()
 	if h.deleting {
 		if f := s.m.Finalizer; f != nil && slices.Contains(finalizers, f.Name) {
-			s.schedule(h, h.deletingAt.Add(f.After), now)
+			s.schedule(h, h.releaseAt, now)
 		}
 		return ops
 	}
@@ -357,9 +358,8 @@ func (s *Stage) decide(h *held, now time.Time) []stageOp {
 }
 
 // finalizers returns the finalizers h needs now: slowDelete's while a
-// slowDelete fault matches h, and the model's own until its After past h's
-// deletion. The API server refuses a new finalizer on an object being
-// deleted.
+// slowDelete fault matches h, and the model's own until h.releaseAt. The API
+// server refuses a new finalizer on an object being deleted.
 func (s *Stage) finalizers(h *held, now time.Time) []string {
 	finalizers := slices.Clone(h.finalizers)
 	keep := func(name string, wanted bool) {
@@ -372,7 +372,7 @@ func (s *Stage) finalizers(h *held, now time.Time) []string {
 	}
 	keep(SlowDeleteFinalizer, s.active(h, false))
 	if f := s.m.Finalizer; f != nil {
-		keep(f.Name, !h.deleting || now.Before(h.deletingAt.Add(f.After)))
+		keep(f.Name, !h.deleting || now.Before(h.releaseAt))
 	}
 	return finalizers
 }
