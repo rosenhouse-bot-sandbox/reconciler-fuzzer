@@ -93,7 +93,7 @@ func TestACannotDrawErrorQuotesAnyOtherPanic(t *testing.T) {
 		var missing *field
 		return missing.dotted
 	})}
-	err := g.rules.acceptsADraw(g.sample, panics)
+	err := g.kinds[0].rules.acceptsADraw(g.kinds[0].sample, panics)
 	if err == nil || !strings.Contains(err.Error(), "nil pointer dereference") || strings.Contains(err.Error(), "cannot draw") {
 		t.Errorf("acceptsADraw returned %v, want the panic's reason and no guess at its cause.", err)
 	}
@@ -111,7 +111,7 @@ func TestNewDrawsAFieldAHundredTimesToFindAValueTheCRDAccepts(t *testing.T) {
 		{0, 100, false},
 	} {
 		draws := 0
-		err := g.rules.acceptsADraw(g.sample, countField(testCase.count, &draws))
+		err := g.kinds[0].rules.acceptsADraw(g.kinds[0].sample, countField(testCase.count, &draws))
 		if (err == nil) != testCase.accepted || draws != testCase.draws {
 			t.Errorf("With every count %d, New drew %d times and returned %v, want %d draws and accepted=%t.",
 				testCase.count, draws, err, testCase.draws, testCase.accepted)
@@ -129,11 +129,11 @@ func TestATransitionRuleSeesTheOldObjectsDefaults(t *testing.T) {
 		{"count", 5, false},
 		{"minCount", 2, true},
 	} {
-		updated := g.sample.DeepCopy()
+		updated := g.kinds[0].sample.DeepCopy()
 		if err := unstructured.SetNestedField(updated.Object, testCase.value, "spec", testCase.field); err != nil {
 			t.Fatal(err)
 		}
-		if err := g.rules.refusal(updated.Object, g.sample.Object); (err != nil) != testCase.refused {
+		if err := g.kinds[0].rules.refusal(updated.Object, g.kinds[0].sample.Object); (err != nil) != testCase.refused {
 			t.Errorf("Setting spec.%s to %d returned %v, want refused=%t.", testCase.field, testCase.value, err, testCase.refused)
 		}
 	}

@@ -303,7 +303,7 @@ func TestCreatesAndUpdatesDrawCRDValidValues(t *testing.T) {
 		case plan.Create:
 			object := decode(t, a.Object)
 			count = object["spec"].(map[string]any)["count"]
-			if err := g.rules.refusal(object, nil); err != nil {
+			if err := g.kinds[0].rules.refusal(object, nil); err != nil {
 				t.Errorf("The CRD refuses the create %s: %v.", a.Object, err)
 			}
 		case plan.Update:

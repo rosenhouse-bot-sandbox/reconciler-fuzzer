@@ -82,7 +82,7 @@ func TestAnOverlayKeywordReconcilerFuzzerDoesNotReadIsAConfigurationError(t *tes
 func TestWithoutMutateEverySpecPathTheSchemaDescribesMoves(t *testing.T) {
 	g := newGenerator(t, loadConfig(t, rulesConfig))
 	want := []string{"spec.config", "spec.count", "spec.left", "spec.maxUnavailable", "spec.minCount", "spec.mode", "spec.tags"}
-	if got := dottedOf(g.fields); !slices.Equal(got, want) {
+	if got := dottedOf(g.kinds[0].fields); !slices.Equal(got, want) {
 		t.Errorf("The generator mutates %v, want %v.", got, want)
 	}
 }
@@ -114,11 +114,11 @@ func TestMutateIsAnAllowlistOfSchemaPaths(t *testing.T) {
 	cfg := loadConfig(t, rulesConfig)
 	cfg.Primaries[0].Values.Mutate = []string{"spec.left", "spec.count"}
 	g := newGenerator(t, cfg)
-	if got := dottedOf(g.fields); !slices.Equal(got, []string{"spec.count", "spec.left"}) {
+	if got := dottedOf(g.kinds[0].fields); !slices.Equal(got, []string{"spec.count", "spec.left"}) {
 		t.Errorf("The generator mutates %v.", got)
 	}
-	if !slices.Equal(g.fields[1].path, []string{"spec", "left"}) {
-		t.Errorf("The field's path is %v, want it split on the dots.", g.fields[1].path)
+	if !slices.Equal(g.kinds[0].fields[1].path, []string{"spec", "left"}) {
+		t.Errorf("The field's path is %v, want it split on the dots.", g.kinds[0].fields[1].path)
 	}
 }
 
@@ -126,7 +126,7 @@ func TestDistinctPathsAreNotMutated(t *testing.T) {
 	cfg := loadConfig(t, rulesConfig)
 	cfg.Primaries[0].Values.Mutate = []string{"spec.left", "spec.count"}
 	cfg.Primaries[0].Values.Distinct = []string{"spec.left"}
-	if got := dottedOf(newGenerator(t, cfg).fields); !slices.Equal(got, []string{"spec.count"}) {
+	if got := dottedOf(newGenerator(t, cfg).kinds[0].fields); !slices.Equal(got, []string{"spec.count"}) {
 		t.Errorf("The generator mutates %v, want spec.count alone.", got)
 	}
 	cfg.Primaries[0].Values.Distinct = []string{"spec.count"}

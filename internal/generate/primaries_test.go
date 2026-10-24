@@ -10,7 +10,6 @@ import (
 const fleetConfig = "testdata/fleet/config.yaml"
 
 func TestPlansCreateAndUpdateEachListedKindWithItsValues(t *testing.T) {
-	t.Skip("enabled by the generate package")
 	mutable := map[string][]string{"Cluster": {"volumes", "volumeSize"}, "Database": {"engine"}}
 	created, updated := map[string]bool{}, map[string]bool{}
 	for _, p := range plans(t, fleetConfig, 50) {

@@ -80,7 +80,7 @@ func TestAModelFaultComesWithTheActionItExercises(t *testing.T) {
 			rapid.Bool().Draw(t, "rapid needs a draw")
 			at := state{}
 			if c.live {
-				at["a"] = g.base("a").Object
+				at["a"] = g.kinds[0].base("a").Object
 			}
 			return g.traffic(t, at, c.fault)
 		}).Example(0)

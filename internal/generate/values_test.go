@@ -250,7 +250,7 @@ func TestAnIntOrStringFollowsItsOverlay(t *testing.T) {
 func generatedAt(t *testing.T, cfg *config.Config, path ...string) []any {
 	t.Helper()
 	g := newGenerator(t, cfg)
-	kept, _, _ := unstructured.NestedFieldNoCopy(g.sample.Object, path...)
+	kept, _, _ := unstructured.NestedFieldNoCopy(g.kinds[0].sample.Object, path...)
 	var values []any
 	for seed := uint64(1); seed <= 100; seed++ {
 		p, err := g.Plan(seed)
