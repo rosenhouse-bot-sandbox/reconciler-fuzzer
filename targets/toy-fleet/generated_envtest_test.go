@@ -14,12 +14,10 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/run"
 )
 
-// TestGeneratedPlansWithFaultsPassB0 runs 20 plans with a fault from the
-// cluster and database configs. It fails if fewer than 3 of a config's plans
-// had a request or model fault that picked a request or held an object, so it
-// catches faults that stop firing. It does not fuzz config.yaml, whose
-// generated Databases and Users can name a Cluster or Database that no slot
-// holds, and then never become ready.
+// TestGeneratedPlansWithFaultsPassB0 runs 20 plans with a fault from each
+// config it fuzzes. config.yaml's header says why config.yaml is not one. It
+// fails if fewer than 3 of a config's plans had a request or model fault that
+// picked a request or held an object, so it catches faults that stop firing.
 func TestGeneratedPlansWithFaultsPassB0(t *testing.T) {
 	for _, cfg := range []string{clusterConfig, databaseConfig} {
 		t.Run(cfg, func(t *testing.T) {

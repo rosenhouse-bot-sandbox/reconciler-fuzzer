@@ -1,5 +1,5 @@
-# Clusters alone, for the generated test. Paths resolve against this file's
-# directory.
+# The generated test fuzzes Clusters alone with this config. Paths resolve
+# against this file's directory.
 launch:
   binary: ../../../bin/toy-fleet
   args:

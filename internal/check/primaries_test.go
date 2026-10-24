@@ -74,20 +74,33 @@ func TestClause7BudgetsCountCRsOfEveryListedKind(t *testing.T) {
 	}
 }
 
-// unlistedOwner settles a step in which the harness creates Database db,
+var (
+	unlistedDB = tt.Ref("toy/databases", "ns", "db")
+	dbChild    = tt.Ref("configmaps", "ns", "db-db")
+)
+
+// withUnlistedOwner settles a step in which the harness creates Database db,
 // which primaries does not list, and Cluster a, and the controller gives db
-// a ConfigMap. The next step deletes Cluster a.
-func unlistedOwner(deleteDB bool) *tt.Script {
-	db := tt.Ref("toy/databases", "ns", "db")
+// a ConfigMap.
+func withUnlistedOwner() *tt.Script {
 	r := fleetRun(2, clusters)
 	r.Begin()
-	uid := r.Create(trace.Harness, db, tt.CR("db", true))
+	r.Create(trace.Harness, unlistedDB, tt.CR("db", true))
 	r.CreateCR("a", clusterA)
-	r.Create(ctl, tt.Ref("configmaps", "ns", "db-db"), tt.OwnedBy(tt.Object("db-db"), uid, true))
-	r.Ready(clusterA).EndFaults().Settle()
+	r.Create(ctl, dbChild, ownedByDB(r, tt.Object("db-db")))
+	return r.Ready(clusterA).EndFaults().Settle()
+}
+
+func ownedByDB(r *tt.Script, body map[string]any) map[string]any {
+	return tt.OwnedBy(body, r.UID(unlistedDB), true)
+}
+
+// unlistedOwner is withUnlistedOwner and a step that deletes Cluster a.
+func unlistedOwner(deleteDB bool) *tt.Script {
+	r := withUnlistedOwner()
 	r.Begin().DeleteCR("a", clusterA)
 	if deleteDB {
-		r.Delete(trace.Harness, db)
+		r.Delete(trace.Harness, unlistedDB)
 	}
 	return r.EndFaults().Settle()
 }
@@ -102,31 +115,19 @@ func TestCleanFailsAChildWhoseUnlistedOwnerIsGone(t *testing.T) {
 }
 
 func TestRestoreNamesTheUnlistedOwnerOfAChangedResource(t *testing.T) {
-	db, child := tt.Ref("toy/databases", "ns", "db"), tt.Ref("configmaps", "ns", "db-db")
-	r := fleetRun(2, clusters)
-	r.Begin()
-	uid := r.Create(trace.Harness, db, tt.CR("db", true))
-	r.CreateCR("a", clusterA)
-	r.Create(ctl, child, tt.OwnedBy(tt.Object("db-db"), uid, true))
-	r.Ready(clusterA).EndFaults().Settle()
+	r := withUnlistedOwner()
 	r.Begin().Restart()
-	r.Update(ctl, child, tt.OwnedBy(named("db-db", map[string]any{"data": "new"}), uid, true))
+	r.Update(ctl, dbChild, ownedByDB(r, named("db-db", map[string]any{"data": "new"})))
 	r.EndFaults().Settle()
 	requireFinding(t, restore(t, r), "Restore", 1, "changed resources", "kube/configmaps",
 		"configmaps ns/db-db (rule 1, unlisted owner databases.toy ns/db): data")
 }
 
-func TestRestoreJudgesTheInstanceADamageDeletedThoughItsRecreateIsRecordedFirst(t *testing.T) {
-	db, child := tt.Ref("toy/databases", "ns", "db"), tt.Ref("configmaps", "ns", "db-db")
-	r := fleetRun(2, clusters)
-	r.Begin()
-	uid := r.Create(trace.Harness, db, tt.CR("db", true))
-	r.CreateCR("a", clusterA)
-	r.Create(ctl, child, tt.OwnedBy(tt.Object("db-db"), uid, true))
-	r.Ready(clusterA).EndFaults().Settle()
-	r.Begin().Delete(trace.Harness, child)
-	r.Create(ctl, child, tt.OwnedBy(tt.Object("db-db"), uid, true))
-	r.Act("damage", "", &child).Call(ctl, "get", child, 200).EndFaults().Settle()
+func TestRestorePassesAResourceRecreatedBeforeItsDamageIsRecorded(t *testing.T) {
+	r := withUnlistedOwner()
+	r.Begin().Delete(trace.Harness, dbChild)
+	r.Create(ctl, dbChild, ownedByDB(r, tt.Object("db-db")))
+	r.Act("damage", "", &dbChild).Call(ctl, "get", dbChild, 200).EndFaults().Settle()
 	requireNone(t, restore(t, r))
 }
 

@@ -1,4 +1,7 @@
-# Paths resolve against this file's directory.
+# This config lists Clusters, Databases and Users. Fuzz cluster/ or
+# database/ instead: a generated Database or User here can name a missing
+# Cluster or Database, and then never gets ready. Paths resolve against this
+# file's directory.
 launch:
   binary: ../../bin/toy-fleet
   args:
