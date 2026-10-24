@@ -2,6 +2,7 @@ package controller
 
 import (
 	"bytes"
+	"context"
 	"maps"
 	"slices"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	fleetv1 "github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/targets/toy-fleet/api/v1"
@@ -25,13 +27,13 @@ const ns = "ns"
 
 type fleet struct {
 	t         *testing.T
-	c         client.Client
+	c         client.WithWatch
 	clusters  *ClusterReconciler
 	databases *DatabaseReconciler
 	users     *UserReconciler
 }
 
-func newClient(t *testing.T, objects ...client.Object) client.Client {
+func newClient(t *testing.T, objects ...client.Object) client.WithWatch {
 	t.Helper()
 	scheme, err := NewScheme()
 	if err != nil {
@@ -78,16 +80,32 @@ func (f *fleet) cluster() *fleetv1.Cluster {
 	return c
 }
 
-// readyVolumes plays the third party: it marks every Volume ready.
-func (f *fleet) readyVolumes() {
+func (f *fleet) listVolumes() []storagev1.Volume {
 	f.t.Helper()
 	list := &storagev1.VolumeList{}
 	if err := f.c.List(f.t.Context(), list); err != nil {
 		f.t.Fatal(err)
 	}
-	for _, v := range list.Items {
+	return list.Items
+}
+
+// readyVolumes plays the third party: it marks every Volume ready.
+func (f *fleet) readyVolumes() {
+	f.t.Helper()
+	for _, v := range f.listVolumes() {
 		meta.SetStatusCondition(&v.Status.Conditions, metav1.Condition{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Ready", ObservedGeneration: v.Generation})
 		if err := f.c.Status().Update(f.t.Context(), &v); err != nil {
+			f.t.Fatal(err)
+		}
+	}
+}
+
+// holdVolumes plays the third party: it puts its finalizer on every Volume.
+func (f *fleet) holdVolumes() {
+	f.t.Helper()
+	for _, v := range f.listVolumes() {
+		v.Finalizers = []string{"storage.thirdparty/protect"}
+		if err := f.c.Update(f.t.Context(), &v); err != nil {
 			f.t.Fatal(err)
 		}
 	}
@@ -96,12 +114,8 @@ func (f *fleet) readyVolumes() {
 // volumes lists each Volume as its name and size.
 func (f *fleet) volumes() []string {
 	f.t.Helper()
-	list := &storagev1.VolumeList{}
-	if err := f.c.List(f.t.Context(), list); err != nil {
-		f.t.Fatal(err)
-	}
 	var volumes []string
-	for _, v := range list.Items {
+	for _, v := range f.listVolumes() {
 		volumes = append(volumes, v.Name+" "+v.Spec.Size)
 	}
 	return volumes
@@ -228,9 +242,8 @@ func TestClusterDeletionWaitsForDatabasesThenVolumes(t *testing.T) {
 	if c := f.cluster(); c.Status.Phase != fleetv1.Deleting || c.Status.Message != "waiting until no Database names the Cluster" {
 		t.Fatalf("With a Database, the deleted Cluster is %+v.", c.Status)
 	}
-	volumes := &storagev1.VolumeList{}
-	if err := f.c.List(t.Context(), volumes); err != nil || len(volumes.Items) != 2 {
-		t.Fatalf("With a Database, the Cluster has Volumes %d, %v; want both.", len(volumes.Items), err)
+	if n := len(f.listVolumes()); n != 2 {
+		t.Fatalf("With a Database, the Cluster has %d Volumes, want both.", n)
 	}
 
 	db := &fleetv1.Database{}
@@ -239,21 +252,12 @@ func TestClusterDeletionWaitsForDatabasesThenVolumes(t *testing.T) {
 	}
 	f.delete(db)
 	f.settle(f.databases, "db")
-	// A Volume's finalizer holds it after the Cluster deletes it.
-	for _, v := range volumes.Items {
-		v.Finalizers = []string{"storage.thirdparty/protect"}
-		if err := f.c.Update(t.Context(), &v); err != nil {
-			t.Fatal(err)
-		}
-	}
+	f.holdVolumes()
 	f.settle(f.clusters, "cluster")
 	if c := f.cluster(); c.Status.Message != "waiting until no Volume of the Cluster remains" {
 		t.Fatalf("With held Volumes, the deleted Cluster is %+v.", c.Status)
 	}
-	if err := f.c.List(t.Context(), volumes); err != nil {
-		t.Fatal(err)
-	}
-	for _, v := range volumes.Items {
+	for _, v := range f.listVolumes() {
 		if v.DeletionTimestamp.IsZero() {
 			t.Fatalf("Volume %s was not deleted.", v.Name)
 		}
@@ -265,6 +269,31 @@ func TestClusterDeletionWaitsForDatabasesThenVolumes(t *testing.T) {
 	f.settle(f.clusters, "cluster")
 	if err := f.get("cluster", &fleetv1.Cluster{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("Once its Volumes are gone, the Cluster gives %v, want not found.", err)
+	}
+}
+
+// A Volume's finalizer can hold it after the Cluster deletes it.
+func TestClusterDeletesEachVolumeOnce(t *testing.T) {
+	f := newFleet(t, clusterObj())
+	deletes := map[string]int{}
+	f.clusters.Client = interceptor.NewClient(f.c, interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			deletes[obj.GetName()]++
+			return c.Delete(ctx, obj, opts...)
+		},
+	})
+	f.settle(f.clusters, "cluster")
+	f.holdVolumes()
+	c := f.cluster()
+	c.Spec.Volumes = 1
+	if err := f.c.Update(t.Context(), c); err != nil {
+		t.Fatal(err)
+	}
+	f.settle(f.clusters, "cluster")
+	f.delete(f.cluster())
+	f.settle(f.clusters, "cluster")
+	if want := map[string]int{"cluster-vol-0": 1, "cluster-vol-1": 1}; !maps.Equal(deletes, want) {
+		t.Errorf("The Cluster sent Volume deletes %v through a scale-down and its deletion, want %v.", deletes, want)
 	}
 }
 
@@ -430,6 +459,14 @@ func TestReconcileWritesNoUnchangedStatus(t *testing.T) {
 	f.reconcileOnce(f.clusters, "cluster")
 	if after := f.cluster().ResourceVersion; after != before {
 		t.Errorf("A settled Cluster went from resourceVersion %s to %s.", before, after)
+	}
+}
+
+// A queued request can outlive its CR.
+func TestReconcileOfAMissingCRSucceeds(t *testing.T) {
+	f := newFleet(t)
+	for _, r := range []reconcile.Reconciler{f.clusters, f.databases, f.users} {
+		f.reconcileOnce(r, "missing")
 	}
 }
 
