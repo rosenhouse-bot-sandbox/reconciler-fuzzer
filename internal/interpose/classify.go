@@ -1,7 +1,6 @@
 package interpose
 
 import (
-	"cmp"
 	"net/http"
 	"strconv"
 	"strings"
@@ -107,8 +106,15 @@ func Matches(m plan.Match, r Request) bool {
 	return field(m.Verb, r.Verb) &&
 		field(m.Group, r.Ref.Group) &&
 		field(m.Resource, r.Ref.Resource) &&
-		field(m.Subresource, cmp.Or(r.Subresource, plan.NoSubresource)) &&
+		subresource(m.Subresource, r.Subresource) &&
 		field(m.Name, r.Ref.Name)
 }
 
 func field(want, got string) bool { return want == "" || want == got }
+
+func subresource(want, got string) bool {
+	if want == plan.NoSubresource {
+		return got == ""
+	}
+	return field(want, got)
+}

@@ -101,11 +101,18 @@ func TestMatches(t *testing.T) {
 }
 
 func TestMatchesNoSubresource(t *testing.T) {
-	update := interpose.Request{Verb: "update", Ref: ref{Group: "toy", Resource: "clusters", Name: "c"}}
-	status := update
-	status.Subresource = "status"
 	m := plan.Match{Verb: "update", Resource: "clusters", Subresource: "-"}
-	if !interpose.Matches(m, update) || interpose.Matches(m, status) {
-		t.Errorf("Matches(%+v): main resource %v, status %v; want true, false.", m, interpose.Matches(m, update), interpose.Matches(m, status))
+	for _, c := range []struct {
+		subresource string
+		want        bool
+	}{
+		{"", true},
+		{"status", false},
+		{"-", false},
+	} {
+		r := interpose.Request{Verb: "update", Ref: ref{Group: "toy", Resource: "clusters", Name: "c"}, Subresource: c.subresource}
+		if got := interpose.Matches(m, r); got != c.want {
+			t.Errorf("Matches(%+v) of subresource %q = %v, want %v.", m, c.subresource, got, c.want)
+		}
 	}
 }
