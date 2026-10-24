@@ -149,8 +149,8 @@ type startedFault struct {
 	model string
 }
 
-// period is step n's fault period. Its faults end once: when the period
-// passes during a create's wait for its slot, or else after the actions.
+// period is step n's fault period. Its faults end once: when Period passes
+// during a create's wait for its slot, or else when the fault period ends.
 type period struct {
 	*execution
 	n       int
@@ -160,7 +160,7 @@ type period struct {
 	ended   bool
 }
 
-// ends is when the step's period passes.
+// ends is when Period passes.
 func (p *period) ends() time.Time { return p.start.Add(time.Duration(p.step.Period)) }
 
 // endFaults ends the started faults, once.
@@ -215,8 +215,8 @@ func (e *execution) faultPeriod(ctx context.Context, p *period) error {
 }
 
 // awaitGone waits for ref, a slot's previous CR, to go. The step's faults or
-// a kill may hold it, so once the period passes, awaitGone ends them and
-// waits at most the settle timeout more.
+// a kill may hold it, so once Period passes, awaitGone ends them and waits
+// at most the settle timeout more.
 func (p *period) awaitGone(ctx context.Context, ref trace.Ref) error {
 	if time.Now().Before(p.ends()) {
 		if gone, err := p.waitGone(ctx, ref, p.ends()); gone || err != nil {

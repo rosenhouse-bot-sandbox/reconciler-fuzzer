@@ -304,6 +304,9 @@ cluster. The settle condition counts a held watch as looking only once the hold 
  "period": "2s", "faults": [{"match": {"resource": "secrets"}, "holdWatch": true}]}
 ```
 
+The create waits for the deleted CR to go. If `period` passes first, the hold ends then, so
+that the controller can finish the delete.
+
 Generated plans draw it for kinds `launch.rbac` lets the controller watch, the primary and
 `primary.owns` kinds most, in a step that deletes a CR and creates it again unchanged. About 1
 cert-manager seed in 11 holds Secrets this way, so a 20-seed `make hunt-cert-manager` usually,

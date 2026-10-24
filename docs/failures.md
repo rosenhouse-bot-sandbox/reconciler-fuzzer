@@ -49,6 +49,11 @@ step the trace ended too early to judge, or an unmapped request. Notes do
 not fail a run. A fault that picked no request tested nothing, so a plan
 with such notes may need a different fault.
 
+A create waits for its slot's previous CR to go. A CR still there
+`timeouts.settle` after the step's `period` fails the create. The note names
+the CR's `deletionTimestamp` and finalizers, and the plan skips to its
+appended steps.
+
 `cloud: unmapped request POST /v2/buckets/b-1/acl` means the system's API
 map could not place a controller request on a resource. No check judges
 that request, so a leak or duplicate it causes goes unseen. The `crud` map

@@ -185,15 +185,12 @@ on a `crud` fake. `Patch` and `Delete` send the map's `Write` through the
 harness listener, and return after an observer pass that started after the
 answer. An answer the map's `Gone` accepts is `system.ErrGone`.
 
-`crudfake` serves the `crud` map's API, with asynchronous states and strict 404
-and 409 answers (`crudfake.go`).
-
 ## 8. Plans
 
 An action's `do` is `create`, `update`, `delete` (optionally `Foreground`),
-`restart`, `kill` (the controller stays down until end faults), `damage` (of an
-instance the controller created) or `changeFixture` (of a fixture, on any
-system). `plan.go` documents each.
+`restart`, `kill` (the controller stays down until the faults end), `damage`
+(of an instance the controller created) or `changeFixture` (of a fixture, on
+any system). `plan.go` documents each.
 
 A `target` has `system` (default `kube`), `group`, `resource`, `namespace`,
 `name`, `role` and `nth` (default 1). Empty fields match anything.
@@ -220,9 +217,12 @@ where `maxPoll` is the longest poll interval of the systems the step's faults
 and `damage` and `changeFixture` actions name, and of every fake when the step
 creates, updates or deletes a CR. A fake's poll is its `poll`, by default
 `stable`. The runner gives a model fault to the first model or fake that
-`Takes` it; none is a harness error. A create that waits `settle` for its slot
-ends the plan after its step. Any other action error, except an unmatched
-target, is a harness error.
+`Takes` it; none is a harness error. A create into an emptied slot waits for
+its previous CR to go. Faults or a kill may hold it, so once `period` passes,
+the wait ends the step's faults, restarts a killed controller and lasts at most
+`settle` more. A CR still there ends the plan after the step, with a note that
+names its `deletionTimestamp` and finalizers. Any other action error, except
+an unmatched target, is a harness error.
 
 ## 10. Settle condition
 

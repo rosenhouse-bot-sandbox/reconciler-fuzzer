@@ -65,4 +65,4 @@ Each Cluster owns Volumes of a third party's kind, which a model sets ready. A D
 
 | Bug | Description | Plan | Check | Step |
 |---|---|---|---|---|
-| B0 | The correct controller. | all 9 committed plans | none | |
+| B0 | The correct controller. | all 11 committed plans | none | |
