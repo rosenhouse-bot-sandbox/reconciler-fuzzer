@@ -11,6 +11,7 @@ import (
 )
 
 var (
+	widgets      = trace.Kind{Group: "toy", Version: "v1", Kind: "Widget", Resource: "widgets"}
 	configMaps   = trace.Kind{Version: "v1", Kind: "ConfigMap", Resource: "configmaps"}
 	clusterRoles = trace.Kind{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRole", Resource: "clusterroles"}
 	labelOwner   = map[string]string{"kube": "self.metadata.labels.owner"}
@@ -18,7 +19,7 @@ var (
 
 func compile(t *testing.T, owners map[string]string, owns ...trace.Owns) owner.Rules {
 	t.Helper()
-	rules, err := owner.Compile(owners, owns, nil)
+	rules, err := owner.Compile(owners, []trace.Primary{{Kind: widgets, Owns: owns}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,10 +52,10 @@ func TestCompileRefusesBadCEL(t *testing.T) {
 	if _, err := owner.Compile(map[string]string{"kube": "self.("}, nil, nil); err == nil {
 		t.Error("a bad owner compiles")
 	}
-	if _, err := owner.Compile(nil, []trace.Owns{{Kind: configMaps, Name: "1 + 2"}}, nil); err == nil {
+	if _, err := owner.Compile(nil, []trace.Primary{{Kind: widgets, Owns: []trace.Owns{{Kind: configMaps, Name: "1 + 2"}}}}, nil); err == nil {
 		t.Error("a bad name compiles")
 	}
-	if _, err := owner.Compile(nil, []trace.Owns{{Kind: configMaps, Name: "'x'", Namespace: "self.("}}, nil); err == nil {
+	if _, err := owner.Compile(nil, []trace.Primary{{Kind: widgets, Owns: []trace.Owns{{Kind: configMaps, Name: "'x'", Namespace: "self.("}}}}, nil); err == nil {
 		t.Error("a bad namespace compiles")
 	}
 }

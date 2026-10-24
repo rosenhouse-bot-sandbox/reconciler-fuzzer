@@ -23,8 +23,24 @@ func TestRun(t *testing.T) {
 		t.Fatal("an empty trace has a Run")
 	}
 	run, ok := b.Add(tt.Run("toy", "widgets")).Index().Run()
-	if !ok || run.Primary.Group != "toy" || run.Primary.Resource != "widgets" {
+	if !ok || len(run.Primaries) != 1 || run.Primaries[0].Kind != (trace.Kind{Group: "toy", Resource: "widgets"}) {
 		t.Fatalf("Run() = %+v, %v", run, ok)
+	}
+}
+
+func TestRefOfKind(t *testing.T) {
+	widgets := trace.Kind{Group: "toy", Version: "v1", Kind: "Widget", Resource: "widgets"}
+	if !widgetA.OfKind(widgets) {
+		t.Errorf("%+v is not of kind %+v.", widgetA, widgets)
+	}
+	for _, ref := range []trace.Ref{
+		{System: "cloud", Group: "toy", Resource: "widgets", Name: "a"},
+		tt.Ref("other/widgets", "ns", "a"),
+		tt.Ref("toy/gadgets", "ns", "a"),
+	} {
+		if ref.OfKind(widgets) {
+			t.Errorf("%+v is of kind %+v.", ref, widgets)
+		}
 	}
 }
 

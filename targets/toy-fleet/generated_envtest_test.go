@@ -15,11 +15,11 @@ import (
 )
 
 // TestGeneratedPlansWithFaultsPassB0 runs 20 plans with a fault from each
-// config. It fails if fewer than 3 of a config's plans had a request or model
-// fault that picked a request or held an object, so it catches faults that
-// stop firing.
+// config it fuzzes. config.yaml's header says why config.yaml is not one. It
+// fails if fewer than 3 of a config's plans had a request or model fault that
+// picked a request or held an object, so it catches faults that stop firing.
 func TestGeneratedPlansWithFaultsPassB0(t *testing.T) {
-	for _, cfg := range configs {
+	for _, cfg := range []string{clusterConfig, databaseConfig} {
 		t.Run(cfg, func(t *testing.T) {
 			t.Parallel()
 			generatedPlansPassB0(t, cfg)
@@ -48,10 +48,7 @@ func generatedPlansPassB0(t *testing.T, path string) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// On the database config, seed 22 hits #128's false positive: Clean
-		// blames a Volume that the controller recreates for the fixture
-		// Cluster on a terminating Database.
-		if faults(p) == 0 || path == databaseConfig && seed == 22 {
+		if faults(p) == 0 {
 			continue
 		}
 		n++

@@ -120,20 +120,27 @@ clause 4 findings follow from it.
 
 A controller resource outlived its owning CR. Each line names the
 resource, the owner rule of DESIGN.md §11 that tied it to a CR (1:
-ownerReferences; 2: `systems[].owner`; 3: `primary.owns`; 4: the CRs live
-at its creation), and that CR's slot:
+ownerReferences; 2: `systems[].owner`; 3: an entry's `owns`; 4: the CRs
+live at its creation that the controller did not create), and that CR's
+slot. A CR that the controller created has no slot, so the line names its
+kind and name instead:
 
 ```
 configmaps rf-9485af8b/widget-0 (rule 4, slot a)
 buckets buckets-1 (rule 2, slot a)
+configmaps rf-9485af8b/db-0 (rule 1, CR databases.example.com rf-9485af8b/db)
 ```
 
 A rule 4 line usually means the resource lacks an ownerReference, so
-garbage collection could not delete it. A rule 1 line on a cluster-scoped
-resource with a namespaced owner means garbage collection ignores that
-invalid ownerReference. A rule 2 or 3 line usually means a finalizer
-forgot the resource. A resource that should outlive its
-CR needs `primary.retain`.
+garbage collection could not delete it. Its ownerReferences may also lead
+to no CR: they reach only objects that the trace never saw, gone objects,
+or objects that the controller made. While they name a live object that is
+not a CR and that the controller did not create, such as a fixture,
+directly or through live objects that the controller made, Clean skips the
+resource. A rule 1 line on a cluster-scoped resource with a namespaced
+owner means garbage collection ignores that invalid ownerReference. A rule
+2 or 3 line usually means a finalizer forgot the resource. A resource that
+should outlive its CR needs its entry's `retain`.
 
 ### Restore
 
@@ -141,16 +148,23 @@ The step changed no CR or fixture, but the controller's resources differ
 from the previous step's end.
 
 - `did not restore damaged resources`: a damaged resource was not
-  recreated.
+  recreated, or every resource of some kind under the damaged resource's
+  root (DESIGN.md §11) is gone. Once a damaged resource's owner is gone, a
+  CR that the controller made in the step must own a resource of the
+  damaged one's kind and role under that root.
 - `replaced resources`: an undamaged resource was replaced, or a new one
   appeared.
 - `changed resources`: an undamaged resource's body changed. Each line
   names the fields that differ.
 
+Each line names its resource's owner as Clean does. `rule 1, unlisted
+owner` names the live object, such as a fixture, that owns the resource
+instead of a CR.
+
 ### Unique: duplicate resources
 
-Two live controller resources share a kind, namespace, owning CR and role
-(DESIGN.md §11).
+Two live controller resources share a kind, namespace, owning CR or
+unlisted owner, and role (DESIGN.md §11).
 
 ### Honest
 
@@ -158,7 +172,8 @@ A CR reported ready while a dependency was not, as the controller's own
 reads showed it. A dependency stops counting once the controller sends a
 successful `delete` of it, and while the controller last saw it deleted.
 A `deletecollection` or an owner's cascade is not such a `delete`. Each
-line names the CR's slot and the dependency:
+line names the CR, by its slot or else by its kind and name, and the
+dependency:
 
 - `reported ready before seeing its dependency ready`: `not seen` means
   the controller never read the dependency after its last write to it;
@@ -187,6 +202,9 @@ names its cause. A run that started leaves its partial trace in `--out`. Common 
 | `creating fixture ...` | Fix the fixture, or install the CRD it needs under `crds`. |
 | `launch args: ...` or `launch env <name>: ...` | Use only `${systems.kube.kubeconfig}`, `namespace` and `url`, and a fake's `${systems.<name>.url}`. |
 | `fake <name> exited ...` | Read `<out>/<name>.log`. Fix the `systems[].process` command or the fake's own config. |
+| `create of slot "<s>" makes a <kind>, which primaries does not list` | List the kind under `primaries`, or make the object a fixture. |
+| `create of slot "<s>" makes an object without apiVersion or kind` | Give the create's `object` both. |
+| `... holds a <kind>, not a <kind>` | Point the entry's `sample` at an object of its `kind`. |
 
 `hunt` notes a seed whose run failed in `summary.md`, and goes on. It
 exits 2 when a seed failed and nothing was found, and 1 on any find.

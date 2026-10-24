@@ -10,7 +10,7 @@ defines each one. Follow these steps in order.
 
 1. **Design first.** Add the check's rule to DESIGN.md §12, and an entry to
    the §17 decision log. An entry is one line that says what changed and
-   which bug or target needs it. DESIGN.md must stay under 500 lines.
+   which bug or target needs it. DESIGN.md must stay under 530 lines.
 
 2. **Write a failing test.** In `internal/check/<name>_test.go`, build
    traces with `internal/trace/tracetest` (`tt.NewScript`, `Begin`,

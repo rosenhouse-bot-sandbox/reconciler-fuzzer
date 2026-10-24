@@ -158,6 +158,17 @@ func TestRestoreJudgesADamagedSharedResourceOnExistenceOnly(t *testing.T) {
 	requireNone(t, restore(t, r))
 }
 
+func TestRestoreFailsADamagedSharedResourceWhoseKindHasOthers(t *testing.T) {
+	r := newRun(2)
+	webhook := tt.Ref("secrets", "ns", "webhook-cert")
+	r.Create(ctl, webhook, tt.Object("webhook-cert"))
+	r.Create(ctl, tt.Ref("secrets", "ns", "metrics-cert"), tt.Object("metrics-cert"))
+	r.Begin().Restart().EndFaults().Settle()
+	r.Begin().Delete(trace.Harness, webhook).Act("damage", "", &webhook).EndFaults()
+	r.Call(ctl, "get", webhook, 404).Settle()
+	requireFinding(t, restore(t, r), "Restore", 1, "did not restore damaged resources", "kube/secrets", "secrets ns/webhook-cert (shared)")
+}
+
 func TestRestoreJudgesAFailedDamageAsNoDamage(t *testing.T) {
 	r := twoCRs()
 	r.Begin()
@@ -203,4 +214,196 @@ func TestRestoreComparesAnotherKindsStatus(t *testing.T) {
 	r.Update(ctl, childA, tt.OwnedBy(map[string]any{"metadata": map[string]any{"name": "a-0"}, "status": "new"}, r.UID(widgetA), true))
 	r.EndFaults().Settle()
 	requireFinding(t, restore(t, r), "Restore", 1, "changed resources", "kube/configmaps", "configmaps ns/a-0 (rule 1, slot a): status")
+}
+
+// madeDatabase settles a step in which the harness creates Cluster a, and
+// the controller makes Database b, a CR of a listed kind, for a, and the
+// ConfigMap b-0 for b.
+func madeDatabase() *tt.Script {
+	r := fleetRun(2, clusters, databases)
+	r.Begin()
+	uid := r.CreateCR("a", clusterA)
+	r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), uid, true))
+	r.Create(ctl, childB, tt.OwnedBy(tt.Object("b-0"), r.UID(databaseB), true))
+	return r.Ready(clusterA).EndFaults().Settle()
+}
+
+func TestRestoreLetsACRTheControllerMadeChangeWhenADamageTouchesIt(t *testing.T) {
+	r := madeDatabase()
+	r.Begin().Delete(trace.Harness, childB).Act("damage", "a", &childB).EndFaults()
+	r.Create(ctl, childB, tt.OwnedBy(tt.Object("b-0"), r.UID(databaseB), true))
+	r.Update(ctl, databaseB, tt.OwnedBy(named("b", map[string]any{"status": map[string]any{"ready": true, "since": "t2"}}), r.UID(clusterA), true))
+	r.Settle()
+	requireNone(t, restore(t, r))
+}
+
+func TestRestoreLetsACRTheControllerMadeForAFixtureChangeWhenADamageTouchesIt(t *testing.T) {
+	r := fleetRun(2, clusters, databases)
+	r.Begin()
+	r.CreateCR("a", clusterA)
+	fixture := r.Create(trace.Harness, tt.Ref("configmaps", "ns", "f"), tt.Object("f"))
+	r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), fixture, true))
+	r.Create(ctl, childB, tt.OwnedBy(tt.Object("b-0"), r.UID(databaseB), true))
+	r.Ready(clusterA).EndFaults().Settle()
+	r.Begin().Delete(trace.Harness, childB).Act("damage", "", &childB).EndFaults()
+	r.Create(ctl, childB, tt.OwnedBy(tt.Object("b-0"), r.UID(databaseB), true))
+	r.Update(ctl, databaseB, tt.OwnedBy(named("b", map[string]any{"status": map[string]any{"ready": true, "since": "t2"}}), fixture, true))
+	r.Settle()
+	requireNone(t, restore(t, r))
+}
+
+func TestRestoreJudgesTheResourcesOfACRTheControllerMadeAgain(t *testing.T) {
+	for name, remade := range map[string]bool{"remade": true, "not remade": false} {
+		t.Run(name, func(t *testing.T) {
+			r := madeDatabase()
+			r.Begin().Delete(trace.Harness, databaseB).Act("damage", "a", &databaseB).EndFaults()
+			collect(r, childB)
+			r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), r.UID(clusterA), true))
+			if remade {
+				r.Create(ctl, childB, tt.OwnedBy(tt.Object("b-0"), r.UID(databaseB), true))
+			}
+			r.Settle()
+			if remade {
+				requireNone(t, restore(t, r))
+			} else {
+				requireFinding(t, restore(t, r), "Restore", 1, "did not restore damaged resources", "kube/configmaps", "configmaps ns/b-0 (rule 1, CR databases.toy ns/b)")
+			}
+		})
+	}
+}
+
+func TestRestorePassesADamagedResourceWhoseOwnerTheControllerRemade(t *testing.T) {
+	r := madeDatabase()
+	r.Begin().Delete(trace.Harness, childB).Act("damage", "a", &childB).EndFaults()
+	r.Delete(ctl, databaseB)
+	r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), r.UID(clusterA), true))
+	r.Create(ctl, childB, tt.OwnedBy(tt.Object("b-0"), r.UID(databaseB), true))
+	r.Settle()
+	requireNone(t, restore(t, r))
+}
+
+func TestRestoreFailsADamagedResourceWhoseRemadeOwnerDoesNotRemakeIt(t *testing.T) {
+	r := fleetRun(2, clusters, databases)
+	r.Begin()
+	uid := r.CreateCR("a", clusterA)
+	r.Create(ctl, childA, tt.OwnedBy(tt.Object("a-0"), uid, true))
+	r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), uid, true))
+	r.Create(ctl, childB, tt.OwnedBy(tt.Object("b-0"), r.UID(databaseB), true))
+	r.Ready(clusterA).EndFaults().Settle()
+	r.Begin().Delete(trace.Harness, childB).Act("damage", "a", &childB).EndFaults()
+	r.Call(ctl, "get", childB, 404)
+	r.Delete(ctl, databaseB)
+	r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), uid, true))
+	r.Settle()
+	requireFinding(t, restore(t, r), "Restore", 1, "did not restore damaged resources", "kube/configmaps", "configmaps ns/b-0 (rule 1, CR databases.toy ns/b)")
+}
+
+func TestRestorePassesAnOwnerAndItsResourceThatTheControllerMadeAgain(t *testing.T) {
+	role := tt.Ref("rbac.authorization.k8s.io/clusterroles", "", "a-reader")
+	binding := tt.Ref("rbac.authorization.k8s.io/clusterrolebindings", "", "a-reader")
+	makeBoth := func(r *tt.Script) {
+		r.Create(ctl, role, tt.Object("a-reader"))
+		r.Create(ctl, binding, tt.OwnedBy(tt.Object("a-reader"), r.UID(role), true))
+	}
+	r := newRun(2)
+	r.Begin()
+	r.CreateCR("a", widgetA)
+	makeBoth(r)
+	r.Ready(widgetA).EndFaults().Settle()
+	r.Begin().Delete(trace.Harness, role).Act("damage", "a", &role).EndFaults()
+	collect(r, binding)
+	makeBoth(r)
+	r.Settle()
+	requireNone(t, restore(t, r))
+}
+
+func TestRestoreNamesACRWithoutASlotByItsKindAndName(t *testing.T) {
+	r := madeDatabase()
+	r.Begin().Restart()
+	r.Update(ctl, childB, tt.OwnedBy(named("b-0", map[string]any{"data": "new"}), r.UID(databaseB), true))
+	r.EndFaults().Settle()
+	requireFinding(t, restore(t, r), "Restore", 1, "changed resources", "kube/configmaps", "configmaps ns/b-0 (rule 1, CR databases.toy ns/b): data")
+}
+
+func TestRestoreLetsARule4ResourceOfADamagedRootChange(t *testing.T) {
+	clusterC, shared := tt.Ref("toy/clusters", "ns", "c"), tt.Ref("configmaps", "ns", "x")
+	r := fleetRun(2, clusters, databases)
+	r.Begin()
+	uid := r.CreateCR("a", clusterA)
+	r.CreateCR("c", clusterC)
+	r.Create(ctl, shared, tt.Object("x"))
+	r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), uid, true))
+	r.Create(ctl, childB, tt.OwnedBy(tt.Object("b-0"), r.UID(databaseB), true))
+	r.Ready(clusterA).Ready(clusterC).EndFaults().Settle()
+	r.Begin().Delete(trace.Harness, childB).Act("damage", "a", &childB).EndFaults()
+	r.Create(ctl, childB, tt.OwnedBy(tt.Object("b-0"), r.UID(databaseB), true))
+	r.Update(ctl, shared, named("x", map[string]any{"data": "new"}))
+	r.Settle()
+	requireNone(t, restore(t, r))
+}
+
+func TestRestorePassesARule4ResourceRemadeAfterTheControllerMadeACR(t *testing.T) {
+	role := tt.Ref("rbac.authorization.k8s.io/clusterroles", "", "a-reader")
+	r := fleetRun(2, clusters, databases)
+	r.Begin()
+	uid := r.CreateCR("a", clusterA)
+	r.Create(ctl, role, tt.Object("a-reader"))
+	r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), uid, true))
+	r.Ready(clusterA).EndFaults().Settle()
+	r.Begin().Delete(trace.Harness, role).Act("damage", "a", &role).EndFaults()
+	r.Create(ctl, role, tt.Object("a-reader"))
+	r.Settle()
+	requireNone(t, restore(t, r))
+}
+
+func TestRestoreFailsAFixturesDamagedResourceDespiteANewCRsResourceOfItsRole(t *testing.T) {
+	cmF, cmB := tt.Ref("configmaps", "ns", "f-1"), tt.Ref("configmaps", "ns", "f-2")
+	r := fleetRun(2, clusters, databases)
+	r.Begin()
+	r.CreateCR("a", clusterA)
+	fixture := r.Create(trace.Harness, tt.Ref("configmaps", "ns", "f"), tt.Object("f"))
+	r.Create(ctl, cmF, tt.OwnedBy(tt.Generated("f-", "f-1"), fixture, true))
+	r.Ready(clusterA).EndFaults().Settle()
+	r.Begin().Delete(trace.Harness, cmF).Act("damage", "", &cmF).EndFaults()
+	r.Call(ctl, "get", cmF, 404)
+	r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), fixture, true))
+	r.Create(ctl, cmB, tt.OwnedBy(tt.Generated("f-", "f-2"), r.UID(databaseB), true))
+	r.Settle()
+	requireFinding(t, restore(t, r), "Restore", 1, "did not restore damaged resources", "kube/configmaps", "configmaps ns/f-1 (rule 1, unlisted owner configmaps ns/f)")
+}
+
+func TestRestoreFailsADamagedResourceDespiteASiblingCRsResourceOfItsRole(t *testing.T) {
+	cmB, cmC := tt.Ref("configmaps", "ns", "db-b1"), tt.Ref("configmaps", "ns", "db-c1")
+	makeC := func(r *tt.Script) {
+		r.Create(ctl, databaseC, tt.OwnedBy(tt.CR("c", true), r.UID(clusterA), true))
+		r.Create(ctl, cmC, tt.OwnedBy(tt.Generated("db-", "db-c1"), r.UID(databaseC), true))
+	}
+	for name, c := range map[string]struct{ remakeB, makeCLater bool }{
+		"owner lives":                     {false, false},
+		"owner remade":                    {true, false},
+		"owner lives, sibling made later": {false, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := fleetRun(2, clusters, databases)
+			r.Begin()
+			uid := r.CreateCR("a", clusterA)
+			r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), uid, true))
+			r.Create(ctl, cmB, tt.OwnedBy(tt.Generated("db-", "db-b1"), r.UID(databaseB), true))
+			if !c.makeCLater {
+				makeC(r)
+			}
+			r.Ready(clusterA).EndFaults().Settle()
+			r.Begin().Delete(trace.Harness, cmB).Act("damage", "a", &cmB).EndFaults()
+			r.Call(ctl, "get", cmB, 404)
+			if c.remakeB {
+				r.Delete(ctl, databaseB)
+				r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), uid, true))
+			}
+			if c.makeCLater {
+				makeC(r)
+			}
+			r.Settle()
+			requireFinding(t, restore(t, r), "Restore", 1, "did not restore damaged resources", "kube/configmaps", "configmaps ns/db-b1 (rule 1, CR databases.toy ns/b)")
+		})
+	}
 }

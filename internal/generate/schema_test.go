@@ -11,11 +11,11 @@ import (
 func primarySchemaOf(t *testing.T, path string) *schema {
 	t.Helper()
 	cfg := loadConfig(t, path)
-	root, _, err := primaryCRD(cfg)
+	root, _, err := primaryCRD(cfg.CRDs, cfg.Primaries[0].Kind)
 	if err != nil {
 		t.Fatal(err)
 	}
-	read, err := overlaid(root, cfg.Values.Overlay)
+	read, err := overlaid(root, cfg.Primaries[0].Values.Overlay)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestPathsTheSchemaDoesNotDescribeAreConfigurationErrors(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := loadConfig(t, toyConfig)
-			declare(&cfg.Values)
+			declare(&cfg.Primaries[0].Values)
 			if _, err := New(cfg); err == nil || !strings.Contains(err.Error(), "spec.nonesuch") {
 				t.Errorf("New returned %v, want an error naming spec.nonesuch.", err)
 			}
@@ -65,7 +65,7 @@ func TestAnOverlayKeywordReconcilerFuzzerDoesNotReadIsAConfigurationError(t *tes
 	} {
 		t.Run(testCase.unread, func(t *testing.T) {
 			cfg := loadConfig(t, testCase.path)
-			cfg.Values.Overlay = map[string]map[string]any{testCase.dotted: testCase.overlay}
+			cfg.Primaries[0].Values.Overlay = map[string]map[string]any{testCase.dotted: testCase.overlay}
 			_, err := New(cfg)
 			if err == nil {
 				t.Fatalf("New accepted the overlay %v.", testCase.overlay)
@@ -82,7 +82,7 @@ func TestAnOverlayKeywordReconcilerFuzzerDoesNotReadIsAConfigurationError(t *tes
 func TestWithoutMutateEverySpecPathTheSchemaDescribesMoves(t *testing.T) {
 	g := newGenerator(t, loadConfig(t, rulesConfig))
 	want := []string{"spec.config", "spec.count", "spec.left", "spec.maxUnavailable", "spec.minCount", "spec.mode", "spec.tags"}
-	if got := dottedOf(g.fields); !slices.Equal(got, want) {
+	if got := dottedOf(g.kinds[0].fields); !slices.Equal(got, want) {
 		t.Errorf("The generator mutates %v, want %v.", got, want)
 	}
 }
@@ -104,7 +104,7 @@ func TestNewReportsTheSpecPathsItLeavesAlone(t *testing.T) {
 			}
 		}
 	}
-	cfg.Values.Mutate = []string{"spec.count"}
+	cfg.Primaries[0].Values.Mutate = []string{"spec.count"}
 	if leftAlone := newGenerator(t, cfg).LeftAlone(); len(leftAlone) != 0 {
 		t.Errorf("New leaves %q alone, and values.mutate names every path that moves.", leftAlone)
 	}
@@ -112,24 +112,24 @@ func TestNewReportsTheSpecPathsItLeavesAlone(t *testing.T) {
 
 func TestMutateIsAnAllowlistOfSchemaPaths(t *testing.T) {
 	cfg := loadConfig(t, rulesConfig)
-	cfg.Values.Mutate = []string{"spec.left", "spec.count"}
+	cfg.Primaries[0].Values.Mutate = []string{"spec.left", "spec.count"}
 	g := newGenerator(t, cfg)
-	if got := dottedOf(g.fields); !slices.Equal(got, []string{"spec.count", "spec.left"}) {
+	if got := dottedOf(g.kinds[0].fields); !slices.Equal(got, []string{"spec.count", "spec.left"}) {
 		t.Errorf("The generator mutates %v.", got)
 	}
-	if !slices.Equal(g.fields[1].path, []string{"spec", "left"}) {
-		t.Errorf("The field's path is %v, want it split on the dots.", g.fields[1].path)
+	if !slices.Equal(g.kinds[0].fields[1].path, []string{"spec", "left"}) {
+		t.Errorf("The field's path is %v, want it split on the dots.", g.kinds[0].fields[1].path)
 	}
 }
 
 func TestDistinctPathsAreNotMutated(t *testing.T) {
 	cfg := loadConfig(t, rulesConfig)
-	cfg.Values.Mutate = []string{"spec.left", "spec.count"}
-	cfg.Values.Distinct = []string{"spec.left"}
-	if got := dottedOf(newGenerator(t, cfg).fields); !slices.Equal(got, []string{"spec.count"}) {
+	cfg.Primaries[0].Values.Mutate = []string{"spec.left", "spec.count"}
+	cfg.Primaries[0].Values.Distinct = []string{"spec.left"}
+	if got := dottedOf(newGenerator(t, cfg).kinds[0].fields); !slices.Equal(got, []string{"spec.count"}) {
 		t.Errorf("The generator mutates %v, want spec.count alone.", got)
 	}
-	cfg.Values.Distinct = []string{"spec.count"}
+	cfg.Primaries[0].Values.Distinct = []string{"spec.count"}
 	if _, err := New(cfg); err == nil || !strings.Contains(err.Error(), "values.distinct spec.count") {
 		t.Errorf("New returned %v for a distinct path that holds no string.", err)
 	}
@@ -137,7 +137,7 @@ func TestDistinctPathsAreNotMutated(t *testing.T) {
 
 func TestAPrimaryKindTheCRDsDoNotDescribeIsAConfigurationError(t *testing.T) {
 	cfg := loadConfig(t, toyConfig)
-	cfg.Primary.Kind.Version = "v9"
+	cfg.Primaries[0].Kind.Version = "v9"
 	if _, err := New(cfg); err == nil || !strings.Contains(err.Error(), "describe no") {
 		t.Errorf("New returned %v.", err)
 	}

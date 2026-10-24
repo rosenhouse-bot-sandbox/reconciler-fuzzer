@@ -1,4 +1,7 @@
-# Paths resolve against this file's directory.
+# This config lists Clusters, Databases and Users. Fuzz cluster/ or
+# database/ instead: a generated Database or User here can name a missing
+# Cluster or Database, and then never gets ready. Paths resolve against this
+# file's directory.
 launch:
   binary: ../../bin/toy-fleet
   args:
@@ -10,19 +13,20 @@ launch:
     - rbac/role.yaml
 crds:
   - crds/
-primary:
-  kind: toy.reconciler-fuzzer/v1/Cluster
-  sample: cluster.yaml
-  ready: >-
-    has(self.status) && has(self.status.observedGeneration) && self.status.observedGeneration == self.metadata.generation
-    && has(self.status.phase) && self.status.phase == 'Ready'
+primaries:
+  - kind: toy.reconciler-fuzzer/v1/Cluster
+    sample: cluster.yaml
+    ready: &ready >-
+      has(self.status) && has(self.status.observedGeneration) && self.status.observedGeneration == self.metadata.generation
+      && has(self.status.phase) && self.status.phase == 'Ready'
+    values: {mutate: [spec.volumes, spec.volumeSize]}
+  - {kind: toy.reconciler-fuzzer/v1/Database, sample: database/database.yaml, ready: *ready}
+  - {kind: toy.reconciler-fuzzer/v1/User, sample: user.yaml, ready: *ready}
 models:
   - kind: storage.thirdparty/v1/Volume
     stages: readyCondition
     after: 300ms
     dependency: {track: 1s}
-values:
-  mutate: [spec.volumes, spec.volumeSize]
 timeouts:
   settle: 10s
   stable: 2s

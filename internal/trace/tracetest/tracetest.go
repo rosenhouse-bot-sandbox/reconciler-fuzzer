@@ -47,9 +47,10 @@ func Ref(resource, namespace, name string) trace.Ref {
 	return trace.Ref{System: "kube", Group: group, Resource: plural, Namespace: namespace, Name: name}
 }
 
-// Run is the first event of a trace whose primary kind is group and resource.
+// Run is the first event of a trace whose one primaries entry is the kind of
+// group and resource.
 func Run(group, resource string) trace.Event {
-	return trace.Event{Run: &trace.Run{Namespace: "ns", Primary: trace.Ref{System: "kube", Group: group, Resource: resource}}}
+	return trace.Event{Run: &trace.Run{Namespace: "ns", Primaries: []trace.Primary{{Kind: trace.Kind{Group: group, Resource: resource}}}}}
 }
 
 // Call is a request by caller on ref.

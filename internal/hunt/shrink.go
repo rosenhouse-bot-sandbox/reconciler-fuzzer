@@ -8,6 +8,9 @@ import (
 	"slices"
 	"time"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 )
 
@@ -19,9 +22,10 @@ const shortestPeriod = plan.Duration(500 * time.Millisecond)
 
 // Candidates returns the plans one greedy pass may try in place of p, in
 // pass order: drop a step, drop an action or fault, halve a fault period
-// (or clear the period of a step without faults), reset a spec field to the
-// sample's value, merge two slots. Every candidate is valid.
-func Candidates(p *plan.Plan, sample map[string]any) []*plan.Plan {
+// (or clear the period of a step without faults), reset a spec field to its
+// value in the sample of the CR's kind, merge two slots. Every candidate is
+// valid.
+func Candidates(p *plan.Plan, samples []map[string]any) []*plan.Plan {
 	var valid []*plan.Plan
 	try := func(change func(c *plan.Plan)) {
 		c := clone(p)
@@ -54,7 +58,7 @@ func Candidates(p *plan.Plan, sample map[string]any) []*plan.Plan {
 	}
 	for i, step := range p.Steps {
 		for j, a := range step.Actions {
-			for _, change := range fieldChanges(a, sample) {
+			for _, change := range fieldChanges(a, samples) {
 				try(func(c *plan.Plan) { change(&c.Steps[i].Actions[j]) })
 			}
 		}
@@ -71,10 +75,10 @@ func Candidates(p *plan.Plan, sample map[string]any) []*plan.Plan {
 // Shrink replaces p by its first failing candidate until no candidate
 // fails, and returns the result. An error of fails ends it; the result is
 // then the smallest failing plan so far.
-func Shrink(ctx context.Context, p *plan.Plan, sample map[string]any, fails Fails) (*plan.Plan, error) {
+func Shrink(ctx context.Context, p *plan.Plan, samples []map[string]any, fails Fails) (*plan.Plan, error) {
 	for {
 		shrunk := false
-		for _, c := range Candidates(p, sample) {
+		for _, c := range Candidates(p, samples) {
 			failed, err := fails(ctx, c)
 			if err != nil {
 				return p, err
@@ -112,15 +116,22 @@ func halve(step *plan.Step) {
 	}
 }
 
-// fieldChanges reset each spec field of a create's object to the sample's
-// value, or drop each field of an update patch that has more than one.
-func fieldChanges(a plan.Action, sample map[string]any) []func(*plan.Action) {
+// fieldChanges reset each spec field of a create's object to its value in
+// the sample of the object's group and kind, or drop each field of an
+// update patch that has more than one. A create of a kind without a sample
+// keeps its fields.
+func fieldChanges(a plan.Action, samples []map[string]any) []func(*plan.Action) {
 	var changes []func(*plan.Action)
 	switch {
 	case a.Do == plan.Create && a.Object != nil:
 		object := decode(a.Object)
-		samples, _ := sample["spec"].(map[string]any)
-		for _, path := range differing(object["spec"], samples, []string{"spec"}) {
+		i := slices.IndexFunc(samples, func(sample map[string]any) bool { return groupKind(sample) == groupKind(object) })
+		if i < 0 {
+			return nil
+		}
+		sample := samples[i]
+		specs, _ := sample["spec"].(map[string]any)
+		for _, path := range differing(object["spec"], specs, []string{"spec"}) {
 			changes = append(changes, func(c *plan.Action) {
 				changed := decode(c.Object)
 				value, present := lookup(sample, path)
@@ -227,6 +238,10 @@ func set(object map[string]any, path []string, value any, present bool) {
 	if len(child) == 0 {
 		delete(object, key)
 	}
+}
+
+func groupKind(object map[string]any) schema.GroupKind {
+	return (&unstructured.Unstructured{Object: object}).GroupVersionKind().GroupKind()
 }
 
 func decode(raw json.RawMessage) map[string]any {

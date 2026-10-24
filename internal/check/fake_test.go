@@ -29,15 +29,15 @@ func bucketBody(state, cr string) map[string]any {
 
 func TestSpecForReadsFakesFromTheRunEvent(t *testing.T) {
 	run := tt.Run("toy", "widgets")
-	run.Run.Ready, run.Run.Stable, run.Run.Reads, run.Run.Writes = "self.ok", 4*s, 3, 5
-	run.Run.Halted = "has(self.halted)"
+	run.Run.Primaries[0].Ready, run.Run.Stable, run.Run.Reads, run.Run.Writes = "self.ok", 4*s, 3, 5
+	run.Run.Primaries[0].Halted = "has(self.halted)"
 	run.Run.Systems = []trace.System{cloudSystem, {Name: "other", API: "crud", Role: "self.role", Poll: 3 * s}}
 	var b tt.Builder
 	got, err := check.SpecFor(nil, b.Add(run).Index())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := got.Halted(map[string]any{"halted": 1}); !ok || err != nil {
+	if ok, err := got.Primaries[0].Halted(map[string]any{"halted": 1}); !ok || err != nil {
 		t.Errorf("Halted = %v, %v", ok, err)
 	}
 	if want := map[string]time.Duration{"cloud": 500 * ms, "other": 3 * s}; !reflect.DeepEqual(got.Polls, want) {
@@ -56,18 +56,18 @@ func TestSpecForReadsFakesFromTheRunEvent(t *testing.T) {
 		t.Errorf("owners = %+v", got.Owners)
 	}
 
-	run.Run.Halted = ""
+	run.Run.Primaries[0].Halted = ""
 	b = tt.Builder{}
-	if got, err := check.SpecFor(nil, b.Add(run).Index()); err != nil || got.Halted != nil {
-		t.Errorf("no halted: set %v, %v", got.Halted != nil, err)
+	if got, err := check.SpecFor(nil, b.Add(run).Index()); err != nil || got.Primaries[0].Halted != nil {
+		t.Errorf("no halted: %v", err)
 	}
 	for name, mistake := range map[string]func(r *trace.Run){
-		"halted": func(r *trace.Run) { r.Halted = "self.(" },
+		"halted": func(r *trace.Run) { r.Primaries[0].Halted = "self.(" },
 		"ready":  func(r *trace.Run) { r.Systems[0].Ready = "self.(" },
 		"gone":   func(r *trace.Run) { r.Systems[0].Gone = "'x'" },
 	} {
 		bad := *run.Run
-		bad.Systems = slices.Clone(run.Run.Systems)
+		bad.Primaries, bad.Systems = slices.Clone(run.Run.Primaries), slices.Clone(run.Run.Systems)
 		mistake(&bad)
 		b = tt.Builder{}
 		if _, err := check.SpecFor(nil, b.Add(trace.Event{Run: &bad}).Index()); err == nil {
@@ -117,7 +117,7 @@ func TestSpecForTakesFakesFromTheConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := got.Halted(map[string]any{"halted": 1}); !ok || err != nil {
+	if ok, err := got.Primaries[0].Halted(map[string]any{"halted": 1}); !ok || err != nil {
 		t.Errorf("Halted = %v, %v", ok, err)
 	}
 	if want := map[string]time.Duration{"cloud": 700 * ms, "other": 2 * s}; !reflect.DeepEqual(got.Polls, want) {
@@ -132,9 +132,9 @@ func TestSpecForTakesFakesFromTheConfig(t *testing.T) {
 	if ok, err := got.Models[0].Ready(map[string]any{"state": "READY"}); !ok || err != nil {
 		t.Errorf("model Ready is not the config's: %v, %v", ok, err)
 	}
-	c.Primary.Halted = ""
-	if got, err := check.SpecFor(c, b.Index()); err != nil || got.Halted != nil {
-		t.Errorf("no halted: set %v, %v", got.Halted != nil, err)
+	c.Primaries[0].Halted = ""
+	if got, err := check.SpecFor(c, b.Index()); err != nil || got.Primaries[0].Halted != nil {
+		t.Errorf("no halted: %v", err)
 	}
 }
 
@@ -142,7 +142,8 @@ func TestSpecForTakesFakesFromTheConfig(t *testing.T) {
 func haltedSpec(t *testing.T) check.Spec {
 	t.Helper()
 	sp := spec
-	sp.Halted = func(cr map[string]any) (bool, error) {
+	sp.Primaries = slices.Clone(spec.Primaries)
+	sp.Primaries[0].Halted = func(cr map[string]any) (bool, error) {
 		status, _ := cr["status"].(map[string]any)
 		return status["halted"] == true, nil
 	}

@@ -71,8 +71,8 @@ func TestSystemFixtures(t *testing.T) {
 	if got := c.Systems[0].Fixtures; !reflect.DeepEqual(got, []string{file}) {
 		t.Errorf("fixtures = %v", got)
 	}
-	if got := c.Values.Fixtures[file]; !reflect.DeepEqual(got, []string{"token"}) {
-		t.Errorf("values.fixtures = %v", c.Values.Fixtures)
+	if got := c.FixtureValues[file]; !reflect.DeepEqual(got, []string{"token"}) {
+		t.Errorf("values.fixtures = %v", c.FixtureValues)
 	}
 	fixtures, err := config.ReadSystemFixtures(file)
 	want := []config.SystemFixture{{Resource: "secret", Name: "app/db", Body: map[string]any{"token": "s3cr3t"}}}
@@ -105,8 +105,8 @@ func TestPeriodic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (&config.Periodic{Every: 2 * time.Second, Paths: []string{"status.refreshTime"}}); !reflect.DeepEqual(c.Primary.Periodic, want) {
-		t.Errorf("periodic = %+v", c.Primary.Periodic)
+	if want := (&config.Periodic{Every: 2 * time.Second, Paths: []string{"status.refreshTime"}}); !reflect.DeepEqual(c.Primaries[0].Periodic, want) {
+		t.Errorf("periodic = %+v", c.Primaries[0].Periodic)
 	}
 	for periodic, want := range map[string]string{
 		"{paths: [status.x]}":            "primary.periodic.every",
