@@ -213,16 +213,16 @@ every live CR, and step `planSteps + 1`, which restarts the controller (§17,
 entry 4).
 
 **Deadline.** `endFaults + settle + min(faults, backoffCap) + maxPoll`. `faults`
-is the time from the step's start until its faults end. `maxPoll` is the longest
-poll interval of the systems the step's faults and `damage` and `changeFixture`
-actions name, and of every fake when the step creates, updates or deletes a CR.
-A fake's poll is its `poll`, by default `stable`. The runner gives a model
-fault to the first model or fake that `Takes` it; none is a harness error. A
-create into an emptied slot waits until its previous CR is deleted. Once
-`period` has passed, the wait ends the step's faults, restarts a killed
-controller, and lasts `settle + min(faults, backoffCap) + maxPoll` more. A CR
-still there ends the plan after the step, with a note. Any other action error,
-except an unmatched target, is a harness error.
+runs from the step's start until its fault period ends, or until a create's slot
+wait ends its faults. `maxPoll` is the longest poll interval of the systems the
+step's faults and `damage` and `changeFixture` actions name, and of every fake
+when the step creates, updates or deletes a CR. A fake's poll is its `poll`, by
+default `stable`. The runner gives a model fault to the first model or fake that
+`Takes` it; none is a harness error. A create into an emptied slot waits until
+its previous CR no longer exists. Once `period` has passed, the wait ends the
+step's faults and restarts a killed controller. It gives up
+`deadline - endFaults` after the faults end, and the plan ends after the step.
+Any other action error, except an unmatched target, is a harness error.
 
 ## 10. Settle condition
 

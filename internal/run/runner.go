@@ -109,7 +109,8 @@ func (e *execution) step(ctx context.Context, n int, step plan.Step) error {
 	if err := s.resume(); err != nil {
 		return err
 	}
-	deadline, backoffBound := s.deadline(e.Recorder.Now())
+	allowance, backoffBound := s.allowance()
+	deadline := e.Recorder.Now() + allowance
 	e.Recorder.Record(trace.Event{Phase: &trace.Phase{Step: n, Name: trace.EndFaults, Deadline: deadline, BackoffBound: backoffBound}})
 	if err := e.settle(ctx, n, deadline); err != nil {
 		return err
@@ -168,11 +169,11 @@ func (s *stepRun) stopFaults() {
 	if !s.faultsStopped.IsZero() {
 		return
 	}
-	s.faultsStopped = time.Now()
 	for i, f := range s.started {
 		f.end()
 		s.Recorder.Record(faultEvent(s.n, i, s.step.Faults[i], f.model, true))
 	}
+	s.faultsStopped = time.Now()
 }
 
 // resume stops the faults and resumes supervision, which restarts a killed
@@ -182,10 +183,11 @@ func (s *stepRun) resume() error {
 	return s.Process.Supervise(true)
 }
 
-// deadline is the step's Deadline once its faults have stopped, given that
-// its fault period ends at endFaults.
-func (s *stepRun) deadline(endFaults time.Duration) (time.Duration, bool) {
-	return Deadline(endFaults, s.faultsStopped.Sub(s.start), s.maxPoll(s.step), s.Config.Timeouts)
+// allowance is how long the step may take to settle once its faults have
+// stopped: its Deadline less end faults. bounded says that backoffCap
+// bounded it.
+func (s *stepRun) allowance() (allowance time.Duration, bounded bool) {
+	return Deadline(0, s.faultsStopped.Sub(s.start), s.maxPoll(s.step), s.Config.Timeouts)
 }
 
 // faultPeriod starts the step's faults, applies its actions and waits until
@@ -207,7 +209,7 @@ func (s *stepRun) faultPeriod(ctx context.Context) error {
 		if err := sleepUntil(ctx, s.start.Add(time.Duration(a.At))); err != nil {
 			return err
 		}
-		ref, err := s.act(ctx, a, s)
+		ref, err := s.execution.act(ctx, a, s)
 		event := &trace.Action{Step: s.n, Index: i, Do: string(a.Do), Slot: a.Slot, Ref: ref}
 		if err != nil {
 			event.Error = err.Error()
@@ -220,13 +222,13 @@ func (s *stepRun) faultPeriod(ctx context.Context) error {
 	return sleepUntil(ctx, s.periodEnd())
 }
 
-// awaitGone waits until ref, the slot's previous CR, is deleted. The step's
-// faults or a kill may hold ref. So once Period has passed with ref still
-// there, awaitGone ends them. It then waits as long as the step's deadline
-// allows after its faults end.
+// awaitGone waits until ref, the slot's previous CR, no longer exists. The
+// step's faults or a kill may hold ref. So once Period has passed with ref
+// still there, awaitGone ends them. It then waits until the allowance after
+// the faults stopped has passed.
 func (s *stepRun) awaitGone(ctx context.Context, ref trace.Ref) error {
-	if untilPeriodEnd := time.Until(s.periodEnd()); untilPeriodEnd > 0 {
-		if timedOut, err := s.waitGone(ctx, ref, untilPeriodEnd); !timedOut {
+	if time.Now().Before(s.periodEnd()) {
+		if timedOut, err := s.waitGone(ctx, ref, s.periodEnd()); !timedOut {
 			return err
 		}
 	} else if gone, err := s.Cluster.Gone(ctx, ref); gone || err != nil {
@@ -235,16 +237,16 @@ func (s *stepRun) awaitGone(ctx context.Context, ref trace.Ref) error {
 	if err := s.resume(); err != nil {
 		return err
 	}
-	allowed, _ := s.deadline(0)
-	if timedOut, err := s.waitGone(ctx, ref, allowed); !timedOut {
+	allowance, _ := s.allowance()
+	if timedOut, err := s.waitGone(ctx, ref, s.faultsStopped.Add(allowance)); !timedOut {
 		return err
 	}
-	return s.slotTaken(ref, allowed)
+	return s.slotTaken(ref, allowance)
 }
 
-// waitGone waits up to timeout until ref names no object.
-func (e *execution) waitGone(ctx context.Context, ref trace.Ref, timeout time.Duration) (timedOut bool, err error) {
-	wait, cancel := context.WithTimeout(ctx, timeout)
+// waitGone waits until ref names no object, or until the time until.
+func (e *execution) waitGone(ctx context.Context, ref trace.Ref, until time.Time) (timedOut bool, err error) {
+	wait, cancel := context.WithDeadline(ctx, until)
 	defer cancel()
 	err = e.Cluster.WaitGone(wait, ref)
 	if err != nil && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
@@ -254,10 +256,9 @@ func (e *execution) waitGone(ctx context.Context, ref trace.Ref, timeout time.Du
 }
 
 // slotTaken is the error of a create whose wait for ref, the slot's previous
-// CR, timed out. waited is how long the wait lasted after the step's faults
-// ended. The error describes the last version of ref that the observer
-// recorded. A delete returns only once the observer has recorded the CR
-// being deleted, so a version without a deletionTimestamp is of another CR.
+// CR, timed out. The wait ended waited after the step's faults stopped. The
+// error describes the last version of ref that the observer recorded, which
+// may be of another CR with the same name.
 func (e *execution) slotTaken(ref trace.Ref, waited time.Duration) error {
 	taken := fmt.Errorf("%w %v after the step's faults ended", errSlotTaken, waited.Round(time.Millisecond))
 	e.ix.Append(e.Recorder.EventsSince(e.ix.Len())...)
@@ -272,9 +273,9 @@ func (e *execution) slotTaken(ref trace.Ref, waited time.Duration) error {
 	case !found || v.Deleted || json.Unmarshal(v.Body, &cr) != nil:
 		return taken
 	case cr.Metadata.DeletionTimestamp == "":
-		return fmt.Errorf("%w: a CR that is not being deleted has it", taken)
+		return fmt.Errorf("%w: the CR with that name is not being deleted", taken)
 	}
-	return fmt.Errorf("%w: its previous CR has deletionTimestamp %s and finalizers %v", taken, cr.Metadata.DeletionTimestamp, cr.Metadata.Finalizers)
+	return fmt.Errorf("%w: the CR with that name has deletionTimestamp %s and finalizers %v", taken, cr.Metadata.DeletionTimestamp, cr.Metadata.Finalizers)
 }
 
 // faultEvent records a fault's start or end. A holdWatch's names its kind.

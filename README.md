@@ -305,8 +305,8 @@ cluster. The settle condition counts a held watch as looking only once the hold 
  "period": "2s", "faults": [{"match": {"resource": "secrets"}, "holdWatch": true}]}
 ```
 
-The create waits until the deleted CR no longer exists. If `period` passes first, the hold
-ends then, so that the controller can finish the delete.
+The create waits until the deleted CR no longer exists. Once `period` has passed, the wait
+ends the hold, so that the controller can finish the delete.
 
 Generated plans draw it for kinds `launch.rbac` lets the controller watch, the primary and
 `primary.owns` kinds most, in a step that deletes a CR and creates it again unchanged. About 1

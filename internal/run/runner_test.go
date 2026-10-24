@@ -49,11 +49,18 @@ func (c *calls) when(entry string) time.Time {
 }
 
 // whenAfter is when entry was first logged after the first other.
-func (c *calls) whenAfter(entry, other string) time.Time {
+func (c *calls) whenAfter(entry, other string) (time.Time, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	from := slices.Index(c.log, other) + 1
-	return c.at[from+slices.Index(c.log[from:], entry)]
+	from := slices.Index(c.log, other)
+	if from < 0 {
+		return time.Time{}, false
+	}
+	i := slices.Index(c.log[from+1:], entry)
+	if i < 0 {
+		return time.Time{}, false
+	}
+	return c.at[from+1+i], true
 }
 
 type fakeProcess struct{ *calls }
@@ -193,9 +200,9 @@ func find(events []trace.Event, step int, name trace.PhaseName) (trace.Event, bo
 	return trace.Event{}, false
 }
 
-func findFaultEnd(events []trace.Event) (trace.Event, bool) {
+func findFaultEnd(events []trace.Event, step int) (trace.Event, bool) {
 	for _, e := range events {
-		if e.Fault != nil && e.Fault.Ended {
+		if e.Fault != nil && e.Fault.Step == step && e.Fault.Ended {
 			return e, true
 		}
 	}
@@ -320,14 +327,14 @@ func TestExecuteEndsThePlanWhenADeletedSlotStaysTaken(t *testing.T) {
 	if got := summarize(events); !reflect.DeepEqual(got, want) {
 		t.Fatalf("events:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	faultEnd, _ := findFaultEnd(events)
+	faultEnd, _ := findFaultEnd(events, 1)
 	create, _ := findAction(events, 1, 1)
 	allowed, _ := Deadline(0, faultLasted(t, events), f.runner.Config.Poll("kube"), timeouts)
 	if waited := create.At - faultEnd.At; waited < allowed-20*time.Millisecond || waited > allowed+100*time.Millisecond {
 		t.Errorf("the create waited %v after the fault ended, want the %v that Deadline allows", waited, allowed)
 	}
 	note := regexp.MustCompile(`^the slot's name is still taken (\S+) after the step's faults ended: ` +
-		`its previous CR has deletionTimestamp 2026-10-24T09:06:40Z and finalizers \[toy/cleanup toy/audit\]$`)
+		`the CR with that name has deletionTimestamp 2026-10-24T09:06:40Z and finalizers \[toy/cleanup toy/audit\]$`)
 	if m := note.FindStringSubmatch(create.Action.Error); m == nil {
 		t.Errorf("action error = %q, want a match of %s", create.Action.Error, note)
 	} else if named, _ := time.ParseDuration(m[1]); (named - allowed).Abs() > 20*time.Millisecond {
@@ -401,7 +408,7 @@ func recreated(step1 ...string) []string {
 func faultLasted(t *testing.T, events []trace.Event) time.Duration {
 	t.Helper()
 	start, _ := find(events, 1, trace.FaultPeriod)
-	end, found := findFaultEnd(events)
+	end, found := findFaultEnd(events, 1)
 	if !found {
 		t.Fatal("no fault ended")
 	}
@@ -519,7 +526,10 @@ func TestExecuteRestartsAKilledControllerWhileACreateWaits(t *testing.T) {
 			if errs := actionErrors(f.rec.Events()); len(errs) != 0 {
 				t.Fatalf("action errors = %q, want none", errs)
 			}
-			restarted := f.process.whenAfter("supervise(true)", "kill")
+			restarted, found := f.process.whenAfter("supervise(true)", "kill")
+			if !found {
+				t.Fatalf("process calls = %q, want supervise(true) after the kill", f.process.all())
+			}
 			if held := restarted.Sub(f.process.when("kill")); held < max(c.period, c.at)-10*time.Millisecond {
 				t.Errorf("supervision resumed %v after the kill, want %v", held, max(c.period, c.at))
 			}
@@ -554,6 +564,42 @@ func TestExecuteBoundsTheBackoffByHowLongTheFaultsLasted(t *testing.T) {
 	}
 }
 
+func TestExecuteCountsEverySlotWaitFromTheEndOfTheFaults(t *testing.T) {
+	f := newFixture(t, nil)
+	faultHoldsDeletedCRs(f, 200*time.Millisecond)
+	deletesOnceTheFaultEnds := f.cluster.waitGone
+	waits := 0
+	f.cluster.waitGone = func(ctx context.Context) error {
+		// The first create waits twice: until the period ends, then until
+		// its slot is free.
+		if waits++; waits <= 2 {
+			return deletesOnceTheFaultEnds(ctx)
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	p := &plan.Plan{Steps: []plan.Step{
+		{Actions: []plan.Action{{Do: plan.Create, Slot: "a", Object: widget("first")}}},
+		{Period: plan.Duration(50 * time.Millisecond), Faults: holdWidgets, Actions: []plan.Action{
+			{Do: plan.Delete, Slot: "a"}, {Do: plan.Create, Slot: "a", Object: widget("second")},
+			{Do: plan.Delete, Slot: "a"}, {Do: plan.Create, Slot: "a", Object: widget("third")},
+		}},
+	}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	events := f.rec.Events()
+	if got := actionErrors(events); len(got) != 1 {
+		t.Fatalf("action errors = %q, want the third create's", got)
+	}
+	faultEnd, _ := findFaultEnd(events, 1)
+	third, _ := findAction(events, 1, 3)
+	allowance, _ := Deadline(0, faultLasted(t, events), f.runner.Config.Poll("kube"), timeouts)
+	if waited := third.At - faultEnd.At; waited < allowance-20*time.Millisecond || waited > allowance+100*time.Millisecond {
+		t.Errorf("the third create gave up %v after the fault ended, want the %v that Deadline allows", waited, allowance)
+	}
+}
+
 func TestSlotTakenNamesWhatTheObserverLastSawHoldTheCR(t *testing.T) {
 	ref := trace.Ref{System: "kube", Resource: "widgets", Namespace: "ns", Name: "first"}
 	held := trace.Event{Version: &trace.Version{Ref: ref, UID: "u1", RV: "2",
@@ -569,8 +615,8 @@ func TestSlotTakenNamesWhatTheObserverLastSawHoldTheCR(t *testing.T) {
 		events []trace.Event
 		want   string
 	}{
-		{"held", []trace.Event{held}, taken + ": its previous CR has deletionTimestamp 2026-10-24T09:06:40Z and finalizers [toy/cleanup]"},
-		{"replaced", []trace.Event{held, gone, replaced}, taken + ": a CR that is not being deleted has it"},
+		{"held", []trace.Event{held}, taken + ": the CR with that name has deletionTimestamp 2026-10-24T09:06:40Z and finalizers [toy/cleanup]"},
+		{"replaced", []trace.Event{held, gone, replaced}, taken + ": the CR with that name is not being deleted"},
 		{"gone since", []trace.Event{held, gone}, taken},
 		{"unrecorded", nil, taken},
 		{"undecodable", []trace.Event{undecodable}, taken},
@@ -853,9 +899,9 @@ func TestDeadline(t *testing.T) {
 		want                          time.Duration
 		wantBackoffBound              bool
 	}{
-		{"no faults", 10 * time.Second, 0, 0, 10*time.Second + 300*time.Millisecond, false},
-		{"short faults", 10 * time.Second, 400 * time.Millisecond, 0, 10*time.Second + 700*time.Millisecond, false},
-		{"faults as long as the cap", 0, time.Second, 0, 1300 * time.Millisecond, false},
+		{"faults lasted 0", 10 * time.Second, 0, 0, 10*time.Second + 300*time.Millisecond, false},
+		{"faults lasted 400ms", 10 * time.Second, 400 * time.Millisecond, 0, 10*time.Second + 700*time.Millisecond, false},
+		{"faults lasted the cap", 0, time.Second, 0, 1300 * time.Millisecond, false},
 		{"cap bounds", 0, 5 * time.Second, 0, 1300 * time.Millisecond, true},
 		{"poll adds", 0, 0, 2 * time.Second, 2300 * time.Millisecond, false},
 	}
