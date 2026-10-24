@@ -33,7 +33,7 @@ type Do string
 const (
 	// Create creates Object, or the sample when Object is empty. A create of
 	// a slot whose CR is still terminating waits until the name is free, at
-	// most the settle timeout after Period.
+	// most the settle timeout after the step's faults end.
 	Create Do = "create"
 	// Update merge-patches the slot's CR with Patch.
 	Update Do = "update"
@@ -90,10 +90,10 @@ type Target struct {
 	Nth int `json:"nth,omitempty"`
 }
 
-// Fault starts with the fault period and ends with the step's faults. A
-// request fault acts on one system's controller listener. A model fault,
-// Stuck or SlowDelete, acts on the stage model of the kind Match names, or on
-// a fake service. Exactly one effect is set.
+// Fault starts with the fault period. Step says when it ends. A request
+// fault acts on one system's controller listener. A model fault, Stuck or
+// SlowDelete, acts on the stage model of the kind Match names, or on a fake
+// service. Exactly one effect is set.
 type Fault struct {
 	// System defaults to "kube".
 	System string `json:"system,omitempty"`

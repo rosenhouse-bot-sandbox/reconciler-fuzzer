@@ -49,10 +49,10 @@ step the trace ended too early to judge, or an unmapped request. Notes do
 not fail a run. A fault that picked no request tested nothing, so a plan
 with such notes may need a different fault.
 
-A create waits for its slot's previous CR to go. A CR still there
-`timeouts.settle` after the step's `period` fails the create. The note names
-the CR's `deletionTimestamp` and finalizers, and the plan skips to its
-appended steps.
+A create waits for its slot's previous CR to go. Once the step's `period`
+passes, the wait ends the step's faults. A CR still there `timeouts.settle`
+later fails the create. The note names the CR's `deletionTimestamp` and
+finalizers, and the plan skips to its appended steps.
 
 `cloud: unmapped request POST /v2/buckets/b-1/acl` means the system's API
 map could not place a controller request on a resource. No check judges
@@ -100,7 +100,7 @@ Look at the clause first:
 failed again within `stable`.
 
 The `backoff-bound` label means `timeouts.backoffCap` set the deadline,
-because the fault period was longer. A controller whose retry backoff
+because the step's faults lasted longer. A controller whose retry backoff
 exceeds the cap fails there. Raise the cap if that backoff is intended.
 
 ### Crash: the controller exited

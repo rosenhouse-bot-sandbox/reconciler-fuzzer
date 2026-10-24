@@ -212,17 +212,17 @@ decodes strictly and validates each action's slot and fields (`plan.go`).
 every live CR, and step `planSteps + 1`, which restarts the controller (§17,
 entry 4).
 
-**Deadline.** `endFaults + settle + min(faultPeriod, backoffCap) + maxPoll`,
-where `maxPoll` is the longest poll interval of the systems the step's faults
-and `damage` and `changeFixture` actions name, and of every fake when the step
-creates, updates or deletes a CR. A fake's poll is its `poll`, by default
-`stable`. The runner gives a model fault to the first model or fake that
-`Takes` it; none is a harness error. A create into an emptied slot waits for
-its previous CR to go. Faults or a kill may hold it, so once `period` passes,
-the wait ends the step's faults, restarts a killed controller and lasts at most
+**Deadline.** `endFaults + settle + min(faults, backoffCap) + maxPoll`, where
+`faults` is how long the step's faults lasted and `maxPoll` is the longest poll
+interval of the systems the step's faults and `damage` and `changeFixture`
+actions name, and of every fake when the step creates, updates or deletes a CR.
+A fake's poll is its `poll`, by default `stable`. The runner gives a model
+fault to the first model or fake that `Takes` it; none is a harness error. A
+create into an emptied slot waits for its previous CR to go. Faults or a kill
+may hold it, so once `period` passes, the wait ends them and lasts at most
 `settle` more. A CR still there ends the plan after the step, with a note that
-names its `deletionTimestamp` and finalizers. Any other action error, except
-an unmatched target, is a harness error.
+names its `deletionTimestamp` and finalizers. Any other action error, except an
+unmatched target, is a harness error.
 
 ## 10. Settle condition
 

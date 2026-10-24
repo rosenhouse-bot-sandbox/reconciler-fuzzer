@@ -177,7 +177,8 @@ type Phase struct {
 	Step     int           `json:"step"`
 	Name     PhaseName     `json:"name"`
 	Deadline time.Duration `json:"deadline,omitempty"`
-	// BackoffBound says that backoffCap, not the fault period, set Deadline.
+	// BackoffBound says that backoffCap, not how long the faults lasted, set
+	// Deadline.
 	BackoffBound bool `json:"backoffBound,omitempty"`
 }
 

@@ -299,13 +299,19 @@ func actionErrors(events []trace.Event) []string {
 	return errs
 }
 
-// faultHoldsDeletedCRs makes a deleted CR go only once a kube fault ends.
-func faultHoldsDeletedCRs(f *fixture) {
+// faultHoldsDeletedCRs makes a deleted CR go only lingers after a kube
+// fault ends.
+func faultHoldsDeletedCRs(f *fixture, lingers time.Duration) {
 	ended := make(chan struct{})
 	f.runner.Listeners["kube"] = fakeTarget{calls: f.faults, onEnd: func() { close(ended) }}
 	f.cluster.waitGone = func(ctx context.Context) error {
 		select {
 		case <-ended:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		select {
+		case <-time.After(lingers):
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
@@ -328,7 +334,7 @@ var holdWidgets = []plan.Fault{{Match: plan.Match{Resource: "widgets"}, HoldWatc
 
 func TestExecuteEndsTheFaultsAtThePeriodWhileACreateWaits(t *testing.T) {
 	f := newFixture(t, nil)
-	faultHoldsDeletedCRs(f)
+	faultHoldsDeletedCRs(f, 0)
 	const period = 100 * time.Millisecond
 	if err := f.runner.Execute(context.Background(), recreateUnder(period, holdWidgets)); err != nil {
 		t.Fatal(err)
@@ -356,7 +362,7 @@ func TestExecuteEndsTheFaultsAtThePeriodWhileACreateWaits(t *testing.T) {
 
 func TestExecuteWaitsTheSettleTimeoutAfterAPeriodLongerThanIt(t *testing.T) {
 	f := newFixture(t, nil)
-	faultHoldsDeletedCRs(f)
+	faultHoldsDeletedCRs(f, 0)
 	if err := f.runner.Execute(context.Background(), recreateUnder(2*timeouts.Settle, holdWidgets)); err != nil {
 		t.Fatal(err)
 	}
@@ -387,6 +393,74 @@ func TestExecuteRestartsAKilledControllerWhileACreateWaits(t *testing.T) {
 	}
 	if got := f.cluster.all(); !slices.Contains(got, `patch second {"spec":{"count":2}}`) {
 		t.Errorf("cluster calls = %q, want the next step's update", got)
+	}
+}
+
+func TestExecuteKeepsTheFaultsForACreateAfterThePeriodIntoAFreeSlot(t *testing.T) {
+	f := newFixture(t, nil)
+	f.cluster.waitGone = func(ctx context.Context) error { return ctx.Err() }
+	p := recreateUnder(50*time.Millisecond, holdWidgets)
+	p.Steps[1].Actions[1].At = plan.Duration(150 * time.Millisecond)
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"phase 0 faultPeriod", "action 0.0 create a first", "phase 0 endFaults", "phase 0 settled", "phase 0 confirmed",
+		"phase 1 faultPeriod", "fault 1.0 start", "action 1.0 delete a first", "action 1.1 create a second", "fault 1.0 end",
+		"phase 1 endFaults", "phase 1 settled", "phase 1 confirmed",
+		"phase 2 faultPeriod", "action 2.0 update a second", "phase 2 endFaults", "phase 2 settled", "phase 2 confirmed",
+		"phase 3 faultPeriod", "action 3.0 delete a second", "phase 3 endFaults", "phase 3 settled", "phase 3 confirmed",
+		"phase 4 faultPeriod", "action 4.0 restart ", "phase 4 endFaults", "phase 4 settled", "phase 4 confirmed",
+	}
+	if got := summarize(f.rec.Events()); !reflect.DeepEqual(got, want) {
+		t.Errorf("events:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestExecuteBoundsTheBackoffByHowLongTheFaultsLasted(t *testing.T) {
+	f := newFixture(t, nil)
+	f.runner.Config.Timeouts.BackoffCap = 200 * time.Millisecond
+	faultHoldsDeletedCRs(f, 200*time.Millisecond)
+	if err := f.runner.Execute(context.Background(), recreateUnder(100*time.Millisecond, holdWidgets)); err != nil {
+		t.Fatal(err)
+	}
+	events := f.rec.Events()
+	start, _ := find(events, 1, trace.FaultPeriod)
+	endFaults, _ := find(events, 1, trace.EndFaults)
+	faultEnd := events[slices.IndexFunc(events, func(e trace.Event) bool { return e.Fault != nil && e.Fault.Ended })]
+	want, wantBound := Deadline(endFaults.At, faultEnd.At-start.At, f.runner.Config.Poll("kube"), f.runner.Config.Timeouts)
+	if got := endFaults.Phase; (got.Deadline-want).Abs() > 20*time.Millisecond || got.BackoffBound != wantBound {
+		t.Errorf("deadline = %v, backoff-bound %v, want about %v, %v", got.Deadline, got.BackoffBound, want, wantBound)
+	}
+}
+
+func TestSlotTakenNamesWhatTheObserverLastSawHoldTheCR(t *testing.T) {
+	ref := trace.Ref{System: "kube", Resource: "widgets", Namespace: "ns", Name: "first"}
+	held := trace.Event{Version: &trace.Version{Ref: ref, UID: "u1", RV: "2",
+		Body: json.RawMessage(`{"metadata":{"deletionTimestamp":"2026-10-24T09:06:40Z","finalizers":["toy/cleanup"]}}`)}}
+	gone := trace.Event{Version: &trace.Version{Ref: ref, UID: "u1", RV: "3", Deleted: true}}
+	undecodable := trace.Event{Version: &trace.Version{Ref: ref, UID: "u1", RV: "2", Body: json.RawMessage(`[]`)}}
+	const taken = "the slot's previous CR is still there after the 300ms settle timeout"
+	for _, c := range []struct {
+		name   string
+		events []trace.Event
+		want   string
+	}{
+		{"held", []trace.Event{held}, taken + ": deletionTimestamp 2026-10-24T09:06:40Z, finalizers [toy/cleanup]"},
+		{"gone since", []trace.Event{held, gone}, taken + ": deletionTimestamp 2026-10-24T09:06:40Z, finalizers [toy/cleanup]"},
+		{"unrecorded", nil, taken},
+		{"undecodable", []trace.Event{undecodable}, taken},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t, nil)
+			for _, e := range c.events {
+				f.rec.Record(e)
+			}
+			e := &execution{Runner: f.runner, ix: trace.NewIndex(nil)}
+			if got := e.slotTaken(ref).Error(); got != c.want {
+				t.Errorf("slotTaken = %q, want %q", got, c.want)
+			}
+		})
 	}
 }
 
