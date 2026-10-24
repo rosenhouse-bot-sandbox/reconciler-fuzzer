@@ -20,7 +20,7 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/run"
 )
 
-func generator(t *testing.T, path string) (*generate.Generator, map[string]any) {
+func generator(t *testing.T, path string) (*generate.Generator, []map[string]any) {
 	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatal(err)
@@ -29,7 +29,11 @@ func generator(t *testing.T, path string) (*generate.Generator, map[string]any) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	return g, readSample(t, cfg.Primaries[0].Sample)
+	var samples []map[string]any
+	for _, p := range cfg.Primaries {
+		samples = append(samples, readSample(t, p.Sample))
+	}
+	return g, samples
 }
 
 // TestGeneratedPlansWithFaultsPassB0 runs plans with a fault, or with a
@@ -126,7 +130,7 @@ func requestAndModelFaults(p *plan.Plan) int {
 func TestAGeneratedFailingPlanShrinks(t *testing.T) {
 	t.Parallel()
 	const seed, bug = 5, 3
-	g, sample := generator(t, "config.yaml")
+	g, samples := generator(t, "config.yaml")
 	p, err := g.Plan(seed)
 	if err != nil {
 		t.Fatal(err)
@@ -144,7 +148,7 @@ func TestAGeneratedFailingPlanShrinks(t *testing.T) {
 		}
 		return false
 	}
-	shrunk, err := hunt.Shrink(t.Context(), p, sample, func(_ context.Context, c *plan.Plan) (bool, error) {
+	shrunk, err := hunt.Shrink(t.Context(), p, samples, func(_ context.Context, c *plan.Plan) (bool, error) {
 		for range 2 {
 			if r, _ := run1(t, "config.yaml", run.Options{Plan: c}, bug); gives(r) {
 				return true, nil

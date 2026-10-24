@@ -76,11 +76,11 @@ func Hunt(ctx context.Context, o Options) ([]Found, error) {
 	if err != nil {
 		return nil, err
 	}
-	sample, err := loadSample(cfg)
+	samples, err := loadSamples(cfg)
 	if err != nil {
 		return nil, err
 	}
-	h := &hunter{run: o.Run, sample: sample, log: o.Log, seen: map[string]bool{}}
+	h := &hunter{run: o.Run, samples: samples, log: o.Log, seen: map[string]bool{}}
 	var found []Found
 	var failed []string
 	seeds := 0
@@ -130,7 +130,7 @@ func ShrinkPlan(ctx context.Context, o ShrinkOptions) ([]Found, error) {
 	if err != nil {
 		return nil, err
 	}
-	sample, err := loadSample(cfg)
+	samples, err := loadSamples(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +138,7 @@ func ShrinkPlan(ctx context.Context, o ShrinkOptions) ([]Found, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := &hunter{run: o.Run, sample: sample, log: o.Log, seen: map[string]bool{}}
+	h := &hunter{run: o.Run, samples: samples, log: o.Log, seen: map[string]bool{}}
 	found, err := h.investigate(ctx, p, o.Out, "plan")
 	if err != nil {
 		return nil, err
@@ -148,10 +148,10 @@ func ShrinkPlan(ctx context.Context, o ShrinkOptions) ([]Found, error) {
 
 // hunter investigates plans and remembers the signatures they found.
 type hunter struct {
-	run    RunPlan
-	sample map[string]any
-	log    io.Writer
-	seen   map[string]bool
+	run     RunPlan
+	samples []map[string]any
+	log     io.Writer
+	seen    map[string]bool
 }
 
 func (h *hunter) logf(format string, args ...any) {
@@ -234,7 +234,7 @@ func (h *hunter) investigate(ctx context.Context, p *plan.Plan, dir, name string
 			h.logf("%s, shrink candidate %d: passes", name, candidates)
 			return false, nil
 		}
-		if f.Shrunk, err = Shrink(ctx, p, h.sample, fails); errors.Is(err, errShrinkCut) {
+		if f.Shrunk, err = Shrink(ctx, p, h.samples, fails); errors.Is(err, errShrinkCut) {
 			h.logf("%s: shrink stopped after %d candidates", name, ShrinkCandidates)
 			err = nil
 		}
@@ -260,16 +260,21 @@ func gives(r check.Report, f check.Finding) bool {
 	return slices.ContainsFunc(r.Findings, func(g check.Finding) bool { return g.Signature() == f.Signature() })
 }
 
-func loadSample(cfg *config.Config) (map[string]any, error) {
-	data, err := os.ReadFile(cfg.Primaries[0].Sample)
-	if err != nil {
-		return nil, err
+// loadSamples reads each entry's sample, in config order.
+func loadSamples(cfg *config.Config) ([]map[string]any, error) {
+	var samples []map[string]any
+	for _, p := range cfg.Primaries {
+		data, err := os.ReadFile(p.Sample)
+		if err != nil {
+			return nil, err
+		}
+		var sample map[string]any
+		if err := yaml.Unmarshal(data, &sample); err != nil {
+			return nil, fmt.Errorf("%s: %w", p.Sample, err)
+		}
+		samples = append(samples, sample)
 	}
-	var sample map[string]any
-	if err := yaml.Unmarshal(data, &sample); err != nil {
-		return nil, fmt.Errorf("%s: %w", cfg.Primaries[0].Sample, err)
-	}
-	return sample, nil
+	return samples, nil
 }
 
 // Summary is summary.md: one row for each finding, then the seeds whose

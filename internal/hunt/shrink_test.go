@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -16,7 +17,7 @@ import (
 
 const toyConfig = "../../targets/toy-widget/config.yaml"
 
-var sample = map[string]any{"metadata": map[string]any{"name": "widget"}, "spec": map[string]any{"count": 3, "mode": "fast"}}
+var samples = []map[string]any{{"metadata": map[string]any{"name": "widget"}, "spec": map[string]any{"count": 3, "mode": "fast"}}}
 
 func parsePlan(t *testing.T, text string) *plan.Plan {
 	t.Helper()
@@ -51,7 +52,7 @@ const create = `{"do":"create","slot":"a","object":{"metadata":{"name":"widget"}
 
 func TestCandidatesDropEachStepThatLeavesAValidPlan(t *testing.T) {
 	p := parsePlan(t, `{"steps":[{"actions":[`+create+`]},{"actions":[{"do":"restart"}]},{"actions":[{"do":"delete","slot":"a"}]}]}`)
-	got := encodedAll(t, Candidates(p, sample))
+	got := encodedAll(t, Candidates(p, samples))
 	for _, want := range []string{
 		`{"steps":[{"actions":[` + create + `]},{"actions":[{"do":"delete","slot":"a"}]}]}`,
 		`{"steps":[{"actions":[` + create + `]},{"actions":[{"do":"restart"}]}]}`,
@@ -73,7 +74,7 @@ func TestCandidatesDropEachStepThatLeavesAValidPlan(t *testing.T) {
 func TestCandidatesDropEachActionAndFaultOfAStepThatKeepsOne(t *testing.T) {
 	fault := `{"match":{"verb":"get"},"drop":true}`
 	p := parsePlan(t, `{"steps":[{"actions":[`+create+`]},{"period":"1s","actions":[{"do":"restart"},{"do":"kill"}],"faults":[`+fault+`]}]}`)
-	got := encodedAll(t, Candidates(p, sample))
+	got := encodedAll(t, Candidates(p, samples))
 	head := `{"steps":[{"actions":[` + create + `]},{"period":"1s",`
 	for _, want := range []string{
 		head + `"actions":[{"do":"kill"}],"faults":[` + fault + `]}]}`,
@@ -99,7 +100,7 @@ func TestCandidatesHalvePeriodsAndOffsetsDownToHalfASecond(t *testing.T) {
 		}
 		p := parsePlan(t, `{"steps":[{"period":"`+testCase.period+`","actions":[{`+at+`"do":"restart"}],"faults":[{"match":{},"drop":true}]}]}`)
 		var halved []string
-		for _, c := range Candidates(p, sample) {
+		for _, c := range Candidates(p, samples) {
 			if len(c.Steps) == 1 && len(c.Steps[0].Actions) == 1 && len(c.Steps[0].Faults) == 1 {
 				halved = append(halved, time.Duration(c.Steps[0].Period).String()+" "+time.Duration(c.Steps[0].Actions[0].At).String())
 			}
@@ -121,7 +122,7 @@ func TestCandidatesHalvePeriodsAndOffsetsDownToHalfASecond(t *testing.T) {
 func TestCandidatesResetEachSpecFieldOfACreateToTheSample(t *testing.T) {
 	p := parsePlan(t, `{"steps":[{"actions":[{"do":"create","slot":"a","object":{"metadata":{"name":"w"},"spec":{"count":5,"extra":{"x":1}}}}]}]}`)
 	var objects []string
-	for _, c := range Candidates(p, sample) {
+	for _, c := range Candidates(p, samples) {
 		if len(c.Steps) == 1 {
 			objects = append(objects, string(c.Steps[0].Actions[0].Object))
 		}
@@ -136,10 +137,42 @@ func TestCandidatesResetEachSpecFieldOfACreateToTheSample(t *testing.T) {
 	}
 }
 
+var fleetSamples = []map[string]any{
+	{"apiVersion": "toy.reconciler-fuzzer/v1", "kind": "Cluster", "metadata": map[string]any{"name": "app"}, "spec": map[string]any{"volumes": 2}},
+	{"apiVersion": "toy.reconciler-fuzzer/v1", "kind": "Database", "metadata": map[string]any{"name": "app"}, "spec": map[string]any{"engine": "postgres"}},
+}
+
+// creates are the object of each candidate that keeps p's one create.
+func creates(t *testing.T, p *plan.Plan, samples []map[string]any) []string {
+	t.Helper()
+	var objects []string
+	for _, c := range Candidates(p, samples) {
+		if len(c.Steps) == 1 {
+			objects = append(objects, string(c.Steps[0].Actions[0].Object))
+		}
+	}
+	return objects
+}
+
+func TestCandidatesResetACreateTowardTheSampleOfItsKind(t *testing.T) {
+	const database = `{"apiVersion":"toy.reconciler-fuzzer/v1","kind":"Database","metadata":{"name":"app"},"spec":{"engine":%q}}`
+	p := parsePlan(t, `{"steps":[{"actions":[{"do":"create","slot":"a","object":`+fmt.Sprintf(database, "mysql")+`}]}]}`)
+	if got, want := creates(t, p, fleetSamples), []string{fmt.Sprintf(database, "postgres")}; !slices.Equal(got, want) {
+		t.Errorf("Resets are %v, want %v.", got, want)
+	}
+}
+
+func TestCandidatesKeepTheFieldsOfACreateOfAKindWithoutASample(t *testing.T) {
+	p := parsePlan(t, `{"steps":[{"actions":[{"do":"create","slot":"a","object":{"apiVersion":"toy.reconciler-fuzzer/v1","kind":"User","metadata":{"name":"app"},"spec":{"engine":"mysql"}}}]}]}`)
+	if got := creates(t, p, fleetSamples); len(got) != 0 {
+		t.Errorf("Resets are %v, want none.", got)
+	}
+}
+
 func TestCandidatesDropEachFieldOfAnUpdatePatchThatHasTwo(t *testing.T) {
 	p := parsePlan(t, `{"steps":[{"actions":[`+create+`,{"do":"update","slot":"a","patch":{"spec":{"count":1,"mode":"safe"}}},{"do":"update","slot":"a","patch":{"spec":{"count":2}}}]}]}`)
 	var patches []string
-	for _, c := range Candidates(p, sample) {
+	for _, c := range Candidates(p, samples) {
 		if len(c.Steps) == 1 && len(c.Steps[0].Actions) == 3 && string(c.Steps[0].Actions[0].Object) == string(p.Steps[0].Actions[0].Object) {
 			actions := c.Steps[0].Actions
 			patches = append(patches, string(actions[1].Patch)+" "+string(actions[2].Patch))
@@ -154,14 +187,14 @@ func TestCandidatesDropEachFieldOfAnUpdatePatchThatHasTwo(t *testing.T) {
 func TestCandidatesMergeSlotsWhoseCRsDoNotOverlap(t *testing.T) {
 	createB := strings.ReplaceAll(create, `"slot":"a"`, `"slot":"b"`)
 	apart := parsePlan(t, `{"steps":[{"actions":[`+create+`]},{"actions":[{"do":"delete","slot":"a"}]},{"actions":[`+createB+`]},{"actions":[{"do":"damage","slot":"b","target":{"resource":"configmaps"}}]}]}`)
-	got := Candidates(apart, sample)
+	got := Candidates(apart, samples)
 	last := encoded(t, got[len(got)-1])
 	want := `{"steps":[{"actions":[` + create + `]},{"actions":[{"do":"delete","slot":"a"}]},{"actions":[` + create + `]},{"actions":[{"do":"damage","slot":"a","target":{"resource":"configmaps"}}]}]}`
 	if last != want {
 		t.Errorf("The last candidate is %s, want b merged into a: %s.", last, want)
 	}
 	overlapping := parsePlan(t, `{"steps":[{"actions":[`+create+`]},{"actions":[`+strings.ReplaceAll(createB, `"widget"`, `"widget-b"`)+`]}]}`)
-	for _, c := range Candidates(overlapping, sample) {
+	for _, c := range Candidates(overlapping, samples) {
 		if !strings.Contains(encoded(t, c), `"slot":"b"`) && len(c.Steps) == 2 {
 			t.Errorf("Candidates merge overlapping slots: %s.", encoded(t, c))
 		}
@@ -182,7 +215,7 @@ func TestEveryCandidateOfGeneratedPlansIsValid(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, c := range Candidates(p, sample) {
+		for _, c := range Candidates(p, samples) {
 			if err := c.Validate(); err != nil {
 				t.Fatalf("seed %d: %v", seed, err)
 			}
@@ -224,7 +257,7 @@ func TestShrinkReachesAPlanNoCandidateOfWhichFails(t *testing.T) {
 			continue
 		}
 		shrunk++
-		got, err := Shrink(context.Background(), p, sample, deletesB)
+		got, err := Shrink(context.Background(), p, samples, deletesB)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -240,7 +273,7 @@ func TestShrinkReachesAPlanNoCandidateOfWhichFails(t *testing.T) {
 		if !slices.Equal(dos, []string{"create b", "delete b"}) || got.Seed != seed {
 			t.Errorf("seed %d shrinks to %s, want a create and a delete of b.", seed, encoded(t, got))
 		}
-		for _, c := range Candidates(got, sample) {
+		for _, c := range Candidates(got, samples) {
 			if fails, _ := deletesB(context.Background(), c); fails {
 				t.Errorf("seed %d: the shrunk plan has the failing candidate %s.", seed, encoded(t, c))
 			}
@@ -253,7 +286,7 @@ func TestShrinkReachesAPlanNoCandidateOfWhichFails(t *testing.T) {
 
 func TestShrinkKeepsAPlanWhoseCandidatesPass(t *testing.T) {
 	p := parsePlan(t, `{"steps":[{"actions":[`+create+`]},{"actions":[{"do":"restart"}]}]}`)
-	got, err := Shrink(context.Background(), p, sample, func(context.Context, *plan.Plan) (bool, error) { return false, nil })
+	got, err := Shrink(context.Background(), p, samples, func(context.Context, *plan.Plan) (bool, error) { return false, nil })
 	if err != nil || encoded(t, got) != encoded(t, p) {
 		t.Errorf("Shrink = %s, %v; want the plan unchanged.", encoded(t, got), err)
 	}
@@ -262,14 +295,14 @@ func TestShrinkKeepsAPlanWhoseCandidatesPass(t *testing.T) {
 func TestShrinkReturnsTheErrorOfFails(t *testing.T) {
 	p := parsePlan(t, `{"steps":[{"actions":[`+create+`]},{"actions":[{"do":"restart"}]}]}`)
 	boom := errors.New("boom")
-	if _, err := Shrink(context.Background(), p, sample, func(context.Context, *plan.Plan) (bool, error) { return false, boom }); !errors.Is(err, boom) {
+	if _, err := Shrink(context.Background(), p, samples, func(context.Context, *plan.Plan) (bool, error) { return false, boom }); !errors.Is(err, boom) {
 		t.Errorf("Shrink returned %v, want boom.", err)
 	}
 }
 
 func TestCandidatesClearTheShortPeriodOfAStepWithoutFaults(t *testing.T) {
 	p := parsePlan(t, `{"steps":[{"period":"500ms","actions":[{"do":"kill"}]}]}`)
-	if got := encodedAll(t, Candidates(p, sample)); !slices.Contains(got, `{"steps":[{"actions":[{"do":"kill"}]}]}`) {
+	if got := encodedAll(t, Candidates(p, samples)); !slices.Contains(got, `{"steps":[{"actions":[{"do":"kill"}]}]}`) {
 		t.Errorf("Candidates are %v, want the period cleared.", got)
 	}
 }

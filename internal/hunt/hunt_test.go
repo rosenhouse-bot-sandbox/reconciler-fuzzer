@@ -367,6 +367,21 @@ func TestSummaryEscapesPipes(t *testing.T) {
 	}
 }
 
+func TestLoadSamplesReadsEachEntrysSampleInOrder(t *testing.T) {
+	cfg, err := config.Load("../generate/testdata/fleet/config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	samples, err := loadSamples(cfg)
+	var kinds []any
+	for _, sample := range samples {
+		kinds = append(kinds, sample["kind"])
+	}
+	if err != nil || !slices.Equal(kinds, []any{"Cluster", "Database"}) {
+		t.Errorf("loadSamples = samples of %v, %v; want a Cluster's and a Database's.", kinds, err)
+	}
+}
+
 func TestAShrinkStopsAfterShrinkCandidates(t *testing.T) {
 	cfg, err := config.Load(toyConfig)
 	if err != nil {
@@ -376,13 +391,13 @@ func TestAShrinkStopsAfterShrinkCandidates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sample, err := loadSample(cfg)
+	samples, err := loadSamples(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	seed := uint64(1)
 	for ; ; seed++ {
-		if p, _ := g.Plan(seed); len(Candidates(p, sample)) > ShrinkCandidates {
+		if p, _ := g.Plan(seed); len(Candidates(p, samples)) > ShrinkCandidates {
 			break
 		}
 	}
