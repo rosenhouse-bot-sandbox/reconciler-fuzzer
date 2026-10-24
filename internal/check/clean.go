@@ -107,6 +107,8 @@ type view struct {
 	steps []trace.StepSpan
 	// owners maps each group's owner key to its owner.
 	owners map[string]owner.Owner
+	// byRoot groups each resource by its owner's root, not its owner.
+	byRoot bool
 }
 
 func newView(ix *trace.Index, s Spec) *view {
@@ -169,12 +171,15 @@ func (v *view) groupOf(i owner.Instance, t time.Duration) group {
 	k := i.Ref
 	k.Name = ""
 	o := v.w.Owner(i, t)
+	if v.byRoot {
+		o = v.w.Root(o, t)
+	}
 	v.owners[o.Key()] = o
 	return group{kind: k, owner: o.Key(), role: i.Role}
 }
 
-// describe names an instance, its owning rule and its CRs' slots, or its
-// unlisted owner.
+// describe names an instance, its owning rule and its CRs, or its unlisted
+// owner.
 func (v *view) describe(i owner.Instance, o owner.Owner) string {
 	if o.Unlisted != "" {
 		unlisted, _ := v.w.Instance(o.Unlisted)
@@ -183,15 +188,20 @@ func (v *view) describe(i owner.Instance, o owner.Owner) string {
 	if o.Shared() {
 		return describe(i.Ref) + " (shared)"
 	}
-	slots := make([]string, len(o.CRs))
+	crs := make([]string, len(o.CRs))
 	for n, uid := range o.CRs {
-		slots[n] = cmp.Or(v.w.Slot(uid), "uid "+uid)
+		crs[n] = crName(v.w, uid)
 	}
-	noun := "slot"
-	if len(slots) > 1 {
-		noun = "slots"
+	return fmt.Sprintf("%s (rule %d, %s)", describe(i.Ref), o.Rule, strings.Join(crs, ", "))
+}
+
+// crName names the CR with uid by its slot, or else by its kind and name.
+func crName(w *owner.World, uid string) string {
+	if slot := w.Slot(uid); slot != "" {
+		return "slot " + slot
 	}
-	return fmt.Sprintf("%s (rule %d, %s %s)", describe(i.Ref), o.Rule, noun, strings.Join(slots, ", "))
+	cr, _ := w.Instance(uid)
+	return "CR " + describe(cr.Ref)
 }
 
 func (v *view) describeAll(instances []owner.Instance, t time.Duration) []string {

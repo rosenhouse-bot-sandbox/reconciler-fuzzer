@@ -51,8 +51,8 @@ type Owner struct {
 	// CRs holds CR UIDs in order: one for rules 1 to 3, the set for rule 4.
 	// It is empty for a shared instance.
 	CRs []string
-	// Unlisted is, for rule 1 with no CR, the UID of the live instance,
-	// not a CR, that an ownerReference names.
+	// Unlisted is, for rule 1 with no CR, the UID of the live instance
+	// that an ownerReference names and that the controller did not create.
 	Unlisted string
 }
 
@@ -423,6 +423,21 @@ func (w *World) object(i Instance, t time.Duration) map[string]any {
 // Primary reports whether i is a CR: a kube instance of a listed kind.
 func (w *World) Primary(i Instance) bool { return slices.ContainsFunc(w.listed, i.Ref.OfKind) }
 
+// Root is o with its one CR, while the controller created that CR,
+// replaced by that CR's owner at t. So the resources of a CR that the
+// controller made share a root with that CR.
+func (w *World) Root(o Owner, t time.Duration) Owner {
+	for seen := map[string]bool{}; ; {
+		uid, _ := o.Named()
+		cr, _ := w.Instance(uid)
+		if cr.Creator != trace.Controller || seen[uid] {
+			return o
+		}
+		seen[uid] = true
+		o = w.Owner(cr, t)
+	}
+}
+
 // Owner is the instance's owning CR at t: the first rule that matches.
 func (w *World) Owner(i Instance, t time.Duration) Owner {
 	if cr, found := w.follow(i, t, map[string]bool{}); found {
@@ -568,10 +583,11 @@ func (w *World) follow(i Instance, t time.Duration, seen map[string]bool) (strin
 }
 
 // unlisted finds the first instance live at t that i's ownerReferences at t
-// name and that is not a CR.
+// name and that the controller did not create, such as a fixture. Owner
+// asks only once follow found no CR.
 func (w *World) unlisted(i Instance, t time.Duration) (string, bool) {
 	for _, ref := range w.ownerReferences(i, t) {
-		if owner, found := w.Instance(ref.UID); found && owner.Live(t) && !w.Primary(owner) {
+		if owner, found := w.Instance(ref.UID); found && owner.Live(t) && owner.Creator != trace.Controller {
 			return owner.UID, true
 		}
 	}
@@ -612,7 +628,7 @@ func (w *World) Slot(uid string) string { return w.slots[uid] }
 var ErrNoMatch = errors.New("no instance matches")
 
 // Select resolves target at t among the live instances that creator made.
-// A slot narrows the match to instances whose owner holds that slot's live
+// A slot narrows the match to instances whose root holds that slot's live
 // CR; an empty slot matches any owner. An error wraps ErrNoMatch, and names
 // the object a slot holds that is not a CR.
 func (w *World) Select(creator trace.Caller, target plan.Target, slot string, t time.Duration) (trace.Ref, error) {
@@ -640,7 +656,7 @@ func (w *World) Select(creator trace.Caller, target plan.Target, slot string, t 
 			!matches(target.Group, i.Ref.Group) || !matches(target.Namespace, i.Ref.Namespace) || !matches(target.Name, i.Ref.Name) || !matches(target.Role, i.Role) {
 			continue
 		}
-		if cr != "" && !slices.Contains(w.Owner(i, t).CRs, cr) {
+		if cr != "" && !slices.Contains(w.Root(w.Owner(i, t), t).CRs, cr) {
 			continue
 		}
 		if nth--; nth == 0 {

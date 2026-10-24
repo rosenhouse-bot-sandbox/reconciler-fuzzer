@@ -121,7 +121,7 @@ func TestCleanJudgesARule4ChildOnlyOnceEveryCRInItsSetIsGone(t *testing.T) {
 	r.Ready(widgetA).Ready(widgetB).EndFaults().Settle()
 	r.Begin().DeleteCR("a", widgetA).EndFaults().Settle()
 	r.Begin().DeleteCR("b", widgetB).EndFaults().Settle()
-	requireFinding(t, judgeWith(t, r, check.Clean), "Clean", 2, "left resources behind", "kube/configmaps", "rule 4, slots a, b")
+	requireFinding(t, judgeWith(t, r, check.Clean), "Clean", 2, "left resources behind", "kube/configmaps", "rule 4, slot a, slot b")
 }
 
 func TestCleanAllowsWhatRetainKeeps(t *testing.T) {

@@ -320,7 +320,7 @@ func readyThrough(p Primary, versions []trace.Event, from, to time.Duration) boo
 	return current
 }
 
-func (h *honesty) slot(uid string) string { return "slot " + cmp.Or(h.w.Slot(uid), "uid "+uid) }
+func (h *honesty) slot(uid string) string { return crName(h.w, uid) }
 
 // add adds a detail to the finding of t's step, summary and kind.
 func (h *honesty) add(t time.Duration, summary, kind, detail string) {

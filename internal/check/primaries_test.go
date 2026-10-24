@@ -356,3 +356,26 @@ func TestRestoreIgnoresPeriodicPathsWithTheOtherVolatileFields(t *testing.T) {
 		}
 	}
 }
+
+func TestCleanFailsALeakedChildOfAnOwnerTheControllerMade(t *testing.T) {
+	registry, entry := tt.Ref("configmaps", "ns", "registry"), tt.Ref("configmaps", "ns", "a-entry")
+	r := newRun(2)
+	r.Begin()
+	r.Create(ctl, registry, tt.Object("registry"))
+	r.CreateCR("a", widgetA)
+	r.Create(ctl, entry, tt.OwnedBy(tt.Object("a-entry"), r.UID(registry), true))
+	r.Ready(widgetA).EndFaults().Settle()
+	r.Begin().DeleteCR("a", widgetA).EndFaults().Settle()
+	requireFinding(t, judgeWith(t, r, check.Clean), "Clean", 1, "left resources behind", "kube/configmaps", "configmaps ns/a-entry (rule 4, slot a)")
+}
+
+func TestHonestNamesACRWithoutASlotByItsKindAndName(t *testing.T) {
+	r := fleetRun(1, clusters, databases)
+	r.Spec.Models = []trace.Model{{Kind: gadgets, Ready: config.ReadyConditionCEL, Dependency: &trace.Dependency{}}}
+	r.Begin()
+	uid := r.CreateCR("a", clusterA)
+	r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", false), uid, true))
+	r.Create(ctl, gadgetA, tt.OwnedBy(tt.ReadyCondition("a", 1, false), r.UID(databaseB), true))
+	r.Update(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), uid, true))
+	requireFinding(t, honest(t, r), "Honest", 0, beforeSeeing, "kube/toy/gadgets", "CR databases.toy ns/b: gadgets.toy ns/a")
+}

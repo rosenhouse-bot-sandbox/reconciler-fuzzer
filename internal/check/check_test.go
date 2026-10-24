@@ -138,14 +138,14 @@ func TestConvergeNotesWhereTheStepsRecordEnds(t *testing.T) {
 		At(9 * s).Add(tt.Call(ctl, "get", widgetA, 200, ""))
 	longer := spec
 	longer.Stable = 3 * s
-	requireNote(t, confirmed, longer, "Step 0 is not judged: it settled at 4.5s, but its confirm window ends at 5.5s, before 7.5s.")
+	requireNote(t, confirmed, longer, "Step 0 is not judged: it settled at 4.5s and had to stay settled for stable, until 7.5s, but its confirm window ends at 5.5s.")
 
 	cut := createStep()
 	cut.At(10 * s).Add(tt.Phase(0, trace.TimedOut)).
 		At(10 * s).Add(tt.Phase(1, trace.FaultPeriod))
 	slow := spec
 	slow.Stable = 8 * s
-	requireNote(t, cut, slow, "Step 0 is not judged: it settled at 9.5s, but the next step starts at 10s, before 17.5s.")
+	requireNote(t, cut, slow, "Step 0 is not judged: it settled at 9.5s and had to stay settled for stable, until 17.5s, but the next step starts at 10s.")
 }
 
 func TestConvergeSearchesOnlyUntilConfirmed(t *testing.T) {

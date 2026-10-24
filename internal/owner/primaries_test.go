@@ -158,3 +158,49 @@ func TestSelectNamesTheKindOfASlotThatHoldsNoCR(t *testing.T) {
 		t.Errorf("Select in slot b = %v, want no match that names databases.toy.", err)
 	}
 }
+
+// made is the controller's create of ref, which uid names and the instance
+// with owner owns.
+func made(ref trace.Ref, uid, owner string) []trace.Event {
+	return []trace.Event{tt.Create(ctl, ref, uid, "1"), tt.Version(ref, uid, "1", tt.OwnedBy(tt.Object(ref.Name), owner, true))}
+}
+
+func TestAnObjectTheControllerCreatedIsNoUnlistedOwner(t *testing.T) {
+	registry := tt.Ref("configmaps", "ns", "registry")
+	tl := fleet(clusters)
+	tl.At(3*s, tt.Create(ctl, registry, "u-reg", "3"), tt.Version(registry, "u-reg", "3", tt.Object("registry"))).
+		At(4*s, made(cmA0, "c1", "u-reg")...)
+	wantOwner(t, ownerBy(t, tl, owner.Rules{}, "c1", 4*s), 4, "ua")
+}
+
+func TestSelectMatchesAResourceOfACRTheControllerCreated(t *testing.T) {
+	tl := fleet(clusters, databases)
+	tl.At(3*s, made(tt.Ref("toy/databases", "ns", "c"), "uc", "ua")...).
+		At(4*s, made(cmA0, "c1", "uc")...)
+	w := owner.New(tl.Index(), owner.Rules{})
+	if ref, err := w.Select(ctl, plan.Target{Resource: "configmaps"}, "a", 5*s); err != nil || ref != cmA0 {
+		t.Errorf("Select in slot a = %+v, %v; want %+v, which Database c owns.", ref, err, cmA0)
+	}
+}
+
+func TestRootFollowsOnlyCRsTheControllerCreated(t *testing.T) {
+	cmB0 := tt.Ref("configmaps", "ns", "b-0")
+	tl := fleet(clusters, databases)
+	tl.At(3*s, made(tt.Ref("toy/databases", "ns", "c"), "uc", "ua")...).
+		At(4*s, made(tt.Ref("toy/databases", "ns", "d"), "ud", "uc")...).
+		At(5*s, made(cmA0, "c1", "ud")...).
+		At(5*s, made(cmB0, "c2", "ub")...)
+	w := owner.New(tl.Index(), owner.Rules{})
+	root := func(uid string) owner.Owner { return w.Root(w.Owner(instance(t, w, uid), 6*s), 6*s) }
+	wantOwner(t, root("c1"), 1, "ua")
+	wantOwner(t, root("c2"), 1, "ub")
+}
+
+func TestRootSurvivesAnOwnerReferenceCycleOfCRs(t *testing.T) {
+	tl := fleet(clusters, databases)
+	tl.At(3*s, made(tt.Ref("toy/databases", "ns", "c"), "uc", "ud")...).
+		At(3*s, made(tt.Ref("toy/databases", "ns", "d"), "ud", "uc")...).
+		At(4*s, made(cmA0, "c1", "uc")...)
+	w := owner.New(tl.Index(), owner.Rules{})
+	wantOwner(t, w.Root(w.Owner(instance(t, w, "c1"), 5*s), 5*s), 1, "uc")
+}

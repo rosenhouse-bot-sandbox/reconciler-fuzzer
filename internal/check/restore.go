@@ -14,8 +14,11 @@ import (
 
 // Restore fails a settled step without a create, update, delete or fixture
 // change whose controller resources differ from the previous settled step's.
+// It groups resources by root, so a damage under a CR that the controller
+// made touches that CR's owner too.
 func Restore(ix *trace.Index, s Spec) []Finding {
 	v := newView(ix, s)
+	v.byRoot = true
 	var findings []Finding
 	for n, step := range v.steps {
 		if n == 0 || v.steps[n-1].Step != step.Step-1 || v.has(step.Step, "create", "update", "delete", "changeFixture") {
@@ -69,9 +72,9 @@ func (v *view) damaged(step int, t time.Duration) (map[group]bool, func(key stri
 			continue
 		}
 		if i, found := v.w.Latest(*e.Action.Ref, t); found {
-			o := v.w.Owner(i, t)
-			groups[v.groupOf(i, t)], keys[o.Key()] = true, true
-			for _, cr := range o.CRs {
+			g := v.groupOf(i, t)
+			groups[g], keys[g.owner] = true, true
+			for _, cr := range v.owners[g.owner].CRs {
 				crs[cr] = true
 			}
 		}

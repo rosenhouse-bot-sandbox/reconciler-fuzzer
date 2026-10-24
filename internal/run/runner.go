@@ -19,10 +19,11 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 )
 
-// Execute runs the plan's steps, then step len(p.Steps), which deletes every
-// live CR, then step len(p.Steps)+1, which restarts the controller. It
-// records Phase, Action and Fault events. It returns an error only when the harness itself fails; a
-// controller that does not settle is a finding, not an error.
+// Execute runs the plan's steps, then step len(p.Steps), which deletes each
+// slot's live CR, then step len(p.Steps)+1, which restarts the controller.
+// It records Phase, Action and Fault events. It returns an error only when
+// the harness itself fails; a controller that does not settle is a finding,
+// not an error.
 func (r *Runner) Execute(ctx context.Context, p *plan.Plan) error {
 	e := &execution{Runner: r, live: map[string]trace.Ref{}, deleted: map[string]trace.Ref{}, ix: trace.NewIndex(nil)}
 	for n, step := range p.Steps {
