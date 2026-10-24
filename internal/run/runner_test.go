@@ -89,7 +89,7 @@ func (c *fakeCluster) Delete(_ context.Context, ref trace.Ref, propagation plan.
 
 func (c *fakeCluster) Gone(_ context.Context, ref trace.Ref) (bool, error) {
 	c.add("gone %s", ref.Name)
-	return c.waitGone == nil, c.goneErr
+	return c.waitGone == nil && c.goneErr == nil, c.goneErr
 }
 
 func (c *fakeCluster) WaitGone(ctx context.Context, ref trace.Ref) error {
@@ -444,7 +444,8 @@ func TestSlotTakenNamesWhatTheObserverLastSawHoldTheCR(t *testing.T) {
 	ref := trace.Ref{System: "kube", Resource: "widgets", Namespace: "ns", Name: "first"}
 	held := trace.Event{Version: &trace.Version{Ref: ref, UID: "u1", RV: "2",
 		Body: json.RawMessage(`{"metadata":{"deletionTimestamp":"2026-10-24T09:06:40Z","finalizers":["toy/cleanup"]}}`)}}
-	gone := trace.Event{Version: &trace.Version{Ref: ref, UID: "u1", RV: "3", Deleted: true}}
+	gone := trace.Event{Version: &trace.Version{Ref: ref, UID: "u1", RV: "3", Deleted: true,
+		Body: json.RawMessage(`{"metadata":{"deletionTimestamp":"2026-10-24T09:06:40Z"}}`)}}
 	undecodable := trace.Event{Version: &trace.Version{Ref: ref, UID: "u1", RV: "2", Body: json.RawMessage(`[]`)}}
 	const taken = "the slot's previous CR is still there after the 300ms settle timeout"
 	for _, c := range []struct {
