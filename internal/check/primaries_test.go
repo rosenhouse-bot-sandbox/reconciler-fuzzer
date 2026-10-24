@@ -169,3 +169,116 @@ func TestHonestRequiresADependencyOnlyOfTheFirstListedKind(t *testing.T) {
 	r.Ready(clusterA).Ready(databaseB)
 	requireFinding(t, honest(t, r), "Honest", 0, noDependency, "kube/toy/clusters", "slot a")
 }
+
+// databaseReady is a Database's ready, which phaseReady satisfies and
+// fleetRun's ready does not.
+const databaseReady = "self.status.phase == 'Ready'"
+
+func phaseReady(name string) map[string]any {
+	return map[string]any{"metadata": map[string]any{"name": name}, "status": map[string]any{"phase": "Ready"}}
+}
+
+func TestSettleJudgesEachCRByItsKindsReady(t *testing.T) {
+	r := fleetRun(1, clusters, databases)
+	r.Spec.Primaries[1].Ready = databaseReady
+	r.Begin()
+	r.CreateCR("a", clusterA)
+	r.CreateCR("b", databaseB)
+	r.Ready(clusterA).Update(ctl, databaseB, phaseReady("b")).EndFaults()
+	if unmet := settledAt(t, r, r.Now+5*s); len(unmet) != 0 {
+		t.Errorf("unmet = %q, want none.", unmet)
+	}
+}
+
+func TestSettleCountsACRHaltedByItsKindsHalted(t *testing.T) {
+	r := fleetRun(1, clusters, databases)
+	r.Spec.Primaries[1].Halted = "self.status.halted == true"
+	r.Begin()
+	r.CreateCR("a", clusterA)
+	r.CreateCR("b", databaseB)
+	halted := tt.CR("b", false)
+	halted["status"].(map[string]any)["halted"] = true
+	dropped := tt.Call(ctl, "update", databaseB, 200, "")
+	dropped.Call.Injected = trace.DropResponse
+	r.Ready(clusterA).Update(ctl, databaseB, halted).Add(dropped).EndFaults()
+	if unmet := settledAt(t, r, r.Now+5*s); len(unmet) != 0 {
+		t.Errorf("unmet = %q, want none.", unmet)
+	}
+}
+
+func TestCleanAllowsWhatACRsKindRetains(t *testing.T) {
+	r := fleetRun(2, clusters, databases)
+	r.Spec.Primaries[1].Retain = "true"
+	r.Begin()
+	uid := r.CreateCR("b", databaseB)
+	r.Create(ctl, tt.Ref("configmaps", "ns", "b-0"), tt.OwnedBy(tt.Object("b-0"), uid, true))
+	r.Ready(databaseB).EndFaults().Settle()
+	r.Begin().DeleteCR("b", databaseB).EndFaults().Settle()
+	requireNone(t, judgeWith(t, r, check.Clean))
+}
+
+func TestPeriodicExemptsARefreshOfAnyListedKind(t *testing.T) {
+	databaseA := tt.Ref("toy/databases", "ns", "a")
+	r := fleetRun(0, clusters, databases)
+	r.Spec.Primaries[1].Periodic = &trace.Periodic{Every: refreshEvery, Paths: []string{"status.refreshTime"}}
+	r.Begin()
+	r.CreateCR("a", databaseA)
+	r.Update(ctl, databaseA, refreshed(1, "t1", nil))
+	r.EndFaults().Tick(2 * s)
+	r.Update(ctl, databaseA, refreshed(2, "t2", nil))
+	if unmet := changedWrites(t, r); len(unmet) != 0 {
+		t.Errorf("unmet = %q, want none.", unmet)
+	}
+}
+
+func TestHonestJudgesEachCRByItsKindsReady(t *testing.T) {
+	r := fleetRun(1, clusters, databases)
+	r.Spec.Primaries[1].Ready = databaseReady
+	r.Spec.Models = []trace.Model{{Kind: gadgets, Ready: config.ReadyConditionCEL, Dependency: &trace.Dependency{}}}
+	r.Begin()
+	uid := r.CreateCR("b", databaseB)
+	r.Create(ctl, gadgetA, tt.OwnedBy(tt.ReadyCondition("a", 1, false), uid, true))
+	r.Update(ctl, databaseB, phaseReady("b"))
+	requireFinding(t, honest(t, r), "Honest", 0, beforeSeeing, "kube/toy/gadgets", "slot b")
+}
+
+func TestHonestTracksEachCRByItsKindsReady(t *testing.T) {
+	r := fleetRun(1, clusters, databases)
+	r.Spec.Primaries[1].Ready = databaseReady
+	r.Spec.Models = []trace.Model{{Kind: gadgets, Ready: config.ReadyConditionCEL, Dependency: &trace.Dependency{Track: 500 * ms}}}
+	r.Begin()
+	uid := r.CreateCR("b", databaseB)
+	gadget := func(ready bool) map[string]any { return tt.OwnedBy(tt.ReadyCondition("a", 1, ready), uid, true) }
+	r.Create(ctl, gadgetA, gadget(false))
+	r.Update(gadgetModel, gadgetA, gadget(true)).See(ctl, gadgetA)
+	r.Update(ctl, databaseB, phaseReady("b"))
+	r.Update(gadgetModel, gadgetA, gadget(false)).See(ctl, gadgetA)
+	requireFinding(t, honest(t, r), "Honest", 0, stayedReady, "kube/toy/gadgets", "slot b")
+}
+
+func TestBackoffRunBreaksOnANewGenerationOfACROfAnyListedKind(t *testing.T) {
+	database := func(generation int) map[string]any {
+		return map[string]any{"metadata": map[string]any{"name": "b", "generation": generation}}
+	}
+	r := fleetRun(1, clusters, databases)
+	r.Begin()
+	r.Create(trace.Harness, databaseB, database(1))
+	for range 8 {
+		r.Call(ctl, "get", gadgetA, 500)
+	}
+	r.Update(trace.Harness, databaseB, database(2))
+	for range 7 {
+		r.Call(ctl, "get", gadgetA, 500)
+	}
+	requireNone(t, judgeWith(t, r, check.Backoff))
+}
+
+func TestPropertySeesAnEmptyKindThatAnyEntryOwns(t *testing.T) {
+	r := fleetRun(0, clusters, databases)
+	r.Spec.Primaries[1].Owns = []trace.Owns{{Kind: trace.Kind{Group: grants.Group, Version: "v1", Kind: "Grant", Resource: grants.Resource}, Name: "self.metadata.name"}}
+	r.Spec.Properties = []trace.Property{{Name: "no-grants", Expr: "size(world.kube['grants.toy.reconciler-fuzzer']) == 0", When: "always"}}
+	r.Begin()
+	r.CreateCR("a", clusterA)
+	r.Ready(clusterA).EndFaults().Settle()
+	requireNone(t, judgeWith(t, r, check.Property))
+}

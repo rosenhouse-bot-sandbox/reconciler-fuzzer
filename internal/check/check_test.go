@@ -420,6 +420,20 @@ func TestSpecForRefusesAConfigThatListsOtherKinds(t *testing.T) {
 	}
 }
 
+func TestSpecForTakesTheResourceTheRunEventRecordsForAListedKind(t *testing.T) {
+	c, err := config.Load("../../targets/toy-widget/config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := tt.Run("toy.reconciler-fuzzer", "widgetries")
+	run.Run.Primaries[0].Kind.Kind = "Widget"
+	var b tt.Builder
+	got, err := check.SpecFor(c, b.Add(run).Index())
+	if err != nil || got.Primaries[0].Kind.Resource != "widgetries" {
+		t.Errorf("SpecFor = %+v, %v; want the recorded resource widgetries.", got.Primaries, err)
+	}
+}
+
 func TestSpecForWithoutAConfigReadsTheRunEvent(t *testing.T) {
 	var b tt.Builder
 	run := tt.Run("toy", "widgets")
