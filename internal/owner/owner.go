@@ -43,10 +43,10 @@ func (i Instance) Live(t time.Duration) bool {
 
 // Owner is an instance's owning CR.
 type Owner struct {
-	// Rule is 1 for an ownerReference chain to a CR, or to an unlisted
-	// owner, 2 for a resource that names its CR, 3 for a CR that names the
-	// resource, and 4 for the set of other CRs alive at the instance's
-	// creation.
+	// Rule is 1 for an ownerReference chain to a CR or an ownerReference to
+	// an unlisted owner, 2 for a resource that names its CR, 3 for a CR that
+	// names the resource, and 4 for the set of other CRs alive at the
+	// instance's creation.
 	Rule int
 	// CRs holds CR UIDs in order: one for rules 1 to 3, the set for rule 4.
 	// It is empty for a shared instance.
@@ -625,7 +625,8 @@ func (w *World) Select(creator trace.Caller, target plan.Target, slot string, t 
 			return trace.Ref{}, ErrNoMatch
 		case !w.Primary(w.instances[n]):
 			held := w.instances[n].Ref
-			return trace.Ref{}, fmt.Errorf("%w: slot %s holds %s %s, which primaries does not list", ErrNoMatch, slot, resourceName(held), held.Name)
+			kind := schema.GroupResource{Group: held.Group, Resource: held.Resource}
+			return trace.Ref{}, fmt.Errorf("%w: slot %s holds %s %s, which primaries does not list", ErrNoMatch, slot, kind, held.Name)
 		}
 		cr = w.instances[n].UID
 	}
@@ -646,12 +647,3 @@ func (w *World) Select(creator trace.Caller, target plan.Target, slot string, t 
 }
 
 func matches(want, got string) bool { return want == "" || want == got }
-
-// resourceName is ref's resource, then "." and its group unless that is
-// core.
-func resourceName(ref trace.Ref) string {
-	if ref.Group == "" {
-		return ref.Resource
-	}
-	return ref.Resource + "." + ref.Group
-}

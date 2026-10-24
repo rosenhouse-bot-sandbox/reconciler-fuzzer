@@ -101,6 +101,21 @@ func TestCleanFailsAChildWhoseUnlistedOwnerIsGone(t *testing.T) {
 		"configmaps ns/db-db (rule 4, slot a)")
 }
 
+func TestRestoreNamesTheUnlistedOwnerOfAChangedResource(t *testing.T) {
+	db, child := tt.Ref("toy/databases", "ns", "db"), tt.Ref("configmaps", "ns", "db-db")
+	r := fleetRun(2, clusters)
+	r.Begin()
+	uid := r.Create(trace.Harness, db, tt.CR("db", true))
+	r.CreateCR("a", clusterA)
+	r.Create(ctl, child, tt.OwnedBy(tt.Object("db-db"), uid, true))
+	r.Ready(clusterA).EndFaults().Settle()
+	r.Begin().Restart()
+	r.Update(ctl, child, tt.OwnedBy(named("db-db", map[string]any{"data": "new"}), uid, true))
+	r.EndFaults().Settle()
+	requireFinding(t, restore(t, r), "Restore", 1, "changed resources", "kube/configmaps",
+		"configmaps ns/db-db (rule 1, unlisted owner databases.toy ns/db): data")
+}
+
 func TestCleanFailsACRTheControllerCreatedThatOutlivesItsOwner(t *testing.T) {
 	r := fleetRun(2, clusters, databases)
 	r.Begin()

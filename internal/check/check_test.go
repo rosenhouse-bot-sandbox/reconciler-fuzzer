@@ -20,8 +20,10 @@ import (
 // createStep is step 0 of a run: the harness creates widget a, and the
 // controller makes it ready at 1.5s.
 func createStep() *tt.Builder {
+	run := tt.Run("toy", "widgets")
+	run.Run.Primaries[0].Kind = widgets
 	var b tt.Builder
-	b.Add(tt.Run("toy", "widgets"), tt.Start(1)).
+	b.Add(run, tt.Start(1)).
 		At(0).Add(tt.Phase(0, trace.FaultPeriod)).
 		At(100 * ms).Add(tt.Call(trace.Harness, "create", widgetA, 201, "1")).
 		At(100 * ms).Add(tt.Version(widgetA, "ua", "1", ready(false))).
@@ -402,12 +404,19 @@ func TestSpecForRefusesAConfigThatListsOtherKinds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	run := tt.Run("toy.reconciler-fuzzer", "widgets")
-	run.Run.Primaries = append(run.Run.Primaries, trace.Primary{Kind: trace.Kind{Group: "toy.reconciler-fuzzer", Resource: "gadgets"}})
-	var b tt.Builder
-	_, err = check.SpecFor(c, b.Add(run).Index())
-	if want := "the config's primaries list widgets.toy.reconciler-fuzzer, but the trace's list widgets.toy.reconciler-fuzzer, gadgets.toy.reconciler-fuzzer"; err == nil || err.Error() != want {
-		t.Errorf("SpecFor = %v, want %q", err, want)
+	widgets := tt.Run("toy.reconciler-fuzzer", "widgets").Run.Primaries[0]
+	gadgets := trace.Primary{Kind: trace.Kind{Group: "toy.reconciler-fuzzer", Resource: "gadgets"}}
+	for recorded, primaries := range map[string][]trace.Primary{
+		"widgets.toy.reconciler-fuzzer, gadgets.toy.reconciler-fuzzer": {widgets, gadgets},
+		"none": nil,
+	} {
+		run := tt.Run("toy.reconciler-fuzzer", "widgets")
+		run.Run.Primaries = primaries
+		var b tt.Builder
+		_, err := check.SpecFor(c, b.Add(run).Index())
+		if want := "the config's primaries list widgets.toy.reconciler-fuzzer, but the trace's list " + recorded; err == nil || err.Error() != want {
+			t.Errorf("SpecFor = %v, want %q", err, want)
+		}
 	}
 }
 

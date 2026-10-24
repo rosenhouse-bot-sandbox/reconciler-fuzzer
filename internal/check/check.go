@@ -40,8 +40,7 @@ type Spec struct {
 	Properties []PropertySpec
 }
 
-// Primary is one listed kind as the checks judge its CRs. Ready, Retain
-// and Halted are CEL over self, a CR of Kind.
+// Primary is one listed kind as the checks judge its CRs.
 type Primary struct {
 	Kind  trace.Kind
 	Ready func(cr map[string]any) (bool, error)
@@ -145,7 +144,7 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 			return Spec{}, fmt.Errorf("the config: %w", err)
 		}
 		if want, got := listedKinds(primaries), listedKinds(run.Primaries); !slices.Equal(want, got) {
-			return Spec{}, fmt.Errorf("the config's primaries list %s, but the trace's list %s", strings.Join(want, ", "), strings.Join(got, ", "))
+			return Spec{}, fmt.Errorf("the config's primaries list %s, but the trace's list %s", strings.Join(want, ", "), cmp.Or(strings.Join(got, ", "), "none"))
 		}
 		if s.Primaries, err = compilePrimaries(primaries); err != nil {
 			return Spec{}, fmt.Errorf("the config's primaries: %w", err)

@@ -132,8 +132,8 @@ type System struct {
 }
 
 // Owns is one owns entry with its kind's resource. Name and Namespace are
-// CEL over the CR. System is empty for kube; a fake's Kind
-// holds only its collection as Resource.
+// CEL over the CR. System is empty for kube; a fake's Kind holds only its
+// collection as Resource.
 type Owns struct {
 	System    string `json:"system,omitempty"`
 	Kind      Kind   `json:"kind"`
