@@ -157,8 +157,8 @@ cross-scope, foreground and orphan rules (`gc.go`). `namespace` finishes a
 terminating namespace. `model.NewStage` makes a stage model per `models:`
 entry, named `trace.ModelCaller` of its kind, which writes `Ready` True and the
 `status:` fields `after` a generation's first version. `stuck` writes matching
-objects `Ready` False and the `stuckStatus:` fields in place of `status:`'s,
-and `slowDelete` adds a finalizer; either's end writes `Ready` True.
+objects `Ready` False and the `stuckStatus:` fields instead, and `slowDelete`
+adds a finalizer. Either's end writes `Ready` True and the `status:` fields.
 
 **Fake services.** `fake.New` makes a System of a `systems:` entry with a
 `process`. Start runs it in the config's directory with

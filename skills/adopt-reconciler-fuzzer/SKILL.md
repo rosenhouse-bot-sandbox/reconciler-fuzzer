@@ -159,7 +159,8 @@ Fill each key from the project:
   controller should notice a dependency going not ready. `status:` adds literal fields to each
   status write the model makes; it replaces the whole `conditions` list. `stuckStatus:`
   replaces those fields while a `stuck` fault lasts, and defaults to `status:`. Set it when
-  `status:` means done, such as `{phase: Bound}`. Otherwise the controller never sees the fault.
+  `status:` means done, such as `{phase: Bound}`. Otherwise a controller that reads only those
+  fields never sees the fault.
 - `budgets` and `timeouts`: leave them out at first. Raise `timeouts.settle` for a slow
   controller, and `stable` for one that requeues with a delay by design. Ask the user first.
 
