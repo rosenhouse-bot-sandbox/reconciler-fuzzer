@@ -122,12 +122,13 @@ buckets buckets-1 (rule 2, slot a)
 
 A rule 4 line usually means the resource lacks an ownerReference, so
 garbage collection could not delete it. Its ownerReferences may also name
-only objects that are gone or that the trace never saw. While one names a
-live object that is not a CR, such as a fixture, Clean skips the
-resource. A rule 1 line on a cluster-scoped resource with a namespaced
-owner means garbage collection ignores that invalid ownerReference. A rule
-2 or 3 line usually means a finalizer forgot the resource. A resource that
-should outlive its CR needs its entry's `retain`.
+only objects that the trace never saw, or gone objects that lead to no CR.
+While one names a live object that is not a CR, such as a fixture, Clean
+skips the resource. A rule 1 line on a cluster-scoped resource with a
+namespaced owner means garbage collection ignores that invalid
+ownerReference. A rule 2 or 3 line usually means a finalizer forgot the
+resource. A resource that should outlive its CR needs its entry's
+`retain`.
 
 ### Restore
 
@@ -185,6 +186,8 @@ names its cause. A run that started leaves its partial trace in `--out`. Common 
 | `launch args: ...` or `launch env <name>: ...` | Use only `${systems.kube.kubeconfig}`, `namespace` and `url`, and a fake's `${systems.<name>.url}`. |
 | `fake <name> exited ...` | Read `<out>/<name>.log`. Fix the `systems[].process` command or the fake's own config. |
 | `create of slot "<s>" makes a <kind>, which primaries does not list` | List the kind under `primaries`, or make the object a fixture. |
+| `create of slot "<s>" makes an object without apiVersion or kind` | Give the create's `object` both. |
+| `... holds a <kind>, not a <kind>` | Point the entry's `sample` at an object of its `kind`. |
 
 `hunt` notes a seed whose run failed in `summary.md`, and goes on. It
 exits 2 when a seed failed and nothing was found, and 1 on any find.

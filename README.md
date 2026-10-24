@@ -131,9 +131,12 @@ for a list of one. An entry takes `primary`'s keys, and its own `overlay`, `dist
 primaries:
   - kind: example.com/v1/Cluster
     sample: cluster.yaml
-    ready: &ready has(self.status) && self.status.observedGeneration == self.metadata.generation
+    ready: &ready >-
+      has(self.status) && has(self.status.observedGeneration)
+      && self.status.observedGeneration == self.metadata.generation
     values: {mutate: [spec.size]}
   - {kind: example.com/v1/Database, sample: database.yaml, ready: *ready}
+fixtures: [settings.yaml]
 values: {fixtures: {settings.yaml: [data.theme]}}   # with primaries, only fixtures
 ```
 
@@ -146,9 +149,9 @@ values: {fixtures: {settings.yaml: [data.theme]}}   # with primaries, only fixtu
   names another CR, such as a Database's `clusterRef`. So
   [targets/toy-fleet](targets/toy-fleet)'s `database/config.yaml` lists only Database, and
   makes the Cluster it names a fixture.
-- A fixture may not be a CR. An object whose ownerReference names a live fixture, or another
-  live object that is not a CR, belongs to that object, even when `owner` or `owns` names a CR.
-  Clean skips it while that object lives.
+- A fixture may not be a CR. An object whose ownerReferences lead to no CR, but name a live
+  object that is not a CR, such as a fixture, belongs to that object. `owner` and `owns` do not
+  change this. Clean skips such an object while its owner lives.
 - `dependency.required` binds only CRs of the first entry.
 
 ### Other namespaces and cluster scope
@@ -175,6 +178,7 @@ systems:
   A cluster-scoped kind takes no `namespace`.
 - `owner` takes CEL over the child. It yields the CR's UID, `namespace/name` or name. A bare name
   prefers a CR in the child's namespace, and names no CR when it matches CRs in two other namespaces.
+  A name that CRs of two kinds share names no CR.
 - Without either, Clean blames such a child on every CR that lived when it was created, so it
   fails only once all of them are gone.
 
@@ -416,7 +420,7 @@ The README also uses these:
 | Term | Meaning |
 | --- | --- |
 | Target | The controller under test, with its config. |
-| CR | An object of a kind that the config's `primaries` lists. A plan creates and changes only CRs. |
+| CR | An object of a kind that the config's `primaries` lists. A plan creates only CRs. |
 | Fixture | An object the harness creates before step 0, such as a ConfigMap the controller reads. |
 | envtest | A kube-apiserver and etcd with no other controllers, from controller-runtime. |
 | Seed | A number that fixes a generated plan, not its timing. |

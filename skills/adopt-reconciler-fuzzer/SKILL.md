@@ -80,11 +80,11 @@ List the external HTTP APIs it calls, such as a cloud's. Each needs a fake servi
 The controller must take the API's endpoint from a flag or an environment variable, and speak
 plain HTTP to it. If it cannot, tell the user.
 
-A config lists every CRD kind the controller serves, one `primaries` entry each. Generated CRs
-do not yet fill a field that names another CR, such as a Database's Cluster, so such a CR
-never gets ready. Hunt seeds (step 9) with configs that list no kind with such a field, or that
-list it alone and make each object it names a fixture. Hand-written plans can use the config
-that lists every kind.
+A config lists every CRD kind the controller serves, one `primaries` entry each. A generated
+CR can name another CR that does not exist, such as a Database's Cluster, and then never gets
+ready. Hunt seeds (step 9) with configs that list no kind with such a field, or that list it
+alone and make each object it names a fixture. Hand-written plans can use the config that lists
+every kind.
 
 ## 3. Choose a directory
 
@@ -157,13 +157,14 @@ Fill each key from the project:
   CEL over the CR that names the child; a cluster-scoped kind takes no `namespace`.
   `systems: [{name: kube, owner}]` holds CEL over a child that yields its CR's UID,
   `namespace/name` or name, such as an owner label. Prefer the UID: a bare name that
-  matches CRs in two other namespaces names none.
+  matches CRs in two other namespaces, or CRs of two kinds, names none.
 - `models`: one entry for every kind whose status another controller sets and the controller
   reads. Add `dependency` when a CR's readiness waits on it and the CR owns it: through
   ownerReferences, directly or through owned objects, or by `owns` or `owner`. Honest judges only such
   dependencies, so leave `dependency` off a kind the CR names by reference, such as an
   issuer or a store. `required: false` allows a CR to be ready with none. `required` binds only
-  CRs of the first entry, so list first the kind that owns the dependency. Set `track` when the
+  CRs of the first entry, so list first the kind that owns the dependency. A config that does
+  not list that kind leaves `dependency` out. Set `track` when the
   controller should notice a dependency going not ready. `status:` adds literal fields to each
   status write the model makes; it replaces the whole `conditions` list. `stuckStatus:`
   replaces those fields while a `stuck` fault lasts, and defaults to `status:`. Each write

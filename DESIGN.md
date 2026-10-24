@@ -216,8 +216,8 @@ refuses a plan that creates an object of an unlisted kind (`ValidateKinds`).
 ## 9. Step runner
 
 `Runner.Execute` runs the plan's steps, then step `planSteps`, which deletes
-every live CR, and step `planSteps + 1`, which restarts the controller (§17,
-entry 4).
+each slot's live CR, and step `planSteps + 1`, which restarts the controller
+(§17, entry 4).
 
 **Deadline.** `endFaults + settle + min(faultPeriod, backoffCap) + maxPoll`,
 where `maxPoll` is the longest poll interval of the systems the step's faults
@@ -274,9 +274,9 @@ from the config, or else the run event.
   its UID, or `cluster`.
 - Its **owning CR** at `t` comes from the first rule that matches
   (`owner.go`): 1, its ownerReferences reach a CR; 2, its system's
-  `owner` CEL names a CR by UID, `namespace/name` or name; 3, an `owns`
-  entry over a CR of its entry's kind names it; 4, otherwise, the set of
-  other CRs live at its creation. While an ownerReference names a live
+  `owner` CEL names a CR by UID, `namespace/name` or name, unless CRs of
+  two kinds share that name; 3, an `owns` entry over a CR of its entry's
+  kind names it; 4, otherwise, the set of other CRs live at its creation. While an ownerReference names a live
   instance that is not a CR, and none reaches a CR, rule 1 gives that
   **unlisted owner** and no CR (entry 80). An instance with no CR is
   **shared**.
@@ -284,7 +284,7 @@ from the config, or else the run event.
   one, a kube instance's is its `generateName`, or else its name, and a
   fake's is empty.
 - The **controller's resources** at `t` are its live instances, minus
-  ignored kinds (§10). A CR the controller created is also one of them.
+  ignored kinds (§10).
 - A **group** is a (system, group, resource, namespace, owning CRs, role).
 
 ## 12. Checks
@@ -338,10 +338,11 @@ dependency not ready`.
 
 **Backoff.** Failing controller calls with one system, verb, object,
 subresource and status form a **run**; a create's object is its `requestName`.
-A success breaks it, as does a new generation of its object, if a CR, of the
-object's rule 1 to 3 CR, or, for an object with neither, of any CR. With `n`
-CRs live, it fails when each gap between calls `5n + 1` to `10n + 1` is under
-100 ms: `retried a failing request in a tight loop`. It skips 409s on a held
+A success breaks it. So does a new generation of its object, or of the
+object's rule 1 to 3 CR. When the object is no CR and has no such CR, any CR's
+new generation breaks it. With `n` CRs live, it fails when each gap between
+calls `5n + 1` to `10n + 1` is under 100 ms: `retried a failing request in a
+tight loop`. It skips 409s on a held
 kind until `stable / 4` after the hold.
 
 **Property.** A `step` property is judged at each settled step's end, and an
@@ -379,7 +380,7 @@ primaries:                                  # every kind the controller serves
     periodic: {every: 1h, paths: [status.refreshTime]}           # optional: clause 7 allows these writes
     values: {overlay: {spec.region: {enum: [eu, us]}}, mutate: [spec.region]}
   - {kind: toy.reconciler-fuzzer/v1/Policy, sample: policy.yaml, ready: has(self.status)}
-values: {fixtures: {kv.yaml: [data.token]}}         # with primaries, only fixtures
+values: {fixtures: {kv.yaml: [value]}}              # with primaries, only fixtures
 models: [{kind: toy.reconciler-fuzzer/v1/Gadget, after: 200ms, dependency: {track: 1s}}]
 systems:
   - {name: kube, owner: "self.metadata.labels['widget-uid']"}   # kube takes only owner
@@ -423,13 +424,14 @@ request from what `launch.rbac` grants, creates weighted most (§17, entry 20).
 2 of 7 kube fault draws (of 9 with `models:`, 2 of which are `stuck` or
 `slowDelete`) hold a kind `launch.rbac` lets the controller watch, the listed
 and `owns` kinds weighted most, and delete a live CR and create it again as it
-was. A hold of a listed kind recreates a CR of that kind, or creates one. With
-fakes, half of the fault draws and of the `damage` draws name a fake: a request
-fault by verb alone, or a model fault on a `crud` fake, and a target by system
-alone. A read-only fake takes no damage and only read faults. `changeFixture`
-draws kube and system fixtures alike. `damage` only deletes. About 1 in 4 CR
-deletes is `Foreground`. A fault period lasts 0.5 s to `2 × stable`, plus the
-longest `track` for a model fault. `generate.go` documents the weights.
+was. A hold of a listed kind prefers a CR of that kind, and creates one in a
+free slot when none lives. With fakes, half of the fault draws and of the
+`damage` draws name a fake: a request fault by verb alone, or a model fault on
+a `crud` fake, and a target by system alone. A read-only fake takes no damage
+and only read faults. `changeFixture` draws kube and system fixtures alike.
+`damage` only deletes. About 1 in 4 CR deletes is `Foreground`. A fault period
+lasts 0.5 s to `2 × stable`, plus the longest `track` for a model fault.
+`generate.go` documents the weights.
 
 **Hunt.** `hunt.Hunt` runs each seed, keeps runs with a new signature, replays
 each 5 times and shrinks it (`shrink.go`), trying at most 16 candidates.
@@ -457,9 +459,9 @@ and `tenant/` and `grant/` cross scopes. In `targets/toy-bucket`, each Bucket CR
 owns one bucket in the `crudfake` system `cloud`; its bugs start at B30, and
 `halted/` runs `--halt` under `primary.halted`. In `targets/toy-fleet`, a
 Cluster owns modelled third-party Volumes, a Database names a Cluster, and a
-User a Database. Its bugs start at B100. `config.yaml` lists all three kinds,
-and its generated test fuzzes `cluster/`, Clusters alone, and `database/`,
-Databases on a fixture Cluster.
+User a Database. Its bugs start at B100. `config.yaml` lists all three kinds.
+The generated test fuzzes `cluster/`, which lists Clusters alone, and
+`database/`, which lists Databases on a fixture Cluster.
 
 Each config's `plans/` holds its gated bugs' and B0's plans. A toy's
 `gate_envtest_test.go` runs `gate_test.go`'s bug rows and B0, and its
