@@ -269,10 +269,11 @@ properties:
 ```
 
 A kind the harness watches from the start maps to an empty list while no object of it exists.
-These are each installed CRD and each kind that the config, a fixture or `launch.rbac` names,
-except Events, Leases and the other kinds the checks ignore. The `run` event of `trace.jsonl`
-lists them in `kinds`. Any other kind, and any fake collection, has a key only if the trace
-holds an object of it.
+These are each installed CRD, each kind that `primary`, `models` or a fixture names, and each
+kind that a `launch.rbac` rule names without `*` and the server lists and watches, except
+Events, Leases and the other kinds the checks ignore. The `run` event of `trace.jsonl` lists
+them in `kinds`. A fake collection that `primary.owns` names also maps to an empty list. Any
+other kind or collection has a key only if the trace holds an object of it.
 
 `firstWrittenUnder(object, path)` names the CR that owned the object when its value at `path`
 first appeared, across deletes and recreates. cert-manager's `fresh-key` property uses it. A

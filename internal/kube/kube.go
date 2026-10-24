@@ -63,8 +63,8 @@ type Options struct {
 	Vars map[string]string
 	// Watch lists kinds the observer watches from the start, as it does
 	// each installed CRD, each fixture's kind and each kind the RBAC names
-	// that trace.Ignored does not. It adds any other kind a listener sees a
-	// request for.
+	// that trace.Ignored does not ignore. It adds any other kind a listener
+	// sees a request for.
 	Watch []schema.GroupVersionKind
 	// Seen lists the dependency kinds whose objects the controller
 	// listener records as Seen events.

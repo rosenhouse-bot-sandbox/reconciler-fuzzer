@@ -373,7 +373,8 @@ func TestObserverWatchesKindsTogether(t *testing.T) {
 	}
 }
 
-// slowFailingDiscovery fails each group version after a pause.
+// slowFailingDiscovery fails each group version after a pause. The pause
+// makes a watchAll that does not wait return before the error.
 type slowFailingDiscovery struct{ discovery.DiscoveryInterface }
 
 func (slowFailingDiscovery) ServerResourcesForGroupVersion(string) (*metav1.APIResourceList, error) {

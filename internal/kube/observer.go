@@ -136,8 +136,8 @@ func (o *observer) watchAll(grs []schema.GroupResource) error {
 
 // watchable maps gr to its preferred version, or to nothing when the server
 // cannot list and watch it. It maps a resource that the mapper finds only in
-// another group, such as deployments asked for in the core group, to nothing,
-// because see records versions under gr.
+// another group, such as deployments asked for in the core group, to nothing.
+// The observer records each version under gr.
 func (o *observer) watchable(gr schema.GroupResource) (schema.GroupVersionResource, error) {
 	partial := schema.GroupVersionResource{Group: gr.Group, Resource: gr.Resource}
 	gvr, err := o.mapper.ResourceFor(partial)

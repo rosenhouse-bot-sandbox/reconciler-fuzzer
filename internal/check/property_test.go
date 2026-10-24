@@ -154,6 +154,17 @@ func TestADeclaredKindWithNoInstanceIsEmpty(t *testing.T) {
 	requireSummaries(t, judgeWith(t, r, check.Property))
 }
 
+func TestAnOwnedFakeCollectionWithNoInstanceIsEmpty(t *testing.T) {
+	r := newRun(0)
+	r.Spec.Systems = []trace.System{{Name: "cloud", API: "crud"}}
+	r.Spec.Owns = []trace.Owns{{System: "cloud", Kind: trace.Kind{Resource: "buckets"}, Name: "self.metadata.name"}}
+	r.Spec.Properties = []trace.Property{{Name: "no-buckets", Expr: "size(world.cloud.buckets) == 0", When: "always"}}
+	r.Begin()
+	withChild(r, "a", true)
+	r.EndFaults().Settle()
+	requireSummaries(t, judgeWith(t, r, check.Property))
+}
+
 func TestAPropertyThatCannotBeEvaluated(t *testing.T) {
 	r := newRun(0)
 	// The run declares grants, but not secrets.

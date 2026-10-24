@@ -115,6 +115,13 @@ func worldKeys(ix *trace.Index, w *owner.World) map[string]map[string]bool {
 		for _, kind := range run.Kinds {
 			add(kind)
 		}
+		// A fake's observer lists all its collections from the start.
+		// Kinds holds the kube kinds that owns names.
+		for _, o := range run.Owns {
+			if o.System != "" {
+				add(trace.Ref{System: o.System, Resource: o.Kind.Resource})
+			}
+		}
 	}
 	for _, i := range w.All() {
 		add(i.Ref)

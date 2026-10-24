@@ -141,11 +141,10 @@ name, and `update` otherwise.
 listeners and the observer, and creates the fixtures. Fixtures expand
 `${systems.<fake>.<key>}`. `Vars` holds `kubeconfig`, `namespace` and `url`.
 Harness actions return once the observer has recorded their effect. The
-system's poll interval is `stable`. The observer list-watches cluster-wide each
-installed CRD and each served kind the config, a fixture or `launch.rbac`
-names, except ignored kinds (§10). These are the run event's `kinds`. It then
-watches any kind a listener records a call on, and records one `version` per
-(ref, resourceVersion).
+observer list-watches cluster-wide each installed CRD and each served kind the
+config, a fixture or `launch.rbac` names, except ignored kinds (§10). These are
+the run event's `kinds`. It then watches any kind a listener records a call on,
+and records one `version` per (ref, resourceVersion).
 
 ## 7. Models and fake services
 
@@ -339,12 +338,12 @@ failing request in a tight loop`. It skips 409s on a held kind until `stable /
 `always` one at each `version` event. Its CEL sees `crs`, the live CRs' bodies,
 and `world.<system>.<key>`, the live instances' bodies, where a key is
 `<resource>` or `<resource>.<group>` on kube and the collection on a fake. Each
-kind in the run event's `kinds` has a key. `firstWrittenUnder(object, path)`
-takes a kube body and a list of keys. It finds the earliest version of the
-object's ref, of any instance, with the object's value at the path, and returns
-the UID of that version's owning CR by rules 1 to 3, or `""`; a finding's
-details say where such values came from. The string and base64 CEL extensions
-apply. Summaries: `property <name> does not hold`, `could not be evaluated`.
+kind in the run event's `kinds`, and each fake collection in its `owns`, has a
+key. `firstWrittenUnder(object, path)` takes a kube body and a list of keys. It
+finds the earliest version of the object's ref, of any instance, with the
+object's value at the path, and returns the UID of that version's owning CR by
+rules 1 to 3, or `""`. The string and base64 CEL extensions apply. Summaries:
+`property <name> does not hold`, `could not be evaluated`.
 
 **Corpus.** `check/testdata/corpus/` holds traces of known bugs and false
 positives (`corpus_test.go`).
@@ -497,3 +496,4 @@ Each entry changes a check, exception, `System` interface or ignore list.
 75. Restore ignores Vault's `current_version` and `versions`, and S3's `versionId`.
 76. `primary.periodic` paths name list items with `[*]`, so ACK exempts only condition stamps.
 77. Honest skips a dependency the controller deleted with a `delete`, or last saw deleted, whatever the observer's lag, so a scale-down passes (#124).
+78. A property sees each kind in the run event's `kinds`, such as each installed CRD, and each fake collection in its `owns`, as an empty list while it has no object (#148).
