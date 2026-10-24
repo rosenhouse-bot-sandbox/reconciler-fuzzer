@@ -147,7 +147,8 @@ values: {fixtures: {settings.yaml: [data.theme]}}   # with primaries, only fixtu
   [targets/toy-fleet](targets/toy-fleet)'s `database/config.yaml` lists only Database, and
   makes the Cluster it names a fixture.
 - A fixture may not be a CR. An object whose ownerReference names a live fixture, or another
-  live object that is not a CR, belongs to that object. Clean skips it while that object lives.
+  live object that is not a CR, belongs to that object, even when `owner` or `owns` names a CR.
+  Clean skips it while that object lives.
 - `dependency.required` binds only CRs of the first entry.
 
 ### Other namespaces and cluster scope

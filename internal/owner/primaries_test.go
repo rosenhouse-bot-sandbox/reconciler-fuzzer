@@ -84,6 +84,22 @@ func TestRule1PrefersACRToAnUnlistedOwner(t *testing.T) {
 	wantOwner(t, ownerBy(t, tl, owner.Rules{}, "c1", 3*s), 1, "ua")
 }
 
+func TestAnUnlistedOwnerOutranksRules2And3(t *testing.T) {
+	rules, err := owner.Compile(labelOwner, []trace.Primary{{Kind: clusters, Owns: []trace.Owns{{Kind: configMaps, Name: "self.spec.child"}}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tl := fleet(clusters)
+	tl.At(3*s, tt.Version(tt.Ref("configmaps", "ns", "x"), "c1", "3", tt.OwnedBy(labeled("x", "ua"), "ub", true))).
+		At(5*s, tt.Deleted(databaseB, "ub", "5", tt.Object("b")))
+	w := owner.New(tl.Index(), rules)
+	child := instance(t, w, "c1")
+	if o := w.Owner(child, 3*s); o.Unlisted != "ub" || len(o.CRs) != 0 {
+		t.Errorf("owner while Database b lives = %+v, want unlisted owner ub and no CR.", o)
+	}
+	wantOwner(t, w.Owner(child, 5*s), 2, "ua")
+}
+
 func TestAnOwnerReferenceToAnUnseenUIDFallsBackToRule4(t *testing.T) {
 	tl := fleet(clusters, databases)
 	tl.At(3*s, tt.Version(cmA0, "c1", "3", tt.OwnedBy(tt.Object("a-0"), "unseen", true)))

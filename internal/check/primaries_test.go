@@ -81,9 +81,9 @@ var (
 
 // withUnlistedOwner settles a step in which the harness creates Database db,
 // which primaries does not list, and Cluster a, and the controller gives db
-// a ConfigMap.
+// a ConfigMap. Step 1 is the delete-all step.
 func withUnlistedOwner() *tt.Script {
-	r := fleetRun(2, clusters)
+	r := fleetRun(1, clusters)
 	r.Begin()
 	r.Create(trace.Harness, unlistedDB, tt.CR("db", true))
 	r.CreateCR("a", clusterA)
@@ -95,14 +95,15 @@ func ownedByDB(r *tt.Script, body map[string]any) map[string]any {
 	return tt.OwnedBy(body, r.UID(unlistedDB), true)
 }
 
-// unlistedOwner is withUnlistedOwner and a step that deletes Cluster a.
+// unlistedOwner is withUnlistedOwner, its delete-all step and its restart
+// step. deleteDB has the delete-all step also delete db.
 func unlistedOwner(deleteDB bool) *tt.Script {
 	r := withUnlistedOwner()
 	r.Begin().DeleteCR("a", clusterA)
 	if deleteDB {
 		r.Delete(trace.Harness, unlistedDB)
 	}
-	return r.EndFaults().Settle()
+	return r.EndFaults().Settle().Begin().Restart().EndFaults().Settle()
 }
 
 func TestCleanPassesAChildOfALiveUnlistedOwner(t *testing.T) {
@@ -225,11 +226,18 @@ func TestCleanAllowsWhatACRsKindRetains(t *testing.T) {
 	r := fleetRun(2, clusters, databases)
 	r.Spec.Primaries[1].Retain = "true"
 	r.Begin()
-	uid := r.CreateCR("b", databaseB)
-	r.Create(ctl, tt.Ref("configmaps", "ns", "b-0"), tt.OwnedBy(tt.Object("b-0"), uid, true))
-	r.Ready(databaseB).EndFaults().Settle()
-	r.Begin().DeleteCR("b", databaseB).EndFaults().Settle()
-	requireNone(t, judgeWith(t, r, check.Clean))
+	for _, cr := range []trace.Ref{clusterA, databaseB} {
+		uid := r.CreateCR(cr.Name, cr)
+		r.Create(ctl, tt.Ref("configmaps", "ns", cr.Name+"-0"), tt.OwnedBy(tt.Object(cr.Name+"-0"), uid, true))
+		r.Ready(cr)
+	}
+	r.EndFaults().Settle()
+	r.Begin().DeleteCR("a", clusterA).DeleteCR("b", databaseB).EndFaults().Settle()
+	findings := judgeWith(t, r, check.Clean)
+	requireFinding(t, findings, "Clean", 1, "left resources behind", "kube/configmaps", "configmaps ns/a-0 (rule 1, slot a)")
+	if len(findings[0].Details) != 1 {
+		t.Errorf("details = %q, want only Cluster a's ConfigMap.", findings[0].Details)
+	}
 }
 
 func TestPeriodicExemptsARefreshOfAnyListedKind(t *testing.T) {

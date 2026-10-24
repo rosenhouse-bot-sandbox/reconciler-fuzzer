@@ -80,10 +80,11 @@ List the external HTTP APIs it calls, such as a cloud's. Each needs a fake servi
 The controller must take the API's endpoint from a flag or an environment variable, and speak
 plain HTTP to it. If it cannot, tell the user.
 
-A config lists every CRD kind the controller serves, as one `primaries` entry each. Generated
-CRs do not yet fill a field that names another CR, such as a Database's Cluster. Hunt a kind
-with such a field in a config of its own that lists only that kind, and make the CR it names a
-fixture there.
+A config lists every CRD kind the controller serves, one `primaries` entry each. Generated CRs
+do not yet fill a field that names another CR, such as a Database's Cluster, so such a CR
+never gets ready. Hunt seeds (step 9) with configs that list no kind with such a field, or that
+list it alone and make each object it names a fixture. Hand-written plans can use the config
+that lists every kind.
 
 ## 3. Choose a directory
 
