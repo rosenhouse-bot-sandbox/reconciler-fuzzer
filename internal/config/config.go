@@ -547,8 +547,8 @@ func primary(key string, declared declaredEntry, dir string, fakes []System) (Pr
 	return p, nil
 }
 
-// fixtureKey matches a ${key} that kube expands in a fixture before it
-// parses the file.
+// fixtureKey matches a ${key} within one line, as kube expands it in a
+// fixture before it parses the file.
 var fixtureKey = regexp.MustCompile(`\$\{[^}\n]*\}`)
 
 // refuseListedFixtures refuses a kube fixture of a listed kind. declared

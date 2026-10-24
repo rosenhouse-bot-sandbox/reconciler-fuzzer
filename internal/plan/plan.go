@@ -214,8 +214,9 @@ func (p *Plan) Validate() error {
 	return nil
 }
 
-// ValidateKinds reports the first create whose object's group and kind
-// listed lacks. A create without an object makes the sample, of listed[0].
+// ValidateKinds reports the first create whose object lacks apiVersion or
+// kind, or has a group and kind that listed lacks. A create without an
+// object makes the sample, of listed[0].
 func (p *Plan) ValidateKinds(listed []schema.GroupKind) error {
 	for i, step := range p.Steps {
 		for j, a := range step.Actions {
