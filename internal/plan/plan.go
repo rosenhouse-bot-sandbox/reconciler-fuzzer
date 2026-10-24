@@ -113,16 +113,16 @@ type Fault struct {
 	// SlowDelete holds each matching object's deletion until the fault ends.
 	SlowDelete bool `json:"slowDelete,omitempty"`
 	// HoldWatch pauses the controller's watch events of the kind Match's
-	// group and resource name, and delivers them in order when it ends. An
-	// empty group names the core group.
+	// group and resource name, and delivers them in order when it ends.
 	HoldWatch bool `json:"holdWatch,omitempty"`
 }
 
 // ModelFault reports whether a stage model, not a listener, takes f.
 func (f Fault) ModelFault() bool { return f.Stuck || f.SlowDelete }
 
-// Match selects requests. An empty field matches any value. Subresource may
-// also be NoSubresource.
+// Match selects requests. An empty field matches any value, but a
+// holdWatch's empty Group names the core group. Subresource may also be
+// NoSubresource.
 type Match struct {
 	Verb        string `json:"verb,omitempty"`
 	Group       string `json:"group,omitempty"`
