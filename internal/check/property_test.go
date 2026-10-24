@@ -139,8 +139,42 @@ func TestPropertyVariables(t *testing.T) {
 	requireSummaries(t, judgeWith(t, r, check.Property), "1 property one-cr does not hold", "2 property one-cr does not hold")
 }
 
+var grants = trace.Ref{System: "kube", Group: "toy.reconciler-fuzzer", Resource: "grants"}
+
+func TestADeclaredKindWithNoInstanceIsEmpty(t *testing.T) {
+	r := newRun(0)
+	r.Spec.Kinds = []trace.Ref{grants}
+	r.Spec.Properties = []trace.Property{
+		{Name: "no-stuck-grants", Expr: "world.kube['grants.toy.reconciler-fuzzer'].all(g, !has(g.metadata.deletionTimestamp))", When: "step"},
+		{Name: "no-grants", Expr: "size(world.kube['grants.toy.reconciler-fuzzer']) == 0", When: "always"},
+	}
+	r.Begin()
+	withChild(r, "a", true)
+	r.EndFaults().Settle()
+	requireSummaries(t, judgeWith(t, r, check.Property))
+}
+
+func TestAnOwnedKindWithNoInstanceIsEmpty(t *testing.T) {
+	r := newRun(0)
+	r.Spec.Systems = []trace.System{{Name: "cloud", API: "crud"}}
+	r.Spec.Owns = []trace.Owns{
+		{Kind: trace.Kind{Group: grants.Group, Version: "v1", Kind: "Grant", Resource: grants.Resource}, Name: "self.metadata.name"},
+		{System: "cloud", Kind: trace.Kind{Resource: "buckets"}, Name: "self.metadata.name"},
+	}
+	r.Spec.Properties = []trace.Property{
+		{Name: "no-grants", Expr: "size(world.kube['grants.toy.reconciler-fuzzer']) == 0", When: "always"},
+		{Name: "no-buckets", Expr: "size(world.cloud.buckets) == 0", When: "always"},
+	}
+	r.Begin()
+	withChild(r, "a", true)
+	r.EndFaults().Settle()
+	requireSummaries(t, judgeWith(t, r, check.Property))
+}
+
 func TestAPropertyThatCannotBeEvaluated(t *testing.T) {
 	r := newRun(0)
+	// The run declares grants, but not secrets.
+	r.Spec.Kinds = []trace.Ref{grants}
 	r.Spec.Properties = []trace.Property{{Name: "typo", Expr: "size(world.kube.secrets) == 0", When: "always"}}
 	r.Begin()
 	withChild(r, "a", true)

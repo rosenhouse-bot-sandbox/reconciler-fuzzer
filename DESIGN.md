@@ -75,8 +75,7 @@ assigns `Seq`, a total order, and `At`, the time since the run started. Each
 event sets one field: `run` (the config the checks need, after the fixtures),
 `phase`, `action`, `fault`, `call`, `watchEnd`, `version` (an observed body),
 `work` (a model's or fake's pending work), `seen` (what a response showed a
-caller, §5) or `proc` (a controller start or exit). `trace/event.go` documents
-each.
+caller, §5) or `proc` (a controller start or exit). `event.go` documents each.
 
 A `Ref` is `{system, group, resource, namespace, name}`. The trace stores
 bodies, not readiness or gone states, so `judge` rejudges an old trace under a
@@ -141,10 +140,11 @@ name, and `update` otherwise.
 listeners and the observer, and creates the fixtures. Fixtures expand
 `${systems.<fake>.<key>}`. `Vars` holds `kubeconfig`, `namespace` and `url`.
 Harness actions return once the observer has recorded their effect. The
-system's poll interval is `stable`. The observer list-watches kinds
-cluster-wide, from the configured kinds and any kind a listener records a call
-on, and records one `version` per (ref, resourceVersion). `Subscribe` hands
-each version to the models.
+observer list-watches cluster-wide each installed CRD, each served kind the
+config or a fixture names, and each served kind `launch.rbac` names that is not
+ignored (§10). These are the run event's `kinds`. It then watches any kind a
+listener records a call on, and records one `version` per
+(ref, resourceVersion).
 
 ## 7. Models and fake services
 
@@ -336,7 +336,8 @@ failing request in a tight loop`. It skips 409s on a held kind until `stable /
 **Property.** A `step` property is judged at each settled step's end, and an
 `always` one at each `version` event. Its CEL sees `crs`, the live CRs' bodies,
 and `world.<system>.<key>`, the live instances' bodies, where a key is
-`<resource>` or `<resource>.<group>` on kube and the collection on a fake.
+`<resource>` or `<resource>.<group>` on kube and the collection on a fake. Each
+kind in the run event's `kinds` or `owns` has a key.
 `firstWrittenUnder(object, path)` takes a kube body and a list of keys. It
 finds the earliest version of the object's ref, of any instance, with the
 object's value at the path, and returns the UID of that version's owning CR by
@@ -356,7 +357,7 @@ against the file's directory. `config.go` documents each key.
 launch:
   binary: ../../bin/toy-bucket
   args: [--bug=0]
-  env: {KUBECONFIG: "${systems.kube.kubeconfig}", CLOUD_ENDPOINT: "${systems.cloud.url}"}
+  env: {CLOUD_ENDPOINT: "${systems.cloud.url}"}   # KUBECONFIG defaults to ${systems.kube.kubeconfig}
   rbac: [rbac/role.yaml]
 crds: [crds/]
 primary:
@@ -426,27 +427,25 @@ reconciler-fuzzer shrink --config c.yaml --plan plan.json --out dir [--launch-ar
 crudfake --config cloud.yaml [--listen addr]
 ```
 
-They exit 0 with no findings, 1 with findings, and 2 on usage or harness errors.
+They exit 0 with no findings, 1 with some, and 2 on a usage or harness error.
 
 ## 16. Gates, examples and testing
 
-**Make targets.** `make help` lists them; CI and the nightly call them.
-
-**Toys.** A toy is a directory in `targets/` with a `main.go`. `build`,
+**Make targets and toys.** `make help` lists the targets, which CI and the
+nightly call. A toy is a directory in `targets/` with a `main.go`. `build`,
 `generate`, `test-generated` and `bug-matrix` run every toy.
-`targets/toy-widget` holds the Widget configs: `gadget/` adds a modelled
-Gadget, and `tenant/` and `grant/` cross scopes. In `targets/toy-bucket`, each
-Bucket CR owns one bucket in the `crudfake` system `cloud`; its bugs start at
-B30, and `halted/` runs `--halt` under `primary.halted`. In `targets/toy-fleet`,
-a Cluster owns modelled third-party Volumes, a Database names a Cluster, and a
+`targets/toy-widget` holds the Widget configs: `gadget/` adds a modelled Gadget,
+and `tenant/` and `grant/` cross scopes. In `targets/toy-bucket`, each Bucket CR
+owns one bucket in the `crudfake` system `cloud`; its bugs start at B30, and
+`halted/` runs `--halt` under `primary.halted`. In `targets/toy-fleet`, a
+Cluster owns modelled third-party Volumes, a Database names a Cluster, and a
 User a Database. Its bugs start at B100, and `database/` fuzzes Databases.
 
 Each config's `plans/` holds its gated bugs' and B0's plans. A toy's
 `gate_envtest_test.go` runs `gate_test.go`'s bug rows and B0, and its
-`bugmatrix_test.go` renders them as its own section of `docs/bug-matrix.md`. B0
-gives no findings and no notes on every committed plan, and no findings on each
-config's first 20 seeds that draw a fault (toy-bucket: one on `cloud`; gadget:
-a model fault). toy-fleet skips seed 22 of `database/`, which hits #128.
+`bugmatrix_test.go` renders them in `docs/bug-matrix.md`. B0 gives no findings
+and no notes on every committed plan, and no findings on each config's first 20
+seeds that draw a fault. toy-fleet skips seed 22 of `database/` (#128).
 
 **Examples.** `examples/<name>` adopts cert-manager, external-secrets on Vault,
 and ACK's s3-controller on moto. Plans and listed seeds give no findings,
@@ -497,3 +496,4 @@ Each entry changes a check, exception, `System` interface or ignore list.
 75. Restore ignores Vault's `current_version` and `versions`, and S3's `versionId`.
 76. `primary.periodic` paths name list items with `[*]`, so ACK exempts only condition stamps.
 77. Honest skips a dependency the controller deleted with a `delete`, or last saw deleted, whatever the observer's lag, so a scale-down passes (#124).
+78. A property sees each kind in the run event's `kinds` or `owns` as an empty list while it has no object (#148).

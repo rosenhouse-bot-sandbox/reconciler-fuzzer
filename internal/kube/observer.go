@@ -3,6 +3,7 @@ package kube
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -116,8 +117,27 @@ func (o *observer) watch(gr schema.GroupResource) error {
 	return nil
 }
 
+// watchAll watches each of grs, and waits for their initial lists. The
+// watches run together, since the first list of a new CRD can take a second.
+// It returns their errors, except for a kind the server does not serve.
+func (o *observer) watchAll(grs []schema.GroupResource) error {
+	errs := make([]error, len(grs))
+	var watches sync.WaitGroup
+	for i, gr := range grs {
+		watches.Go(func() {
+			if err := o.watch(gr); !meta.IsNoMatchError(err) {
+				errs[i] = err
+			}
+		})
+	}
+	watches.Wait()
+	return errors.Join(errs...)
+}
+
 // watchable maps gr to its preferred version, or to nothing when the server
-// cannot list and watch it.
+// cannot list and watch it. It maps a resource that the mapper finds only in
+// another group, such as deployments asked for in the core group, to nothing.
+// The observer records each version under gr.
 func (o *observer) watchable(gr schema.GroupResource) (schema.GroupVersionResource, error) {
 	partial := schema.GroupVersionResource{Group: gr.Group, Resource: gr.Resource}
 	gvr, err := o.mapper.ResourceFor(partial)
@@ -127,6 +147,9 @@ func (o *observer) watchable(gr schema.GroupResource) (schema.GroupVersionResour
 	}
 	if err != nil {
 		return schema.GroupVersionResource{}, fmt.Errorf("mapping %s: %w", gr, err)
+	}
+	if gvr.GroupResource() != gr {
+		return schema.GroupVersionResource{}, nil
 	}
 	resources, err := o.discovery.ServerResourcesForGroupVersion(gvr.GroupVersion().String())
 	if err != nil {

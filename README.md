@@ -93,7 +93,6 @@ launch:
   binary: ../bin/manager                   # your controller, built
   args: [--health-probe-bind-address=0, --metrics-bind-address=0]
   env:
-    KUBECONFIG: ${systems.kube.kubeconfig}   # the harness writes this file
     WATCH_NAMESPACE: ${systems.kube.namespace}
   rbac: [../config/rbac/role.yaml]         # the controller runs with only these rules
 crds: [../config/crd/bases/]
@@ -108,6 +107,10 @@ timeouts: {settle: 30s, stable: 3s}
 ```
 
 - Paths resolve against the config file's directory.
+- The controller's `KUBECONFIG` defaults to `${systems.kube.kubeconfig}`, the kubeconfig the
+  harness writes for it. Pass `--kubeconfig=${systems.kube.kubeconfig}` in `args` if the
+  controller does not read `KUBECONFIG`, as when it calls `clientcmd.BuildConfigFromFlags`
+  with an empty path.
 - `args` turns off the scaffold's fixed ports, so runs cannot clash on them. If it has
   webhooks, set `ENABLE_WEBHOOKS: "false"` in `env`.
 - `ready` is CEL over the CR. It must be true only once the controller has acted on the
@@ -269,6 +272,14 @@ properties:
         || world.kube.secrets.exists(s, s.metadata.name == c.spec.target.name
           && s.data.token == base64.encode(bytes(v.data.value)))))
 ```
+
+A kind the harness watches from the start maps to an empty list while no object of it exists.
+These include each installed CRD and each kind that `primary`, `models` or a fixture names.
+They also include each kind that a `launch.rbac` rule names without `*`, except Events, Leases
+and the other kinds the checks ignore. The harness skips a kind that the server does not list
+and watch in the named group. The `run` event of `trace.jsonl` lists these kinds in `kinds`. A
+fake collection that `primary.owns` names also maps to an empty list. Any other kind or
+collection has a key only if the trace holds an object of it.
 
 `firstWrittenUnder(object, path)` names the CR that owned the object when its value at `path`
 first appeared, across deletes and recreates. cert-manager's `fresh-key` property uses it. A

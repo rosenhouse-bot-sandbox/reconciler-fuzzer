@@ -1,6 +1,7 @@
 package check
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -60,7 +61,7 @@ type properties struct {
 	*view
 	t time.Duration
 	// keys holds an empty world: each system, and each of its kinds that
-	// the trace holds.
+	// the run declares or the trace holds.
 	keys    map[string]map[string]bool
 	decoded map[uint64]map[string]any
 	// origins says, for each firstWrittenUnder call of an evaluation, where
@@ -98,19 +99,30 @@ func (p *properties) times(property PropertySpec) []judgeTime {
 	return times
 }
 
-// worldKeys holds kube and each fake, and each kind any instance has.
+// worldKeys holds kube and each fake, and each kind the run declares or
+// any instance has.
 func worldKeys(ix *trace.Index, w *owner.World) map[string]map[string]bool {
 	keys := map[string]map[string]bool{"kube": {}}
+	add := func(ref trace.Ref) {
+		if keys[ref.System] == nil {
+			keys[ref.System] = map[string]bool{}
+		}
+		keys[ref.System][worldKey(ref)] = true
+	}
 	if run, ok := ix.Run(); ok {
 		for _, system := range run.Systems {
 			keys[system.Name] = map[string]bool{}
 		}
+		for _, kind := range run.Kinds {
+			add(kind)
+		}
+		// The observers watch each owned kind from the start.
+		for _, o := range run.Owns {
+			add(trace.Ref{System: cmp.Or(o.System, "kube"), Group: o.Kind.Group, Resource: o.Kind.Resource})
+		}
 	}
 	for _, i := range w.All() {
-		if keys[i.Ref.System] == nil {
-			keys[i.Ref.System] = map[string]bool{}
-		}
-		keys[i.Ref.System][worldKey(i.Ref)] = true
+		add(i.Ref)
 	}
 	return keys
 }

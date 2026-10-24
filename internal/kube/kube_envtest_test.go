@@ -79,7 +79,7 @@ func TestKube(t *testing.T) {
 		CRDs:     []string{toy + "crds"},
 		RBAC:     []string{toy + "rbac/role.yaml", "testdata/role-elsewhere.yaml"},
 		Fixtures: []string{toy + "widget-config.yaml", "testdata/scoped-fixtures.yaml"},
-		Watch:    []schema.GroupVersionKind{widgetGVK},
+		Watch:    []schema.GroupVersionKind{widgetGVK, {Group: "apps", Version: "v1", Kind: "Deployment"}},
 		Seen:     []schema.GroupVersionKind{widgetGVK},
 		Warm:     []map[string]any{{"apiVersion": "toy.reconciler-fuzzer/v1", "kind": "Widget", "metadata": map[string]any{"name": "warm"}, "spec": map[string]any{"count": int64(1)}}},
 	})
@@ -282,6 +282,23 @@ func TestKube(t *testing.T) {
 		recorded.await(t, "version of the secret", func(e trace.Event) bool {
 			return e.Version != nil && e.Version.Ref.Resource == "secrets" && e.Version.Ref.Name == "s"
 		})
+	})
+
+	t.Run("kinds name the CRDs and the kinds watched from the start", func(t *testing.T) {
+		toyCRD := func(resource string) trace.Ref {
+			return trace.Ref{System: Name, Group: "toy.reconciler-fuzzer", Resource: resource}
+		}
+		want := []trace.Ref{
+			{System: Name, Resource: "configmaps"},
+			{System: Name, Resource: "namespaces"},
+			{System: Name, Group: "apps", Resource: "deployments"}, // Only Watch names it.
+			{System: Name, Group: "batch", Resource: "cronjobs"},
+			{System: Name, Group: "rbac.authorization.k8s.io", Resource: "clusterroles"},
+			toyCRD("gadgets"), toyCRD("grants"), toyCRD("tenants"), toyCRD("widgets"),
+		}
+		if got := k.Kinds(); !slices.Equal(got, want) {
+			t.Errorf("Kinds = %+v, want %+v.", got, want)
+		}
 	})
 
 	t.Run("snapshot lists the widget", func(t *testing.T) {

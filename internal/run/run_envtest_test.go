@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -90,6 +91,51 @@ timeouts: {settle: 10s, stable: 1s}
 	}
 }
 
+// TestAPropertyOverAnInstalledCRDWithNoObjectHolds runs a property over the
+// toy's grants CRD, which the run event in trace.jsonl lists in kinds. The
+// controller only lists widgets, so no Grant exists.
+func TestAPropertyOverAnInstalledCRDWithNoObjectHolds(t *testing.T) {
+	toyDir, err := filepath.Abs(toy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	config := fmt.Sprintf(`launch:
+  binary: /bin/sh
+  args: [-c, 'while true; do curl -sf ${systems.kube.url}/apis/toy.reconciler-fuzzer/v1/widgets >/dev/null; sleep 1; done']
+  rbac: [%[1]s/rbac/role.yaml]
+crds: [%[1]s/crds/]
+primary:
+  kind: toy.reconciler-fuzzer/v1/Widget
+  sample: %[1]s/widget.yaml
+  ready: "true"
+timeouts: {settle: 10s, stable: 1s}
+properties:
+  - name: no-stuck-grants
+    expr: "world.kube['grants.toy.reconciler-fuzzer'].all(g, !has(g.metadata.deletionTimestamp))"
+`, toyDir)
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{{Do: plan.Create, Slot: "a"}}}}}
+	out := filepath.Join(dir, "out")
+	report, err := Run(context.Background(), Options{ConfigPath: filepath.Join(dir, "config.yaml"), Plan: p, Out: out})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Findings) > 0 {
+		t.Errorf("findings %+v, want none", report.Findings)
+	}
+	events, err := trace.Load(filepath.Join(out, "trace.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	grants := trace.Ref{System: "kube", Group: "toy.reconciler-fuzzer", Resource: "grants"}
+	if i := slices.IndexFunc(events, func(e trace.Event) bool { return e.Run != nil }); i < 0 || !slices.Contains(events[i].Run.Kinds, grants) {
+		t.Errorf("the trace's run event does not list grants in kinds")
+	}
+}
+
 // reader is a controller that reads the Vault secret a fixture names.
 const reader = `while true; do curl -sf -H "X-Vault-Token: $VAULT_TOKEN" "$VAULT_URL/v1/secret/data/app/db" >/dev/null; sleep 1; done`
 
@@ -164,5 +210,34 @@ timeouts: {settle: 10s, stable: 1s}
 	}
 	if !secret || !store || !expanded || !reads {
 		t.Errorf("the vault fixture first %v, the kube fixture %v expanded %v, a controller read %v; want all", secret, store, expanded, reads)
+	}
+}
+
+// A launch.env without KUBECONFIG must not leave the controller on the
+// shell's cluster.
+func TestTheControllerGetsTheHarnessKubeconfigByDefault(t *testing.T) {
+	t.Setenv("KUBECONFIG", "/home/me/.kube/production")
+	toyDir, err := filepath.Abs(toy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	got := filepath.Join(dir, "got")
+	config := fmt.Sprintf("launch: {binary: /bin/sh, args: [-c, 'echo \"$KUBECONFIG\" > %[2]s; exec sleep 60']}\ncrds: [%[1]s/crds/]\nprimary: {kind: toy.reconciler-fuzzer/v1/Widget, sample: %[1]s/widget.yaml, ready: \"true\"}\ntimeouts: {settle: 3s, stable: 1s}\n",
+		toyDir, got)
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "out")
+	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{{Do: plan.Create, Slot: "a"}}}}}
+	if _, err := Run(context.Background(), Options{ConfigPath: filepath.Join(dir, "config.yaml"), Plan: p, Out: out}); err != nil {
+		t.Fatal(err)
+	}
+	text, err := os.ReadFile(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(out, "kubeconfig") + "\n"; string(text) != want {
+		t.Errorf("The controller got KUBECONFIG %q, want %q.", text, want)
 	}
 }
