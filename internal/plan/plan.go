@@ -226,8 +226,8 @@ func (p *Plan) ValidateKinds(listed []schema.GroupKind) error {
 			switch {
 			case err != nil:
 				return fmt.Errorf("steps[%d].actions[%d]: %w", i, j, err)
-			case o.Kind == "":
-				return fmt.Errorf("steps[%d].actions[%d]: create of slot %q makes an object with no kind", i, j, a.Slot)
+			case o.APIVersion == "" || o.Kind == "":
+				return fmt.Errorf("steps[%d].actions[%d]: create of slot %q makes an object without apiVersion or kind", i, j, a.Slot)
 			case !slices.Contains(listed, o.groupKind()):
 				return fmt.Errorf("steps[%d].actions[%d]: create of slot %q makes a %s, which primaries does not list", i, j, a.Slot, o.groupKind())
 			}

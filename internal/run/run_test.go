@@ -82,29 +82,56 @@ func TestTraceModelsNameKindsBothWays(t *testing.T) {
 var clusterRoleKind = schema.GroupVersionKind{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRole"}
 
 func TestPrimaryKindsWatchEveryListedAndOwnsKind(t *testing.T) {
+	secretKind := schema.GroupVersionKind{Version: "v1", Kind: "Secret"}
 	primaries := []config.Primary{
 		{Kind: gadgetKind, Owns: []config.Owns{{Kind: clusterRoleKind, Name: "'x'"}, {System: "cloud", Collection: "buckets", Name: "'y'"}}},
-		{Kind: sprocketKind, Owns: []config.Owns{{Kind: gadgetKind, Name: "'z'"}}},
+		{Kind: sprocketKind, Owns: []config.Owns{{Kind: secretKind, Name: "'z'"}}},
 	}
-	if got, want := primaryKinds(primaries), []schema.GroupVersionKind{gadgetKind, clusterRoleKind, sprocketKind, gadgetKind}; !reflect.DeepEqual(got, want) {
+	if got, want := primaryKinds(primaries), []schema.GroupVersionKind{gadgetKind, clusterRoleKind, sprocketKind, secretKind}; !reflect.DeepEqual(got, want) {
 		t.Errorf("primaryKinds = %v, want %v", got, want)
 	}
 }
 
 func TestLoadSamplesReadsEachEntrysSampleInOrder(t *testing.T) {
-	dir := t.TempDir()
-	var primaries []config.Primary
-	for _, kind := range []string{"Gadget", "Sprocket"} {
-		path := filepath.Join(dir, kind+".yaml")
-		if err := os.WriteFile(path, []byte("kind: "+kind+"\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		primaries = append(primaries, config.Primary{Sample: path})
+	samples, err := loadSamples(samplePrimaries(t, gadgetKind, sprocketKind))
+	want := []map[string]any{
+		{"apiVersion": "toy.reconciler-fuzzer/v1", "kind": "Gadget"},
+		{"apiVersion": "toy.reconciler-fuzzer/v2", "kind": "Sprocket"},
 	}
-	samples, err := loadSamples(primaries)
-	if want := []map[string]any{{"kind": "Gadget"}, {"kind": "Sprocket"}}; err != nil || !reflect.DeepEqual(samples, want) {
+	if err != nil || !reflect.DeepEqual(samples, want) {
 		t.Errorf("loadSamples = %v, %v; want %v", samples, err, want)
 	}
+}
+
+func TestLoadSamplesRefusesASampleOfAnotherKind(t *testing.T) {
+	for _, sampleKind := range []schema.GroupVersionKind{sprocketKind, {Group: "other", Version: "v1", Kind: "Gadget"}} {
+		primaries := samplePrimaries(t, sampleKind)
+		primaries[0].Kind = gadgetKind
+		if _, err := loadSamples(primaries); err == nil || !strings.Contains(err.Error(), sampleKind.GroupKind().String()) || !strings.Contains(err.Error(), gadgetKind.GroupKind().String()) {
+			t.Errorf("loadSamples of a %s for a %s entry = %v, want an error that names both.", sampleKind.GroupKind(), gadgetKind.GroupKind(), err)
+		}
+	}
+}
+
+func TestLoadSamplesTakesASampleOfAnotherVersion(t *testing.T) {
+	primaries := samplePrimaries(t, schema.GroupVersionKind{Group: gadgetKind.Group, Version: "v9", Kind: gadgetKind.Kind})
+	primaries[0].Kind = gadgetKind
+	if _, err := loadSamples(primaries); err != nil {
+		t.Error(err)
+	}
+}
+
+// samplePrimaries are entries of kinds, each with a sample of its kind.
+func samplePrimaries(t *testing.T, kinds ...schema.GroupVersionKind) []config.Primary {
+	var primaries []config.Primary
+	for _, kind := range kinds {
+		path := filepath.Join(t.TempDir(), "sample.yaml")
+		if err := os.WriteFile(path, []byte("apiVersion: "+kind.GroupVersion().String()+"\nkind: "+kind.Kind+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		primaries = append(primaries, config.Primary{Kind: kind, Sample: path})
+	}
+	return primaries
 }
 
 func TestAPIMapTakesTheSystemsAPI(t *testing.T) {

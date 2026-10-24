@@ -209,16 +209,15 @@ type Model struct {
 	// A nil StuckStatus means Status, and an empty one means no fields.
 	Status, StuckStatus map[string]any
 	After               time.Duration
-	// Dependency is nil unless the readiness of the CRs that own objects of
-	// the kind depends on them.
+	// Dependency is nil unless the kind is a readiness dependency.
 	Dependency *Dependency
 }
 
-// Dependency marks a model kind, or a fake's resources, as ones whose
-// readiness their owning CR's readiness depends on.
+// Dependency marks a model kind or a fake as a readiness dependency of the
+// CRs that own its objects.
 type Dependency struct {
-	// Required demands at least one owned dependency when a CR of the first
-	// Primaries entry becomes Ready. It defaults to true.
+	// Required fails a CR of the first Primaries entry that becomes Ready
+	// while it owns none of the dependency's objects. It defaults to true.
 	Required bool
 	// Track, when set, fails a CR that stays Ready longer than Track after
 	// the controller read a not-ready dependency.
@@ -344,7 +343,8 @@ type declaredDependency struct {
 }
 
 // Load reads the file strictly: an unknown key is an error that names its
-// line. It compiles Ready and checks that every path exists.
+// line. It compiles each entry's expressions, checks that every path exists
+// and refuses a kube fixture of a listed kind.
 func Load(path string) (*Config, error) {
 	c, err := load(path)
 	if err != nil {
@@ -549,7 +549,7 @@ func primary(key string, declared declaredEntry, dir string, fakes []System) (Pr
 
 // fixtureKey matches a ${key} that kube expands in a fixture before it
 // parses the file.
-var fixtureKey = regexp.MustCompile(`\$\{[^}]*\}`)
+var fixtureKey = regexp.MustCompile(`\$\{[^}\n]*\}`)
 
 // refuseListedFixtures refuses a kube fixture of a listed kind. declared
 // are the fixtures as the config names them, and paths the files.
@@ -557,7 +557,7 @@ func refuseListedFixtures(declared, paths []string, listed []schema.GroupKind) e
 	for i, path := range paths {
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return err
+			return fmt.Errorf("fixtures %s: %w", declared[i], err)
 		}
 		data = fixtureKey.ReplaceAllLiteral(data, []byte("key"))
 		reader := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(data)))
@@ -577,7 +577,7 @@ func refuseListedFixtures(declared, paths []string, listed []schema.GroupKind) e
 				return fmt.Errorf("fixtures %s: %w", declared[i], err)
 			}
 			if kind := schema.FromAPIVersionAndKind(header.APIVersion, header.Kind).GroupKind(); slices.Contains(listed, kind) {
-				return fmt.Errorf("fixtures %s: the file holds a %s, which primaries lists; create CRs in a plan", declared[i], header.Kind)
+				return fmt.Errorf("fixtures %s: the file holds a %s CR; create CRs in a plan", declared[i], header.Kind)
 			}
 		}
 	}
@@ -709,10 +709,10 @@ func dependency(key string, declared *declaredDependency) (*Dependency, error) {
 	return dep, nil
 }
 
-func owns(primary string, entries []declaredOwns, fakes []System) ([]Owns, error) {
+func owns(entryKey string, entries []declaredOwns, fakes []System) ([]Owns, error) {
 	var owns []Owns
 	for i, declared := range entries {
-		key := fmt.Sprintf("%s.owns[%d]", primary, i)
+		key := fmt.Sprintf("%s.owns[%d]", entryKey, i)
 		if declared.Kind == "" {
 			return nil, fmt.Errorf("%s.kind is required", key)
 		}
@@ -937,7 +937,7 @@ func (c *Config) entry(cr map[string]any) (Primary, error) {
 			return p, nil
 		}
 	}
-	return Primary{}, fmt.Errorf("primaries lists no %s", gk)
+	return Primary{}, fmt.Errorf("primaries lists no kind %q of apiVersion %q", kind, apiVersion)
 }
 
 // Expand replaces each ${key} in s with vars[key]. An unknown key is an

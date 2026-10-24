@@ -441,7 +441,8 @@ func expandLaunch(l config.Launch, extra []string, systemVars map[string]map[str
 	return o, nil
 }
 
-// loadSamples reads each entry's sample, in config order.
+// loadSamples reads each entry's sample, in config order. A sample of
+// another kind than its entry's is an error.
 func loadSamples(primaries []config.Primary) ([]map[string]any, error) {
 	var samples []map[string]any
 	for _, p := range primaries {
@@ -452,6 +453,11 @@ func loadSamples(primaries []config.Primary) ([]map[string]any, error) {
 		var sample map[string]any
 		if err := yaml.Unmarshal(data, &sample); err != nil {
 			return nil, fmt.Errorf("loading sample %s: %w", p.Sample, err)
+		}
+		apiVersion, _ := sample["apiVersion"].(string)
+		kind, _ := sample["kind"].(string)
+		if got := schema.FromAPIVersionAndKind(apiVersion, kind).GroupKind(); got != p.Kind.GroupKind() {
+			return nil, fmt.Errorf("loading sample %s: it holds a %s, not a %s", p.Sample, got, p.Kind.GroupKind())
 		}
 		samples = append(samples, sample)
 	}

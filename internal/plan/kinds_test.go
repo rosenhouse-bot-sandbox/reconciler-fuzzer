@@ -45,9 +45,11 @@ func TestValidateKindsRefusesAnUnlistedKind(t *testing.T) {
 	}
 }
 
-func TestValidateKindsRefusesAnObjectWithoutKind(t *testing.T) {
-	p := &Plan{Steps: []Step{{Actions: []Action{{Do: Create, Slot: "a", Object: json.RawMessage(`{"apiVersion":"toy/v1","metadata":{"name":"c"}}`)}}}}}
-	if err := p.ValidateKinds([]schema.GroupKind{{Group: "toy", Kind: "Cluster"}}); err == nil || !strings.Contains(err.Error(), "no kind") {
-		t.Errorf("ValidateKinds = %v, want an error that says the object has no kind.", err)
+func TestValidateKindsRefusesAnObjectWithoutAPIVersionOrKind(t *testing.T) {
+	for _, object := range []string{`{"apiVersion":"toy/v1","metadata":{"name":"c"}}`, `{"kind":"Cluster","metadata":{"name":"c"}}`} {
+		p := &Plan{Steps: []Step{{Actions: []Action{{Do: Create, Slot: "a", Object: json.RawMessage(object)}}}}}
+		if err := p.ValidateKinds([]schema.GroupKind{{Group: "toy", Kind: "Cluster"}, {Kind: "Cluster"}}); err == nil || !strings.Contains(err.Error(), "without apiVersion or kind") {
+			t.Errorf("ValidateKinds of %s = %v, want an error that says the object lacks apiVersion or kind.", object, err)
+		}
 	}
 }

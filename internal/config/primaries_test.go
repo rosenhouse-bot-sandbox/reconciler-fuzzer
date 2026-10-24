@@ -158,14 +158,28 @@ func TestPrimariesRefusals(t *testing.T) {
 }
 
 func TestAFixtureOfAListedKindFails(t *testing.T) {
-	for _, c := range []struct{ config, fixture, kind string }{
-		{twoPrimaries, "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: settings}\n---\napiVersion: toy/v1\nkind: Database\nmetadata: {name: db}\n", "Database"},
-		{minimal(t), "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: settings}\n", "ConfigMap"},
+	for name, c := range map[string]struct{ config, fixture, kind string }{
+		"a second document":            {twoPrimaries, "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: settings}\n---\napiVersion: toy/v1\nkind: Database\nmetadata: {name: db}\n", "Database"},
+		"a kube kind":                  {minimal(t), "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: settings}\n", "ConfigMap"},
+		"after a ${ closed on no line": {twoPrimaries, "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: settings}\ndata:\n  a: ${\n---\napiVersion: toy/v1\nkind: Database\nmetadata: {name: db}\n", "Database"},
 	} {
 		path := writeFixture(t, c.config, c.fixture)
 		if _, err := config.Load(path); err == nil || !strings.Contains(err.Error(), "fixture.yaml") || !strings.Contains(err.Error(), c.kind) {
-			t.Errorf("Load = %v, want an error that names fixture.yaml and %s.", err, c.kind)
+			t.Errorf("%s: Load = %v, want an error that names fixture.yaml and %s.", name, err, c.kind)
 		}
+	}
+}
+
+func TestAFixtureThatDoesNotParseFails(t *testing.T) {
+	if _, err := config.Load(writeFixture(t, twoPrimaries, "- apiVersion: v1\n- kind: Secret\n")); err == nil || !strings.Contains(err.Error(), "fixtures fixture.yaml") {
+		t.Errorf("A list: Load = %v, want an error that names fixtures fixture.yaml.", err)
+	}
+	path := writeConfig(t, strings.Replace(twoPrimaries, "fixtures: [fixture.yaml]", "fixtures: [settings]", 1))
+	if err := os.Mkdir(filepath.Join(filepath.Dir(path), "settings"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err == nil || !strings.Contains(err.Error(), "fixtures settings") {
+		t.Errorf("A directory: Load = %v, want an error that names fixtures settings.", err)
 	}
 }
 
@@ -173,6 +187,20 @@ func TestAFixtureLoadsBeforeItsKeysExpand(t *testing.T) {
 	path := writeFixture(t, twoPrimaries, "apiVersion: v1\nkind: Secret\nmetadata: {name: token}\nstringData: {url: ${systems.kube.url}}\n")
 	if _, err := config.Load(path); err != nil {
 		t.Error(err)
+	}
+}
+
+func TestAnotherGroupsKindIsNotListed(t *testing.T) {
+	path := writeFixture(t, `launch: {binary: bin/controller, rbac: [role.yaml]}
+crds: [crd.yaml]
+primaries:
+  - {kind: toy/v1/Cluster, sample: sample.yaml, ready: "true"}
+  - {kind: other/v1/Cluster, sample: sample.yaml, ready: "true"}
+models: [{kind: model/v1/Cluster, after: 1s}]
+fixtures: [fixture.yaml]
+`, "apiVersion: fixture/v1\nkind: Cluster\nmetadata: {name: c}\n")
+	if _, err := config.Load(path); err != nil {
+		t.Errorf("Load = %v, want Clusters of four groups to load as two entries, a model and a fixture.", err)
 	}
 }
 
