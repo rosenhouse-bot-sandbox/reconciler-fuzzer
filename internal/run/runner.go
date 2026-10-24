@@ -182,8 +182,8 @@ func (s *stepRun) resume() error {
 	return s.Process.Supervise(true)
 }
 
-// deadline is the step's Deadline, given that its fault period ends at
-// endFaults.
+// deadline is the step's Deadline once its faults have stopped, given that
+// its fault period ends at endFaults.
 func (s *stepRun) deadline(endFaults time.Duration) (time.Duration, bool) {
 	return Deadline(endFaults, s.faultsStopped.Sub(s.start), s.maxPoll(s.step), s.Config.Timeouts)
 }

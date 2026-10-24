@@ -32,8 +32,9 @@ type Do string
 const (
 	// Create creates Object, or the sample when Object is empty. A create of
 	// a slot whose CR is still terminating waits until the name is free. Once
-	// Period has passed, the wait ends the step's faults, restarts a killed
-	// controller and lasts at most the settle timeout more.
+	// Period has passed, the wait ends the step's faults and restarts a killed
+	// controller. It then lasts as long as the step's deadline allows after
+	// the faults end.
 	Create Do = "create"
 	// Update merge-patches the slot's CR with Patch.
 	Update Do = "update"

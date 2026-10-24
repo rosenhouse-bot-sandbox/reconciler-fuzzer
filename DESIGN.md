@@ -188,9 +188,9 @@ answer. An answer the map's `Gone` accepts is `system.ErrGone`.
 ## 8. Plans
 
 An action's `do` is `create`, `update`, `delete` (optionally `Foreground`),
-`restart`, `kill` (the controller stays down until end faults), `damage` (of an
-instance the controller created) or `changeFixture` (of a fixture, on any
-system). `plan.go` documents each.
+`restart`, `kill` (the controller stays down until the step's faults end, §9),
+`damage` (of an instance the controller created) or `changeFixture` (of a
+fixture, on any system). `plan.go` documents each.
 
 A `target` has `system` (default `kube`), `group`, `resource`, `namespace`,
 `name`, `role` and `nth` (default 1). Empty fields match anything.
@@ -212,17 +212,17 @@ decodes strictly and validates each action's slot and fields (`plan.go`).
 every live CR, and step `planSteps + 1`, which restarts the controller (§17,
 entry 4).
 
-**Deadline.** `endFaults + settle + min(faults, backoffCap) + maxPoll`, where
-`faults` is how long the step's faults lasted and `maxPoll` is the longest poll
-interval of the systems the step's faults and `damage` and `changeFixture`
+**Deadline.** `endFaults + settle + min(faults, backoffCap) + maxPoll`. `faults`
+is the time from the step's start until its faults end. `maxPoll` is the longest
+poll interval of the systems the step's faults and `damage` and `changeFixture`
 actions name, and of every fake when the step creates, updates or deletes a CR.
 A fake's poll is its `poll`, by default `stable`. The runner gives a model
 fault to the first model or fake that `Takes` it; none is a harness error. A
-create into an emptied slot waits for its previous CR to go. Faults or a kill
-may hold it, so once `period` passes, the wait ends them and lasts at most
-`settle` more. A CR still there ends the plan after the step, with a note that
-names its `deletionTimestamp` and finalizers. Any other action error, except an
-unmatched target, is a harness error.
+create into an emptied slot waits until its previous CR is deleted. Once
+`period` has passed, the wait ends the step's faults, restarts a killed
+controller, and lasts `settle + min(faults, backoffCap) + maxPoll` more. A CR
+still there ends the plan after the step, with a note. Any other action error,
+except an unmatched target, is a harness error.
 
 ## 10. Settle condition
 

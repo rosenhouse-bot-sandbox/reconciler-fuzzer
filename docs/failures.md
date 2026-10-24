@@ -49,10 +49,14 @@ step the trace ended too early to judge, or an unmapped request. Notes do
 not fail a run. A fault that picked no request tested nothing, so a plan
 with such notes may need a different fault.
 
-A create waits for its slot's previous CR to go. Once the step's `period`
-passes, the wait ends the step's faults. A CR still there `timeouts.settle`
-later fails the create. The note names the CR's `deletionTimestamp` and
-finalizers, and the plan skips to its appended steps.
+`the slot's name is still taken 37s after the step's faults ended` means
+that a create gave up waiting for its slot's previous CR to be deleted. Once
+the step's `period` has passed, the wait ends the step's faults and restarts
+a killed controller. It then lasts as long as the step's deadline allows
+after the faults end (DESIGN.md §9). The rest of the note names the
+`deletionTimestamp` and finalizers that the CR last showed, or says that a
+CR that is not being deleted has the name. The run then skips to the two
+steps that the runner appends.
 
 `cloud: unmapped request POST /v2/buckets/b-1/acl` means the system's API
 map could not place a controller request on a resource. No check judges
