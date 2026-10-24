@@ -142,7 +142,8 @@ values: {fixtures: {settings.yaml: [data.theme]}}   # with primaries, only fixtu
 
 - Every check judges the CRs of each listed kind by their own entry, and the settle condition
   waits for each. A CR that the controller creates is also judged as its owner's resource, so
-  Clean fails it when it outlives that owner.
+  Clean fails it when it outlives that owner. Restore treats a damage under such a CR as a
+  damage under its owner.
 - A plan creates only CRs of listed kinds, and `run` refuses any other create. A create
   without an object makes the first entry's sample.
 - Generated plans draw each create's kind from the list. They do not yet fill a field that
@@ -150,9 +151,10 @@ values: {fixtures: {settings.yaml: [data.theme]}}   # with primaries, only fixtu
   [targets/toy-fleet](targets/toy-fleet)'s `database/config.yaml` lists only Database, and
   makes the Cluster it names a fixture.
 - A fixture may not be a CR. An object whose ownerReferences lead to no CR, but name a live
-  object that is not a CR, such as a fixture, belongs to that object. `owner` and `owns` do not
-  change this. Clean skips such an object while its owner lives.
-- `dependency.required` binds only CRs of the first entry.
+  object that the controller did not create, such as a fixture, belongs to that object. `owner`
+  and `owns` do not change this. Clean skips such an object while its owner lives.
+- A dependency belongs to the nearest CR that owns it, even one that the controller created.
+  `dependency.required` binds only CRs of the first entry.
 
 ### Other namespaces and cluster scope
 

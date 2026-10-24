@@ -162,8 +162,9 @@ Fill each key from the project:
   reads. Add `dependency` when a CR's readiness waits on it and the CR owns it: through
   ownerReferences, directly or through owned objects, or by `owns` or `owner`. Honest judges only such
   dependencies, so leave `dependency` off a kind the CR names by reference, such as an
-  issuer or a store. `required: false` allows a CR to be ready with none. `required` binds only
-  CRs of the first entry, so list first the kind that owns the dependency. A config that does
+  issuer or a store. A dependency belongs only to the nearest CR that owns it, even one that
+  the controller created. `required: false` allows a CR to be ready with none. `required` binds
+  only CRs of the first entry, so list first the kind of that nearest CR. A config that does
   not list that kind leaves `dependency` out. Set `track` when the
   controller should notice a dependency going not ready. `status:` adds literal fields to each
   status write the model makes; it replaces the whole `conditions` list. `stuckStatus:`

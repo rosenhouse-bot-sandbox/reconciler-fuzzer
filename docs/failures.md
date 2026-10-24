@@ -113,17 +113,20 @@ clause 4 findings follow from it.
 A controller resource outlived its owning CR. Each line names the
 resource, the owner rule of DESIGN.md §11 that tied it to a CR (1:
 ownerReferences; 2: `systems[].owner`; 3: an entry's `owns`; 4: the CRs
-live at its creation), and that CR's slot:
+live at its creation), and that CR's slot. A CR that the controller
+created has no slot, so the line names its kind and name instead:
 
 ```
 configmaps rf-9485af8b/widget-0 (rule 4, slot a)
 buckets buckets-1 (rule 2, slot a)
+configmaps rf-9485af8b/db-0 (rule 1, CR databases.example.com rf-9485af8b/db)
 ```
 
 A rule 4 line usually means the resource lacks an ownerReference, so
-garbage collection could not delete it. Its ownerReferences may also name
-only objects that the trace never saw, or gone objects that lead to no CR.
-While one names a live object that is not a CR, such as a fixture, Clean
+garbage collection could not delete it. Its ownerReferences may also lead
+to no CR: they name only objects that the trace never saw, gone objects,
+or objects that the controller made. While one names a live object that is
+not a CR and that the controller did not create, such as a fixture, Clean
 skips the resource. A rule 1 line on a cluster-scoped resource with a
 namespaced owner means garbage collection ignores that invalid
 ownerReference. A rule 2 or 3 line usually means a finalizer forgot the
@@ -143,7 +146,8 @@ from the previous step's end.
   names the fields that differ.
 
 Each line names its resource's owner as Clean does. `rule 1, unlisted
-owner` names the live object, not a CR, that an ownerReference names.
+owner` names the live object, not a CR, that an ownerReference names and
+that the controller did not create.
 
 ### Unique: duplicate resources
 
@@ -156,7 +160,8 @@ A CR reported ready while a dependency was not, as the controller's own
 reads showed it. A dependency stops counting once the controller sends a
 successful `delete` of it, and while the controller last saw it deleted.
 A `deletecollection` or an owner's cascade is not such a `delete`. Each
-line names the CR's slot and the dependency:
+line names the CR, by its slot or else by its kind and name, and the
+dependency:
 
 - `reported ready before seeing its dependency ready`: `not seen` means
   the controller never read the dependency after its last write to it;

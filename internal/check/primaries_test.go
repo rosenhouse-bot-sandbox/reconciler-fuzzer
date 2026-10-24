@@ -370,12 +370,35 @@ func TestCleanFailsALeakedChildOfAnOwnerTheControllerMade(t *testing.T) {
 }
 
 func TestHonestNamesACRWithoutASlotByItsKindAndName(t *testing.T) {
-	r := fleetRun(1, clusters, databases)
-	r.Spec.Models = []trace.Model{{Kind: gadgets, Ready: config.ReadyConditionCEL, Dependency: &trace.Dependency{}}}
-	r.Begin()
-	uid := r.CreateCR("a", clusterA)
-	r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", false), uid, true))
-	r.Create(ctl, gadgetA, tt.OwnedBy(tt.ReadyCondition("a", 1, false), r.UID(databaseB), true))
-	r.Update(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), uid, true))
-	requireFinding(t, honest(t, r), "Honest", 0, beforeSeeing, "kube/toy/gadgets", "CR databases.toy ns/b: gadgets.toy ns/a")
+	gadget := func(r *tt.Script, ready bool) map[string]any {
+		return tt.OwnedBy(tt.ReadyCondition("a", 1, ready), r.UID(databaseB), true)
+	}
+	for summary, c := range map[string]struct {
+		dependency   trace.Dependency
+		script       func(r *tt.Script, readyB func())
+		kind, detail string
+	}{
+		beforeSeeing: {trace.Dependency{}, func(r *tt.Script, readyB func()) {
+			r.Create(ctl, gadgetA, gadget(r, false))
+			readyB()
+		}, "kube/toy/gadgets", "CR databases.toy ns/b: gadgets.toy ns/a"},
+		noDependency: {trace.Dependency{Required: true}, func(_ *tt.Script, readyB func()) { readyB() },
+			"kube/toy/databases", "CR databases.toy ns/b"},
+		stayedReady: {trace.Dependency{Track: 500 * ms}, func(r *tt.Script, readyB func()) {
+			r.Create(ctl, gadgetA, gadget(r, false))
+			r.Update(gadgetModel, gadgetA, gadget(r, true)).See(ctl, gadgetA)
+			readyB()
+			r.Update(gadgetModel, gadgetA, gadget(r, false)).See(ctl, gadgetA)
+		}, "kube/toy/gadgets", "CR databases.toy ns/b: gadgets.toy ns/a seen not ready"},
+	} {
+		t.Run(summary, func(t *testing.T) {
+			r := fleetRun(1, databases, clusters)
+			r.Spec.Models = []trace.Model{{Kind: gadgets, Ready: config.ReadyConditionCEL, Dependency: &c.dependency}}
+			r.Begin()
+			uid := r.CreateCR("a", clusterA)
+			r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", false), uid, true))
+			c.script(r, func() { r.Update(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), uid, true)) })
+			requireFinding(t, honest(t, r), "Honest", 0, summary, c.kind, c.detail)
+		})
+	}
 }

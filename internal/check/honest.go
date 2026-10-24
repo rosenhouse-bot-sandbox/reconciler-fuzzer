@@ -96,11 +96,11 @@ func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, d
 		for _, m := range deps {
 			owned := h.dependencies(uid, m, t0)
 			if len(owned) == 0 && m.Dependency.Required && requires {
-				h.add(t0, noDependency, kind(v.Ref), h.slot(uid))
+				h.add(t0, noDependency, kind(v.Ref), crName(h.w, uid))
 			}
 			for _, dep := range owned {
 				if why := h.unseen(dep, m, t0); why != "" {
-					h.add(t0, beforeSeeing, kind(dep.Ref), fmt.Sprintf("%s: %s %s", h.slot(uid), describe(dep.Ref), why))
+					h.add(t0, beforeSeeing, kind(dep.Ref), fmt.Sprintf("%s: %s %s", crName(h.w, uid), describe(dep.Ref), why))
 				}
 			}
 		}
@@ -258,7 +258,7 @@ func (h *honesty) judgeTrack(uid string, p Primary, versions []trace.Event, deps
 				if cr, named := h.w.Owner(dep, seen.At).Named(); !named || cr != uid {
 					continue
 				}
-				h.add(at, stayedReady, kind(dep.Ref), fmt.Sprintf("%s: %s seen not ready at %v", h.slot(uid), describe(dep.Ref), seen.At))
+				h.add(at, stayedReady, kind(dep.Ref), fmt.Sprintf("%s: %s seen not ready at %v", crName(h.w, uid), describe(dep.Ref), seen.At))
 				break
 			}
 		}
@@ -319,8 +319,6 @@ func readyThrough(p Primary, versions []trace.Event, from, to time.Duration) boo
 	}
 	return current
 }
-
-func (h *honesty) slot(uid string) string { return crName(h.w, uid) }
 
 // add adds a detail to the finding of t's step, summary and kind.
 func (h *honesty) add(t time.Duration, summary, kind, detail string) {

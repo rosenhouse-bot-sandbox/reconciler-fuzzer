@@ -272,3 +272,20 @@ func TestRestoreNamesACRWithoutASlotByItsKindAndName(t *testing.T) {
 	r.EndFaults().Settle()
 	requireFinding(t, restore(t, r), "Restore", 1, "changed resources", "kube/configmaps", "configmaps ns/b-0 (rule 1, CR databases.toy ns/b): data")
 }
+
+func TestRestoreLetsARule4ResourceOfADamagedRootChange(t *testing.T) {
+	clusterC, shared := tt.Ref("toy/clusters", "ns", "c"), tt.Ref("configmaps", "ns", "x")
+	r := fleetRun(2, clusters, databases)
+	r.Begin()
+	uid := r.CreateCR("a", clusterA)
+	r.CreateCR("c", clusterC)
+	r.Create(ctl, shared, tt.Object("x"))
+	r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), uid, true))
+	r.Create(ctl, childB, tt.OwnedBy(tt.Object("b-0"), r.UID(databaseB), true))
+	r.Ready(clusterA).Ready(clusterC).EndFaults().Settle()
+	r.Begin().Delete(trace.Harness, childB).Act("damage", "a", &childB).EndFaults()
+	r.Create(ctl, childB, tt.OwnedBy(tt.Object("b-0"), r.UID(databaseB), true))
+	r.Update(ctl, shared, named("x", map[string]any{"data": "new"}))
+	r.Settle()
+	requireNone(t, restore(t, r))
+}
