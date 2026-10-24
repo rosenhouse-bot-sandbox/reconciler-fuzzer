@@ -23,8 +23,8 @@ const shortestPeriod = plan.Duration(500 * time.Millisecond)
 // Candidates returns the plans one greedy pass may try in place of p, in
 // pass order: drop a step, drop an action or fault, halve a fault period
 // (or clear the period of a step without faults), reset a spec field to its
-// value in the sample of the CR's kind, merge two slots. samples are the
-// entries' samples. Every candidate is valid.
+// value in the sample of the CR's kind, merge two slots. Every candidate is
+// valid.
 func Candidates(p *plan.Plan, samples []map[string]any) []*plan.Plan {
 	var valid []*plan.Plan
 	try := func(change func(c *plan.Plan)) {

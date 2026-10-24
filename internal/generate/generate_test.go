@@ -2,8 +2,8 @@ package generate
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -63,14 +63,14 @@ func drawPlans(t *testing.T, g *Generator, n int) []*plan.Plan {
 }
 
 // example is draw's value for seed. A draw that panics fails the test,
-// where rapid's Example, and so Plan, would hide it by drawing again.
+// where rapid's Example, and so Plan, would hide it by drawing again. Only
+// rapid's invalidData, which asks for another draw, is no failure.
 func example[V any](t *testing.T, seed int, draw func(*rapid.T) V) V {
 	t.Helper()
 	return rapid.Custom(func(rt *rapid.T) V {
 		defer func() {
 			if r := recover(); r != nil {
-				switch r.(type) {
-				case string, runtime.Error:
+				if fmt.Sprintf("%T", r) != "rapid.invalidData" {
 					t.Errorf("Seed %d's draw panics: %v", seed, r)
 				}
 				panic(r)

@@ -17,7 +17,7 @@ import (
 
 const toyConfig = "../../targets/toy-widget/config.yaml"
 
-var samples = []map[string]any{{"metadata": map[string]any{"name": "widget"}, "spec": map[string]any{"count": 3, "mode": "fast"}}}
+var samples = []map[string]any{{"apiVersion": "toy.reconciler-fuzzer/v1", "kind": "Widget", "metadata": map[string]any{"name": "widget"}, "spec": map[string]any{"count": 3, "mode": "fast"}}}
 
 func parsePlan(t *testing.T, text string) *plan.Plan {
 	t.Helper()
@@ -48,7 +48,10 @@ func encodedAll(t *testing.T, plans []*plan.Plan) []string {
 	return all
 }
 
-const create = `{"do":"create","slot":"a","object":{"metadata":{"name":"widget"},"spec":{"count":5,"mode":"fast"}}}`
+const (
+	widget = `"apiVersion":"toy.reconciler-fuzzer/v1","kind":"Widget"`
+	create = `{"do":"create","slot":"a","object":{` + widget + `,"metadata":{"name":"widget"},"spec":{"count":5,"mode":"fast"}}}`
+)
 
 func TestCandidatesDropEachStepThatLeavesAValidPlan(t *testing.T) {
 	p := parsePlan(t, `{"steps":[{"actions":[`+create+`]},{"actions":[{"do":"restart"}]},{"actions":[{"do":"delete","slot":"a"}]}]}`)
@@ -120,20 +123,14 @@ func TestCandidatesHalvePeriodsAndOffsetsDownToHalfASecond(t *testing.T) {
 }
 
 func TestCandidatesResetEachSpecFieldOfACreateToTheSample(t *testing.T) {
-	p := parsePlan(t, `{"steps":[{"actions":[{"do":"create","slot":"a","object":{"metadata":{"name":"w"},"spec":{"count":5,"extra":{"x":1}}}}]}]}`)
-	var objects []string
-	for _, c := range Candidates(p, samples) {
-		if len(c.Steps) == 1 {
-			objects = append(objects, string(c.Steps[0].Actions[0].Object))
-		}
-	}
+	p := parsePlan(t, `{"steps":[{"actions":[{"do":"create","slot":"a","object":{`+widget+`,"metadata":{"name":"w"},"spec":{"count":5,"extra":{"x":1}}}}]}]}`)
 	want := []string{
-		`{"metadata":{"name":"w"},"spec":{"count":3,"extra":{"x":1}}}`,
-		`{"metadata":{"name":"w"},"spec":{"count":5}}`,
-		`{"metadata":{"name":"w"},"spec":{"count":5,"extra":{"x":1},"mode":"fast"}}`,
+		`{` + widget + `,"metadata":{"name":"w"},"spec":{"count":3,"extra":{"x":1}}}`,
+		`{` + widget + `,"metadata":{"name":"w"},"spec":{"count":5}}`,
+		`{` + widget + `,"metadata":{"name":"w"},"spec":{"count":5,"extra":{"x":1},"mode":"fast"}}`,
 	}
-	if !slices.Equal(objects, want) {
-		t.Errorf("Resets are %v, want %v.", objects, want)
+	if got := creates(t, p, samples); !slices.Equal(got, want) {
+		t.Errorf("Resets are %v, want %v.", got, want)
 	}
 }
 
@@ -142,7 +139,7 @@ var fleetSamples = []map[string]any{
 	{"apiVersion": "toy.reconciler-fuzzer/v1", "kind": "Database", "metadata": map[string]any{"name": "app"}, "spec": map[string]any{"engine": "postgres"}},
 }
 
-// creates are the object of each candidate that keeps p's one create.
+// creates are the objects of the candidates that keep p's one create.
 func creates(t *testing.T, p *plan.Plan, samples []map[string]any) []string {
 	t.Helper()
 	var objects []string

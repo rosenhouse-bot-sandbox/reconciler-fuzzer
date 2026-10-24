@@ -93,16 +93,16 @@ func New(cfg *config.Config) (*Generator, error) {
 
 func build(cfg *config.Config) (*Generator, error) {
 	g := &Generator{listed: cfg.ListedKinds(), stable: cfg.Timeouts.Stable, granted: map[gvk.GroupResource][]string{}, modelFakes: map[string]bool{}, readOnly: map[string]bool{}}
-	for _, p := range cfg.Primaries {
+	for i, p := range cfg.Primaries {
 		k, err := newCRKind(cfg.CRDs, p)
-		if err != nil && len(cfg.Primaries) > 1 {
-			err = fmt.Errorf("%s: %w", p.Kind.Kind, err)
-		}
 		if err != nil {
+			if len(cfg.Primaries) > 1 {
+				err = fmt.Errorf("primaries[%d]: %w", i, err)
+			}
 			return nil, err
 		}
 		g.kinds = append(g.kinds, k)
-		g.addResource(k.resource)
+		g.resources = append(g.resources, k.resource)
 		for _, o := range p.Owns {
 			if o.System == "" {
 				gvr, _ := meta.UnsafeGuessKindToResource(o.Kind)
@@ -459,13 +459,18 @@ func (g *Generator) burst(t *rapid.T, at state) []plan.Action {
 	return within50ms(t, []plan.Action{g.delete(t, at, slot), g.createOf(t, at, slot, k)})
 }
 
-// holdTraffic is the action a holdWatch takes: a live CR, of the held kind
-// when one is, deleted and created again as it was within 50 ms, which a
-// stale cache can mistake for the old CR, or else a create.
+// holdTraffic is the action a holdWatch takes: a live CR deleted and created
+// again as it was within 50 ms, which a stale cache can mistake for the old
+// CR. It takes a CR of the held kind if one is live. Otherwise a hold of a
+// listed kind creates a CR of that kind in a free slot. Failing that, it
+// takes any live CR, or else a create.
 func (g *Generator) holdTraffic(t *rapid.T, at state, f plan.Fault) []plan.Action {
+	gr := gvk.GroupResource{Group: f.Match.Group, Resource: f.Match.Resource}
 	live := at.live()
-	if held := g.ofResource(at, live, gvk.GroupResource{Group: f.Match.Group, Resource: f.Match.Resource}); len(held) > 0 {
+	if held := g.ofResource(at, live, gr); len(held) > 0 {
 		live = held
+	} else if i := slices.IndexFunc(g.kinds, func(k *crKind) bool { return k.resource == gr }); i >= 0 && len(at.free()) > 0 {
+		return []plan.Action{g.createOf(t, at, sampled(t, at.free(), "slot"), g.kinds[i])}
 	}
 	if len(live) == 0 {
 		return []plan.Action{g.create(t, at, sampled(t, at.free(), "slot"))}

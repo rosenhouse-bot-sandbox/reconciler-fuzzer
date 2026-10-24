@@ -128,7 +128,7 @@ func fleetState(g *Generator) state {
 }
 
 // slotsOf are the slots whose CR 20 draws of traffic first update or
-// delete, or the other actions it first takes.
+// delete, the kinds it first creates, or the other actions it first takes.
 func slotsOf(t *testing.T, at state, traffic func(*rapid.T, state) []plan.Action) []string {
 	t.Helper()
 	var slots []string
@@ -140,6 +140,8 @@ func slotsOf(t *testing.T, at state, traffic func(*rapid.T, state) []plan.Action
 		switch first := drawn[0]; first.Do {
 		case plan.Update, plan.Delete:
 			slots = append(slots, first.Slot)
+		case plan.Create:
+			slots = append(slots, fmt.Sprint("create ", decode(t, first.Object)["kind"]))
 		default:
 			slots = append(slots, string(first.Do))
 		}
@@ -167,9 +169,10 @@ func TestARequestFaultOnAListedKindComesWithAnUpdateOfThatKind(t *testing.T) {
 	}
 }
 
-func TestAHoldWatchOfAListedKindRecreatesACROfThatKind(t *testing.T) {
+func TestAHoldWatchOfAListedKindRecreatesOrCreatesACROfThatKind(t *testing.T) {
 	g := newGenerator(t, loadConfig(t, fleetConfig))
-	onlyDatabase := state{"b": g.kinds[1].base("b").Object}
+	database := g.kinds[1].base("b").Object
+	databases := state{"a": g.kinds[1].base("a").Object, "b": database, "c": g.kinds[1].base("c").Object}
 	for _, c := range []struct {
 		group, resource string
 		at              state
@@ -177,7 +180,11 @@ func TestAHoldWatchOfAListedKindRecreatesACROfThatKind(t *testing.T) {
 	}{
 		{"toy.reconciler-fuzzer", "clusters", fleetState(g), []string{"a"}},
 		{"toy.reconciler-fuzzer", "databases", fleetState(g), []string{"b"}},
-		{"toy.reconciler-fuzzer", "clusters", onlyDatabase, []string{"b"}},
+		{"toy.reconciler-fuzzer", "clusters", state{"b": database}, []string{"create Cluster"}},
+		{"toy.reconciler-fuzzer", "databases", state{}, []string{"create Database"}},
+		{"toy.reconciler-fuzzer", "clusters", databases, []string{"a", "b", "c"}},
+		{"toy.reconciler-fuzzer", "users", fleetState(g), []string{"a", "b"}},
+		{"toy.reconciler-fuzzer", "users", state{}, []string{"create Cluster", "create Database"}},
 		{"", "configmaps", fleetState(g), []string{"a", "b"}},
 	} {
 		f := plan.Fault{Match: plan.Match{Group: c.group, Resource: c.resource}, HoldWatch: true}
@@ -258,17 +265,17 @@ func TestPlanRefusesACreateOfAKindTheConfigDoesNotList(t *testing.T) {
 	t.Error("Plan accepts 50 plans, though the config lists no Database.")
 }
 
-func TestWithSeveralKindsNotesAndErrorsNameTheKind(t *testing.T) {
-	rules := loadConfig(t, rulesConfig)
-	for _, note := range newGenerator(t, rules).LeftAlone() {
+func TestWithSeveralKindsNotesNameTheKindAndErrorsTheEntry(t *testing.T) {
+	one := loadConfig(t, rulesConfig)
+	for _, note := range newGenerator(t, one).LeftAlone() {
 		if !strings.HasPrefix(note, "generation leaves spec.") {
 			t.Errorf("With one kind, LeftAlone notes %q.", note)
 		}
 	}
-	cfg := loadConfig(t, fleetConfig)
-	cfg.CRDs = append(cfg.CRDs, rules.CRDs...)
-	cfg.Primaries = append(cfg.Primaries, rules.Primaries[0])
-	notes := newGenerator(t, cfg).LeftAlone()
+	several := loadConfig(t, fleetConfig)
+	several.CRDs = append(several.CRDs, one.CRDs...)
+	several.Primaries = append(several.Primaries, one.Primaries[0])
+	notes := newGenerator(t, several).LeftAlone()
 	for _, note := range notes {
 		if !strings.HasPrefix(note, "Gadget: generation leaves spec.") {
 			t.Errorf("With several kinds, LeftAlone notes %q.", note)
@@ -277,9 +284,18 @@ func TestWithSeveralKindsNotesAndErrorsNameTheKind(t *testing.T) {
 	if len(notes) != 2 {
 		t.Errorf("LeftAlone notes %q, want spec.right and spec.surge.", notes)
 	}
-	cfg.Primaries[1].Values.Mutate = []string{"spec.nonesuch"}
-	if _, err := New(cfg); err == nil || !strings.Contains(err.Error(), "Database: values.mutate spec.nonesuch") {
-		t.Errorf("New returned %v, want an error that names the Database's values.mutate.", err)
+	for _, c := range []struct {
+		cfg   *config.Config
+		entry int
+		want  string
+	}{
+		{one, 0, "generating plans: values.mutate spec.nonesuch"},
+		{several, 1, "generating plans: primaries[1]: values.mutate spec.nonesuch"},
+	} {
+		c.cfg.Primaries[c.entry].Values.Mutate = []string{"spec.nonesuch"}
+		if _, err := New(c.cfg); err == nil || !strings.HasPrefix(err.Error(), c.want) {
+			t.Errorf("New returned %v, want an error that starts %q.", err, c.want)
+		}
 	}
 }
 
