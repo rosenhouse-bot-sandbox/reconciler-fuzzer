@@ -129,6 +129,10 @@ type Match struct {
 	Name        string `json:"name,omitempty"`
 }
 
+// NoSubresource as a Match's Subresource matches only a request without a
+// subresource, such as an update and not a status update.
+const NoSubresource = "-"
+
 // Error answers a request with a Status of Code.
 type Error struct {
 	Code       int      `json:"code"`
