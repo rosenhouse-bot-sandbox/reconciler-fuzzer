@@ -22,7 +22,7 @@ var cloud = trace.System{Name: "cloud", API: "crud", Role: "self.tags.role", Gon
 
 func compileSystems(t *testing.T, owners map[string]string, owns []trace.Owns, systems ...trace.System) owner.Rules {
 	t.Helper()
-	rules, err := owner.Compile(owners, owns, systems)
+	rules, err := owner.Compile(owners, []trace.Primary{{Kind: widgets, Owns: owns}}, systems)
 	if err != nil {
 		t.Fatal(err)
 	}

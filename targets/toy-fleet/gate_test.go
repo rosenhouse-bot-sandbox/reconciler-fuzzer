@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 )
 
@@ -35,6 +36,29 @@ func TestEveryPlanLoads(t *testing.T) {
 		for _, name := range names {
 			if _, err := plan.Load(planPath(config, name)); err != nil {
 				t.Errorf("%v", err)
+			}
+		}
+	}
+}
+
+func TestEveryPlanCreatesOnlyListedKinds(t *testing.T) {
+	t.Skip("enabled by the toy-fleet package")
+	for _, path := range configs {
+		c, err := config.Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		names, err := plans(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range names {
+			p, err := plan.Load(planPath(path, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := p.ValidateKinds(c.ListedKinds()); err != nil {
+				t.Errorf("%s under %s: %v", name, path, err)
 			}
 		}
 	}

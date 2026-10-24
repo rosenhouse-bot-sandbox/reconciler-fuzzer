@@ -125,7 +125,7 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 		if err := s.addSystems(systems); err != nil {
 			return Spec{}, fmt.Errorf("the config's systems: %w", err)
 		}
-		if s.Owners, err = owner.Compile(owners, owns, systems); err != nil {
+		if s.Owners, err = owner.Compile(owners, []trace.Primary{{Kind: trace.Kind{Group: s.PrimaryGroup, Resource: s.PrimaryResource}, Owns: owns}}, systems); err != nil {
 			return Spec{}, fmt.Errorf("the config's owners: %w", err)
 		}
 		if s.Properties, err = compileProperties(owner.Properties(c)); err != nil {
@@ -162,7 +162,7 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 	if err := s.addSystems(run.Systems); err != nil {
 		return Spec{}, fmt.Errorf("the trace's systems: %w", err)
 	}
-	if s.Owners, err = owner.Compile(run.Owners, run.Owns, run.Systems); err != nil {
+	if s.Owners, err = owner.Compile(run.Owners, []trace.Primary{{Kind: trace.Kind{Group: s.PrimaryGroup, Resource: s.PrimaryResource}, Owns: run.Owns}}, run.Systems); err != nil {
 		return Spec{}, fmt.Errorf("the trace's owners: %w", err)
 	}
 	if s.Properties, err = compileProperties(run.Properties); err != nil {

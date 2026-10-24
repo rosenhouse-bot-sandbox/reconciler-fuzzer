@@ -311,8 +311,8 @@ next step's start, or the trace's last event.
 resource fails when its rule 1 to 3 CR is gone, or its rule-4 set is non-empty
 and every CR in it is gone. At the end of step `planSteps + 1`, every unshared
 controller resource fails. Its CRs' `retain` allows a resource. Shared resources
-are judged only for growth since the first `create`. Summary: `left resources
-behind`.
+are judged only for growth since the first `create`, and those of an unlisted
+owner not at all. Summary: `left resources behind`.
 
 **Restore.** It judges a settled step with no `create`, `update`, `delete` or
 `changeFixture` action after a settled step, comparing the controller's
@@ -332,9 +332,9 @@ observedGeneration while `ready`, its last `seen` of each dependency must show
 its last write's version or a later one, which its `ready` accepts: `reported
 ready before seeing its dependency ready`. With `required`, a CR of the first
 `primaries` entry needs a dependency of each kind: `reported ready with no
-dependency` (entry 81). With `track: d`,
-a CR fails that stays `ready` `d` after the controller saw a dependency not
-ready: `stayed ready after seeing its dependency not ready`.
+dependency` (entry 81). With `track: d`, a CR fails that stays `ready` `d` after
+the controller saw a dependency not ready: `stayed ready after seeing its
+dependency not ready`.
 
 **Backoff.** Failing controller calls with one system, verb, object,
 subresource and status form a **run**; a create's object is its `requestName`.

@@ -66,16 +66,18 @@ type Rules struct {
 	Gone  map[string]func(self map[string]any) (bool, error)
 }
 
-// OwnsRule is one primary.owns entry over a CR's body.
+// OwnsRule is one owns entry over the body of a CR of its entry's kind.
 type OwnsRule struct {
 	System, Group, Resource string
-	Name                    func(cr map[string]any) (string, error)
+	// CRGroup and CRResource name the entry's kind.
+	CRGroup, CRResource string
+	Name                func(cr map[string]any) (string, error)
 	// Namespace is nil when unset: the CR's namespace, or cluster-scoped.
 	Namespace func(cr map[string]any) (string, error)
 }
 
-// Compile builds Rules from a Run event's owners, owns and systems.
-func Compile(owners map[string]string, owns []trace.Owns, systems []trace.System) (Rules, error) {
+// Compile builds Rules from a Run event's owners, primaries and systems.
+func Compile(owners map[string]string, primaries []trace.Primary, systems []trace.System) (Rules, error) {
 	rules := Rules{
 		Owners: map[string]func(map[string]any) (string, error){},
 		Roles:  map[string]func(map[string]any) (string, error){},
@@ -101,18 +103,20 @@ func Compile(owners map[string]string, owns []trace.Owns, systems []trace.System
 			}
 		}
 	}
-	for _, o := range owns {
-		rule := OwnsRule{System: cmp.Or(o.System, "kube"), Group: o.Kind.Group, Resource: o.Kind.Resource}
-		var err error
-		if rule.Name, err = config.CompileString(o.Name); err != nil {
-			return Rules{}, fmt.Errorf("owns %s name: %w", o.Kind.Kind, err)
-		}
-		if o.Namespace != "" {
-			if rule.Namespace, err = config.CompileString(o.Namespace); err != nil {
-				return Rules{}, fmt.Errorf("owns %s namespace: %w", o.Kind.Kind, err)
+	for _, p := range primaries {
+		for _, o := range p.Owns {
+			rule := OwnsRule{System: cmp.Or(o.System, "kube"), Group: o.Kind.Group, Resource: o.Kind.Resource, CRGroup: p.Kind.Group, CRResource: p.Kind.Resource}
+			var err error
+			if rule.Name, err = config.CompileString(o.Name); err != nil {
+				return Rules{}, fmt.Errorf("owns %s name: %w", o.Kind.Kind, err)
 			}
+			if o.Namespace != "" {
+				if rule.Namespace, err = config.CompileString(o.Namespace); err != nil {
+					return Rules{}, fmt.Errorf("owns %s namespace: %w", o.Kind.Kind, err)
+				}
+			}
+			rules.Owns = append(rules.Owns, rule)
 		}
-		rules.Owns = append(rules.Owns, rule)
 	}
 	return rules, nil
 }
