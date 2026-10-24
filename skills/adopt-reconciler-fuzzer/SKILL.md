@@ -218,7 +218,12 @@ systems:
 - `properties: [{name, expr, when}]` holds CEL that must hold at each settled step's end, or at
   every version with `when: always`. It sees `crs` and `world.<system>.<key>`, such as
   `world.kube.secrets`. Write one when the user names an invariant the checks cannot know, such
-  as "the Secret holds Vault's current value". Ask the user before adding one.
+  as "the Secret holds Vault's current value". Ask the user before adding one. A property needs
+  no `'k' in world.<system>` guard for a kind that always has a key. An installed CRD always
+  has one, as does each kind that `primary`, `models` or a fixture names. A kind that a
+  `launch.rbac` rule names without `*`, other than Events and Leases, has one if the server
+  lists and watches it in the rule's group. A fake collection that `primary.owns` names has one
+  too. Guard any other kind or collection.
 - `primary.periodic: {every, paths}` names the CR fields the controller rewrites on a timer,
   such as `status.refreshTime`, or `status.conditions[*].lastTransitionTime` for a field of
   every list item. Name the narrowest path: a broader one also excuses real flapping. Without

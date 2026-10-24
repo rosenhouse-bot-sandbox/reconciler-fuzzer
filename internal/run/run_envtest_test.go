@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -87,6 +88,51 @@ timeouts: {settle: 10s, stable: 1s}
 	}
 	if systems != 1 || injected != 1 || stuck != 2 {
 		t.Errorf("the trace holds %d runs naming cloud, %d injected 503s and %d stuck events, want 1, 1 and 2", systems, injected, stuck)
+	}
+}
+
+// TestAPropertyOverAnInstalledCRDWithNoObjectHolds runs a property over the
+// toy's grants CRD, which the run event in trace.jsonl lists in kinds. The
+// controller only lists widgets, so no Grant exists.
+func TestAPropertyOverAnInstalledCRDWithNoObjectHolds(t *testing.T) {
+	toyDir, err := filepath.Abs(toy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	config := fmt.Sprintf(`launch:
+  binary: /bin/sh
+  args: [-c, 'while true; do curl -sf ${systems.kube.url}/apis/toy.reconciler-fuzzer/v1/widgets >/dev/null; sleep 1; done']
+  rbac: [%[1]s/rbac/role.yaml]
+crds: [%[1]s/crds/]
+primary:
+  kind: toy.reconciler-fuzzer/v1/Widget
+  sample: %[1]s/widget.yaml
+  ready: "true"
+timeouts: {settle: 10s, stable: 1s}
+properties:
+  - name: no-stuck-grants
+    expr: "world.kube['grants.toy.reconciler-fuzzer'].all(g, !has(g.metadata.deletionTimestamp))"
+`, toyDir)
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{{Do: plan.Create, Slot: "a"}}}}}
+	out := filepath.Join(dir, "out")
+	report, err := Run(context.Background(), Options{ConfigPath: filepath.Join(dir, "config.yaml"), Plan: p, Out: out})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Findings) > 0 {
+		t.Errorf("findings %+v, want none", report.Findings)
+	}
+	events, err := trace.Load(filepath.Join(out, "trace.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	grants := trace.Ref{System: "kube", Group: "toy.reconciler-fuzzer", Resource: "grants"}
+	if i := slices.IndexFunc(events, func(e trace.Event) bool { return e.Run != nil }); i < 0 || !slices.Contains(events[i].Run.Kinds, grants) {
+		t.Errorf("the trace's run event does not list grants in kinds")
 	}
 }
 
