@@ -3,7 +3,6 @@ package owner_test
 import (
 	"reflect"
 	"testing"
-	"time"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/owner"
@@ -111,17 +110,17 @@ func TestSourcesAndSystemsOfAFake(t *testing.T) {
 		Systems: []config.System{{Name: "kube"}, {Name: "cloud", Process: &config.Process{}, API: "crud", Owner: "self.tags.cr",
 			Role: "self.tags.role", Ready: "self.state == 'READY'", Gone: "self.state == 'DELETING'",
 			Dependency: &config.Dependency{Required: true}, Poll: s}},
-		Primary: config.Primary{Owns: []config.Owns{{System: "cloud", Collection: "buckets", Name: "self.status.bucket"}}},
+		Primaries: []config.Primary{{Kind: widgetKind, Owns: []config.Owns{{System: "cloud", Collection: "buckets", Name: "self.status.bucket"}}}},
 	}
-	owners, owns, err := owner.Sources(c, resolveTo("", false, nil))
+	owners, primaries, err := owner.Sources(c, resolver(map[string]string{"Widget": "widgets"}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(owners, map[string]string{"cloud": "self.tags.cr"}) {
 		t.Errorf("owners = %v", owners)
 	}
-	if want := []trace.Owns{{System: "cloud", Kind: trace.Kind{Resource: "buckets"}, Name: "self.status.bucket"}}; !reflect.DeepEqual(owns, want) {
-		t.Errorf("owns = %+v", owns)
+	if want := []trace.Owns{{System: "cloud", Kind: trace.Kind{Resource: "buckets"}, Name: "self.status.bucket"}}; len(primaries) != 1 || !reflect.DeepEqual(primaries[0].Owns, want) {
+		t.Errorf("primaries = %+v", primaries)
 	}
 	want := []trace.System{{Name: "cloud", API: "crud", Role: "self.tags.role", Ready: "self.state == 'READY'", Gone: "self.state == 'DELETING'",
 		Ignore: []string{"version"}, Poll: s, Dependency: &trace.Dependency{Required: true}}}
@@ -130,16 +129,9 @@ func TestSourcesAndSystemsOfAFake(t *testing.T) {
 	}
 }
 
-func TestPropertiesAndPeriodicCopyTheConfig(t *testing.T) {
+func TestPropertiesCopyTheConfig(t *testing.T) {
 	c := &config.Config{Properties: []config.Property{{Name: "fresh", Expr: "true", When: config.Always}}}
 	if want := []trace.Property{{Name: "fresh", Expr: "true", When: "always"}}; !reflect.DeepEqual(owner.Properties(c), want) {
 		t.Errorf("Properties = %+v, want %+v", owner.Properties(c), want)
-	}
-	if owner.Periodic(c) != nil {
-		t.Error("Periodic without primary.periodic is not nil")
-	}
-	c.Primary.Periodic = &config.Periodic{Every: time.Second, Paths: []string{"status.refreshTime"}}
-	if want := (&trace.Periodic{Every: time.Second, Paths: []string{"status.refreshTime"}}); !reflect.DeepEqual(owner.Periodic(c), want) {
-		t.Errorf("Periodic = %+v, want %+v", owner.Periodic(c), want)
 	}
 }

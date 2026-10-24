@@ -36,14 +36,12 @@ func fleet(kinds ...trace.Kind) *tt.Timeline {
 }
 
 func TestRule1ReachesACROfAnyListedKind(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	tl := fleet(clusters, databases)
 	tl.At(3*s, tt.Version(cmA0, "c1", "3", tt.OwnedBy(tt.Object("a-0"), "ub", true)))
 	wantOwner(t, ownerBy(t, tl, owner.Rules{}, "c1", 3*s), 1, "ub")
 }
 
 func TestRule4SpansEveryListedKind(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	tl := fleet(clusters, databases)
 	tl.At(3*s, tt.Version(cmA0, "c1", "3", tt.Object("a-0")))
 	wantOwner(t, ownerBy(t, tl, owner.Rules{}, "c1", 3*s), 4, "ua", "ub")
@@ -51,7 +49,6 @@ func TestRule4SpansEveryListedKind(t *testing.T) {
 }
 
 func TestACRTheControllerCreatedIsACRThatItsOwnerOwns(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	databaseC := tt.Ref("toy/databases", "ns", "c")
 	tl := fleet(clusters, databases)
 	tl.At(3*s, tt.Create(ctl, databaseC, "uc", "3"), tt.Version(databaseC, "uc", "3", tt.OwnedBy(tt.Object("c"), "ua", true))).
@@ -66,7 +63,6 @@ func TestACRTheControllerCreatedIsACRThatItsOwnerOwns(t *testing.T) {
 }
 
 func TestAChildOfALiveUnlistedOwnerHasNoCR(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	tl := fleet(clusters)
 	tl.At(3*s, tt.Version(cmA0, "c1", "3", tt.OwnedBy(tt.Object("a-0"), "ub", true))).
 		At(5*s, tt.Deleted(databaseB, "ub", "5", tt.Object("b")))
@@ -83,14 +79,12 @@ func TestAChildOfALiveUnlistedOwnerHasNoCR(t *testing.T) {
 }
 
 func TestRule1PrefersACRToAnUnlistedOwner(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	tl := fleet(clusters)
 	tl.At(3*s, tt.Version(cmA0, "c1", "3", tt.OwnedBy(tt.OwnedBy(tt.Object("a-0"), "ub", true), "ua", false)))
 	wantOwner(t, ownerBy(t, tl, owner.Rules{}, "c1", 3*s), 1, "ua")
 }
 
 func TestAnOwnerReferenceToAnUnseenUIDFallsBackToRule4(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	tl := fleet(clusters, databases)
 	tl.At(3*s, tt.Version(cmA0, "c1", "3", tt.OwnedBy(tt.Object("a-0"), "unseen", true)))
 	o := ownerBy(t, tl, owner.Rules{}, "c1", 3*s)
@@ -101,7 +95,6 @@ func TestAnOwnerReferenceToAnUnseenUIDFallsBackToRule4(t *testing.T) {
 }
 
 func TestRule2SkipsANameThatCRsOfTwoKindsShare(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	databaseA := tt.Ref("toy/databases", "ns", "a")
 	tl := fleet(clusters, databases)
 	tl.At(3*s, tt.Version(databaseA, "ua-db", "3", tt.Object("a"))).
@@ -114,7 +107,6 @@ func TestRule2SkipsANameThatCRsOfTwoKindsShare(t *testing.T) {
 }
 
 func TestRule3NamesAResourceForACROfItsEntrysKind(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	rules, err := owner.Compile(nil, []trace.Primary{
 		{Kind: clusters, Owns: []trace.Owns{{Kind: configMaps, Name: "self.spec.child"}}},
 		{Kind: databases, Owns: []trace.Owns{{Kind: secrets, Name: "self.spec.child"}}},
@@ -130,7 +122,6 @@ func TestRule3NamesAResourceForACROfItsEntrysKind(t *testing.T) {
 }
 
 func TestSelectMatchesInASlotOfAnyListedKind(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	tl := fleet(clusters, databases)
 	tl.At(3*s, tt.Create(ctl, cmA0, "c1", "3"), tt.Version(cmA0, "c1", "3", tt.OwnedBy(tt.Object("a-0"), "ub", true)))
 	w := owner.New(tl.Index(), owner.Rules{})
@@ -143,7 +134,6 @@ func TestSelectMatchesInASlotOfAnyListedKind(t *testing.T) {
 }
 
 func TestSelectNamesTheKindOfASlotThatHoldsNoCR(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	tl := fleet(clusters)
 	tl.At(3*s, tt.Create(ctl, cmA0, "c1", "3"), tt.Version(cmA0, "c1", "3", tt.OwnedBy(tt.Object("a-0"), "ub", true)))
 	w := owner.New(tl.Index(), owner.Rules{})

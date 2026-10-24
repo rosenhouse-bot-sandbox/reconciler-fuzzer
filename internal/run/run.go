@@ -352,15 +352,11 @@ func apiMap(s config.System) (fake.API, error) {
 
 // runEvent describes the run for the checks.
 func runEvent(cfg *config.Config, k *kube.Kube, planSteps int) (trace.Event, error) {
-	primary, err := k.Ref(cfg.Primary.Kind, "")
-	if err != nil {
-		return trace.Event{}, err
-	}
 	models, err := traceModels(cfg.Models, k.Ref)
 	if err != nil {
 		return trace.Event{}, err
 	}
-	owners, owns, err := owner.Sources(cfg, func(gvk schema.GroupVersionKind) (string, bool, error) {
+	owners, primaries, err := owner.Sources(cfg, func(gvk schema.GroupVersionKind) (string, bool, error) {
 		ref, err := k.Ref(gvk, "")
 		return ref.Resource, ref.Namespace != "", err
 	})
@@ -368,11 +364,10 @@ func runEvent(cfg *config.Config, k *kube.Kube, planSteps int) (trace.Event, err
 		return trace.Event{}, err
 	}
 	return trace.Event{Run: &trace.Run{
-		Namespace: k.Namespace(), Primary: primary, PlanSteps: planSteps,
-		Ready: cfg.Primary.Ready, Stable: cfg.Timeouts.Stable, Reads: cfg.Budgets.Reads, Writes: cfg.Budgets.Writes,
-		Retain: cfg.Primary.Retain, Models: models, StatusKinds: k.StatusKinds(), Kinds: k.Kinds(),
-		Owners: owners, Owns: owns, Halted: cfg.Primary.Halted, Systems: owner.Systems(cfg),
-		Properties: owner.Properties(cfg), Periodic: owner.Periodic(cfg),
+		Namespace: k.Namespace(), Primaries: primaries, PlanSteps: planSteps,
+		Stable: cfg.Timeouts.Stable, Reads: cfg.Budgets.Reads, Writes: cfg.Budgets.Writes,
+		Models: models, StatusKinds: k.StatusKinds(), Kinds: k.Kinds(),
+		Owners: owners, Systems: owner.Systems(cfg), Properties: owner.Properties(cfg),
 	}}, nil
 }
 

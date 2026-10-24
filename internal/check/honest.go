@@ -30,9 +30,10 @@ func Honest(ix *trace.Index, s Spec) []Finding {
 	order, crs := crVersions(ix, s)
 	for _, uid := range order {
 		versions := crs[uid]
-		h.judgeTriggers(uid, versions, deps)
+		p, _ := s.primary(versions[0].Version.Ref)
+		h.judgeTriggers(uid, p, versions, deps)
 		if events := ix.Events(); len(events) > 0 {
-			h.judgeTrack(uid, versions, deps, events[len(events)-1].At)
+			h.judgeTrack(uid, p, versions, deps, events[len(events)-1].At)
 		}
 	}
 	keys := slices.SortedFunc(maps.Keys(h.found), func(a, b findingKey) int {
@@ -65,7 +66,7 @@ func crVersions(ix *trace.Index, s Spec) ([]string, map[string][]trace.Event) {
 	var order []string
 	versions := map[string][]trace.Event{}
 	for _, e := range ix.Events() {
-		if v := e.Version; v != nil && v.Ref.Group == s.PrimaryGroup && v.Ref.Resource == s.PrimaryResource {
+		if v := e.Version; v != nil && s.listed(v.Ref) {
 			if versions[v.UID] == nil {
 				order = append(order, v.UID)
 			}
@@ -75,14 +76,16 @@ func crVersions(ix *trace.Index, s Spec) ([]string, map[string][]trace.Event) {
 	return order, versions
 }
 
-// judgeTriggers judges each CR version the controller wrote that becomes
-// ready, or raises observedGeneration while ready.
-func (h *honesty) judgeTriggers(uid string, versions []trace.Event, deps []Model) {
+// judgeTriggers judges each version of the CR, of p's kind, that the
+// controller wrote that becomes ready, or raises observedGeneration while
+// ready. Only a CR of the first entry's kind needs a required dependency.
+func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, deps []Model) {
+	requires := p.Kind == h.s.Primaries[0].Kind
 	wasReady, wasObserved := false, 0.0
 	for _, e := range versions {
 		v := e.Version
 		body := decode(v.Body)
-		isReady, observed := satisfies(h.s.Ready, body), observedGeneration(body)
+		isReady, observed := satisfies(p.Ready, body), observedGeneration(body)
 		trigger := isReady && (!wasReady || observed > wasObserved)
 		wasReady, wasObserved = isReady, observed
 		if !trigger || h.ix.Writer(*v) != trace.Controller {
@@ -92,7 +95,7 @@ func (h *honesty) judgeTriggers(uid string, versions []trace.Event, deps []Model
 		t0 := call.At - call.Call.Latency
 		for _, m := range deps {
 			owned := h.dependencies(uid, m, t0)
-			if len(owned) == 0 && m.Dependency.Required {
+			if len(owned) == 0 && m.Dependency.Required && requires {
 				h.add(t0, noDependency, kind(v.Ref), h.slot(uid))
 			}
 			for _, dep := range owned {
@@ -235,9 +238,10 @@ func (h *honesty) ready(seen trace.Event, m Model) bool {
 	return found && !seen.Seen.Deleted && satisfies(m.Ready, decode(v.Body))
 }
 
-// judgeTrack fails a CR that stays ready for track after the controller
-// saw one of its dependencies not ready, and saw nothing better since.
-func (h *honesty) judgeTrack(uid string, versions []trace.Event, deps []Model, end time.Duration) {
+// judgeTrack fails a CR, of p's kind, that stays ready for track after the
+// controller saw one of its dependencies not ready, and saw nothing better
+// since.
+func (h *honesty) judgeTrack(uid string, p Primary, versions []trace.Event, deps []Model, end time.Duration) {
 	for _, m := range deps {
 		d := m.Dependency.Track
 		if d == 0 {
@@ -247,7 +251,7 @@ func (h *honesty) judgeTrack(uid string, versions []trace.Event, deps []Model, e
 			for _, seen := range h.ix.Seen(trace.Controller, dep.UID) {
 				at := seen.At + d
 				if at > end || h.ready(seen, m) || seen.Seen.Deleted || h.seenDeleting(seen) ||
-					!h.streak(dep, m, seen.At, at) || !h.readyThrough(versions, seen.At, at) || h.excused(uid, seen.At, at) ||
+					!h.streak(dep, m, seen.At, at) || !readyThrough(p, versions, seen.At, at) || h.excused(uid, seen.At, at) ||
 					h.ix.Opaque(trace.Controller, dep.Ref, seen.At, at) {
 					continue
 				}
@@ -299,14 +303,14 @@ func (h *honesty) streak(dep owner.Instance, m Model, from, to time.Duration) bo
 }
 
 // readyThrough reports whether the CR's version at from, and every later
-// one until to, satisfies ready.
-func (h *honesty) readyThrough(versions []trace.Event, from, to time.Duration) bool {
+// one until to, satisfies p's ready.
+func readyThrough(p Primary, versions []trace.Event, from, to time.Duration) bool {
 	current := false
 	for _, e := range versions {
 		if e.At > to {
 			break
 		}
-		ok := !e.Version.Deleted && satisfies(h.s.Ready, decode(e.Version.Body))
+		ok := !e.Version.Deleted && satisfies(p.Ready, decode(e.Version.Body))
 		if e.At <= from {
 			current = ok
 		} else if !ok {

@@ -11,7 +11,7 @@ import (
 )
 
 // newRun starts a run whose plan has planSteps steps.
-func newRun(planSteps int) *tt.Script { return tt.NewScript(widgetA, planSteps, 1*s) }
+func newRun(planSteps int) *tt.Script { return tt.NewScript(widgets, planSteps, 1*s) }
 
 // withChild has the harness create the CR in slot, and the controller give
 // it the child configmap <slot>-0 and make it ready. owned sets the child's
@@ -126,7 +126,7 @@ func TestCleanJudgesARule4ChildOnlyOnceEveryCRInItsSetIsGone(t *testing.T) {
 
 func TestCleanAllowsWhatRetainKeeps(t *testing.T) {
 	r := newRun(2)
-	r.Spec.Retain = `self.metadata.name == "a"`
+	r.Spec.Primaries[0].Retain = `self.metadata.name == "a"`
 	r.Begin()
 	withChild(r, "a", true)
 	withChild(r, "b", true)
@@ -195,7 +195,6 @@ func TestCleanIgnoresWhatTheControllerDidNotCreate(t *testing.T) {
 	r.Begin().Restart()
 	r.Create(trace.Harness, tt.Ref("configmaps", "ns", "fixture"), tt.Object("fixture"))
 	r.At(r.Now, tt.Version(tt.Ref("configmaps", "ns", "kube-root-ca.crt"), "u-root", "r1", tt.Object("kube-root-ca.crt")))
-	r.Create(ctl, tt.Ref("toy/widgets", "ns", "spawned"), tt.CR("spawned", true))
 	r.EndFaults().Settle()
 	requireNone(t, judgeWith(t, r, check.Clean))
 }

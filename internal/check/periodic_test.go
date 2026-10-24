@@ -27,7 +27,7 @@ func refreshed(n int, at string, status map[string]any) map[string]any {
 // controller write status.refreshTime once more than stable later.
 func refreshing() *tt.Script {
 	r := newRun(0)
-	r.Spec.Periodic = &trace.Periodic{Every: refreshEvery, Paths: []string{"status.refreshTime"}}
+	r.Spec.Primaries[0].Periodic = &trace.Periodic{Every: refreshEvery, Paths: []string{"status.refreshTime"}}
 	r.Begin()
 	r.CreateCR("a", widgetA)
 	r.Update(ctl, widgetA, refreshed(1, "t1", nil))
@@ -79,7 +79,7 @@ func TestPeriodicCountsWritesOfOtherFields(t *testing.T) {
 		"metadata only": refreshed(2, "t1", nil),
 	} {
 		r := newRun(0)
-		r.Spec.Periodic = &trace.Periodic{Every: refreshEvery, Paths: []string{"status.refreshTime"}}
+		r.Spec.Primaries[0].Periodic = &trace.Periodic{Every: refreshEvery, Paths: []string{"status.refreshTime"}}
 		r.Begin()
 		r.CreateCR("a", widgetA)
 		r.Update(ctl, widgetA, refreshed(1, "t1", nil))
@@ -136,7 +136,7 @@ func TestPeriodicNamesAFieldOfEveryListItem(t *testing.T) {
 		"one condition fewer":  {map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "True", "lastTransitionTime": "t2"}}}, 1},
 	} {
 		r := newRun(0)
-		r.Spec.Periodic = &trace.Periodic{Every: refreshEvery, Paths: []string{"status.conditions[*].lastTransitionTime"}}
+		r.Spec.Primaries[0].Periodic = &trace.Periodic{Every: refreshEvery, Paths: []string{"status.conditions[*].lastTransitionTime"}}
 		r.Begin()
 		r.CreateCR("a", widgetA)
 		r.Update(ctl, widgetA, refreshed(1, "t", conditions("t1", "True")))

@@ -1,4 +1,4 @@
-{"seq":1,"at":0,"run":{"namespace":"ns","primary":{"system":"kube","group":"toy","resource":"widgets"}}}
+{"seq":1,"at":0,"run":{"namespace":"ns","primaries":[{"kind":{"group":"toy","version":"v1","kind":"Widget","resource":"widgets"},"ready":""}]}}
 {"seq":2,"at":0,"proc":{"event":"start","pid":1}}
 {"seq":3,"at":0,"phase":{"step":0,"name":"faultPeriod"}}
 {"seq":4,"at":100000000,"call":{"caller":"harness","method":"","path":"","verb":"create","ref":{"system":"kube","group":"toy","resource":"widgets","namespace":"ns","name":"a"},"status":201,"resultRV":"1"}}

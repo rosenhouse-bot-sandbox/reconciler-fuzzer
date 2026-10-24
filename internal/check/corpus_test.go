@@ -120,10 +120,11 @@ func TestCorpusMatchesItsGenerator(t *testing.T) {
 }
 
 var (
-	cert    = tt.Ref("cert-manager.io/certificates", "ns", "a")
-	request = tt.Ref("cert-manager.io/certificaterequests", "ns", "a-1")
-	tls     = tt.Ref("secrets", "ns", "a-tls")
-	fixture = tt.Ref("configmaps", "ns", "widget-config")
+	certificates = trace.Kind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate", Resource: "certificates"}
+	cert         = tt.Ref("cert-manager.io/certificates", "ns", "a")
+	request      = tt.Ref("cert-manager.io/certificaterequests", "ns", "a-1")
+	tls          = tt.Ref("secrets", "ns", "a-tls")
+	fixture      = tt.Ref("configmaps", "ns", "widget-config")
 )
 
 func owned(body map[string]any, r *tt.Script, cr trace.Ref) map[string]any {
@@ -163,7 +164,7 @@ func toy(planSteps int) *tt.Script {
 // certificate settles step 0, which creates certificate a, its request a-1
 // and its Secret a-tls.
 func certificate(planSteps int, ownedSecret bool) *tt.Script {
-	r := tt.NewScript(cert, planSteps, 1*s)
+	r := tt.NewScript(certificates, planSteps, 1*s)
 	r.Begin()
 	r.CreateCR("a", cert)
 	r.Create(ctl, request, owned(tt.Object("a-1"), r, cert))
@@ -217,7 +218,7 @@ var corpus = map[string]func() *tt.Script{
 	},
 	"d17-retained-secret": func() *tt.Script {
 		r := certificate(1, false)
-		r.Spec.Retain = `self.metadata.name == "a"`
+		r.Spec.Primaries[0].Retain = `self.metadata.name == "a"`
 		return finish(r, map[string]trace.Ref{"a": cert}, request)
 	},
 	"d18-singleton-webhook-secret": func() *tt.Script {
@@ -298,7 +299,7 @@ var corpus = map[string]func() *tt.Script{
 	},
 	"d70-periodic-refresh-writes": func() *tt.Script {
 		r := newRun(1)
-		r.Spec.Periodic = &trace.Periodic{Every: 3 * s, Paths: []string{"status.refreshTime"}}
+		r.Spec.Primaries[0].Periodic = &trace.Periodic{Every: 3 * s, Paths: []string{"status.refreshTime"}}
 		r.Begin()
 		withChild(r, "a", true)
 		r.EndFaults()

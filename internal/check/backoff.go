@@ -130,7 +130,7 @@ func backoffEvents(ix *trace.Index, s Spec) []trace.Event {
 			if c := e.Call; c.Caller == trace.Controller && judged(e) && !c.Watch && !c.Unknown() {
 				events = append(events, e)
 			}
-		case e.Version != nil && e.Version.Ref.Group == s.PrimaryGroup && e.Version.Ref.Resource == s.PrimaryResource:
+		case e.Version != nil && s.listed(e.Version.Ref):
 			metadata, _ := decode(e.Version.Body)["metadata"].(map[string]any)
 			was, seen := generations[e.Version.UID]
 			generations[e.Version.UID] = metadata["generation"]

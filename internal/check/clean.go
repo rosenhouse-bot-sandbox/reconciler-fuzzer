@@ -53,16 +53,17 @@ func (v *view) allGone(o owner.Owner, t time.Duration) bool {
 	})
 }
 
-// retained reports whether primary.retain holds over the last body of every
-// CR o names.
+// retained reports whether, for every CR o names, its kind's retain holds
+// over its last body.
 func (v *view) retained(o owner.Owner, t time.Duration) bool {
-	return v.s.Retain != nil && len(o.CRs) > 0 && !slices.ContainsFunc(o.CRs, func(uid string) bool {
+	return len(o.CRs) > 0 && !slices.ContainsFunc(o.CRs, func(uid string) bool {
 		cr, _ := v.w.Instance(uid)
+		p, _ := v.s.primary(cr.Ref)
 		var body map[string]any
-		if json.Unmarshal(v.w.Body(cr, t), &body) != nil {
+		if p.Retain == nil || json.Unmarshal(v.w.Body(cr, t), &body) != nil {
 			return true
 		}
-		keep, err := v.s.Retain(body)
+		keep, err := p.Retain(body)
 		return err != nil || !keep
 	})
 }
@@ -135,10 +136,10 @@ func (v *view) has(step int, do ...string) bool {
 }
 
 // resources are the instances the controller created that live at t,
-// except CRs and the kinds of trace.Ignored.
+// except the kinds of trace.Ignored.
 func (v *view) resources(t time.Duration) []owner.Instance {
 	return slices.DeleteFunc(v.w.Instances(t), func(i owner.Instance) bool {
-		return i.Creator != trace.Controller || v.w.Primary(i) || trace.Ignored(trace.Call{Ref: i.Ref})
+		return i.Creator != trace.Controller || trace.Ignored(trace.Call{Ref: i.Ref})
 	})
 }
 
@@ -172,8 +173,13 @@ func (v *view) groupOf(i owner.Instance, t time.Duration) group {
 	return group{kind: k, owner: o.Key(), role: i.Role}
 }
 
-// describe names an instance, its owning rule and its CRs' slots.
+// describe names an instance, its owning rule and its CRs' slots, or its
+// unlisted owner.
 func (v *view) describe(i owner.Instance, o owner.Owner) string {
+	if o.Unlisted != "" {
+		unlisted, _ := v.w.Instance(o.Unlisted)
+		return fmt.Sprintf("%s (rule 1, unlisted owner %s)", describe(i.Ref), describe(unlisted.Ref))
+	}
 	if o.Shared() {
 		return describe(i.Ref) + " (shared)"
 	}

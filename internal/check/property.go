@@ -117,8 +117,10 @@ func worldKeys(ix *trace.Index, w *owner.World) map[string]map[string]bool {
 			add(kind)
 		}
 		// The observers watch each owned kind from the start.
-		for _, o := range run.Owns {
-			add(trace.Ref{System: cmp.Or(o.System, "kube"), Group: o.Kind.Group, Resource: o.Kind.Resource})
+		for _, p := range run.Primaries {
+			for _, o := range p.Owns {
+				add(trace.Ref{System: cmp.Or(o.System, "kube"), Group: o.Kind.Group, Resource: o.Kind.Resource})
+			}
 		}
 	}
 	for _, i := range w.All() {
@@ -238,28 +240,29 @@ func valueAt(object map[string]any, path []string) (any, bool) {
 	return value, true
 }
 
-// periodicWrite reports whether e is a write of a CR that changed only
-// Periodic.Paths, at least Every/2 after the previous such write of that
-// CR. Clause 7 does not count it as a changed write.
+// periodicWrite reports whether e is a write of a CR that changed only its
+// kind's Periodic.Paths, at least Every/2 after the previous such write of
+// that CR. Clause 7 does not count it as a changed write.
 func (s Spec) periodicWrite(ix *trace.Index, e trace.Event) bool {
-	if s.Periodic == nil || !s.onlyPeriodic(ix, e) {
+	ref := e.Call.Object()
+	p, listed := s.primary(ref)
+	if !listed || p.Periodic == nil || !onlyPeriodic(ix, e, p.Periodic) {
 		return false
 	}
-	ref := e.Call.Object()
 	for _, prev := range slices.Backward(ix.Calls(e.Call.Caller, -1, e.At)) {
-		if prev.Seq < e.Seq && prev.Call.Object() == ref && s.onlyPeriodic(ix, prev) {
-			return e.At-prev.At >= s.Periodic.Every/2
+		if prev.Seq < e.Seq && prev.Call.Object() == ref && onlyPeriodic(ix, prev, p.Periodic) {
+			return e.At-prev.At >= p.Periodic.Every/2
 		}
 	}
 	return true
 }
 
-// onlyPeriodic reports whether e wrote a CR version that differs from the
-// one before only under Periodic.Paths.
-func (s Spec) onlyPeriodic(ix *trace.Index, e trace.Event) bool {
+// onlyPeriodic reports whether e wrote a version of its object that differs
+// from the one before only under periodic.Paths.
+func onlyPeriodic(ix *trace.Index, e trace.Event, periodic *trace.Periodic) bool {
 	c := e.Call
 	ref := c.Object()
-	if ref.System != "kube" || ref.Group != s.PrimaryGroup || ref.Resource != s.PrimaryResource || !trace.Mutating(c.Verb) || !succeeded(*c) {
+	if !trace.Mutating(c.Verb) || !succeeded(*c) {
 		return false
 	}
 	is, found := ix.VersionOf(ref, c.ResultRV)
@@ -280,7 +283,7 @@ func (s Spec) onlyPeriodic(ix *trace.Index, e trace.Event) bool {
 	}
 	paths := leafDiff("", a, b, nil)
 	return len(paths) > 0 && !slices.ContainsFunc(paths, func(path string) bool {
-		return !slices.ContainsFunc(s.Periodic.Paths, func(periodic string) bool { return under(path, periodic) })
+		return !slices.ContainsFunc(periodic.Paths, func(p string) bool { return under(path, p) })
 	})
 }
 

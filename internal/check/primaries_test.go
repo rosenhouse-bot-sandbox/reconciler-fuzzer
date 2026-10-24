@@ -23,10 +23,9 @@ var (
 // fleetRun starts a run whose primaries list kinds, each ready as newRun's
 // CRs are.
 func fleetRun(planSteps int, kinds ...trace.Kind) *tt.Script {
-	r := tt.NewScript(clusterA, planSteps, 1*s)
-	r.Spec.Primaries = nil
-	for _, k := range kinds {
-		r.Spec.Primaries = append(r.Spec.Primaries, trace.Primary{Kind: k, Ready: "has(self.status) && self.status.ready == true"})
+	r := tt.NewScript(kinds[0], planSteps, 1*s)
+	for _, k := range kinds[1:] {
+		r.Spec.Primaries = append(r.Spec.Primaries, trace.Primary{Kind: k, Ready: r.Spec.Primaries[0].Ready})
 	}
 	return r
 }
@@ -42,7 +41,6 @@ func settledAt(t *testing.T, r *tt.Script, at time.Duration) []string {
 }
 
 func TestSettleWaitsOnACROfEveryListedKind(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	for name, create := range map[string]func(r *tt.Script){
 		"the harness's":    func(r *tt.Script) { r.CreateCR("b", databaseB) },
 		"the controller's": func(r *tt.Script) { r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", false), r.UID(clusterA), true)) },
@@ -59,7 +57,6 @@ func TestSettleWaitsOnACROfEveryListedKind(t *testing.T) {
 }
 
 func TestClause7BudgetsCountCRsOfEveryListedKind(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	r := fleetRun(1, clusters, databases)
 	r.Begin()
 	r.CreateCR("a", clusterA)
@@ -96,7 +93,6 @@ func unlistedOwner(deleteDB bool) *tt.Script {
 }
 
 func TestCleanPassesAChildOfALiveUnlistedOwner(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	requireNone(t, judgeWith(t, unlistedOwner(false), check.Clean))
 }
 
@@ -117,7 +113,6 @@ func TestCleanFailsACRTheControllerCreatedThatOutlivesItsOwner(t *testing.T) {
 }
 
 func TestUniqueGroupsByACROfAnyListedKind(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	r := fleetRun(1, clusters, databases)
 	r.Begin()
 	r.CreateCR("a", clusterA)
@@ -131,7 +126,6 @@ func TestUniqueGroupsByACROfAnyListedKind(t *testing.T) {
 }
 
 func TestPropertySeesCRsOfEveryListedKind(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	r := fleetRun(1, clusters, databases)
 	r.Spec.Properties = []trace.Property{{Name: "both", Expr: "crs.size() == 2", When: "step"}}
 	r.Begin()
@@ -142,7 +136,6 @@ func TestPropertySeesCRsOfEveryListedKind(t *testing.T) {
 }
 
 func TestHonestJudgesACROfEveryListedKind(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	r := fleetRun(1, clusters, databases)
 	r.Spec.Models = []trace.Model{{Kind: gadgets, Ready: config.ReadyConditionCEL, Dependency: &trace.Dependency{}}}
 	r.Begin()
@@ -160,22 +153,4 @@ func TestHonestRequiresADependencyOnlyOfTheFirstListedKind(t *testing.T) {
 	r.CreateCR("b", databaseB)
 	r.Ready(clusterA).Ready(databaseB)
 	requireFinding(t, honest(t, r), "Honest", 0, noDependency, "kube/toy/clusters", "slot a")
-}
-
-func TestConvergeNotesWhereTheStepsRecordEnds(t *testing.T) {
-	t.Skip("enabled by the judge package")
-	confirmed := createStep()
-	confirmed.At(3500 * ms).Add(tt.Phase(0, trace.Settled)).
-		At(5500 * ms).Add(tt.Phase(0, trace.Confirmed)).
-		At(9 * s).Add(tt.Call(ctl, "get", widgetA, 200, ""))
-	longer := spec
-	longer.Stable = 3 * s
-	requireNote(t, confirmed, longer, "Step 0 is not judged: it settled at 4.5s, but its confirm window ends at 5.5s, before 7.5s.")
-
-	cut := createStep()
-	cut.At(10 * s).Add(tt.Phase(0, trace.TimedOut)).
-		At(10 * s).Add(tt.Phase(1, trace.FaultPeriod))
-	slow := spec
-	slow.Stable = 8 * s
-	requireNote(t, cut, slow, "Step 0 is not judged: it settled at 9.5s, but the next step starts at 10s, before 17.5s.")
 }

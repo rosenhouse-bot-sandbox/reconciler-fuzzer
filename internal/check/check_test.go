@@ -129,13 +129,21 @@ func requireNote(t *testing.T, b *tt.Builder, s check.Spec, want string) {
 	}
 }
 
-func TestConvergeNotesAnUnrecordedConfirmWindow(t *testing.T) {
-	b := createStep()
-	b.At(3500 * ms).Add(tt.Phase(0, trace.Settled)).
-		At(5500 * ms).Add(tt.Phase(0, trace.Confirmed))
+func TestConvergeNotesWhereTheStepsRecordEnds(t *testing.T) {
+	confirmed := createStep()
+	confirmed.At(3500 * ms).Add(tt.Phase(0, trace.Settled)).
+		At(5500 * ms).Add(tt.Phase(0, trace.Confirmed)).
+		At(9 * s).Add(tt.Call(ctl, "get", widgetA, 200, ""))
 	longer := spec
 	longer.Stable = 3 * s
-	requireNote(t, b, longer, "Step 0 is not judged: it settled at 4.5s, but the trace ends at 5.5s")
+	requireNote(t, confirmed, longer, "Step 0 is not judged: it settled at 4.5s, but its confirm window ends at 5.5s, before 7.5s.")
+
+	cut := createStep()
+	cut.At(10 * s).Add(tt.Phase(0, trace.TimedOut)).
+		At(10 * s).Add(tt.Phase(1, trace.FaultPeriod))
+	slow := spec
+	slow.Stable = 8 * s
+	requireNote(t, cut, slow, "Step 0 is not judged: it settled at 9.5s, but the next step starts at 10s, before 17.5s.")
 }
 
 func TestConvergeSearchesOnlyUntilConfirmed(t *testing.T) {
@@ -147,15 +155,6 @@ func TestConvergeSearchesOnlyUntilConfirmed(t *testing.T) {
 	if f := only(t, converge(b, longer)); f.Summary != "did not settle (clause 7)" || f.At != 5500*ms {
 		t.Fatalf("finding = %+v", f)
 	}
-}
-
-func TestConvergeNotesAConfirmWindowCutByTheNextStep(t *testing.T) {
-	b := createStep()
-	b.At(10 * s).Add(tt.Phase(0, trace.TimedOut)).
-		At(10 * s).Add(tt.Phase(1, trace.FaultPeriod))
-	slow := spec
-	slow.Stable = 8 * s
-	requireNote(t, b, slow, "Step 0 is not judged")
 }
 
 func TestConvergeNotesATraceThatEndsBeforeTheDeadline(t *testing.T) {
@@ -381,7 +380,8 @@ func TestSpecFor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.PrimaryGroup != "toy.reconciler-fuzzer" || got.PrimaryResource != "widgets" || got.Stable != 2*s || got.Budgets != c.Budgets {
+	if want := (trace.Kind{Group: "toy.reconciler-fuzzer", Version: "v1", Kind: "Widget", Resource: "widgets"}); len(got.Primaries) != 1 ||
+		got.Primaries[0].Kind != want || got.Stable != 2*s || got.Budgets != c.Budgets {
 		t.Fatalf("spec = %+v", got)
 	}
 	ready := map[string]any{
@@ -389,11 +389,25 @@ func TestSpecFor(t *testing.T) {
 		"spec":     map[string]any{"count": int64(1)},
 		"status":   map[string]any{"observedGeneration": int64(1), "ready": int64(1)},
 	}
-	if ok, err := got.Ready(ready); !ok || err != nil {
+	if ok, err := got.Primaries[0].Ready(ready); !ok || err != nil {
 		t.Fatalf("Ready is not the config's: %v, %v", ok, err)
 	}
-	if ok, _ := got.Ready(map[string]any{}); ok {
+	if ok, _ := got.Primaries[0].Ready(map[string]any{}); ok {
 		t.Fatal("Ready holds for an empty object")
+	}
+}
+
+func TestSpecForRefusesAConfigThatListsOtherKinds(t *testing.T) {
+	c, err := config.Load("../../targets/toy-widget/config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := tt.Run("toy.reconciler-fuzzer", "widgets")
+	run.Run.Primaries = append(run.Run.Primaries, trace.Primary{Kind: trace.Kind{Group: "toy.reconciler-fuzzer", Resource: "gadgets"}})
+	var b tt.Builder
+	_, err = check.SpecFor(c, b.Add(run).Index())
+	if want := "the config's primaries list widgets.toy.reconciler-fuzzer, but the trace's list widgets.toy.reconciler-fuzzer, gadgets.toy.reconciler-fuzzer"; err == nil || err.Error() != want {
+		t.Errorf("SpecFor = %v, want %q", err, want)
 	}
 }
 
@@ -403,17 +417,29 @@ func TestSpecForWithoutAConfigReadsTheRunEvent(t *testing.T) {
 	if _, err := check.SpecFor(nil, b.Add(run).Index()); err == nil {
 		t.Fatal("SpecFor works on a run event that records no spec")
 	}
-	run.Run.Ready, run.Run.Stable, run.Run.Reads, run.Run.Writes = "self.ok", 4*s, 3, 5
+	run.Run.Primaries[0].Ready, run.Run.Stable, run.Run.Reads, run.Run.Writes = "self.ok", 4*s, 3, 5
 	b = tt.Builder{}
 	got, err := check.SpecFor(nil, b.Add(run).Index())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.PrimaryResource != "widgets" || got.Stable != 4*s || got.Budgets != (config.Budgets{Reads: 3, Writes: 5}) {
+	if len(got.Primaries) != 1 || got.Primaries[0].Kind.Resource != "widgets" || got.Stable != 4*s || got.Budgets != (config.Budgets{Reads: 3, Writes: 5}) {
 		t.Fatalf("spec = %+v", got)
 	}
-	if ok, err := got.Ready(map[string]any{"ok": true}); !ok || err != nil {
+	if ok, err := got.Primaries[0].Ready(map[string]any{"ok": true}); !ok || err != nil {
 		t.Fatalf("Ready = %v, %v", ok, err)
+	}
+	for name, mistake := range map[string]func(r *trace.Run){
+		"no primaries": func(r *trace.Run) { r.Primaries = nil },
+		"a bad ready":  func(r *trace.Run) { r.Primaries[0].Ready = "self.(" },
+	} {
+		bad := *run.Run
+		bad.Primaries = slices.Clone(run.Run.Primaries)
+		mistake(&bad)
+		b = tt.Builder{}
+		if _, err := check.SpecFor(nil, b.Add(trace.Event{Run: &bad}).Index()); err == nil {
+			t.Errorf("SpecFor accepts a run event with %s.", name)
+		}
 	}
 }
 
@@ -474,7 +500,7 @@ func TestSpecForTakesModelsFromTheConfig(t *testing.T) {
 
 func TestSpecForWithoutAConfigTakesModelsFromTheRunEvent(t *testing.T) {
 	run := tt.Run("toy", "widgets")
-	run.Run.Ready, run.Run.Stable, run.Run.Reads, run.Run.Writes = "self.ok", 4*s, 3, 5
+	run.Run.Primaries[0].Ready, run.Run.Stable, run.Run.Reads, run.Run.Writes = "self.ok", 4*s, 3, 5
 	run.Run.Models = []trace.Model{{Kind: gadgetKind, Ready: "self.ok", Dependency: &trace.Dependency{Track: s}}}
 	run.Run.StatusKinds = []trace.Kind{gadgetKind}
 	var b tt.Builder

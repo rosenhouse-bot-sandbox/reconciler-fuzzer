@@ -1,4 +1,4 @@
-{"seq":1,"at":0,"run":{"namespace":"ns","primary":{"system":"kube","group":"toy","resource":"widgets"},"planSteps":1,"ready":"has(self.status) \u0026\u0026 self.status.ready == true","stable":1000000000,"reads":2,"writes":4}}
+{"seq":1,"at":0,"run":{"namespace":"ns","primaries":[{"kind":{"group":"toy","version":"v1","kind":"Widget","resource":"widgets"},"ready":"has(self.status) \u0026\u0026 self.status.ready == true"}],"planSteps":1,"stable":1000000000,"reads":2,"writes":4}}
 {"seq":2,"at":0,"proc":{"event":"start","pid":1}}
 {"seq":3,"at":0,"call":{"caller":"controller","method":"","path":"","verb":"list","ref":{"system":"kube","group":"toy","resource":"widgets","namespace":"ns"},"status":200}}
 {"seq":4,"at":0,"version":{"ref":{"system":"kube","resource":"configmaps","namespace":"ns","name":"kube-root-ca.crt"},"uid":"u-root","rv":"r1","body":{"metadata":{"name":"kube-root-ca.crt"}}}}

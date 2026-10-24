@@ -24,40 +24,76 @@ import (
 type Spec struct {
 	// Primaries are the listed kinds, in config order.
 	Primaries []Primary
-	// Primary is the CR kind, as group and plural resource.
-	PrimaryGroup    string
-	PrimaryResource string
-	Ready           func(obj map[string]any) (bool, error)
-	Stable          time.Duration
-	Budgets         config.Budgets
-	// Retain says whether Clean allows a deleted CR's resources to stay.
-	// It is nil when the config sets no primary.retain.
-	Retain func(cr map[string]any) (bool, error)
+	Stable    time.Duration
+	Budgets   config.Budgets
 	// Models are the stage models, from the config or the Run event.
 	Models []Model
 	// StatusKinds are the installed CRDs with a status subresource.
 	StatusKinds []trace.Kind
 	// Owners are owning-CR rules 2 and 3, from the config or the Run event.
 	Owners owner.Rules
-	// Halted is nil when the config sets no primary.halted.
-	Halted func(cr map[string]any) (bool, error)
 	// Polls maps each fake to its poll interval.
 	Polls map[string]time.Duration
 	// Ignore maps a fake to the body fields Restore does not compare.
 	Ignore map[string][]string
 	// Properties come from the config, or else the Run event.
 	Properties []PropertySpec
-	// Periodic is nil when the config sets no primary.periodic.
-	Periodic *trace.Periodic
 }
 
-// Primary is one listed kind as the checks judge its CRs.
+// Primary is one listed kind as the checks judge its CRs. Ready, Retain
+// and Halted are CEL over self, a CR of Kind.
 type Primary struct {
 	Kind  trace.Kind
 	Ready func(cr map[string]any) (bool, error)
+	// Retain says whether Clean allows a deleted CR's resources to stay.
 	// Retain, Halted and Periodic are nil when the entry sets none.
 	Retain, Halted func(cr map[string]any) (bool, error)
 	Periodic       *trace.Periodic
+}
+
+// primary is the entry of ref's kind, if ref names a CR.
+func (s Spec) primary(ref trace.Ref) (Primary, bool) {
+	i := slices.IndexFunc(s.Primaries, func(p Primary) bool { return ref.OfKind(p.Kind) })
+	if i < 0 {
+		return Primary{}, false
+	}
+	return s.Primaries[i], true
+}
+
+// listed reports whether ref names a CR.
+func (s Spec) listed(ref trace.Ref) bool {
+	_, listed := s.primary(ref)
+	return listed
+}
+
+// compilePrimaries compiles each entry's CEL.
+func compilePrimaries(entries []trace.Primary) ([]Primary, error) {
+	var compiled []Primary
+	for _, e := range entries {
+		p := Primary{Kind: e.Kind, Periodic: e.Periodic}
+		name := groupResource(e.Kind)
+		var err error
+		if p.Ready, err = config.CompileReady(e.Ready); err != nil {
+			return nil, fmt.Errorf("ready of %s: %w", name, err)
+		}
+		if e.Retain != "" {
+			if p.Retain, err = config.CompileReady(e.Retain); err != nil {
+				return nil, fmt.Errorf("retain of %s: %w", name, err)
+			}
+		}
+		if e.Halted != "" {
+			if p.Halted, err = config.CompileReady(e.Halted); err != nil {
+				return nil, fmt.Errorf("halted of %s: %w", name, err)
+			}
+		}
+		compiled = append(compiled, p)
+	}
+	return compiled, nil
+}
+
+// groupResource names k as resource.group.
+func groupResource(k trace.Kind) string {
+	return schema.GroupResource{Group: k.Group, Resource: k.Resource}.String()
 }
 
 // PropertySpec is a compiled config property.
@@ -95,63 +131,49 @@ type Model struct {
 }
 
 // SpecFor builds a Spec from c, or from the trace's Run event when c is nil.
-// The primary resource and the status kinds always come from the Run event.
+// The status kinds always come from the Run event, and c must list the Run
+// event's kinds.
 func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 	run, ok := ix.Run()
 	if !ok {
 		return Spec{}, errors.New("the trace has no run event")
 	}
-	s := Spec{PrimaryGroup: run.Primary.Group, PrimaryResource: run.Primary.Resource, StatusKinds: run.StatusKinds}
+	s := Spec{StatusKinds: run.StatusKinds}
 	if c != nil {
-		if want, _ := meta.UnsafeGuessKindToResource(c.Primary.Kind); want.Group != s.PrimaryGroup || want.Resource != s.PrimaryResource {
-			return Spec{}, fmt.Errorf("the config's primary is %s, but the trace's is %s", want.GroupResource(), schema.GroupResource{Group: s.PrimaryGroup, Resource: s.PrimaryResource})
+		owners, primaries, err := owner.Sources(c, recordedResource(run))
+		if err != nil {
+			return Spec{}, fmt.Errorf("the config: %w", err)
 		}
-		s.Ready, s.Stable, s.Budgets = c.Ready, c.Timeouts.Stable, c.Budgets
-		if c.Primary.Retain != "" {
-			s.Retain = c.Retain
+		if want, got := listedKinds(primaries), listedKinds(run.Primaries); !slices.Equal(want, got) {
+			return Spec{}, fmt.Errorf("the config's primaries list %s, but the trace's list %s", strings.Join(want, ", "), strings.Join(got, ", "))
 		}
-		if c.Primary.Halted != "" {
-			s.Halted = c.Halted
+		if s.Primaries, err = compilePrimaries(primaries); err != nil {
+			return Spec{}, fmt.Errorf("the config's primaries: %w", err)
 		}
-		var err error
+		s.Stable, s.Budgets = c.Timeouts.Stable, c.Budgets
 		if s.Models, err = configModels(c.Models, run.Models); err != nil {
 			return Spec{}, err
-		}
-		owners, owns, err := owner.Sources(c, recordedResource(run))
-		if err != nil {
-			return Spec{}, fmt.Errorf("the config's owners: %w", err)
 		}
 		systems := owner.Systems(c)
 		if err := s.addSystems(systems); err != nil {
 			return Spec{}, fmt.Errorf("the config's systems: %w", err)
 		}
-		if s.Owners, err = owner.Compile(owners, []trace.Primary{{Kind: trace.Kind{Group: s.PrimaryGroup, Resource: s.PrimaryResource}, Owns: owns}}, systems); err != nil {
+		if s.Owners, err = owner.Compile(owners, primaries, systems); err != nil {
 			return Spec{}, fmt.Errorf("the config's owners: %w", err)
 		}
 		if s.Properties, err = compileProperties(owner.Properties(c)); err != nil {
 			return Spec{}, fmt.Errorf("the config's properties: %w", err)
 		}
-		s.Periodic = owner.Periodic(c)
 		return s, nil
 	}
-	if run.Ready == "" || run.Stable <= 0 || run.Reads <= 0 || run.Writes <= 0 {
-		return Spec{}, errors.New("the trace's run event records no ready, stable and budgets; pass a config")
+	if len(run.Primaries) == 0 || run.Stable <= 0 || run.Reads <= 0 || run.Writes <= 0 {
+		return Spec{}, errors.New("the trace's run event records no primaries, stable and budgets; pass a config")
 	}
-	ready, err := config.CompileReady(run.Ready)
-	if err != nil {
-		return Spec{}, fmt.Errorf("the trace's ready: %w", err)
+	var err error
+	if s.Primaries, err = compilePrimaries(run.Primaries); err != nil {
+		return Spec{}, fmt.Errorf("the trace's primaries: %w", err)
 	}
-	s.Ready, s.Stable, s.Budgets = ready, run.Stable, config.Budgets{Reads: run.Reads, Writes: run.Writes}
-	if run.Retain != "" {
-		if s.Retain, err = config.CompileReady(run.Retain); err != nil {
-			return Spec{}, fmt.Errorf("the trace's retain: %w", err)
-		}
-	}
-	if run.Halted != "" {
-		if s.Halted, err = config.CompileReady(run.Halted); err != nil {
-			return Spec{}, fmt.Errorf("the trace's halted: %w", err)
-		}
-	}
+	s.Stable, s.Budgets = run.Stable, config.Budgets{Reads: run.Reads, Writes: run.Writes}
 	for _, m := range run.Models {
 		ready, err := config.CompileReady(m.Ready)
 		if err != nil {
@@ -162,14 +184,22 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 	if err := s.addSystems(run.Systems); err != nil {
 		return Spec{}, fmt.Errorf("the trace's systems: %w", err)
 	}
-	if s.Owners, err = owner.Compile(run.Owners, []trace.Primary{{Kind: trace.Kind{Group: s.PrimaryGroup, Resource: s.PrimaryResource}, Owns: run.Owns}}, run.Systems); err != nil {
+	if s.Owners, err = owner.Compile(run.Owners, run.Primaries, run.Systems); err != nil {
 		return Spec{}, fmt.Errorf("the trace's owners: %w", err)
 	}
 	if s.Properties, err = compileProperties(run.Properties); err != nil {
 		return Spec{}, fmt.Errorf("the trace's properties: %w", err)
 	}
-	s.Periodic = run.Periodic
 	return s, nil
+}
+
+// listedKinds names each entry's kind as resource.group, in order.
+func listedKinds(primaries []trace.Primary) []string {
+	var kinds []string
+	for _, p := range primaries {
+		kinds = append(kinds, groupResource(p.Kind))
+	}
+	return kinds
 }
 
 // addSystems sets Polls and Ignore, and adds a Model for each dependency
@@ -217,13 +247,20 @@ func (s Spec) modelled(ref trace.Ref) bool {
 	})
 }
 
-// recordedResource maps an owns kind to the run event's resource for it, or
-// else a guess. It counts every kind as namespaced, since the run refused a
-// namespace on a cluster-scoped kind.
+// recordedResource maps a listed or owns kind to the run event's resource
+// for it, or else a guess. It counts every kind as namespaced, since the run
+// refused a namespace on a cluster-scoped kind.
 func recordedResource(run trace.Run) func(schema.GroupVersionKind) (string, bool, error) {
+	var recorded []trace.Kind
+	for _, p := range run.Primaries {
+		recorded = append(recorded, p.Kind)
+		for _, o := range p.Owns {
+			recorded = append(recorded, o.Kind)
+		}
+	}
 	return func(gvk schema.GroupVersionKind) (string, bool, error) {
-		if i := slices.IndexFunc(run.Owns, func(r trace.Owns) bool { return r.Kind.Group == gvk.Group && r.Kind.Kind == gvk.Kind }); i >= 0 {
-			return run.Owns[i].Kind.Resource, true, nil
+		if i := slices.IndexFunc(recorded, func(k trace.Kind) bool { return k.Group == gvk.Group && k.Kind == gvk.Kind }); i >= 0 {
+			return recorded[i].Resource, true, nil
 		}
 		plural, _ := meta.UnsafeGuessKindToResource(gvk)
 		return plural.Resource, true, nil
