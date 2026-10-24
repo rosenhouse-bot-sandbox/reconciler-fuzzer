@@ -356,6 +356,22 @@ func TestRestorePassesARule4ResourceRemadeAfterTheControllerMadeACR(t *testing.T
 	requireNone(t, restore(t, r))
 }
 
+func TestRestoreFailsAFixturesDamagedResourceDespiteANewCRsResourceOfItsRole(t *testing.T) {
+	cmF, cmB := tt.Ref("configmaps", "ns", "f-1"), tt.Ref("configmaps", "ns", "f-2")
+	r := fleetRun(2, clusters, databases)
+	r.Begin()
+	r.CreateCR("a", clusterA)
+	fixture := r.Create(trace.Harness, tt.Ref("configmaps", "ns", "f"), tt.Object("f"))
+	r.Create(ctl, cmF, tt.OwnedBy(tt.Generated("f-", "f-1"), fixture, true))
+	r.Ready(clusterA).EndFaults().Settle()
+	r.Begin().Delete(trace.Harness, cmF).Act("damage", "", &cmF).EndFaults()
+	r.Call(ctl, "get", cmF, 404)
+	r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), fixture, true))
+	r.Create(ctl, cmB, tt.OwnedBy(tt.Generated("f-", "f-2"), r.UID(databaseB), true))
+	r.Settle()
+	requireFinding(t, restore(t, r), "Restore", 1, "did not restore damaged resources", "kube/configmaps", "configmaps ns/f-1 (rule 1, unlisted owner configmaps ns/f)")
+}
+
 func TestRestoreFailsADamagedResourceDespiteASiblingCRsResourceOfItsRole(t *testing.T) {
 	cmB, cmC := tt.Ref("configmaps", "ns", "db-b1"), tt.Ref("configmaps", "ns", "db-c1")
 	makeC := func(r *tt.Script) {
