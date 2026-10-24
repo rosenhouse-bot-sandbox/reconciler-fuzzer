@@ -158,10 +158,12 @@ Fill each key from the project:
   issuer or a store. `required: false` allows a CR to be ready with none. Set `track` when the
   controller should notice a dependency going not ready. `status:` adds literal fields to each
   status write the model makes; it replaces the whole `conditions` list. `stuckStatus:`
-  replaces those fields while a `stuck` fault lasts, and defaults to `status:`. Set it when
-  `status:` means done, such as `{phase: Bound}`. Otherwise a controller that reads only those
-  fields never sees the fault. Leave it unset for a Job: the API server refuses to lower
-  `succeeded`, and the model retries the refused write until the fault ends.
+  replaces those fields while a `stuck` fault lasts, and defaults to `status:`. Each write
+  removes the fields that only the other key sets. Set `stuckStatus:` when `status:` means
+  done, such as `{phase: Bound}`. Otherwise a controller that reads only those fields never
+  sees the fault. For a Job, set `stuckStatus: {active: 1}`. A Job created during the fault
+  then stays unfinished. The API server refuses to lower a done Job's `succeeded`, so that Job
+  stays done and `Ready`. The model retries the refused write until the fault ends.
 - `budgets` and `timeouts`: leave them out at first. Raise `timeouts.settle` for a slow
   controller, and `stable` for one that requeues with a delay by design. Ask the user first.
 
@@ -264,6 +266,9 @@ Vault fixture, add a step that writes a new version, `{"do": "changeFixture", "t
 that deletes and creates slot `a` with `"faults": [{"match": {"resource": "secrets"},
 "holdWatch": true}]` tests how the controller acts on a stale cache. A report note that the
 `holdWatch` held no watch means the controller watches no such kind, or the match is wrong.
+A note that a `stuck` fault held no object means no object matched, or the API server refused
+each stuck write, as it does for a done Job. `trace.jsonl` records a refused write as a model
+call with status 422. Check `stuckStatus:` against the kind's status schema.
 `<module>/targets/*/plans/` hold more.
 Run it from the config's directory, in the background, and act on the exit code:
 

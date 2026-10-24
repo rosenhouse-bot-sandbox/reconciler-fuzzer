@@ -172,7 +172,8 @@ models:
   `{"match": {"group": "example.com", "resource": "gadgets"}, "stuck": true}`.
 - `status:` adds literal fields to the model's status writes, such as a PVC's `{phase: Bound}`.
   While `stuck` lasts, the `stuckStatus:` fields, such as `{phase: Pending}`, replace them.
-  `stuckStatus:` defaults to `status:`.
+  `stuckStatus:` defaults to `status:`. Each write removes the fields that only the other key
+  sets. A model with only `stuckStatus: {phase: Pending}` thus removes `phase` while ready.
 - If a run fails to converge while an object of a kind nothing models has no status,
   `report.md` names the kind and suggests a `models:` entry for it.
 
