@@ -3,12 +3,14 @@ package generate
 import (
 	"encoding/json"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	gvk "k8s.io/apimachinery/pkg/runtime/schema"
+	"pgregory.net/rapid"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
@@ -41,9 +43,16 @@ func newGenerator(t *testing.T, cfg *config.Config) *Generator {
 // plans draws the plans of seeds 1 to n.
 func plans(t *testing.T, path string, n int) []*plan.Plan {
 	t.Helper()
-	g := newGenerator(t, loadConfig(t, path))
+	return drawPlans(t, newGenerator(t, loadConfig(t, path)), n)
+}
+
+// drawPlans draws g's plans of seeds 1 to n. A draw that panics fails the
+// test.
+func drawPlans(t *testing.T, g *Generator, n int) []*plan.Plan {
+	t.Helper()
 	var drawn []*plan.Plan
 	for seed := uint64(1); seed <= uint64(n); seed++ {
+		example(t, int(seed), g.plan)
 		p, err := g.Plan(seed)
 		if err != nil {
 			t.Fatalf("Plan(%d) failed: %v.", seed, err)
@@ -51,6 +60,24 @@ func plans(t *testing.T, path string, n int) []*plan.Plan {
 		drawn = append(drawn, p)
 	}
 	return drawn
+}
+
+// example is draw's value for seed. A draw that panics fails the test,
+// where rapid's Example, and so Plan, would hide it by drawing again.
+func example[V any](t *testing.T, seed int, draw func(*rapid.T) V) V {
+	t.Helper()
+	return rapid.Custom(func(rt *rapid.T) V {
+		defer func() {
+			if r := recover(); r != nil {
+				switch r.(type) {
+				case string, runtime.Error:
+					t.Errorf("Seed %d's draw panics: %v", seed, r)
+				}
+				panic(r)
+			}
+		}()
+		return draw(rt)
+	}).Example(seed)
 }
 
 func actions(plans []*plan.Plan) []plan.Action {
@@ -83,7 +110,7 @@ func decode(t *testing.T, raw json.RawMessage) map[string]any {
 }
 
 func TestPlansHaveTheShapeOfSection14(t *testing.T) {
-	for _, path := range []string{toyConfig, toyConfig, rulesConfig} {
+	for _, path := range []string{toyConfig, fleetConfig, rulesConfig} {
 		for _, p := range plans(t, path, 200) {
 			if err := p.Validate(); err != nil {
 				t.Fatalf("%s seed %d: %v", path, p.Seed, err)

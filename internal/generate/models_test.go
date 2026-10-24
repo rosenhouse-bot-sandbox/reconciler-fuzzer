@@ -76,14 +76,14 @@ func TestAModelFaultComesWithTheActionItExercises(t *testing.T) {
 		{slowDelete, true, plan.Delete},
 		{slowDelete, false, plan.Restart},
 	} {
-		action := rapid.Custom(func(t *rapid.T) plan.Action {
-			rapid.Bool().Draw(t, "rapid needs a draw")
+		action := example(t, 0, func(rt *rapid.T) plan.Action {
+			rapid.Bool().Draw(rt, "rapid needs a draw")
 			at := state{}
 			if c.live {
 				at["a"] = g.kinds[0].base("a").Object
 			}
-			return g.traffic(t, at, c.fault)
-		}).Example(0)
+			return g.traffic(rt, at, c.fault)
+		})
 		if action.Do != c.want {
 			t.Errorf("%s with a live CR %t comes with %s, want %s.", c.fault, c.live, action.Do, c.want)
 		}

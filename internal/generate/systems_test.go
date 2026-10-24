@@ -51,9 +51,9 @@ var holdWidgets = plan.Fault{Match: plan.Match{Group: "toy.reconciler-fuzzer", R
 func TestAHoldWatchComesWithARecreateOfALiveCRAsItWas(t *testing.T) {
 	g := newGenerator(t, loadConfig(t, toyConfig))
 	cr := g.kinds[0].base("a").Object
-	actions := rapid.Custom(func(t *rapid.T) []plan.Action {
-		return g.holdTraffic(t, state{"a": cr}, holdWidgets)
-	}).Example(0)
+	actions := example(t, 0, func(rt *rapid.T) []plan.Action {
+		return g.holdTraffic(rt, state{"a": cr}, holdWidgets)
+	})
 	if len(actions) != 2 || actions[0].Do != plan.Delete || actions[1].Do != plan.Create ||
 		actions[0].Slot != "a" || actions[1].Slot != "a" || !reflect.DeepEqual(decode(t, actions[1].Object), decode(t, marshal(cr))) {
 		t.Errorf("A holdWatch comes with %+v, want slot a deleted and created as it was.", actions)
@@ -65,9 +65,9 @@ func TestAHoldWatchComesWithARecreateOfALiveCRAsItWas(t *testing.T) {
 
 func TestAHoldWatchWithoutALiveCRComesWithACreate(t *testing.T) {
 	g := newGenerator(t, loadConfig(t, toyConfig))
-	actions := rapid.Custom(func(t *rapid.T) []plan.Action {
-		return g.holdTraffic(t, state{}, holdWidgets)
-	}).Example(0)
+	actions := example(t, 0, func(rt *rapid.T) []plan.Action {
+		return g.holdTraffic(rt, state{}, holdWidgets)
+	})
 	if len(actions) != 1 || actions[0].Do != plan.Create {
 		t.Errorf("A holdWatch with no live CR comes with %+v, want a create.", actions)
 	}
@@ -201,20 +201,31 @@ func TestAReadOnlyFakeTakesNoDamageAndOnlyReadFaults(t *testing.T) {
 }
 
 func TestAReadOnlyFakesFaultComesWithACreateOrAnUpdate(t *testing.T) {
-	g := newGenerator(t, loadConfig(t, "testdata/systems/read-only.yaml"))
 	read := plan.Fault{System: "vault", Match: plan.Match{Verb: "get"}, Drop: true}
-	for _, live := range []bool{false, true} {
-		action := rapid.Custom(func(t *rapid.T) plan.Action {
+	for _, c := range []struct {
+		live, fieldless bool
+		want            plan.Do
+	}{
+		{false, false, plan.Create},
+		{true, false, plan.Update},
+		{true, true, plan.Restart},
+	} {
+		g := newGenerator(t, loadConfig(t, "testdata/systems/read-only.yaml"))
+		if c.fieldless {
+			g.kinds[0].fields = nil
+		}
+		action := example(t, 0, func(rt *rapid.T) plan.Action {
+			rapid.Bool().Draw(rt, "rapid needs a draw")
 			at := state{}
-			if live {
+			if c.live {
 				for _, slot := range slots {
 					at[slot] = g.kinds[0].base(slot).Object
 				}
 			}
-			return g.traffic(t, at, read)
-		}).Example(0)
-		if want := map[bool]plan.Do{false: plan.Create, true: plan.Update}[live]; action.Do != want {
-			t.Errorf("live %v: a read fault comes with %s, want %s.", live, action.Do, want)
+			return g.traffic(rt, at, read)
+		})
+		if action.Do != c.want {
+			t.Errorf("live %v, fieldless %v: a read fault comes with %s, want %s.", c.live, c.fieldless, action.Do, c.want)
 		}
 	}
 }

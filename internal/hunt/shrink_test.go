@@ -163,9 +163,14 @@ func TestCandidatesResetACreateTowardTheSampleOfItsKind(t *testing.T) {
 }
 
 func TestCandidatesKeepTheFieldsOfACreateOfAKindWithoutASample(t *testing.T) {
-	p := parsePlan(t, `{"steps":[{"actions":[{"do":"create","slot":"a","object":{"apiVersion":"toy.reconciler-fuzzer/v1","kind":"User","metadata":{"name":"app"},"spec":{"engine":"mysql"}}}]}]}`)
-	if got := creates(t, p, fleetSamples); len(got) != 0 {
-		t.Errorf("Resets are %v, want none.", got)
+	for _, header := range []string{
+		`"apiVersion":"toy.reconciler-fuzzer/v1","kind":"User"`,
+		`"apiVersion":"other.reconciler-fuzzer/v1","kind":"Database"`,
+	} {
+		p := parsePlan(t, `{"steps":[{"actions":[{"do":"create","slot":"a","object":{`+header+`,"metadata":{"name":"app"},"spec":{"engine":"mysql"}}}]}]}`)
+		if got := creates(t, p, fleetSamples); len(got) != 0 {
+			t.Errorf("Resets of {%s} are %v, want none.", header, got)
+		}
 	}
 }
 
@@ -281,6 +286,21 @@ func TestShrinkReachesAPlanNoCandidateOfWhichFails(t *testing.T) {
 	}
 	if shrunk == 0 {
 		t.Fatal("No seed deletes slot b.")
+	}
+}
+
+// hasCreate fails while the plan creates something.
+func hasCreate(_ context.Context, p *plan.Plan) (bool, error) {
+	return slices.ContainsFunc(p.Steps, func(s plan.Step) bool {
+		return slices.ContainsFunc(s.Actions, func(a plan.Action) bool { return a.Do == plan.Create })
+	}), nil
+}
+
+func TestShrinkResetsACreateTowardTheSampleOfItsKind(t *testing.T) {
+	const database = `{"steps":[{"actions":[{"do":"create","slot":"a","object":{"apiVersion":"toy.reconciler-fuzzer/v1","kind":"Database","metadata":{"name":"app"},"spec":{"engine":%q}}}]}]}`
+	got, err := Shrink(context.Background(), parsePlan(t, fmt.Sprintf(database, "mysql")), fleetSamples, hasCreate)
+	if want := fmt.Sprintf(database, "postgres"); err != nil || encoded(t, got) != want {
+		t.Errorf("Shrink = %s, %v; want %s.", encoded(t, got), err, want)
 	}
 }
 

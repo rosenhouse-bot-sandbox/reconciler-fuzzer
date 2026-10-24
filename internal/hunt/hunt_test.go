@@ -3,6 +3,7 @@ package hunt
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -330,6 +331,28 @@ func TestShrinkPlanRunsReplaysAndShrinksAPlanFile(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(out, "summary.md")); err != nil {
 		t.Error(err)
+	}
+}
+
+func TestShrinkPlanResetsACreateTowardTheSample(t *testing.T) {
+	out := t.TempDir()
+	path := filepath.Join(t.TempDir(), "plan.json")
+	const widget = `{"steps":[{"actions":[{"do":"create","slot":"a","object":{"apiVersion":"toy.reconciler-fuzzer/v1","kind":"Widget","metadata":{"name":"widget"},"spec":{"count":%d}}}]}]}`
+	if err := plan.Save(path, parsePlan(t, fmt.Sprintf(widget, 5))); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeRun{out: out, finds: func(_ string, p *plan.Plan) []check.Finding {
+		if created, _ := hasCreate(context.Background(), p); created {
+			return []check.Finding{clean}
+		}
+		return nil
+	}}
+	found, err := ShrinkPlan(context.Background(), ShrinkOptions{ConfigPath: toyConfig, PlanPath: path, Out: out, Run: fake.run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := fmt.Sprintf(widget, 3); len(found) != 1 || encoded(t, found[0].Shrunk) != want {
+		t.Errorf("ShrinkPlan found %+v, want the create shrunk to %s.", found, want)
 	}
 }
 
