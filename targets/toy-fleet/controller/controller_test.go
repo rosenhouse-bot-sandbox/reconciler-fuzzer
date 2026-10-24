@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	fleetv1 "github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/targets/toy-fleet/api/v1"
@@ -104,7 +105,7 @@ func (f *fleet) readyVolumes() {
 func (f *fleet) holdVolumes() {
 	f.t.Helper()
 	for _, v := range f.listVolumes() {
-		v.Finalizers = []string{"storage.thirdparty/protect"}
+		controllerutil.AddFinalizer(&v, "storage.thirdparty/protect")
 		if err := f.c.Update(f.t.Context(), &v); err != nil {
 			f.t.Fatal(err)
 		}
@@ -290,10 +291,13 @@ func TestClusterDeletesEachVolumeOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.settle(f.clusters, "cluster")
+	if want := map[string]int{"cluster-vol-1": 1}; !maps.Equal(deletes, want) {
+		t.Errorf("After a scale-down, the Cluster sent Volume deletes %v, want %v.", deletes, want)
+	}
 	f.delete(f.cluster())
 	f.settle(f.clusters, "cluster")
 	if want := map[string]int{"cluster-vol-0": 1, "cluster-vol-1": 1}; !maps.Equal(deletes, want) {
-		t.Errorf("The Cluster sent Volume deletes %v through a scale-down and its deletion, want %v.", deletes, want)
+		t.Errorf("After its deletion, the Cluster sent Volume deletes %v, want %v.", deletes, want)
 	}
 }
 
