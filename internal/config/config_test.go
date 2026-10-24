@@ -336,6 +336,49 @@ func TestModels(t *testing.T) {
 	}
 }
 
+// A third-party controller puts its own finalizer on what it serves, and
+// removes it once it has torn the object down.
+func TestAModelCanHoldAFinalizer(t *testing.T) {
+	c, err := config.Load(writeConfig(t, minimal(t)+`models:
+  - kind: example.com/v1/Gadget
+    after: 200ms
+    finalizer: {name: example.com/protect, after: 1s}
+  - kind: example.com/v1/Gizmo
+    after: 0s
+    finalizer: {name: example.com/quick, after: 0s}
+  - kind: example.com/v1/Doohickey
+    after: 0s
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []*config.Finalizer{{Name: "example.com/protect", After: time.Second}, {Name: "example.com/quick"}, nil}
+	if len(c.Models) != len(want) {
+		t.Fatalf("models = %+v", c.Models)
+	}
+	for i, m := range c.Models {
+		if !reflect.DeepEqual(m.Finalizer, want[i]) {
+			t.Errorf("%s finalizer = %+v, want %+v", m.Kind.Kind, m.Finalizer, want[i])
+		}
+	}
+}
+
+func TestAModelFinalizerRefusesMistakes(t *testing.T) {
+	for finalizer, want := range map[string]string{
+		"{after: 1s}":                                          "models[0].finalizer.name is required",
+		`{name: "-x", after: 1s}`:                              `models[0].finalizer.name "-x"`,
+		"{name: example.com/x}":                                "models[0].finalizer.after is required",
+		"{name: example.com/x, after: -1s}":                    `models[0].finalizer.after "-1s"`,
+		"{name: example.com/x, after: soon}":                   `models[0].finalizer.after "soon"`,
+		"{name: reconciler-fuzzer.dev/slow-delete, after: 1s}": "slowDelete",
+	} {
+		_, err := config.Load(writeConfig(t, minimal(t)+"models:\n- {kind: example.com/v1/Gadget, after: 1s, finalizer: "+finalizer+"}\n"))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("finalizer %s: err = %v, want %q", finalizer, err, want)
+		}
+	}
+}
+
 func TestModelsTellAnEmptyStuckStatusFromAnUnsetOne(t *testing.T) {
 	c, err := config.Load(writeConfig(t, minimal(t)+`models:
   - {kind: v1/Pod, after: 0s, status: {phase: Running}}

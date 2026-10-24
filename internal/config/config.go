@@ -201,9 +201,18 @@ type Model struct {
 	// A nil StuckStatus means Status, and an empty one means no fields.
 	Status, StuckStatus map[string]any
 	After               time.Duration
+	// Finalizer is nil unless the model holds each object's deletion.
+	Finalizer *Finalizer
 	// Dependency is nil unless the kind is a readiness dependency of the
 	// primary.
 	Dependency *Dependency
+}
+
+// Finalizer is a finalizer the model keeps on each live object. It removes
+// the finalizer After past the object's deletion.
+type Finalizer struct {
+	Name  string
+	After time.Duration
 }
 
 // Dependency marks a model kind as one the primary's readiness depends on.

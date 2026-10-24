@@ -171,17 +171,20 @@ func recordedEvents(e *events) []trace.Event {
 	return events
 }
 
-func TestAStageMakesAGadgetReadyThenStuckThenRecovered(t *testing.T) {
+var gadgetKind = schema.GroupVersionKind{Group: "test.reconciler-fuzzer", Version: "v1", Kind: "Gadget"}
+
+// startStage starts envtest with the Gadget CRD and a stage of m, and
+// creates Gadget g.
+func startStage(t *testing.T, m config.Model) (*kube.Kube, *Stage, *events, trace.Ref) {
+	t.Helper()
 	ctx := context.Background()
 	recorded := &events{}
-	gvk := schema.GroupVersionKind{Group: "test.reconciler-fuzzer", Version: "v1", Kind: "Gadget"}
-	k := kube.New(kube.Options{CRDs: []string{"testdata/crds"}, Watch: []schema.GroupVersionKind{gvk}})
+	k := kube.New(kube.Options{CRDs: []string{"testdata/crds"}, Watch: []schema.GroupVersionKind{gadgetKind}})
 	if _, err := k.Start(ctx, &system.Env{Record: recorded.record, Dir: t.TempDir()}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { k.Stop(ctx) })
-	s, err := NewStage(k, config.Model{Kind: gvk, Stage: config.ReadyCondition, After: 100 * time.Millisecond,
-		Status: map[string]any{"phase": "Running"}, StuckStatus: map[string]any{"phase": "Pending"}})
+	s, err := NewStage(k, m)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,11 +192,28 @@ func TestAStageMakesAGadgetReadyThenStuckThenRecovered(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.Stop(ctx) })
-	ready, err := config.CompileReady(config.ReadyConditionCEL)
+	ref, err := k.Create(ctx, map[string]any{"apiVersion": "test.reconciler-fuzzer/v1", "kind": "Gadget", "metadata": map[string]any{"name": "g"}, "spec": map[string]any{"size": int64(1)}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, err := k.Create(ctx, map[string]any{"apiVersion": "test.reconciler-fuzzer/v1", "kind": "Gadget", "metadata": map[string]any{"name": "g"}, "spec": map[string]any{"size": int64(1)}})
+	return k, s, recorded, ref
+}
+
+// lastVersion is the last version of ref the observer recorded.
+func lastVersion(recorded *events, ref trace.Ref) trace.Version {
+	var last trace.Version
+	for _, e := range recordedEvents(recorded) {
+		if e.Version != nil && e.Version.Ref == ref {
+			last = *e.Version
+		}
+	}
+	return last
+}
+
+func TestAStageMakesAGadgetReadyThenStuckThenRecovered(t *testing.T) {
+	_, s, recorded, ref := startStage(t, config.Model{Kind: gadgetKind, Stage: config.ReadyCondition, After: 100 * time.Millisecond,
+		Status: map[string]any{"phase": "Running"}, StuckStatus: map[string]any{"phase": "Pending"}})
+	ready, err := config.CompileReady(config.ReadyConditionCEL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,12 +221,7 @@ func TestAStageMakesAGadgetReadyThenStuckThenRecovered(t *testing.T) {
 		t.Helper()
 		deadline := time.Now().Add(10 * time.Second)
 		for time.Now().Before(deadline) {
-			var last trace.Version
-			for _, e := range recordedEvents(recorded) {
-				if e.Version != nil && e.Version.Ref == ref {
-					last = *e.Version
-				}
-			}
+			last := lastVersion(recorded, ref)
 			var obj map[string]any
 			json.Unmarshal(last.Body, &obj)
 			if got, err := ready(obj); err == nil && got == want && strings.Contains(string(last.Body), message) {
@@ -218,7 +233,7 @@ func TestAStageMakesAGadgetReadyThenStuckThenRecovered(t *testing.T) {
 	}
 
 	await(t, "ready", true, `"phase":"Running"`)
-	end, err := s.Fault(plan.Fault{Match: plan.Match{Group: gvk.Group, Resource: "gadgets"}, Stuck: true})
+	end, err := s.Fault(plan.Fault{Match: plan.Match{Group: gadgetKind.Group, Resource: "gadgets"}, Stuck: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,5 +251,30 @@ func TestAStageMakesAGadgetReadyThenStuckThenRecovered(t *testing.T) {
 			t.Fatal("The stage's writes are not calls by its caller.")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestAStageHoldsAGadgetsDeletionWithItsFinalizer(t *testing.T) {
+	const hold = 500 * time.Millisecond
+	k, _, recorded, ref := startStage(t, config.Model{Kind: gadgetKind, Stage: config.ReadyCondition, After: 100 * time.Millisecond,
+		Finalizer: &config.Finalizer{Name: "example.com/cleanup", After: hold}})
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(string(lastVersion(recorded, ref).Body), `"example.com/cleanup"`) {
+		if time.Now().After(deadline) {
+			t.Fatal("The gadget never got the stage's finalizer.")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	deleted := time.Now()
+	if err := k.Delete(ctx, ref, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.WaitGone(ctx, ref); err != nil {
+		t.Fatalf("The gadget is not gone: %v", err)
+	}
+	if elapsed := time.Since(deleted); elapsed < hold {
+		t.Errorf("The gadget went %v after its delete, want at least %v.", elapsed, hold)
 	}
 }

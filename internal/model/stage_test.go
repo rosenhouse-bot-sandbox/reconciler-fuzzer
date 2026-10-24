@@ -109,15 +109,34 @@ func (w *stageWorks) get() []bool {
 
 const after = 60 * time.Millisecond
 
+func gadgetModel() config.Model {
+	return config.Model{Kind: gadgetGVR.GroupVersion().WithKind("Gadget"), Stage: config.ReadyCondition, After: after}
+}
+
 func testStage(t *testing.T) (*Stage, *fakeStageWriter, *stageWorks) {
 	return testStageWith(t, map[string]any{"phase": "Running"}, nil)
 }
 
 func testStageWith(t *testing.T, status, stuckStatus map[string]any) (*Stage, *fakeStageWriter, *stageWorks) {
+	m := gadgetModel()
+	m.Status, m.StuckStatus = status, stuckStatus
+	return testStageOf(t, m)
+}
+
+const cleanup = "example.com/cleanup"
+
+// testStageHolding runs a stage that keeps cleanup on each live Gadget, and
+// removes it hold past the Gadget's deletion.
+func testStageHolding(t *testing.T, hold time.Duration) (*Stage, *fakeStageWriter, *stageWorks) {
+	m := gadgetModel()
+	m.Finalizer = &config.Finalizer{Name: cleanup, After: hold}
+	return testStageOf(t, m)
+}
+
+func testStageOf(t *testing.T, m config.Model) (*Stage, *fakeStageWriter, *stageWorks) {
 	t.Helper()
 	w := &fakeStageWriter{}
 	works := &stageWorks{}
-	m := config.Model{Kind: gadgetGVR.GroupVersion().WithKind("Gadget"), Stage: config.ReadyCondition, After: after, Status: status, StuckStatus: stuckStatus}
 	s := newStage(gadgetGVR, m, w, works.record)
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel, s.done = cancel, make(chan struct{})
@@ -179,6 +198,8 @@ func readyCondition(t *testing.T, w write) map[string]any {
 func precondition(w write) any {
 	return w.patch["metadata"].(map[string]any)["resourceVersion"]
 }
+
+func writtenFinalizers(w write) any { return w.patch["metadata"].(map[string]any)["finalizers"] }
 
 func TestStageIsNamedAfterItsKind(t *testing.T) {
 	s := newStage(gadgetGVR, config.Model{}, nil, nil)
@@ -469,14 +490,13 @@ func TestSlowDeleteHoldsEveryMatchingObjectUntilItEnds(t *testing.T) {
 		t.Fatal(err)
 	}
 	writes := w.all()
-	finalizers := func(w write) any { return w.patch["metadata"].(map[string]any)["finalizers"] }
-	if len(writes) != 1 || writes[0].subresource != "" || !reflect.DeepEqual(finalizers(writes[0]), []any{"other", SlowDeleteFinalizer}) {
+	if len(writes) != 1 || writes[0].subresource != "" || !reflect.DeepEqual(writtenFinalizers(writes[0]), []any{"other", SlowDeleteFinalizer}) {
 		t.Fatalf("Fault returned with writes %+v, want the finalizer added to g1.", writes)
 	}
 	s.hear(gadget{name: "g1", uid: "u1", rv: writes[0].rv, generation: 1, finalizers: []string{"other", SlowDeleteFinalizer}, ready: readyFor(1)}.version())
 	s.hear(gadget{name: "g2", uid: "u2", rv: "5", generation: 1, ready: readyFor(1)}.version())
 	writes = w.await(t, 2)
-	if writes[1].ref.Name != "g2" || !reflect.DeepEqual(finalizers(writes[1]), []any{SlowDeleteFinalizer}) {
+	if writes[1].ref.Name != "g2" || !reflect.DeepEqual(writtenFinalizers(writes[1]), []any{SlowDeleteFinalizer}) {
 		t.Fatalf("Wrote %+v, want the finalizer added to g2.", writes[1])
 	}
 	s.hear(gadget{name: "g2", uid: "u2", rv: writes[1].rv, generation: 1, deleting: true, finalizers: []string{SlowDeleteFinalizer}, ready: readyFor(1)}.version())
@@ -486,7 +506,7 @@ func TestSlowDeleteHoldsEveryMatchingObjectUntilItEnds(t *testing.T) {
 	writes = w.all()[2:]
 	var got []string
 	for _, w := range writes {
-		got = append(got, fmt.Sprintf("%s %s %v", w.ref.Name, w.subresource, finalizers(w)))
+		got = append(got, fmt.Sprintf("%s %s %v", w.ref.Name, w.subresource, writtenFinalizers(w)))
 	}
 	want := []string{"g1  [other]", "g2  []", "g1 status <nil>"}
 	if !reflect.DeepEqual(got, want) {
@@ -571,5 +591,107 @@ func TestStageTakesAModelFaultWithNoGroup(t *testing.T) {
 	f.Match.Group = ""
 	if !s.Takes(f) {
 		t.Errorf("Takes(%s) = false, want true.", f)
+	}
+}
+
+func TestAModelFinalizerHoldsEachDeletionForItsAfter(t *testing.T) {
+	const hold = 500 * time.Millisecond
+	s, w, _ := testStageHolding(t, hold)
+	g := gadget{name: "g", uid: "u", rv: "1", generation: 1, finalizers: []string{"other"}, ready: readyFor(1)}
+	s.hear(g.version())
+	added := w.await(t, 1)[0]
+	if added.subresource != "" || precondition(added) != "1" || !reflect.DeepEqual(writtenFinalizers(added), []any{"other", cleanup}) {
+		t.Fatalf("Wrote %+v on first hearing g, want its finalizer added at resourceVersion 1.", added)
+	}
+	g.rv, g.finalizers = added.rv, []string{"other", cleanup}
+	s.hear(g.version())
+	w.still(t, 1, 2*after)
+
+	deleted := time.Now()
+	g.rv, g.generation, g.deleting = "200", 2, true
+	s.hear(g.version())
+	if !s.Pending() {
+		t.Error("Pending is false while the finalizer holds the deletion.")
+	}
+	removed := w.await(t, 2)[1]
+	if elapsed := time.Since(deleted); elapsed < hold {
+		t.Errorf("Removed the finalizer %v after the deletion, want at least %v.", elapsed, hold)
+	}
+	if precondition(removed) != "200" || !reflect.DeepEqual(writtenFinalizers(removed), []any{"other"}) {
+		t.Errorf("Wrote %+v, want only the stage's finalizer removed at resourceVersion 200.", removed)
+	}
+}
+
+func TestAModelFinalizerReturnsToALiveObjectThatLostIt(t *testing.T) {
+	s, w, _ := testStageHolding(t, time.Second)
+	g := gadget{name: "g", uid: "u", rv: "1", generation: 1, finalizers: []string{cleanup}, ready: readyFor(1)}
+	s.hear(g.version())
+	w.still(t, 0, 2*after)
+	g.rv, g.finalizers = "2", nil
+	s.hear(g.version())
+	if got := w.await(t, 1)[0]; precondition(got) != "2" || !reflect.DeepEqual(writtenFinalizers(got), []any{cleanup}) {
+		t.Errorf("Wrote %+v, want the finalizer added back at resourceVersion 2.", got)
+	}
+}
+
+func TestAModelFinalizerIsNotAddedToAnObjectBeingDeleted(t *testing.T) {
+	s, w, works := testStageHolding(t, time.Second)
+	s.hear(gadget{name: "g", uid: "u", rv: "1", generation: 1, deleting: true, finalizers: []string{"x"}}.version())
+	w.still(t, 0, 2*after)
+	if got := works.get(); len(got) > 0 {
+		t.Errorf("Recorded work %v, want none.", got)
+	}
+}
+
+func TestAModelFinalizerCountsAfterFromTheFirstDeletingVersion(t *testing.T) {
+	s, _, _ := testStageHolding(t, time.Hour)
+	deletingAt := func(g gadget) time.Time {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.objects[g.ref()].deletingAt
+	}
+	g := gadget{name: "g", uid: "u", rv: "1", generation: 1, finalizers: []string{cleanup, "other"}}
+	s.hear(g.version())
+	heard := time.Now()
+	g.rv, g.generation, g.deleting = "2", 2, true
+	s.hear(g.version())
+	first := deletingAt(g)
+	if first.Before(heard) || first.After(time.Now()) {
+		t.Fatalf("deletingAt = %v, want the time the stage heard the deletion, after %v.", first, heard)
+	}
+	time.Sleep(time.Millisecond)
+	g.rv, g.finalizers = "3", []string{cleanup}
+	s.hear(g.version())
+	if got := deletingAt(g); !got.Equal(first) {
+		t.Errorf("deletingAt = %v after a later deleting version, want %v.", got, first)
+	}
+}
+
+func TestSlowDeleteAndAModelFinalizerKeepEachOther(t *testing.T) {
+	s, w, _ := testStageHolding(t, after)
+	end, err := s.Fault(slowDelete())
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := gadget{name: "g", uid: "u", rv: "1", generation: 1, ready: readyFor(1)}
+	s.hear(g.version())
+	added := w.await(t, 1)[0]
+	g.rv, g.finalizers = added.rv, []string{SlowDeleteFinalizer, cleanup}
+	s.hear(g.version())
+	g.rv, g.generation, g.deleting = "200", 2, true
+	s.hear(g.version())
+	released := w.await(t, 2)[1]
+	g.rv, g.finalizers = released.rv, []string{SlowDeleteFinalizer}
+	s.hear(g.version())
+	w.still(t, 2, 2*after)
+	end()
+
+	var got []string
+	for _, w := range w.all() {
+		got = append(got, fmt.Sprint(writtenFinalizers(w)))
+	}
+	want := []string{fmt.Sprint([]any{SlowDeleteFinalizer, cleanup}), fmt.Sprint([]any{SlowDeleteFinalizer}), "[]"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Wrote finalizers %q, want %q.", got, want)
 	}
 }

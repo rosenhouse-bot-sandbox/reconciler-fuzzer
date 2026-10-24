@@ -1,0 +1,30 @@
+# config.yaml, but the Volume model also plays a storage controller's
+# finalizer: it holds each Volume's deletion for 1s. Paths resolve against
+# this file's directory.
+launch:
+  binary: ../../../bin/toy-fleet
+  args:
+    - --bug=0                      # A later --launch-arg --bug=N wins.
+  env:
+    WATCH_NAMESPACE: ${systems.kube.namespace}
+  rbac:
+    - ../rbac/role.yaml
+crds:
+  - ../crds/
+primary:
+  kind: toy.reconciler-fuzzer/v1/Cluster
+  sample: ../cluster.yaml
+  ready: >-
+    has(self.status) && has(self.status.observedGeneration) && self.status.observedGeneration == self.metadata.generation
+    && has(self.status.phase) && self.status.phase == 'Ready'
+models:
+  - kind: storage.thirdparty/v1/Volume
+    stages: readyCondition
+    after: 300ms
+    finalizer: {name: storage.thirdparty/protect, after: 1s}
+    dependency: {track: 1s}
+values:
+  mutate: [spec.volumes, spec.volumeSize]
+timeouts:
+  settle: 10s
+  stable: 2s

@@ -66,6 +66,8 @@ type held struct {
 	generation int64
 	heardAt    time.Time
 	deleting   bool
+	// deletingAt is when the stage first heard the object being deleted.
+	deletingAt time.Time
 	finalizers []string
 	ready      *stageCondition
 	// awaited is the resourceVersion a sent write made, or, after a
