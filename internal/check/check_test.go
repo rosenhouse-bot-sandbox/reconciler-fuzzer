@@ -404,18 +404,27 @@ func TestSpecForRefusesAConfigThatListsOtherKinds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	widgets := tt.Run("toy.reconciler-fuzzer", "widgets").Run.Primaries[0]
-	gadgets := trace.Primary{Kind: trace.Kind{Group: "toy.reconciler-fuzzer", Resource: "gadgets"}}
-	for recorded, primaries := range map[string][]trace.Primary{
-		"widgets.toy.reconciler-fuzzer, gadgets.toy.reconciler-fuzzer": {widgets, gadgets},
-		"none": nil,
-	} {
-		run := tt.Run("toy.reconciler-fuzzer", "widgets")
-		run.Run.Primaries = primaries
+	run := tt.Run("toy.reconciler-fuzzer", "widgets")
+	run.Run.Primaries = append(run.Run.Primaries, trace.Primary{Kind: trace.Kind{Group: "toy.reconciler-fuzzer", Resource: "gadgets"}})
+	var b tt.Builder
+	_, err = check.SpecFor(c, b.Add(run).Index())
+	if want := "the config's primaries list widgets.toy.reconciler-fuzzer, but the trace's list widgets.toy.reconciler-fuzzer, gadgets.toy.reconciler-fuzzer"; err == nil || err.Error() != want {
+		t.Errorf("SpecFor = %v, want %q", err, want)
+	}
+}
+
+func TestSpecForTellsToRunAgainATraceThatListsNoPrimaries(t *testing.T) {
+	c, err := config.Load("../../targets/toy-widget/config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := tt.Run("toy.reconciler-fuzzer", "widgets")
+	run.Run.Primaries, run.Run.Stable, run.Run.Reads, run.Run.Writes = nil, s, 2, 4
+	for name, c := range map[string]*config.Config{"with a config": c, "without one": nil} {
 		var b tt.Builder
 		_, err := check.SpecFor(c, b.Add(run).Index())
-		if want := "the config's primaries list widgets.toy.reconciler-fuzzer, but the trace's list " + recorded; err == nil || err.Error() != want {
-			t.Errorf("SpecFor = %v, want %q", err, want)
+		if want := "the trace's run event lists no primaries, so an older reconciler-fuzzer recorded it; run its plan.json again"; err == nil || err.Error() != want {
+			t.Errorf("SpecFor %s = %v, want %q", name, err, want)
 		}
 	}
 }

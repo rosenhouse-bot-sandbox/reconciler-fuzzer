@@ -200,9 +200,9 @@ A `target` has `system` (default `kube`), `group`, `resource`, `namespace`,
 `name`, `role` and `nth` (default 1). Empty fields match anything.
 `owner.World.Select` resolves it when the action runs: the `nth` live instance,
 in creation order, that the controller (for `damage`) or the harness created,
-owned by the slot's live CR when a slot is set. A target that matches nothing
-records the error `no instance matches`, which names the slot's kind when the
-slot holds an object that is not a CR.
+owned by the slot's newest live CR when a slot is set. A target that matches
+nothing records the error `no instance matches`, which names the slot's kind
+when the slot holds an object that is not a CR.
 
 Actions run in order, each at its optional `at` offset. A fault sets one
 effect: a request fault or `holdWatch` (§5), or a model fault (§7) with no
@@ -317,10 +317,10 @@ owner not at all. Summary: `left resources behind`.
 **Restore.** It judges a settled step with no `create`, `update`, `delete` or
 `changeFixture` action after a settled step, comparing the controller's
 resources at the two ends by group, without volatile fields (entries 21 and 40,
-and the map's). Where no `damage` touched the owning CR, each instance must
-stay, with no new one and an equal body: `replaced resources`, `changed
-resources`. Where one did, each damaged group must be live again: `did not
-restore damaged resources` (entry 22).
+the map's, and a CR kind's `periodic.paths`). Where no `damage` touched the
+owning CR, each instance must stay, with no new one and an equal body:
+`replaced resources`, `changed resources`. Where one did, each damaged group
+must be live again: `did not restore damaged resources` (entry 22).
 
 **Unique.** At each settled step's end, a group holds at most one live
 controller instance. Summary: `duplicate resources`.
@@ -338,10 +338,11 @@ dependency not ready`.
 
 **Backoff.** Failing controller calls with one system, verb, object,
 subresource and status form a **run**; a create's object is its `requestName`.
-A success, or the CR's new generation, breaks it. With `n` CRs live, it fails
-when each gap between calls `5n + 1` to `10n + 1` is under 100 ms: `retried a
-failing request in a tight loop`. It skips 409s on a held kind until `stable /
-4` after the hold.
+A success breaks it, as does a new generation of its object, if a CR, of the
+object's rule 1 to 3 CR, or, for an object with neither, of any CR. With `n`
+CRs live, it fails when each gap between calls `5n + 1` to `10n + 1` is under
+100 ms: `retried a failing request in a tight loop`. It skips 409s on a held
+kind until `stable / 4` after the hold.
 
 **Property.** A `step` property is judged at each settled step's end, and an
 `always` one at each `version` event. Its CEL sees `crs`, the live CRs' bodies,

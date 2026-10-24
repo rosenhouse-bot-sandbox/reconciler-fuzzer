@@ -112,8 +112,8 @@ clause 4 findings follow from it.
 
 A controller resource outlived its owning CR. Each line names the
 resource, the owner rule of DESIGN.md §11 that tied it to a CR (1:
-ownerReferences; 2: `systems[].owner`; 3: `primary.owns`; 4: the CRs live
-at its creation), and that CR's slot:
+ownerReferences; 2: `systems[].owner`; 3: an entry's `owns`; 4: the CRs
+live at its creation), and that CR's slot:
 
 ```
 configmaps rf-9485af8b/widget-0 (rule 4, slot a)
@@ -121,11 +121,13 @@ buckets buckets-1 (rule 2, slot a)
 ```
 
 A rule 4 line usually means the resource lacks an ownerReference, so
-garbage collection could not delete it. A rule 1 line on a cluster-scoped
-resource with a namespaced owner means garbage collection ignores that
-invalid ownerReference. A rule 2 or 3 line usually means a finalizer
-forgot the resource. A resource that should outlive its
-CR needs `primary.retain`.
+garbage collection could not delete it. Its ownerReferences may also name
+only objects that are gone or that the trace never saw. While one names a
+live object that is not a CR, such as a fixture, Clean skips the
+resource. A rule 1 line on a cluster-scoped resource with a namespaced
+owner means garbage collection ignores that invalid ownerReference. A rule
+2 or 3 line usually means a finalizer forgot the resource. A resource that
+should outlive its CR needs its entry's `retain`.
 
 ### Restore
 
@@ -138,6 +140,9 @@ from the previous step's end.
   appeared.
 - `changed resources`: an undamaged resource's body changed. Each line
   names the fields that differ.
+
+Each line names its resource's owner as Clean does. `rule 1, unlisted
+owner` names the live object, not a CR, that an ownerReference names.
 
 ### Unique: duplicate resources
 
@@ -179,6 +184,7 @@ names its cause. A run that started leaves its partial trace in `--out`. Common 
 | `creating fixture ...` | Fix the fixture, or install the CRD it needs under `crds`. |
 | `launch args: ...` or `launch env <name>: ...` | Use only `${systems.kube.kubeconfig}`, `namespace` and `url`, and a fake's `${systems.<name>.url}`. |
 | `fake <name> exited ...` | Read `<out>/<name>.log`. Fix the `systems[].process` command or the fake's own config. |
+| `create of slot "<s>" makes a <kind>, which primaries does not list` | List the kind under `primaries`, or make the object a fixture. |
 
 `hunt` notes a seed whose run failed in `summary.md`, and goes on. It
 exits 2 when a seed failed and nothing was found, and 1 on any find.

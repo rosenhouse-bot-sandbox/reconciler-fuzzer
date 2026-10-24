@@ -137,6 +137,9 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 	if !ok {
 		return Spec{}, errors.New("the trace has no run event")
 	}
+	if len(run.Primaries) == 0 {
+		return Spec{}, errors.New("the trace's run event lists no primaries, so an older reconciler-fuzzer recorded it; run its plan.json again")
+	}
 	s := Spec{StatusKinds: run.StatusKinds}
 	if c != nil {
 		owners, primaries, err := owner.Sources(c, recordedResource(run))
@@ -144,7 +147,7 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 			return Spec{}, fmt.Errorf("the config: %w", err)
 		}
 		if want, got := listedKinds(primaries), listedKinds(run.Primaries); !slices.Equal(want, got) {
-			return Spec{}, fmt.Errorf("the config's primaries list %s, but the trace's list %s", strings.Join(want, ", "), cmp.Or(strings.Join(got, ", "), "none"))
+			return Spec{}, fmt.Errorf("the config's primaries list %s, but the trace's list %s", strings.Join(want, ", "), strings.Join(got, ", "))
 		}
 		if s.Primaries, err = compilePrimaries(primaries); err != nil {
 			return Spec{}, fmt.Errorf("the config's primaries: %w", err)
@@ -165,8 +168,8 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 		}
 		return s, nil
 	}
-	if len(run.Primaries) == 0 || run.Stable <= 0 || run.Reads <= 0 || run.Writes <= 0 {
-		return Spec{}, errors.New("the trace's run event records no primaries, stable and budgets; pass a config")
+	if run.Stable <= 0 || run.Reads <= 0 || run.Writes <= 0 {
+		return Spec{}, errors.New("the trace's run event records no stable and budgets; pass a config")
 	}
 	var err error
 	if s.Primaries, err = compilePrimaries(run.Primaries); err != nil {
