@@ -518,5 +518,5 @@ Each entry changes a check, exception, `System` interface or ignore list.
 77. Honest skips a dependency the controller deleted with a `delete`, or last saw deleted, whatever the observer's lag, so a scale-down passes (#124).
 78. A property sees each kind in the run event's `kinds` or `owns` as an empty list while it has no object (#148).
 79. Every check judges each kind `primaries` lists, and a CR the controller creates is also its owner's resource (#126).
-80. A live unlisted owner keeps its children from rule 4, so deleting a CR blames none of them (#128).
+80. A live unlisted owner keeps its children from rules 2 to 4, so deleting a CR blames none of them (#128).
 81. `required` binds only the first entry's CRs, so the kinds that own no dependency pass.
