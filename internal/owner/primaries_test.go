@@ -48,6 +48,13 @@ func TestRule4SpansEveryListedKind(t *testing.T) {
 	wantOwner(t, ownerBy(t, tl, owner.Rules{}, "ub", 3*s), 4, "ua")
 }
 
+func TestRule4LeavesOutCRsTheControllerCreated(t *testing.T) {
+	tl := fleet(clusters, databases)
+	tl.At(3*s, made(tt.Ref("toy/databases", "ns", "c"), "uc", "ua")...).
+		At(4*s, tt.Version(cmA0, "c1", "4", tt.Object("a-0")))
+	wantOwner(t, ownerBy(t, tl, owner.Rules{}, "c1", 4*s), 4, "ua", "ub")
+}
+
 func TestACRTheControllerCreatedIsACRThatItsOwnerOwns(t *testing.T) {
 	databaseC := tt.Ref("toy/databases", "ns", "c")
 	tl := fleet(clusters, databases)

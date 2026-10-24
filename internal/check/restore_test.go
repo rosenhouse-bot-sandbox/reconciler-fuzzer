@@ -282,6 +282,22 @@ func TestRestorePassesADamagedResourceWhoseOwnerTheControllerRemade(t *testing.T
 	requireNone(t, restore(t, r))
 }
 
+func TestRestoreFailsADamagedResourceWhoseRemadeOwnerDoesNotRemakeIt(t *testing.T) {
+	r := fleetRun(2, clusters, databases)
+	r.Begin()
+	uid := r.CreateCR("a", clusterA)
+	r.Create(ctl, childA, tt.OwnedBy(tt.Object("a-0"), uid, true))
+	r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), uid, true))
+	r.Create(ctl, childB, tt.OwnedBy(tt.Object("b-0"), r.UID(databaseB), true))
+	r.Ready(clusterA).EndFaults().Settle()
+	r.Begin().Delete(trace.Harness, childB).Act("damage", "a", &childB).EndFaults()
+	r.Call(ctl, "get", childB, 404)
+	r.Delete(ctl, databaseB)
+	r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), uid, true))
+	r.Settle()
+	requireFinding(t, restore(t, r), "Restore", 1, "did not restore damaged resources", "kube/configmaps", "configmaps ns/b-0 (rule 1, CR databases.toy ns/b)")
+}
+
 func TestRestorePassesAnOwnerAndItsResourceThatTheControllerMadeAgain(t *testing.T) {
 	role := tt.Ref("rbac.authorization.k8s.io/clusterroles", "", "a-reader")
 	binding := tt.Ref("rbac.authorization.k8s.io/clusterrolebindings", "", "a-reader")
@@ -322,6 +338,20 @@ func TestRestoreLetsARule4ResourceOfADamagedRootChange(t *testing.T) {
 	r.Begin().Delete(trace.Harness, childB).Act("damage", "a", &childB).EndFaults()
 	r.Create(ctl, childB, tt.OwnedBy(tt.Object("b-0"), r.UID(databaseB), true))
 	r.Update(ctl, shared, named("x", map[string]any{"data": "new"}))
+	r.Settle()
+	requireNone(t, restore(t, r))
+}
+
+func TestRestorePassesARule4ResourceRemadeAfterTheControllerMadeACR(t *testing.T) {
+	role := tt.Ref("rbac.authorization.k8s.io/clusterroles", "", "a-reader")
+	r := fleetRun(2, clusters, databases)
+	r.Begin()
+	uid := r.CreateCR("a", clusterA)
+	r.Create(ctl, role, tt.Object("a-reader"))
+	r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), uid, true))
+	r.Ready(clusterA).EndFaults().Settle()
+	r.Begin().Delete(trace.Harness, role).Act("damage", "a", &role).EndFaults()
+	r.Create(ctl, role, tt.Object("a-reader"))
 	r.Settle()
 	requireNone(t, restore(t, r))
 }

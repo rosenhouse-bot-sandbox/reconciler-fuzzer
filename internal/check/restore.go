@@ -26,9 +26,10 @@ func Restore(ix *trace.Index, s Spec) []Finding {
 		from, to := v.steps[n-1].ConfirmEnd, step.ConfirmEnd
 		damaged, touched := v.damaged(step.Step, from)
 		before, after := v.groups(from), v.groups(to)
-		kinds := map[group]bool{}
+		kinds, roles := map[group]bool{}, map[group]bool{}
 		for g := range after {
 			kinds[group{kind: g.kind, root: g.root}] = true
+			roles[group{kind: g.kind, root: g.root, role: g.role}] = true
 		}
 		missing, replaced, changed := map[string][]string{}, map[string][]string{}, map[string][]string{}
 		for _, g := range slices.Collect(maps.Keys(merge(before, after))) {
@@ -36,9 +37,13 @@ func Restore(ix *trace.Index, s Spec) []Finding {
 			k := kind(g.kind)
 			if touched(g.root) {
 				// A damaged group must be live again while its owner lives, and
-				// a touched group that empties must leave its kind under its root.
-				o, hit := damaged[g]
-				if len(was) > 0 && len(is) == 0 && (hit && v.lives(o, to) || !kinds[group{kind: g.kind, root: g.root}]) {
+				// leave its kind and role under its root once its owner is gone.
+				// A touched group that empties must leave its kind there.
+				restored := kinds[group{kind: g.kind, root: g.root}]
+				if o, hit := damaged[g]; hit {
+					restored = !v.lives(o, to) && roles[group{kind: g.kind, root: g.root, role: g.role}]
+				}
+				if len(was) > 0 && len(is) == 0 && !restored {
 					missing[k] = append(missing[k], v.describeAll(was[:1], from)...)
 				}
 				continue

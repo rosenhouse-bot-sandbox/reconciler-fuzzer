@@ -156,6 +156,18 @@ func TestUniqueGroupsByACROfAnyListedKind(t *testing.T) {
 	requireNone(t, judgeWith(t, r, check.Unique))
 }
 
+func TestUniqueFailsRule4DuplicatesMadeBeforeAndAfterACRTheControllerMade(t *testing.T) {
+	r := fleetRun(1, clusters, databases)
+	r.Begin()
+	uid := r.CreateCR("a", clusterA)
+	r.Create(ctl, tt.Ref("configmaps", "ns", "x-1"), tt.Generated("x-", "x-1"))
+	r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), uid, true))
+	r.Create(ctl, tt.Ref("configmaps", "ns", "x-2"), tt.Generated("x-", "x-2"))
+	r.Ready(clusterA).EndFaults().Settle()
+	requireFinding(t, judgeWith(t, r, check.Unique), "Unique", 0, "duplicate resources", "kube/configmaps",
+		"configmaps ns/x-1 (rule 4, slot a), configmaps ns/x-2 (rule 4, slot a)")
+}
+
 func TestPropertySeesCRsOfEveryListedKind(t *testing.T) {
 	r := fleetRun(1, clusters, databases)
 	r.Spec.Properties = []trace.Property{{Name: "both", Expr: "crs.size() == 2", When: "step"}}

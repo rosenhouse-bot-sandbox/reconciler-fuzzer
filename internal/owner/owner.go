@@ -45,7 +45,8 @@ func (i Instance) Live(t time.Duration) bool {
 type Owner struct {
 	// Rule is 1 for an ownerReference chain to a CR or to an unlisted owner,
 	// 2 for a resource that names its CR, 3 for a CR that names the resource,
-	// and 4 for the set of other CRs alive at the instance's creation.
+	// and 4 for the set of other CRs alive at the instance's creation that the
+	// controller did not create.
 	Rule int
 	// CRs holds CR UIDs in order: one for rules 1 to 3, the set for rule 4.
 	// It is empty for a shared instance.
@@ -452,9 +453,11 @@ func (w *World) Owner(i Instance, t time.Duration) Owner {
 	if cr, found := w.naming(i, t); found {
 		return Owner{Rule: 3, CRs: []string{cr}}
 	}
+	// The set skips CRs that the controller created, so a resource that the
+	// controller remakes after making one keeps its set.
 	var crs []string
 	for _, other := range w.instances {
-		if w.Primary(other) && other.Live(i.Created) && other.UID != i.UID {
+		if w.Primary(other) && other.Creator != trace.Controller && other.Live(i.Created) && other.UID != i.UID {
 			crs = append(crs, other.UID)
 		}
 	}
