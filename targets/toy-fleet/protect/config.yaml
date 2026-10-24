@@ -6,6 +6,7 @@ launch:
   args:
     - --bug=0                      # A later --launch-arg --bug=N wins.
   env:
+    KUBECONFIG: ${systems.kube.kubeconfig}
     WATCH_NAMESPACE: ${systems.kube.namespace}
   rbac:
     - ../rbac/role.yaml

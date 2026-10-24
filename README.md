@@ -170,10 +170,10 @@ models:
 - Generated plans then draw two model faults. `stuck` keeps Gadgets not ready, and `slowDelete`
   holds their deletion, until the fault period ends. A plan step writes one as
   `{"match": {"group": "example.com", "resource": "gadgets"}, "stuck": true}`.
-- `finalizer: {name: example.com/cleanup, after: 500ms}` plays a controller that holds each
-  Gadget's deletion with its own finalizer, as a storage controller does. The model keeps the
-  finalizer on each live Gadget, and removes it 500 ms after the Gadget's deletion starts.
-  Without this key, only `slowDelete` holds a Gadget's deletion.
+- `finalizer: {name: example.com/cleanup, after: 500ms}` plays a controller, such as a storage
+  controller, that holds each Gadget's deletion with its own finalizer. The model adds the
+  finalizer to each live Gadget it hears, and removes it 500 ms after it hears the deletion.
+  Keep `after` under `timeouts.settle`: a step settles only once its holds end.
 - `status:` adds literal fields to the model's status writes, such as a PVC's `{phase: Bound}`.
   While `stuck` lasts, the `stuckStatus:` fields, such as `{phase: Pending}`, replace them.
   `stuckStatus:` defaults to `status:`. Each write removes the fields that only the other key

@@ -620,6 +620,12 @@ func TestAModelFinalizerHoldsEachDeletionForItsAfter(t *testing.T) {
 	if precondition(removed) != "200" || !reflect.DeepEqual(writtenFinalizers(removed), []any{"other"}) {
 		t.Errorf("Wrote %+v, want only the stage's finalizer removed at resourceVersion 200.", removed)
 	}
+	w.still(t, 2, 2*after)
+	g.rv, g.finalizers = removed.rv, []string{"other"}
+	s.hear(g.version())
+	if s.Pending() {
+		t.Error("Pending is true after the stage removed its finalizer.")
+	}
 }
 
 func TestAModelFinalizerReturnsToALiveObjectThatLostIt(t *testing.T) {
@@ -696,9 +702,8 @@ func TestSlowDeleteAndAModelFinalizerKeepEachOther(t *testing.T) {
 	}
 }
 
-// Something removed the stage's finalizer from g while a slowDelete fault
-// held g.
-func TestAModelFinalizerReplacesSlowDeletesWithNoFault(t *testing.T) {
+// g kept slowDelete's finalizer past the fault's end, but lost the stage's.
+func TestAModelFinalizerReplacesALeftoverSlowDeleteFinalizer(t *testing.T) {
 	s, w, _ := testStageHolding(t, time.Second)
 	s.hear(gadget{name: "g", uid: "u", rv: "1", generation: 1, finalizers: []string{SlowDeleteFinalizer}, ready: readyFor(1)}.version())
 	if got := w.await(t, 1)[0]; !reflect.DeepEqual(writtenFinalizers(got), []any{cleanup}) {

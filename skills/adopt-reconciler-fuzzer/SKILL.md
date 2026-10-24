@@ -164,9 +164,9 @@ Fill each key from the project:
   sees the fault. For a Job, set `stuckStatus: {active: 1}`. A Job created during the fault
   then stays unfinished. The API server refuses to lower a done Job's `succeeded`, so that Job
   stays done and `Ready`. The model retries the refused write until the fault ends. Add
-  `finalizer: {name, after}` when the other controller puts its own finalizer on each object,
-  as a storage controller does. The model keeps that finalizer on each live object, and
-  removes it `after` past the object's deletion.
+  `finalizer: {name, after}` when something else puts a finalizer on each object, such as
+  Kubernetes' `kubernetes.io/pvc-protection` on a PVC. The model adds `name` to each live
+  object, and removes it `after` past the deletion. Keep `after` under `timeouts.settle`.
 - `budgets` and `timeouts`: leave them out at first. Raise `timeouts.settle` for a slow
   controller, and `stable` for one that requeues with a delay by design. Ask the user first.
 

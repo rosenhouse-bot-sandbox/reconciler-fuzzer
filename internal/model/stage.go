@@ -66,7 +66,8 @@ type held struct {
 	generation int64
 	heardAt    time.Time
 	deleting   bool
-	// deletingAt is when the stage first heard the object being deleted.
+	// deletingAt is when the stage first heard the object being deleted. It
+	// is finer than deletionTimestamp, which holds whole seconds.
 	deletingAt time.Time
 	finalizers []string
 	ready      *stageCondition

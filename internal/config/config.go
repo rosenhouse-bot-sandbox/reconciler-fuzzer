@@ -211,8 +211,8 @@ type Model struct {
 	Dependency *Dependency
 }
 
-// Finalizer is a finalizer the model keeps on each live object. It removes
-// the finalizer After past the object's deletion.
+// Finalizer is a finalizer the model adds to each live object it hears. It
+// removes the finalizer After past the object's deletion.
 type Finalizer struct {
 	Name  string
 	After time.Duration
@@ -592,7 +592,9 @@ func models(d declaration, primary schema.GroupVersionKind) ([]Model, error) {
 	return models, nil
 }
 
-// finalizer refuses a name the API server would refuse, and slowDelete's.
+// finalizer refuses slowDelete's name and any name without a domain. On a
+// built-in kind, the API server refuses a name without a domain unless it is
+// one of its own, such as gc's orphan.
 func finalizer(key string, declared *declaredFinalizer) (*Finalizer, error) {
 	if declared == nil {
 		return nil, nil
@@ -603,6 +605,8 @@ func finalizer(key string, declared *declaredFinalizer) (*Finalizer, error) {
 		return nil, fmt.Errorf("%s.name is required", key)
 	case len(problems) > 0:
 		return nil, fmt.Errorf("%s.name %q: %s", key, declared.Name, strings.Join(problems, "; "))
+	case !strings.Contains(declared.Name, "/"):
+		return nil, fmt.Errorf("%s.name %s: want a domain-qualified name, such as example.com/%s", key, declared.Name, declared.Name)
 	case declared.Name == trace.SlowDeleteFinalizer:
 		return nil, fmt.Errorf("%s.name %s: slowDelete faults hold objects with this finalizer", key, declared.Name)
 	}

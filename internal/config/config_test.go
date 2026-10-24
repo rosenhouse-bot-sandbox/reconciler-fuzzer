@@ -367,6 +367,7 @@ func TestAModelFinalizerRefusesMistakes(t *testing.T) {
 	for finalizer, want := range map[string]string{
 		"{after: 1s}":                                          "models[0].finalizer.name is required",
 		`{name: "-x", after: 1s}`:                              `models[0].finalizer.name "-x"`,
+		"{name: orphan, after: 1s}":                            "models[0].finalizer.name orphan: want a domain-qualified name",
 		"{name: example.com/x}":                                "models[0].finalizer.after is required",
 		"{name: example.com/x, after: -1s}":                    `models[0].finalizer.after "-1s"`,
 		"{name: example.com/x, after: soon}":                   `models[0].finalizer.after "soon"`,

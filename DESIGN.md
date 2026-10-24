@@ -149,14 +149,14 @@ records a call on, and records one `version` per (ref, resourceVersion).
 `run.Run` starts the fakes, `kube`, the models, then the controller. A model
 writes through its own listener from `k.Listen`, hears versions through
 `k.Subscribe`, and records `work` as its work starts and ends. `gc` collects an
-instance whose owners a live read finds gone (`gc.go`). `namespace` finishes a
-terminating namespace. `model.NewStage` makes a stage model per `models:` entry,
-named `trace.ModelCaller` of its kind, which writes `Ready` True and the
-`status:` fields `after` a generation's first version. With `finalizer:`, it
-keeps that finalizer on each live object, and removes it `finalizer.after` past
-the first deleting version it hears. `stuck` writes matching objects `Ready`
-False and the `stuckStatus:` fields instead, and `slowDelete` adds its own
-finalizer. Either's end writes `Ready` True and the `status:` fields.
+instance whose owners a live read finds gone, following Kubernetes' cross-scope,
+foreground and orphan rules (`gc.go`). `namespace` finishes a terminating
+namespace. `model.NewStage` makes a stage model per `models:` entry, named
+`trace.ModelCaller` of its kind, which writes `Ready` True and the `status:`
+fields `after` a generation's first version. It adds its `finalizer:` to live
+objects to hold a deletion for `finalizer.after`. `stuck` writes matching
+objects `Ready` False and the `stuckStatus:` fields instead, and `slowDelete`
+adds a finalizer. Either's end writes `Ready` True and the `status:` fields.
 
 **Fake services.** `fake.New` makes a System of a `systems:` entry with a
 `process`. Start runs it in the config's directory with
