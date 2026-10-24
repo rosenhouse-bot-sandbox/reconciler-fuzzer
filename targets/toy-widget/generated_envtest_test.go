@@ -106,9 +106,10 @@ func faults(p *plan.Plan) int {
 	return n
 }
 
-// requestAndModelFaults counts p's faults other than holdWatch. Each notes it
-// if it picked no request or held no object. A holdWatch notes only a kind
-// that the controller did not watch, so it cannot show that it fired.
+// requestAndModelFaults counts p's faults other than holdWatch. Each such
+// fault gets a note if it picked no request or held no object. A holdWatch
+// gets a note only for a kind the controller did not watch, so it cannot show
+// that it fired.
 func requestAndModelFaults(p *plan.Plan) int {
 	n := 0
 	for _, s := range p.Steps {
