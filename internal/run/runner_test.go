@@ -575,20 +575,26 @@ func TestExecuteBoundsTheBackoffByHowLongTheFaultsLasted(t *testing.T) {
 	}
 }
 
-func TestExecuteCountsTheWaitForACRDeletedDuringTheFaultsFromTheirEnd(t *testing.T) {
-	f := newFixture(t, nil)
-	faultHoldsDeletedCRs(f, 200*time.Millisecond)
-	deletesOnceTheFaultEnds := f.cluster.waitGone
+// onlyTheFirstCRGoes keeps the first deleted CR until a kube fault has ended
+// and lingers has passed, and every later one for good.
+func onlyTheFirstCRGoes(f *fixture, lingers time.Duration) {
+	faultHoldsDeletedCRs(f, lingers)
+	goesOnceTheFaultEnds := f.cluster.waitGone
 	waits := 0
 	f.cluster.waitGone = func(ctx context.Context) error {
-		// Slot a's create waits twice: until the period ends, then until
+		// The first create waits twice: until the period ends, then until
 		// its slot is free.
 		if waits++; waits <= 2 {
-			return deletesOnceTheFaultEnds(ctx)
+			return goesOnceTheFaultEnds(ctx)
 		}
 		<-ctx.Done()
 		return ctx.Err()
 	}
+}
+
+func TestExecuteCountsTheWaitForACRDeletedDuringTheFaultsFromTheirEnd(t *testing.T) {
+	f := newFixture(t, nil)
+	onlyTheFirstCRGoes(f, 200*time.Millisecond)
 	p := &plan.Plan{Steps: []plan.Step{
 		{Actions: []plan.Action{{Do: plan.Create, Slot: "a", Object: widget("a1")}, {Do: plan.Create, Slot: "b", Object: widget("b1")}}},
 		{Period: plan.Duration(100 * time.Millisecond), Faults: holdWidgets, Actions: []plan.Action{
@@ -613,6 +619,25 @@ func TestExecuteCountsTheWaitForACRDeletedDuringTheFaultsFromTheirEnd(t *testing
 }
 
 func TestExecuteCountsTheWaitForACRDeletedAfterTheFaultsFromItsDelete(t *testing.T) {
+	f := newFixture(t, nil)
+	onlyTheFirstCRGoes(f, 0)
+	p := recreateUnder(50*time.Millisecond, holdWidgets, plan.Action{Do: plan.Delete, Slot: "a"}, plan.Action{Do: plan.Create, Slot: "a", Object: widget("between")})
+	later := plan.Duration(2 * timeouts.Settle)
+	p.Steps[1].Actions[2].At, p.Steps[1].Actions[3].At = later, later
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	events := f.rec.Events()
+	deleted, _ := findAction(events, 1, 2)
+	create, _ := findAction(events, 1, 3)
+	allowance, _ := Deadline(0, faultLasted(t, events), f.runner.Config.Poll("kube"), timeouts)
+	if gaveUp := create.At - deleted.At; gaveUp < allowance-20*time.Millisecond || gaveUp > allowance+100*time.Millisecond {
+		t.Errorf("the create gave up %v after its delete, want the %v that Deadline allows", gaveUp, allowance)
+	}
+	checkWaitNote(t, events, create, "")
+}
+
+func TestExecuteWaitsForEveryRecreatedSlotInAStepWithoutFaults(t *testing.T) {
 	f := newFixture(t, nil)
 	f.cluster.waitGone = func(ctx context.Context) error {
 		// Like kube.WaitGone's first GET, a wait past its deadline fails.

@@ -34,8 +34,8 @@ const (
 	// Create creates Object, or the sample when Object is empty. A create of
 	// a slot whose CR is still terminating waits until the name is free. Once
 	// Period has passed, the wait ends the step's faults and restarts a killed
-	// controller. It gives up as long after the faults end as the step's
-	// deadline allows.
+	// controller. It gives up as long after the faults end, or after the
+	// slot's delete if that is later, as the step's deadline allows.
 	Create Do = "create"
 	// Update merge-patches the slot's CR with Patch.
 	Update Do = "update"
