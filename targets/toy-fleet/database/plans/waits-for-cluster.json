@@ -1,0 +1,23 @@
+{
+  "steps": [
+    {
+      "period": "3s",
+      "faults": [
+        {
+          "match": {
+            "group": "storage.thirdparty",
+            "resource": "volumes"
+          },
+          "stuck": true
+        }
+      ],
+      "actions": [
+        {
+          "at": "1s",
+          "do": "create",
+          "slot": "a"
+        }
+      ]
+    }
+  ]
+}
