@@ -35,7 +35,10 @@ func Restore(ix *trace.Index, s Spec) []Finding {
 			was, is := before[g], after[g]
 			k := kind(g.kind)
 			if touched(g.root) {
-				if len(was) > 0 && len(is) == 0 && (damaged[g] || !kinds[group{kind: g.kind, root: g.root}]) {
+				// A damaged group must be live again while its owner lives, and
+				// a touched group that empties must leave its kind under its root.
+				o, hit := damaged[g]
+				if len(was) > 0 && len(is) == 0 && (hit && v.lives(o, to) || !kinds[group{kind: g.kind, root: g.root}]) {
 					missing[k] = append(missing[k], v.describeAll(was[:1], from)...)
 				}
 				continue
@@ -61,18 +64,18 @@ func Restore(ix *trace.Index, s Spec) []Finding {
 }
 
 // damaged returns the groups, at t, of the instances step's damage actions
-// changed, and whether a root key shares a root or a CR with one of theirs.
-// It takes each damaged ref's instance at t, because the controller can
-// recreate a deleted instance before the action's event.
-func (v *view) damaged(step int, t time.Duration) (map[group]bool, func(root string) bool) {
-	groups, keys, crs := map[group]bool{}, map[string]bool{}, map[string]bool{}
+// changed, with their owners, and whether a root key shares a root or a CR
+// with one of theirs. It takes each damaged ref's instance at t, because the
+// controller can recreate a deleted instance before the action's event.
+func (v *view) damaged(step int, t time.Duration) (map[group]owner.Owner, func(root string) bool) {
+	groups, keys, crs := map[group]owner.Owner{}, map[string]bool{}, map[string]bool{}
 	for _, e := range v.ix.Actions(step) {
 		if e.Action.Do != "damage" || e.Action.Ref == nil || e.Action.Error != "" {
 			continue
 		}
 		if i, found := v.w.Latest(*e.Action.Ref, t); found {
 			g := v.groupOf(i, t)
-			groups[g], keys[g.root] = true, true
+			groups[g], keys[g.root] = v.w.Owner(i, t), true
 			for _, cr := range v.roots[g.root].CRs {
 				crs[cr] = true
 			}
@@ -82,6 +85,9 @@ func (v *view) damaged(step int, t time.Duration) (map[group]bool, func(root str
 		return keys[root] || slices.ContainsFunc(v.roots[root].CRs, func(uid string) bool { return crs[uid] })
 	}
 }
+
+// lives reports whether o names no CR, or a CR live at t.
+func (v *view) lives(o owner.Owner, t time.Duration) bool { return len(o.CRs) == 0 || !v.allGone(o, t) }
 
 func merge[K comparable, V any](a, b map[K]V) map[K]V {
 	m := maps.Clone(a)

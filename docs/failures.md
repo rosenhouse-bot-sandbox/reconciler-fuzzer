@@ -125,13 +125,13 @@ configmaps rf-9485af8b/db-0 (rule 1, CR databases.example.com rf-9485af8b/db)
 A rule 4 line usually means the resource lacks an ownerReference, so
 garbage collection could not delete it. Its ownerReferences may also lead
 to no CR: they reach only objects that the trace never saw, gone objects,
-or objects that the controller made. While they reach a live object that is
-not a CR and that the controller did not create, such as a fixture, Clean
-skips the resource. A rule 1 line on a cluster-scoped resource with a
-namespaced owner means garbage collection ignores that invalid
-ownerReference. A rule 2 or 3 line usually means a finalizer forgot the
-resource. A resource that should outlive its CR needs its entry's
-`retain`.
+or objects that the controller made. While they name a live object that is
+not a CR and that the controller did not create, such as a fixture,
+directly or through live objects that the controller made, Clean skips the
+resource. A rule 1 line on a cluster-scoped resource with a namespaced
+owner means garbage collection ignores that invalid ownerReference. A rule
+2 or 3 line usually means a finalizer forgot the resource. A resource that
+should outlive its CR needs its entry's `retain`.
 
 ### Restore
 
@@ -139,15 +139,16 @@ The step changed no CR or fixture, but the controller's resources differ
 from the previous step's end.
 
 - `did not restore damaged resources`: a damaged resource was not
-  recreated.
+  recreated, or every resource of some kind under the damaged resource's
+  root (DESIGN.md §11) is gone.
 - `replaced resources`: an undamaged resource was replaced, or a new one
   appeared.
 - `changed resources`: an undamaged resource's body changed. Each line
   names the fields that differ.
 
 Each line names its resource's owner as Clean does. `rule 1, unlisted
-owner` names the live object, neither a CR nor the controller's, that the
-resource's ownerReferences reach.
+owner` names the live object, such as a fixture, that owns the resource
+instead of a CR.
 
 ### Unique: duplicate resources
 

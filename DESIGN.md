@@ -322,7 +322,8 @@ resources at the two ends by group, without volatile fields (entries 21 and 40,
 the map's, and a CR kind's `periodic.paths`). Where no `damage` touched the
 root, each instance must stay, with no new one and an equal body:
 `replaced resources`, `changed resources`. Where one did, each damaged group
-must be live again: `did not restore damaged resources` (entry 22).
+must be live again while its owner lives, and each group's kind must stay
+under the root: `did not restore damaged resources` (entries 22 and 82).
 
 **Unique.** At each settled step's end, a group holds at most one live
 controller instance. Summary: `duplicate resources`.
@@ -524,4 +525,4 @@ Each entry changes a check, exception, `System` interface or ignore list.
 79. Every check judges each kind `primaries` lists, and a CR the controller creates is also its owner's resource (#126).
 80. A live unlisted owner, such as a fixture, keeps what it owns, directly or through the controller's live objects, from rules 2 to 4, so deleting a CR blames none of it (#128). An object the controller made is never an unlisted owner.
 81. `required` binds only the first entry's CRs, so the kinds that own no dependency pass.
-82. A `damage` touches each group under its root, and a touched group may empty while its kind lives under that root. So a damage under a CR that the controller made touches that CR's owner, and that CR may be remade.
+82. A `damage` touches each group under its root. An undamaged touched group, or a damaged one whose owner is gone, may empty while its kind lives under that root. So a damage under a CR that the controller made touches that CR's owner, and the controller may remake that CR.

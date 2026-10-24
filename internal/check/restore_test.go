@@ -158,6 +158,17 @@ func TestRestoreJudgesADamagedSharedResourceOnExistenceOnly(t *testing.T) {
 	requireNone(t, restore(t, r))
 }
 
+func TestRestoreFailsADamagedSharedResourceWhoseKindHasOthers(t *testing.T) {
+	r := newRun(2)
+	webhook := tt.Ref("secrets", "ns", "webhook-cert")
+	r.Create(ctl, webhook, tt.Object("webhook-cert"))
+	r.Create(ctl, tt.Ref("secrets", "ns", "metrics-cert"), tt.Object("metrics-cert"))
+	r.Begin().Restart().EndFaults().Settle()
+	r.Begin().Delete(trace.Harness, webhook).Act("damage", "", &webhook).EndFaults()
+	r.Call(ctl, "get", webhook, 404).Settle()
+	requireFinding(t, restore(t, r), "Restore", 1, "did not restore damaged resources", "kube/secrets", "secrets ns/webhook-cert (shared)")
+}
+
 func TestRestoreJudgesAFailedDamageAsNoDamage(t *testing.T) {
 	r := twoCRs()
 	r.Begin()
@@ -259,6 +270,16 @@ func TestRestoreJudgesTheResourcesOfACRTheControllerMadeAgain(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRestorePassesADamagedResourceWhoseOwnerTheControllerRemade(t *testing.T) {
+	r := madeDatabase()
+	r.Begin().Delete(trace.Harness, childB).Act("damage", "a", &childB).EndFaults()
+	r.Delete(ctl, databaseB)
+	r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), r.UID(clusterA), true))
+	r.Create(ctl, childB, tt.OwnedBy(tt.Object("b-0"), r.UID(databaseB), true))
+	r.Settle()
+	requireNone(t, restore(t, r))
 }
 
 func TestRestorePassesAnOwnerAndItsResourceThatTheControllerMadeAgain(t *testing.T) {

@@ -143,8 +143,8 @@ func (v *view) resources(t time.Duration) []owner.Instance {
 	})
 }
 
-// group is what Restore and Unique compare: a kind, a namespace, an owning
-// CR and a role.
+// group is what Clean, Restore and Unique compare: a kind, a namespace, an
+// owner, its root and a role.
 type group struct {
 	kind  trace.Ref
 	owner string
