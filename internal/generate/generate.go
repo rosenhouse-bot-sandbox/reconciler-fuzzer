@@ -459,21 +459,21 @@ func (g *Generator) burst(t *rapid.T, at state) []plan.Action {
 	return within50ms(t, []plan.Action{g.delete(t, at, slot), g.createOf(t, at, slot, k)})
 }
 
-// holdTraffic is the action a holdWatch takes: a live CR deleted and created
-// again as it was within 50 ms, which a stale cache can mistake for the old
-// CR. It takes a CR of the held kind if one is live. Otherwise a hold of a
-// listed kind creates a CR of that kind in a free slot. Failing that, it
-// takes any live CR, or else a create.
+// holdTraffic is the action a holdWatch takes: a live CR, of the held kind
+// if one is, deleted and created again as it was within 50 ms, which a
+// stale cache can mistake for the old CR. A hold of a listed kind with no
+// CR of that kind live creates one in a free slot. Without a live CR, it
+// takes a create.
 func (g *Generator) holdTraffic(t *rapid.T, at state, f plan.Fault) []plan.Action {
 	gr := gvk.GroupResource{Group: f.Match.Group, Resource: f.Match.Resource}
-	live := at.live()
+	live, free := at.live(), at.free()
 	if held := g.ofResource(at, live, gr); len(held) > 0 {
 		live = held
-	} else if i := slices.IndexFunc(g.kinds, func(k *crKind) bool { return k.resource == gr }); i >= 0 && len(at.free()) > 0 {
-		return []plan.Action{g.createOf(t, at, sampled(t, at.free(), "slot"), g.kinds[i])}
+	} else if i := slices.IndexFunc(g.kinds, func(k *crKind) bool { return k.resource == gr }); i >= 0 && len(free) > 0 {
+		return []plan.Action{g.createOf(t, at, sampled(t, free, "slot"), g.kinds[i])}
 	}
 	if len(live) == 0 {
-		return []plan.Action{g.create(t, at, sampled(t, at.free(), "slot"))}
+		return []plan.Action{g.create(t, at, sampled(t, free, "slot"))}
 	}
 	slot := sampled(t, live, "slot")
 	cr := at[slot]

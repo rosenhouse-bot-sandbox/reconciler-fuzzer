@@ -127,9 +127,9 @@ func fleetState(g *Generator) state {
 	return state{"a": g.kinds[0].base("a").Object, "b": g.kinds[1].base("b").Object}
 }
 
-// slotsOf are the slots whose CR 20 draws of traffic first update or
-// delete, the kinds it first creates, or the other actions it first takes.
-func slotsOf(t *testing.T, at state, traffic func(*rapid.T, state) []plan.Action) []string {
+// firstActions sum up the first action of 20 draws of traffic: the slot it
+// updates or deletes, the kind it creates, or else its do.
+func firstActions(t *testing.T, at state, traffic func(*rapid.T, state) []plan.Action) []string {
 	t.Helper()
 	var slots []string
 	for seed := range 20 {
@@ -162,7 +162,7 @@ func TestARequestFaultOnAListedKindComesWithAnUpdateOfThatKind(t *testing.T) {
 		{"databases", onlyCluster, []string{"restart"}},
 	} {
 		f := plan.Fault{Match: plan.Match{Verb: "update", Group: "toy.reconciler-fuzzer", Resource: c.resource}, Drop: true}
-		got := slotsOf(t, c.at, func(t *rapid.T, at state) []plan.Action { return []plan.Action{g.traffic(t, at, f)} })
+		got := firstActions(t, c.at, func(t *rapid.T, at state) []plan.Action { return []plan.Action{g.traffic(t, at, f)} })
 		if !slices.Equal(got, c.want) {
 			t.Errorf("A fault on %s with slots %v comes with %v, want %v.", c.resource, slices.Sorted(maps.Keys(c.at)), got, c.want)
 		}
@@ -188,9 +188,9 @@ func TestAHoldWatchOfAListedKindRecreatesOrCreatesACROfThatKind(t *testing.T) {
 		{"", "configmaps", fleetState(g), []string{"a", "b"}},
 	} {
 		f := plan.Fault{Match: plan.Match{Group: c.group, Resource: c.resource}, HoldWatch: true}
-		got := slotsOf(t, c.at, func(t *rapid.T, at state) []plan.Action { return g.holdTraffic(t, at, f) })
+		got := firstActions(t, c.at, func(t *rapid.T, at state) []plan.Action { return g.holdTraffic(t, at, f) })
 		if !slices.Equal(got, c.want) {
-			t.Errorf("A hold of %s with slots %v recreates %v, want %v.", c.resource, slices.Sorted(maps.Keys(c.at)), got, c.want)
+			t.Errorf("A hold of %s with slots %v comes with %v, want %v.", c.resource, slices.Sorted(maps.Keys(c.at)), got, c.want)
 		}
 	}
 }
@@ -265,7 +265,7 @@ func TestPlanRefusesACreateOfAKindTheConfigDoesNotList(t *testing.T) {
 	t.Error("Plan accepts 50 plans, though the config lists no Database.")
 }
 
-func TestWithSeveralKindsNotesNameTheKindAndErrorsTheEntry(t *testing.T) {
+func TestWithSeveralKindsNotesNameTheKindAndErrorsNameTheEntry(t *testing.T) {
 	one := loadConfig(t, rulesConfig)
 	for _, note := range newGenerator(t, one).LeftAlone() {
 		if !strings.HasPrefix(note, "generation leaves spec.") {

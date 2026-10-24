@@ -62,16 +62,16 @@ func drawPlans(t *testing.T, g *Generator, n int) []*plan.Plan {
 	return drawn
 }
 
-// example is draw's value for seed. A draw that panics fails the test,
-// where rapid's Example, and so Plan, would hide it by drawing again. Only
-// rapid's invalidData, which asks for another draw, is no failure.
+// example is draw's value for seed. rapid's Example, and so Plan, hides a
+// draw that panics by drawing again. example fails the test on any panic
+// but rapid's invalidData, which asks for another draw.
 func example[V any](t *testing.T, seed int, draw func(*rapid.T) V) V {
 	t.Helper()
 	return rapid.Custom(func(rt *rapid.T) V {
 		defer func() {
 			if r := recover(); r != nil {
 				if fmt.Sprintf("%T", r) != "rapid.invalidData" {
-					t.Errorf("Seed %d's draw panics: %v", seed, r)
+					t.Errorf("Seed %d's draw panics with a %T: %v", seed, r, r)
 				}
 				panic(r)
 			}
