@@ -695,3 +695,13 @@ func TestSlowDeleteAndAModelFinalizerKeepEachOther(t *testing.T) {
 		t.Errorf("Wrote finalizers %q, want %q.", got, want)
 	}
 }
+
+// Something removed the stage's finalizer from g while a slowDelete fault
+// held g.
+func TestAModelFinalizerReplacesSlowDeletesWithNoFault(t *testing.T) {
+	s, w, _ := testStageHolding(t, time.Second)
+	s.hear(gadget{name: "g", uid: "u", rv: "1", generation: 1, finalizers: []string{SlowDeleteFinalizer}, ready: readyFor(1)}.version())
+	if got := w.await(t, 1)[0]; !reflect.DeepEqual(writtenFinalizers(got), []any{cleanup}) {
+		t.Errorf("Wrote %+v, want slowDelete's finalizer replaced by the stage's.", got)
+	}
+}

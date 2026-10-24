@@ -321,14 +321,14 @@ func (s *Stage) decide(h *held, now time.Time) []stageOp {
 		return nil
 	}
 	var ops []stageOp
-	finalizers, release := s.finalizers(h, now)
+	finalizers := s.finalizers(h, now)
 	if !slices.Equal(finalizers, h.finalizers) {
 		ops = append(ops, stageOp{ref: h.ref, uid: h.uid, rv: h.rv, finalizers: finalizers})
 	}
 	h.stopTimer()
 	if h.deleting {
-		if !release.IsZero() {
-			s.schedule(h, release, now)
+		if f := s.m.Finalizer; f != nil && slices.Contains(finalizers, f.Name) {
+			s.schedule(h, h.deletingAt.Add(f.After), now)
 		}
 		return ops
 	}
@@ -358,10 +358,9 @@ func (s *Stage) decide(h *held, now time.Time) []stageOp {
 // finalizers returns the finalizers h needs now: slowDelete's while a
 // slowDelete fault matches h, and the model's own until its After past h's
 // deletion. The API server refuses a new finalizer on an object being
-// deleted. release is when the model's own finalizer is to go, or zero if h
-// has none to remove later.
-func (s *Stage) finalizers(h *held, now time.Time) (finalizers []string, release time.Time) {
-	finalizers = slices.Clone(h.finalizers)
+// deleted.
+func (s *Stage) finalizers(h *held, now time.Time) []string {
+	finalizers := slices.Clone(h.finalizers)
 	keep := func(name string, wanted bool) {
 		switch has := slices.Contains(finalizers, name); {
 		case wanted && !has && !h.deleting:
@@ -372,14 +371,9 @@ func (s *Stage) finalizers(h *held, now time.Time) (finalizers []string, release
 	}
 	keep(SlowDeleteFinalizer, s.active(h, false))
 	if f := s.m.Finalizer; f != nil {
-		due := h.deletingAt.Add(f.After)
-		holding := !h.deleting || now.Before(due)
-		keep(f.Name, holding)
-		if h.deleting && holding && slices.Contains(finalizers, f.Name) {
-			release = due
-		}
+		keep(f.Name, !h.deleting || now.Before(h.deletingAt.Add(f.After)))
 	}
-	return finalizers, release
+	return finalizers
 }
 
 // schedule queues a sweep at due. The caller holds s.mu.
