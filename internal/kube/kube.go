@@ -465,18 +465,23 @@ func (k *Kube) Delete(ctx context.Context, ref trace.Ref, propagation plan.Propa
 	return k.observer.await(ctx, "the deletion of "+describe(ref), func() bool { return k.observer.recordedGone(ref, string(uid)) })
 }
 
-// WaitGone returns once ref names no object, finalizers included.
-func (k *Kube) WaitGone(ctx context.Context, ref trace.Ref) error {
+// Gone reports whether ref names no object, finalizers included.
+func (k *Kube) Gone(ctx context.Context, ref trace.Ref) (bool, error) {
 	resource, err := k.resource(ref)
 	if err != nil {
-		return err
-	}
-	return wait.PollUntilContextCancel(ctx, 100*time.Millisecond, true, func(ctx context.Context) (bool, error) {
-		_, err := resource.Get(ctx, ref.Name, metav1.GetOptions{})
-		if apierrors.IsNotFound(err) {
-			return true, nil
-		}
 		return false, err
+	}
+	_, err = resource.Get(ctx, ref.Name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return true, nil
+	}
+	return false, err
+}
+
+// WaitGone returns once ref names no object, finalizers included.
+func (k *Kube) WaitGone(ctx context.Context, ref trace.Ref) error {
+	return wait.PollUntilContextCancel(ctx, 100*time.Millisecond, true, func(ctx context.Context) (bool, error) {
+		return k.Gone(ctx, ref)
 	})
 }
 
