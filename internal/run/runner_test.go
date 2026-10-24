@@ -253,11 +253,11 @@ func TestExecuteWaitsForADeletedSlotBeforeCreating(t *testing.T) {
 
 func TestExecuteEndsThePlanWhenADeletedSlotStaysTaken(t *testing.T) {
 	f := newFixture(t, nil)
-	f.rec.Record(trace.Event{Version: &trace.Version{
-		Ref: trace.Ref{System: "kube", Resource: "widgets", Namespace: "ns", Name: "first"}, UID: "u1", RV: "2",
-		Body: json.RawMessage(`{"metadata":{"name":"first","deletionTimestamp":"2026-10-24T09:06:40Z","finalizers":["toy/cleanup","toy/audit"]}}`),
-	}})
 	f.cluster.waitGone = func(ctx context.Context) error {
+		f.rec.Record(trace.Event{Version: &trace.Version{
+			Ref: trace.Ref{System: "kube", Resource: "widgets", Namespace: "ns", Name: "first"}, UID: "u1", RV: "2",
+			Body: json.RawMessage(`{"metadata":{"name":"first","deletionTimestamp":"2026-10-24T09:06:40Z","finalizers":["toy/cleanup","toy/audit"]}}`),
+		}})
 		<-ctx.Done()
 		return fmt.Errorf(`Get "http://127.0.0.1:36123/widgets/first": %w`, ctx.Err())
 	}
@@ -401,6 +401,23 @@ func TestExecuteReturnsACancelDuringTheSlotWait(t *testing.T) {
 	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{{Do: plan.Create, Slot: "a"}, {Do: plan.Delete, Slot: "a"}, {Do: plan.Create, Slot: "a"}}}}}
 	if err := f.runner.Execute(ctx, p); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Execute = %v, want the cancellation", err)
+	}
+}
+
+func TestExecuteReturnsTheRunsDeadlineDuringTheSlotWait(t *testing.T) {
+	f := newFixture(t, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), timeouts.Settle/3)
+	defer cancel()
+	f.cluster.waitGone = func(wait context.Context) error {
+		<-wait.Done()
+		return wait.Err()
+	}
+	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{{Do: plan.Create, Slot: "a"}, {Do: plan.Delete, Slot: "a"}, {Do: plan.Create, Slot: "a"}}}}}
+	if err := f.runner.Execute(ctx, p); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Execute = %v, want the deadline", err)
+	}
+	if got, want := actionErrors(f.rec.Events()), []string{context.DeadlineExceeded.Error()}; !reflect.DeepEqual(got, want) {
+		t.Errorf("action errors = %q, want %q", got, want)
 	}
 }
 
