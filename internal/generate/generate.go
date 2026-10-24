@@ -27,9 +27,11 @@ import (
 
 // Generator draws plans for one config. A draw does no I/O.
 type Generator struct {
-	// kinds are the listed kinds, in config order.
+	// kinds hold what the CRs of each listed kind are drawn from, in config
+	// order.
 	kinds []*crKind
-	// listed are the config's listed kinds, which each create must make.
+	// listed are the config's listed kinds. Plan refuses a create of any
+	// other kind.
 	listed []gvk.GroupKind
 	// resources are the listed kinds first, then the fixture and RBAC
 	// resources, which damage targets.
@@ -154,8 +156,8 @@ func newCRKind(crds []string, p config.Primary) (*crKind, error) {
 	if k.sample.Object, err = readObject(p.Sample); err != nil {
 		return nil, err
 	}
-	if held := k.sample.GroupVersionKind().GroupKind(); held != k.groupKind {
-		return nil, fmt.Errorf("the sample holds a %s, not a %s", held, k.groupKind)
+	if gk := k.sample.GroupVersionKind().GroupKind(); gk != k.groupKind {
+		return nil, fmt.Errorf("the sample holds a %s, not a %s", gk, k.groupKind)
 	}
 	if err := rules.refusal(k.sample.Object, nil); err != nil {
 		return nil, fmt.Errorf("the CRD refuses the sample: %w", err)
@@ -377,8 +379,8 @@ func (s state) free() []string {
 // kindOf is the listed kind of a CR the plan holds, by its apiVersion and
 // kind.
 func (g *Generator) kindOf(cr map[string]any) *crKind {
-	held := (&unstructured.Unstructured{Object: cr}).GroupVersionKind().GroupKind()
-	return g.kinds[slices.IndexFunc(g.kinds, func(k *crKind) bool { return k.groupKind == held })]
+	gk := (&unstructured.Unstructured{Object: cr}).GroupVersionKind().GroupKind()
+	return g.kinds[slices.IndexFunc(g.kinds, func(k *crKind) bool { return k.groupKind == gk })]
 }
 
 // updatable are the live slots whose kind has fields to change.
@@ -386,9 +388,9 @@ func (g *Generator) updatable(at state) []string {
 	return slices.DeleteFunc(at.live(), func(slot string) bool { return len(g.kindOf(at[slot]).fields) == 0 })
 }
 
-// ofResource are the slots whose CR is of the resource gr.
-func (g *Generator) ofResource(at state, slots []string, gr gvk.GroupResource) []string {
-	return slices.DeleteFunc(slices.Clone(slots), func(slot string) bool { return g.kindOf(at[slot]).resource != gr })
+// ofResource are the slots in from whose CR is of the resource gr.
+func (g *Generator) ofResource(at state, from []string, gr gvk.GroupResource) []string {
+	return slices.DeleteFunc(slices.Clone(from), func(slot string) bool { return g.kindOf(at[slot]).resource != gr })
 }
 
 func (g *Generator) plan(t *rapid.T) *plan.Plan {
@@ -589,12 +591,11 @@ func (g *Generator) damageOf(t *rapid.T, at state, target plan.Target) plan.Acti
 }
 
 // traffic is an action that exercises a fault during its period. A request
-// fault takes a damage of its resource, or an update of a live CR of its
-// kind for a fault on a listed kind. Stuck takes an update of a live CR,
-// which gives its dependencies a new generation to keep not ready, or else
-// a create. SlowDelete takes a delete of a live CR, whose dependencies'
-// deletion it holds; a later step may create the slot again. Otherwise a
-// restart.
+// fault takes a damage of its resource or, on a listed kind, an update of a
+// live CR of that kind. Stuck takes an update of a live CR, which gives its
+// dependencies a new generation to keep not ready, or else a create.
+// SlowDelete takes a delete of a live CR, whose dependencies' deletion it
+// holds; a later step may create the slot again. Otherwise a restart.
 func (g *Generator) traffic(t *rapid.T, at state, f plan.Fault) plan.Action {
 	if f.System != "" {
 		return g.fakeTraffic(t, at, f)
