@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 
@@ -292,11 +294,12 @@ func TestRuleKindsSkipsWildcardsSubresourcesAndIgnoredKinds(t *testing.T) {
 	}
 }
 
-// staticMapper is a RESTMapper that knows ConfigMaps only.
+// staticMapper is a RESTMapper whose Reset does nothing.
 type staticMapper struct{ meta.RESTMapper }
 
 func (staticMapper) Reset() {}
 
+// newStaticMapper knows ConfigMaps only.
 func newStaticMapper() staticMapper {
 	mapper := meta.NewDefaultRESTMapper(nil)
 	mapper.Add(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}, meta.RESTScopeNamespace)
@@ -311,6 +314,80 @@ func TestObserverRetriesAKindItCouldNotMap(t *testing.T) {
 	}
 	if _, kept := o.kinds[gr]; kept {
 		t.Error("the observer keeps a kind it could not map, so it never tries it again")
+	}
+}
+
+// servesDeployments is a discovery client whose every group version serves
+// deployments.
+type servesDeployments struct{ discovery.DiscoveryInterface }
+
+func (servesDeployments) ServerResourcesForGroupVersion(string) (*metav1.APIResourceList, error) {
+	return &metav1.APIResourceList{APIResources: []metav1.APIResource{{Name: "deployments", Verbs: []string{"list", "watch"}}}}, nil
+}
+
+func TestObserverCannotWatchAKindTheMapperFindsInAnotherGroup(t *testing.T) {
+	mapper := meta.NewDefaultRESTMapper(nil)
+	mapper.Add(schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}, meta.RESTScopeNamespace)
+	o := &observer{mapper: staticMapper{mapper}, discovery: servesDeployments{}}
+	want := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+	if gvr, err := o.watchable(want.GroupResource()); gvr != want || err != nil {
+		t.Errorf("watchable(deployments.apps) = %v, %v, want %v", gvr, err, want)
+	}
+	// An RBAC rule can name deployments in the core group, and the mapper
+	// finds them in apps. The observer would record them as core objects.
+	if gvr, err := o.watchable(schema.GroupResource{Resource: "deployments"}); !gvr.Empty() || err != nil {
+		t.Errorf("watchable(deployments) = %v, %v, want nothing", gvr, err)
+	}
+}
+
+// gatheringMapper answers ResourceFor only once every caller has asked.
+type gatheringMapper struct {
+	staticMapper
+	callers *sync.WaitGroup
+}
+
+func (m gatheringMapper) ResourceFor(gvr schema.GroupVersionResource) (schema.GroupVersionResource, error) {
+	m.callers.Done()
+	m.callers.Wait()
+	return m.staticMapper.ResourceFor(gvr)
+}
+
+func TestObserverWatchesKindsTogether(t *testing.T) {
+	mapper := meta.NewDefaultRESTMapper(nil)
+	mapper.Add(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}, meta.RESTScopeNamespace)
+	mapper.Add(schema.GroupVersionKind{Version: "v1", Kind: "Secret"}, meta.RESTScopeNamespace)
+	kinds := []schema.GroupResource{{Resource: "configmaps"}, {Resource: "secrets"}}
+	var callers sync.WaitGroup
+	callers.Add(len(kinds))
+	// The server serves neither kind, so no informer starts.
+	o := &observer{mapper: gatheringMapper{staticMapper{mapper}, &callers}, discovery: servesDeployments{}, kinds: map[schema.GroupResource]schema.GroupVersionResource{}}
+	done := make(chan struct{})
+	go func() {
+		o.watchAll(kinds)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("watchAll watches one kind at a time")
+	}
+}
+
+// slowFailingDiscovery fails each group version after a pause. The pause
+// makes a watchAll that does not wait return before the error.
+type slowFailingDiscovery struct{ discovery.DiscoveryInterface }
+
+func (slowFailingDiscovery) ServerResourcesForGroupVersion(string) (*metav1.APIResourceList, error) {
+	time.Sleep(20 * time.Millisecond)
+	return nil, errors.New("discovery failed")
+}
+
+func TestObserverReportsWatchErrorsOtherThanNoMatch(t *testing.T) {
+	o := &observer{mapper: newStaticMapper(), discovery: slowFailingDiscovery{}, kinds: map[schema.GroupResource]schema.GroupVersionResource{}}
+	// The mapper knows no widgets.
+	err := o.watchAll([]schema.GroupResource{{Resource: "configmaps"}, {Group: "toy", Resource: "widgets"}})
+	if err == nil || !strings.Contains(err.Error(), "discovery failed") || strings.Contains(err.Error(), "widgets") {
+		t.Errorf("watchAll = %v, want the discovery error alone", err)
 	}
 }
 

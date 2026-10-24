@@ -271,6 +271,14 @@ properties:
           && s.data.token == base64.encode(bytes(v.data.value)))))
 ```
 
+A kind the harness watches from the start maps to an empty list while no object of it exists.
+These include each installed CRD and each kind that `primary`, `models` or a fixture names.
+They also include each kind that a `launch.rbac` rule names without `*`, except Events, Leases
+and the other kinds the checks ignore. The harness skips a kind that the server does not list
+and watch in the named group. The `run` event of `trace.jsonl` lists these kinds in `kinds`. A
+fake collection that `primary.owns` names also maps to an empty list. Any other kind or
+collection has a key only if the trace holds an object of it.
+
 `firstWrittenUnder(object, path)` names the CR that owned the object when its value at `path`
 first appeared, across deletes and recreates. cert-manager's `fresh-key` property uses it. A
 failing property's details say which instance and CR such a value came from.

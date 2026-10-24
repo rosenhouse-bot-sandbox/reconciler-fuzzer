@@ -7,3 +7,6 @@ rules:
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get"]
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    verbs: ["get"]
