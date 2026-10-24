@@ -185,7 +185,6 @@ on a `crud` fake. `Patch` and `Delete` send the map's `Write` through the
 harness listener, and return after an observer pass that started after the
 answer. An answer the map's `Gone` accepts is `system.ErrGone`.
 
-`make setup` installs a checksummed Vault and a hash-pinned moto under `bin/`.
 `crudfake` serves the `crud` map's API, with asynchronous states and strict 404
 and 409 answers (`crudfake.go`).
 
@@ -432,20 +431,21 @@ They exit 0 with no findings, 1 with some, and 2 on a usage or harness error.
 
 ## 16. Gates, examples and testing
 
-**Make targets.** `make help` lists them; CI and the nightly call them.
-
-**Toys.** A toy is a directory in `targets/` with a `main.go`. `build`,
+**Make targets and toys.** `make help` lists the targets, which CI and the
+nightly call. A toy is a directory in `targets/` with a `main.go`. `build`,
 `generate`, `test-generated` and `bug-matrix` run every toy.
-`targets/toy-widget` holds the Widget configs: `gadget/` adds a modelled
-Gadget, and `tenant/` and `grant/` cross scopes. In `targets/toy-bucket`, each
-Bucket CR owns one bucket in the `crudfake` system `cloud`; its bugs start at
-B30, and `halted/` runs `--halt` under `primary.halted`.
+`targets/toy-widget` holds the Widget configs: `gadget/` adds a modelled Gadget,
+and `tenant/` and `grant/` cross scopes. In `targets/toy-bucket`, each Bucket CR
+owns one bucket in the `crudfake` system `cloud`; its bugs start at B30, and
+`halted/` runs `--halt` under `primary.halted`. In `targets/toy-fleet`, a
+Cluster owns modelled third-party Volumes, a Database names a Cluster, and a
+User a Database. Its bugs start at B100, and `database/` fuzzes Databases.
 
 Each config's `plans/` holds its gated bugs' and B0's plans. A toy's
-`gate_envtest_test.go` runs `gate_test.go`'s table, and its `bugmatrix_test.go`
-renders the table as its own section of `docs/bug-matrix.md`. B0 gives no
-findings and no notes on every committed plan, and no findings on the first 20
-seeds of each config (toy-bucket: the first 20 that draw a fault on `cloud`).
+`gate_envtest_test.go` runs `gate_test.go`'s bug rows and B0, and its
+`bugmatrix_test.go` renders them in `docs/bug-matrix.md`. B0 gives no findings
+and no notes on every committed plan, and no findings on the 20 faulted seeds
+that the toy's generated test runs for each config.
 
 **Examples.** `examples/<name>` adopts cert-manager, external-secrets on Vault,
 and ACK's s3-controller on moto. Plans and listed seeds give no findings,

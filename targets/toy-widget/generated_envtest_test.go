@@ -33,9 +33,9 @@ func generator(t *testing.T, path string) (*generate.Generator, map[string]any) 
 }
 
 // TestGeneratedPlansWithFaultsPassB0 runs plans with a fault, or with a
-// model fault for the gadget config. It also requires some plans to have a
-// fault that picked a request or held an object, so the gate fails if
-// faults stop firing.
+// model fault for the gadget config. It also requires 3 plans of each config
+// to have a request or model fault that picked a request or held an object,
+// so the gate fails if faults stop firing.
 func TestGeneratedPlansWithFaultsPassB0(t *testing.T) {
 	for _, cfg := range configs {
 		t.Run(cfg, func(t *testing.T) {
@@ -55,7 +55,7 @@ func generatedPlansPassB0(t *testing.T, cfg string) {
 	}
 	t.Cleanup(func() {
 		if n := fired.Load(); n < firing {
-			t.Errorf("A fault fired in %d of %d plans, want at least %d.", n, plans, firing)
+			t.Errorf("A request or model fault fired in %d of %d plans, want at least %d.", n, plans, firing)
 		}
 	})
 	for seed, n := uint64(1), 0; n < plans; seed++ {
@@ -79,7 +79,7 @@ func generatedPlansPassB0(t *testing.T, cfg string) {
 					unpicked++
 				}
 			}
-			if unpicked < faults(p) {
+			if unpicked < requestAndModelFaults(p) {
 				fired.Add(1)
 			}
 		})
@@ -102,6 +102,22 @@ func faults(p *plan.Plan) int {
 	n := 0
 	for _, s := range p.Steps {
 		n += len(s.Faults)
+	}
+	return n
+}
+
+// requestAndModelFaults counts p's faults other than holdWatch. With no fake
+// services, each such fault gets a note if it picked no request or held no
+// object. A holdWatch gets a note only for a kind the controller did not
+// watch, so it cannot show that it fired.
+func requestAndModelFaults(p *plan.Plan) int {
+	n := 0
+	for _, s := range p.Steps {
+		for _, f := range s.Faults {
+			if !f.HoldWatch {
+				n++
+			}
+		}
 	}
 	return n
 }

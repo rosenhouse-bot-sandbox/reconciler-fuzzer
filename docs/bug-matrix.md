@@ -58,3 +58,11 @@ Each Bucket owns one bucket in the `crudfake` system `cloud` (targets/toy-bucket
 | B33 | Reports ready right after the create, while the bucket is CREATING. | b33 | Honest | 0 |
 | B34 | Never recreates a missing bucket. | b34 | Restore | 1 |
 | B35 | Retries a 503 every 10 ms, past the rate limiter. | b35 | Backoff | 0 |
+
+## Fleet toy
+
+Each Cluster owns Volumes of a third party's kind, which a model sets ready. A Database names its Cluster, and a User its Database (targets/toy-fleet).
+
+| Bug | Description | Plan | Check | Step |
+|---|---|---|---|---|
+| B0 | The correct controller. | all 9 committed plans | none | |

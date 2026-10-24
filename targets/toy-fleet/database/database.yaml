@@ -1,0 +1,7 @@
+apiVersion: toy.reconciler-fuzzer/v1
+kind: Database
+metadata:
+  name: db
+spec:
+  clusterRef: cluster
+  engine: postgres
