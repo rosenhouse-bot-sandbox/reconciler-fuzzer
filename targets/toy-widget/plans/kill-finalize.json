@@ -1,0 +1,19 @@
+{
+  "steps": [
+    {
+      "actions": [
+        {"do": "create", "slot": "a"}
+      ]
+    },
+    {
+      "period": "3s",
+      "faults": [
+        {"match": {"verb": "patch", "resource": "widgets", "subresource": "-"}, "nth": 1, "killAfter": true}
+      ],
+      "actions": [
+        {"do": "update", "slot": "a", "patch": {"spec": {"count": 2}}},
+        {"at": "1s", "do": "delete", "slot": "a"}
+      ]
+    }
+  ]
+}

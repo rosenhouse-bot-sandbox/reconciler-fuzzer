@@ -122,7 +122,9 @@ type Fault struct {
 // ModelFault reports whether a stage model, not a listener, takes f.
 func (f Fault) ModelFault() bool { return f.Stuck || f.SlowDelete }
 
-// Match selects requests. An empty field matches any value.
+// Match selects requests. An empty field matches any value, but a
+// holdWatch's empty Group names the core group. Subresource may also be
+// NoSubresource.
 type Match struct {
 	Verb        string `json:"verb,omitempty"`
 	Group       string `json:"group,omitempty"`
@@ -130,6 +132,10 @@ type Match struct {
 	Subresource string `json:"subresource,omitempty"`
 	Name        string `json:"name,omitempty"`
 }
+
+// NoSubresource as a Match's Subresource matches only a request without a
+// subresource.
+const NoSubresource = "-"
 
 // Error answers a request with a Status of Code.
 type Error struct {
