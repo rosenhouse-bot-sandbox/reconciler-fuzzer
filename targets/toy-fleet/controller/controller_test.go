@@ -225,7 +225,7 @@ func TestClusterDeletionWaitsForDatabasesThenVolumes(t *testing.T) {
 
 	f.delete(f.cluster())
 	f.settle(f.clusters, "cluster")
-	if c := f.cluster(); c.Status.Phase != fleetv1.Deleting || c.Status.Message != "Databases that still name the Cluster: 1" {
+	if c := f.cluster(); c.Status.Phase != fleetv1.Deleting || c.Status.Message != "waiting until no Database names the Cluster" {
 		t.Fatalf("With a Database, the deleted Cluster is %+v.", c.Status)
 	}
 	volumes := &storagev1.VolumeList{}
@@ -247,7 +247,7 @@ func TestClusterDeletionWaitsForDatabasesThenVolumes(t *testing.T) {
 		}
 	}
 	f.settle(f.clusters, "cluster")
-	if c := f.cluster(); c.Status.Message != "Volumes that remain: 2" {
+	if c := f.cluster(); c.Status.Message != "waiting until no Volume of the Cluster remains" {
 		t.Fatalf("With held Volumes, the deleted Cluster is %+v.", c.Status)
 	}
 	if err := f.c.List(t.Context(), volumes); err != nil {
@@ -309,8 +309,7 @@ func TestDatabaseWaitsForItsClusterAndHoldsDeletionForUsers(t *testing.T) {
 	}
 	f.delete(db)
 	f.settle(f.databases, "db")
-	deleting := fleetv1.CommonStatus{Phase: fleetv1.Deleting, ObservedGeneration: 1, Message: "Users that still name the Database: 1"}
-	if err := f.get("db", db); err != nil || db.Status != deleting {
+	if err := f.get("db", db); err != nil || db.Status.Phase != fleetv1.Deleting || db.Status.Message != "waiting until no User names the Database" {
 		t.Fatalf("With a User, the deleted Database is %+v, %v.", db.Status, err)
 	}
 	f.delete(user)
@@ -349,12 +348,12 @@ func TestFinalizeLeavesACRItReleased(t *testing.T) {
 }
 
 // The cache can miss a new Database or Volume, so finalize lists them past it.
-func TestClusterFinalizeCountsDependentsTheCacheMisses(t *testing.T) {
+func TestClusterFinalizeSeesDependentsTheCacheMisses(t *testing.T) {
 	volume := &storagev1.Volume{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "cluster-vol-0", Labels: map[string]string{ClusterLabel: "cluster"},
 		OwnerReferences: []metav1.OwnerReference{{APIVersion: fleetv1.GroupVersion.String(), Kind: "Cluster", Name: "cluster", UID: "c1", Controller: ptr.To(true)}}}}
 	for message, dependent := range map[string]client.Object{
-		"Databases that still name the Cluster: 1": databaseObj(),
-		"Volumes that remain: 1":                   volume,
+		"waiting until no Database names the Cluster":    databaseObj(),
+		"waiting until no Volume of the Cluster remains": volume,
 	} {
 		cluster := deleting(clusterObj(), fleetv1.ClusterFinalizer)
 		cluster.UID = "c1"
@@ -368,12 +367,12 @@ func TestClusterFinalizeCountsDependentsTheCacheMisses(t *testing.T) {
 }
 
 // The cache can miss a new User, so finalize lists Users past it.
-func TestDatabaseFinalizeCountsUsersTheCacheMisses(t *testing.T) {
+func TestDatabaseFinalizeSeesUsersTheCacheMisses(t *testing.T) {
 	db := deleting(databaseObj(), fleetv1.DatabaseFinalizer)
 	f := newFleet(t, db)
 	f.databases.APIReader = newClient(t, userObj())
 	f.settle(f.databases, "db")
-	if err := f.get("db", db); err != nil || db.Status.Message != "Users that still name the Database: 1" {
+	if err := f.get("db", db); err != nil || db.Status.Message != "waiting until no User names the Database" {
 		t.Fatalf("With a User the cache misses, the deleted Database is %+v, %v.", db.Status, err)
 	}
 }

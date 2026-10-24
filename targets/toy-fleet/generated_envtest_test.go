@@ -48,14 +48,14 @@ func generatedPlansPassB0(t *testing.T, path string) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if faults(p) == 0 {
+		// On the database config, seed 22 hits #128's false positive: Clean
+		// blames a Volume that the controller recreates for the fixture
+		// Cluster on a terminating Database.
+		if faults(p) == 0 || path == databaseConfig && seed == 22 {
 			continue
 		}
 		n++
 		t.Run(fmt.Sprintf("seed %d", seed), func(t *testing.T) {
-			if path == databaseConfig && seed == 22 {
-				t.Skip("Clean blames a Volume that the controller recreates for the fixture Cluster on a terminating Database (#128).")
-			}
 			t.Parallel()
 			report, text := run1(t, path, run.Options{Plan: p}, 0)
 			if len(report.Findings) != 0 {
@@ -82,10 +82,10 @@ func faults(p *plan.Plan) int {
 	return n
 }
 
-// requestAndModelFaults counts p's faults other than holdWatch. Each such
-// fault gets a note if it picked no request or held no object. A holdWatch
-// gets a note only for a kind the controller did not watch, so it cannot show
-// that it fired.
+// requestAndModelFaults counts p's faults other than holdWatch. With no fake
+// services, each such fault gets a note if it picked no request or held no
+// object. A holdWatch gets a note only for a kind the controller did not
+// watch, so it cannot show that it fired.
 func requestAndModelFaults(p *plan.Plan) int {
 	n := 0
 	for _, s := range p.Steps {

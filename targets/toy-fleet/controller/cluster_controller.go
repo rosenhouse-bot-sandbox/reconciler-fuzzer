@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -110,12 +111,7 @@ func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Clust
 	if err := r.APIReader.List(ctx, databases, client.InNamespace(cluster.Namespace)); err != nil {
 		return fmt.Errorf("listing Databases: %w", err)
 	}
-	var dependents int
-	for _, db := range databases.Items {
-		if db.Spec.ClusterRef == cluster.Name {
-			dependents++
-		}
-	}
+	named := slices.ContainsFunc(databases.Items, func(db fleetv1.Database) bool { return db.Spec.ClusterRef == cluster.Name })
 	volumes, err := r.ownedVolumes(ctx, r.APIReader, cluster)
 	if err != nil {
 		return err
@@ -123,17 +119,17 @@ func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Clust
 	old := cluster.Status
 	cluster.Status.Phase = fleetv1.Deleting
 	switch {
-	case dependents > 0:
-		cluster.Status.Message = fmt.Sprintf("Databases that still name the Cluster: %d", dependents)
+	case named:
+		cluster.Status.Message = "waiting until no Database names the Cluster"
 	case len(volumes) > 0:
-		cluster.Status.Message = fmt.Sprintf("Volumes that remain: %d", len(volumes))
+		cluster.Status.Message = "waiting until no Volume of the Cluster remains"
 	default:
 		cluster.Status.Message = ""
 	}
 	if err := r.writeStatus(ctx, cluster, old, cluster.Status); err != nil {
 		return err
 	}
-	if dependents > 0 {
+	if named {
 		return nil // A Database's deletion requeues the Cluster.
 	}
 	for i := range volumes {

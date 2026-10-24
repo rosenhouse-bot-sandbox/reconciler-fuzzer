@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -108,18 +109,13 @@ func (r *DatabaseReconciler) finalize(ctx context.Context, db *fleetv1.Database)
 	if err := r.APIReader.List(ctx, users, client.InNamespace(db.Namespace)); err != nil {
 		return fmt.Errorf("listing Users: %w", err)
 	}
-	var dependents int
-	for _, u := range users.Items {
-		if u.Spec.DatabaseRef == db.Name {
-			dependents++
-		}
-	}
+	named := slices.ContainsFunc(users.Items, func(u fleetv1.User) bool { return u.Spec.DatabaseRef == db.Name })
 	old := db.Status
 	db.Status.Phase, db.Status.Message = fleetv1.Deleting, ""
-	if dependents > 0 {
-		db.Status.Message = fmt.Sprintf("Users that still name the Database: %d", dependents)
+	if named {
+		db.Status.Message = "waiting until no User names the Database"
 	}
-	if err := r.writeStatus(ctx, db, old, db.Status); err != nil || dependents > 0 {
+	if err := r.writeStatus(ctx, db, old, db.Status); err != nil || named {
 		return err // A User's deletion requeues the Database.
 	}
 	controllerutil.RemoveFinalizer(db, fleetv1.DatabaseFinalizer)

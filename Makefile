@@ -182,7 +182,7 @@ test:
 test-envtest: setup
 	KUBEBUILDER_ASSETS="$$($(ENVTEST_USE))" go test -tags envtest -count=1 -p 2 -parallel 3 -timeout 20m -skip '$(GENERATED)' ./...
 
-# go test starts packages in the order listed. toy-widget's takes longest, so it
+# go test favors the packages listed first. toy-widget's takes longest, so it
 # is listed first.
 .PHONY: test-generated
 test-generated: setup
