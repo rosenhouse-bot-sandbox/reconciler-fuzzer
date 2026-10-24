@@ -178,6 +178,8 @@ models:
   `report.md` names the kind and suggests a `models:` entry for it.
 
 [targets/toy-widget/gadget](targets/toy-widget/gadget) runs the toy with a Gadget model.
+Another toy, in [targets/toy-fleet](targets/toy-fleet), reconciles Cluster, Database and User
+CRs, and its config models the third-party Volumes each Cluster owns.
 
 ### Fake services
 

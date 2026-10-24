@@ -1,0 +1,8 @@
+{
+  "steps": [
+    {"actions": [{"do": "create", "slot": "a"}]},
+    {"actions": [{"do": "update", "slot": "a", "patch": {"spec": {"engine": "mysql"}}}]},
+    {"period": "2s", "actions": [{"do": "create", "slot": "u", "object": {"apiVersion": "toy.reconciler-fuzzer/v1", "kind": "User", "metadata": {"name": "alice"}, "spec": {"databaseRef": "db"}}}]},
+    {"period": "3s", "actions": [{"do": "delete", "slot": "a"}, {"at": "1s", "do": "delete", "slot": "u"}]}
+  ]
+}
