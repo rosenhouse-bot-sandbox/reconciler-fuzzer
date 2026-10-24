@@ -101,19 +101,24 @@ func TestMatches(t *testing.T) {
 }
 
 func TestMatchesNoSubresource(t *testing.T) {
-	m := plan.Match{Subresource: "-"}
 	for _, c := range []struct {
-		name, subresource string
-		want              bool
+		name        string
+		match       plan.Match
+		subresource string
+		want        bool
 	}{
-		{"main resource", "", true},
-		{"status", "status", false},
-		{"subresource named -", "-", false},
+		{"main resource", plan.Match{Verb: "update", Resource: "clusters", Subresource: "-"}, "", true},
+		{"status", plan.Match{Verb: "update", Resource: "clusters", Subresource: "-"}, "status", false},
+		{"subresource named -", plan.Match{Subresource: "-"}, "-", false},
+		{"verb", plan.Match{Verb: "patch", Subresource: "-"}, "", false},
+		{"group", plan.Match{Group: "apps", Subresource: "-"}, "", false},
+		{"resource", plan.Match{Resource: "volumes", Subresource: "-"}, "", false},
+		{"name", plan.Match{Name: "d", Subresource: "-"}, "", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			r := interpose.Request{Verb: "update", Ref: ref{Resource: "clusters", Name: "c"}, Subresource: c.subresource}
-			if got := interpose.Matches(m, r); got != c.want {
-				t.Errorf("Matches(%+v) of subresource %q = %v, want %v", m, c.subresource, got, c.want)
+			r := interpose.Request{Verb: "update", Ref: ref{Group: "toy", Resource: "clusters", Name: "c"}, Subresource: c.subresource}
+			if got := interpose.Matches(c.match, r); got != c.want {
+				t.Errorf("Matches(%+v) of subresource %q = %v, want %v", c.match, c.subresource, got, c.want)
 			}
 		})
 	}
