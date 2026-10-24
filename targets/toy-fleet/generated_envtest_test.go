@@ -14,8 +14,8 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/run"
 )
 
-// TestGeneratedPlansWithFaultsPassB0 runs each config's first 20 plans with a
-// fault. It fails if fewer than 3 of a config's plans had a request or model
+// TestGeneratedPlansWithFaultsPassB0 runs 20 plans with a fault from each
+// config. It fails if fewer than 3 of a config's plans had a request or model
 // fault that picked a request or held an object, so it catches faults that
 // stop firing.
 func TestGeneratedPlansWithFaultsPassB0(t *testing.T) {

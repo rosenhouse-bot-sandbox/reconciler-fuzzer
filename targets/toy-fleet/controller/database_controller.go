@@ -100,7 +100,7 @@ func (r *DatabaseReconciler) syncConfigMap(ctx context.Context, db *fleetv1.Data
 	return nil
 }
 
-// finalize releases the Database once no User names it.
+// finalize removes the Database's finalizer once no User names it.
 func (r *DatabaseReconciler) finalize(ctx context.Context, db *fleetv1.Database) error {
 	if !controllerutil.ContainsFinalizer(db, fleetv1.DatabaseFinalizer) {
 		return nil

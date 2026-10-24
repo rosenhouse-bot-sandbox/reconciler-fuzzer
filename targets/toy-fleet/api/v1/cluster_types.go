@@ -28,9 +28,9 @@ type ClusterStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 
-// Cluster is Pending, then Provisioning until its Volumes are ready, then
-// Ready, and Deleting once deleted. It owns spec.volumes Volumes, whose
-// third-party controller sets them ready.
+// Cluster is Pending at first, Provisioning while any of its Volumes is not
+// ready, Ready while all are, and Deleting once deleted. It owns spec.volumes
+// Volumes, whose third-party controller sets them ready.
 type Cluster struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

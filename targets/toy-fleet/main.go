@@ -29,7 +29,7 @@ func main() {
 func run(args []string, out io.Writer) error {
 	flags := flag.NewFlagSet("toy-fleet", flag.ContinueOnError)
 	flags.SetOutput(io.Discard) // main reports what Parse rejects; --help prints below.
-	kubeconfig := flags.String("kubeconfig", "", "path to a kubeconfig file; defaults to $KUBECONFIG, then to the in-cluster configuration")
+	kubeconfig := flags.String("kubeconfig", "", "path to a kubeconfig file; defaults to $KUBECONFIG, then the in-cluster configuration, then ~/.kube/config")
 	bugID := flags.Int("bug", 0, "seeded bug to run; 0 is the correct controller")
 	metricsAddress := flags.String("metrics-bind-address", "0", "address the metrics server binds to; 0 disables it")
 	if err := flags.Parse(args); err != nil {
@@ -77,7 +77,7 @@ func cacheOptions(namespace string) cache.Options {
 }
 
 // restConfig prefers the --kubeconfig path, then $KUBECONFIG, then the
-// in-cluster configuration.
+// in-cluster configuration, then ~/.kube/config.
 func restConfig(kubeconfig string) (*rest.Config, error) {
 	if kubeconfig != "" {
 		return clientcmd.BuildConfigFromFlags("", kubeconfig)

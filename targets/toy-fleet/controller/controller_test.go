@@ -134,8 +134,8 @@ func userObj() *fleetv1.User {
 	return &fleetv1.User{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "alice", Generation: 1, UID: "u1"}, Spec: fleetv1.UserSpec{DatabaseRef: "db"}}
 }
 
-// pending is the status of a CR of generation 1 that waits, as message says.
-func pending(message string) fleetv1.CommonStatus {
+// pendingStatus is the Pending status of a generation 1 CR with message.
+func pendingStatus(message string) fleetv1.CommonStatus {
 	return fleetv1.CommonStatus{Phase: fleetv1.Pending, ObservedGeneration: 1, Message: message}
 }
 
@@ -274,11 +274,11 @@ func TestDatabaseWaitsForItsClusterAndHoldsDeletionForUsers(t *testing.T) {
 	f.settle(f.databases, "db")
 	f.settle(f.users, "alice")
 	db := &fleetv1.Database{}
-	if err := f.get("db", db); err != nil || db.Status != pending("waiting for Cluster cluster") {
+	if err := f.get("db", db); err != nil || db.Status != pendingStatus("waiting for Cluster cluster") {
 		t.Fatalf("Without a Cluster, the Database is %+v, %v.", db.Status, err)
 	}
 	user := &fleetv1.User{}
-	if err := f.get("alice", user); err != nil || user.Status != pending("waiting for Database db to be Ready") {
+	if err := f.get("alice", user); err != nil || user.Status != pendingStatus("waiting for Database db to be Ready") {
 		t.Fatalf("On a Pending Database, the User is %+v, %v.", user.Status, err)
 	}
 
@@ -287,7 +287,7 @@ func TestDatabaseWaitsForItsClusterAndHoldsDeletionForUsers(t *testing.T) {
 	}
 	f.settle(f.clusters, "cluster")
 	f.settle(f.databases, "db")
-	if err := f.get("db", db); err != nil || db.Status != pending("waiting for Cluster cluster to be Ready") {
+	if err := f.get("db", db); err != nil || db.Status != pendingStatus("waiting for Cluster cluster to be Ready") {
 		t.Fatalf("On a Provisioning Cluster, the Database is %+v, %v.", db.Status, err)
 	}
 	f.readyVolumes()
@@ -330,7 +330,7 @@ func TestUserWaitsForItsDatabase(t *testing.T) {
 	f := newFleet(t, userObj())
 	f.settle(f.users, "alice")
 	user := &fleetv1.User{}
-	if err := f.get("alice", user); err != nil || user.Status != pending("waiting for Database db") {
+	if err := f.get("alice", user); err != nil || user.Status != pendingStatus("waiting for Database db") {
 		t.Fatalf("Without a Database, the User is %+v, %v.", user.Status, err)
 	}
 }

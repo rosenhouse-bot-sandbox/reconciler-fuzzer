@@ -444,8 +444,8 @@ User a Database. Its bugs start at B100, and `database/` fuzzes Databases.
 Each config's `plans/` holds its gated bugs' and B0's plans. A toy's
 `gate_envtest_test.go` runs `gate_test.go`'s bug rows and B0, and its
 `bugmatrix_test.go` renders them in `docs/bug-matrix.md`. B0 gives no findings
-and no notes on every committed plan, and no findings on each config's first 20
-seeds that draw a fault. toy-fleet skips seed 22 of `database/` (#128).
+and no notes on every committed plan, and no findings on the 20 faulted seeds
+that the toy's generated test runs for each config.
 
 **Examples.** `examples/<name>` adopts cert-manager, external-secrets on Vault,
 and ACK's s3-controller on moto. Plans and listed seeds give no findings,
