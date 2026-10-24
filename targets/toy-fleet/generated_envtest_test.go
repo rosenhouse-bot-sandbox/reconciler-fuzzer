@@ -14,13 +14,21 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/run"
 )
 
-// TestGeneratedPlansWithFaultsPassB0 runs config.yaml's first 20 plans with a
-// fault. It fails if fewer than 3 of them had a fault that picked a request or
-// held an object, so it catches faults that stop firing. It leaves out the
-// database config. There, Clean blames a Volume that the controller recreates
-// for the fixture Cluster on the Databases live at its creation (#128).
+// TestGeneratedPlansWithFaultsPassB0 runs each config's first 20 plans with a
+// fault. It fails if fewer than 3 of a config's plans had a request or model
+// fault that picked a request or held an object, so it catches faults that
+// stop firing.
 func TestGeneratedPlansWithFaultsPassB0(t *testing.T) {
-	const path, plans, firing = "config.yaml", 20, 3
+	for _, cfg := range configs {
+		t.Run(cfg, func(t *testing.T) {
+			t.Parallel()
+			generatedPlansPassB0(t, cfg)
+		})
+	}
+}
+
+func generatedPlansPassB0(t *testing.T, path string) {
+	const plans, firing = 20, 3
 	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatal(err)
@@ -32,7 +40,7 @@ func TestGeneratedPlansWithFaultsPassB0(t *testing.T) {
 	var fired atomic.Int32
 	t.Cleanup(func() {
 		if n := fired.Load(); n < firing {
-			t.Errorf("A fault fired in %d of %d plans, want at least %d.", n, plans, firing)
+			t.Errorf("A request or model fault fired in %d of %d plans, want at least %d.", n, plans, firing)
 		}
 	})
 	for seed, n := uint64(1), 0; n < plans; seed++ {
@@ -45,6 +53,9 @@ func TestGeneratedPlansWithFaultsPassB0(t *testing.T) {
 		}
 		n++
 		t.Run(fmt.Sprintf("seed %d", seed), func(t *testing.T) {
+			if path == databaseConfig && seed == 22 {
+				t.Skip("Clean blames a Volume that the controller recreates for the fixture Cluster on a terminating Database (#128).")
+			}
 			t.Parallel()
 			report, text := run1(t, path, run.Options{Plan: p}, 0)
 			if len(report.Findings) != 0 {
@@ -56,7 +67,7 @@ func TestGeneratedPlansWithFaultsPassB0(t *testing.T) {
 					unpicked++
 				}
 			}
-			if unpicked < faults(p) {
+			if unpicked < requestAndModelFaults(p) {
 				fired.Add(1)
 			}
 		})
@@ -67,6 +78,21 @@ func faults(p *plan.Plan) int {
 	n := 0
 	for _, s := range p.Steps {
 		n += len(s.Faults)
+	}
+	return n
+}
+
+// requestAndModelFaults counts p's faults other than holdWatch. Each notes it
+// if it picked no request or held no object. A holdWatch notes only a kind
+// that the controller did not watch, so it cannot show that it fired.
+func requestAndModelFaults(p *plan.Plan) int {
+	n := 0
+	for _, s := range p.Steps {
+		for _, f := range s.Faults {
+			if !f.HoldWatch {
+				n++
+			}
+		}
 	}
 	return n
 }

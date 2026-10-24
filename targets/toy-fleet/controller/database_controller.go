@@ -18,7 +18,7 @@ import (
 )
 
 // DatabaseReconciler readies a Database on its Cluster, and holds its
-// deletion until its Users are gone.
+// deletion while a User names it.
 type DatabaseReconciler struct{ reconciler }
 
 func (r *DatabaseReconciler) SetupWithManager(m ctrl.Manager) error {
@@ -117,7 +117,7 @@ func (r *DatabaseReconciler) finalize(ctx context.Context, db *fleetv1.Database)
 	old := db.Status
 	db.Status.Phase, db.Status.Message = fleetv1.Deleting, ""
 	if dependents > 0 {
-		db.Status.Message = fmt.Sprintf("waiting for %d Users to go", dependents)
+		db.Status.Message = fmt.Sprintf("Users that still name the Database: %d", dependents)
 	}
 	if err := r.writeStatus(ctx, db, old, db.Status); err != nil || dependents > 0 {
 		return err // A User's deletion requeues the Database.

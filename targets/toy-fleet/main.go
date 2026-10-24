@@ -68,7 +68,7 @@ func run(args []string, out io.Writer) error {
 	return manager.Start(ctrl.SetupSignalHandler())
 }
 
-// cacheOptions confine the cache to namespace, where it is set.
+// cacheOptions confines the cache to namespace when namespace is set.
 func cacheOptions(namespace string) cache.Options {
 	if namespace == "" {
 		return cache.Options{}

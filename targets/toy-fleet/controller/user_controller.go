@@ -48,7 +48,7 @@ func (r *UserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !user.DeletionTimestamp.IsZero() {
-		return ctrl.Result{}, nil // The garbage collector takes its Secret.
+		return ctrl.Result{}, nil // The garbage collector deletes its Secret.
 	}
 	old := user.Status
 	user.Status = fleetv1.CommonStatus{Phase: fleetv1.Pending, ObservedGeneration: user.Generation}

@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"bytes"
+	"maps"
 	"slices"
 	"testing"
 
@@ -132,15 +134,22 @@ func userObj() *fleetv1.User {
 	return &fleetv1.User{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "alice", Generation: 1, UID: "u1"}, Spec: fleetv1.UserSpec{DatabaseRef: "db"}}
 }
 
+// pending is the status of a CR of generation 1 that waits, as message says.
+func pending(message string) fleetv1.CommonStatus {
+	return fleetv1.CommonStatus{Phase: fleetv1.Pending, ObservedGeneration: 1, Message: message}
+}
+
 func TestClusterIsReadyOnlyOnceItsVolumesAre(t *testing.T) {
 	f := newFleet(t, clusterObj())
 	f.settle(f.clusters, "cluster")
-	if c := f.cluster(); c.Status.Phase != fleetv1.Provisioning || c.Status.ObservedGeneration != 1 || c.Finalizers[0] != fleetv1.ClusterFinalizer {
+	provisioning := fleetv1.ClusterStatus{CommonStatus: fleetv1.CommonStatus{Phase: fleetv1.Provisioning, ObservedGeneration: 1, Message: "0 of 2 Volumes ready"}}
+	if c := f.cluster(); c.Status != provisioning || !slices.Equal(c.Finalizers, []string{fleetv1.ClusterFinalizer}) {
 		t.Fatalf("Before the Volumes are ready, the Cluster is %+v %v.", c.Status, c.Finalizers)
 	}
 	f.readyVolumes()
 	f.settle(f.clusters, "cluster")
-	if c := f.cluster(); c.Status.Phase != fleetv1.Ready || c.Status.ReadyVolumes != 2 {
+	ready := fleetv1.ClusterStatus{CommonStatus: fleetv1.CommonStatus{Phase: fleetv1.Ready, ObservedGeneration: 1}, ReadyVolumes: 2}
+	if c := f.cluster(); c.Status != ready {
 		t.Fatalf("After the Volumes are ready, the Cluster is %+v.", c.Status)
 	}
 }
@@ -194,14 +203,11 @@ func TestVolumeReadyNeedsReadyTrueForItsGenerationWhileLive(t *testing.T) {
 	if !volumeReady(volume(metav1.ConditionTrue, 2)) {
 		t.Error("A Volume with Ready True for its generation is not ready.")
 	}
-	deleting := volume(metav1.ConditionTrue, 2)
-	now := metav1.Now()
-	deleting.DeletionTimestamp = &now
 	for name, v := range map[string]*storagev1.Volume{
 		"no condition":        {},
 		"Ready False":         volume(metav1.ConditionFalse, 2),
 		"an older generation": volume(metav1.ConditionTrue, 1),
-		"deleting":            deleting,
+		"deleting":            deleting(volume(metav1.ConditionTrue, 2), "storage.thirdparty/protect"),
 	} {
 		if volumeReady(v) {
 			t.Errorf("A Volume with %s is ready.", name)
@@ -219,7 +225,7 @@ func TestClusterDeletionWaitsForDatabasesThenVolumes(t *testing.T) {
 
 	f.delete(f.cluster())
 	f.settle(f.clusters, "cluster")
-	if c := f.cluster(); c.Status.Phase != fleetv1.Deleting || c.Status.Message != "waiting for 1 Databases to go" {
+	if c := f.cluster(); c.Status.Phase != fleetv1.Deleting || c.Status.Message != "Databases that still name the Cluster: 1" {
 		t.Fatalf("With a Database, the deleted Cluster is %+v.", c.Status)
 	}
 	volumes := &storagev1.VolumeList{}
@@ -241,7 +247,7 @@ func TestClusterDeletionWaitsForDatabasesThenVolumes(t *testing.T) {
 		}
 	}
 	f.settle(f.clusters, "cluster")
-	if c := f.cluster(); c.Status.Message != "waiting for 2 Volumes to go" {
+	if c := f.cluster(); c.Status.Message != "Volumes that remain: 2" {
 		t.Fatalf("With held Volumes, the deleted Cluster is %+v.", c.Status)
 	}
 	if err := f.c.List(t.Context(), volumes); err != nil {
@@ -268,11 +274,11 @@ func TestDatabaseWaitsForItsClusterAndHoldsDeletionForUsers(t *testing.T) {
 	f.settle(f.databases, "db")
 	f.settle(f.users, "alice")
 	db := &fleetv1.Database{}
-	if err := f.get("db", db); err != nil || db.Status.Phase != fleetv1.Pending || db.Status.Message != "waiting for Cluster cluster" {
+	if err := f.get("db", db); err != nil || db.Status != pending("waiting for Cluster cluster") {
 		t.Fatalf("Without a Cluster, the Database is %+v, %v.", db.Status, err)
 	}
 	user := &fleetv1.User{}
-	if err := f.get("alice", user); err != nil || user.Status.Phase != fleetv1.Pending {
+	if err := f.get("alice", user); err != nil || user.Status != pending("waiting for Database db to be Ready") {
 		t.Fatalf("On a Pending Database, the User is %+v, %v.", user.Status, err)
 	}
 
@@ -281,7 +287,7 @@ func TestDatabaseWaitsForItsClusterAndHoldsDeletionForUsers(t *testing.T) {
 	}
 	f.settle(f.clusters, "cluster")
 	f.settle(f.databases, "db")
-	if err := f.get("db", db); err != nil || db.Status.Phase != fleetv1.Pending || db.Status.Message != "waiting for Cluster cluster to be Ready" {
+	if err := f.get("db", db); err != nil || db.Status != pending("waiting for Cluster cluster to be Ready") {
 		t.Fatalf("On a Provisioning Cluster, the Database is %+v, %v.", db.Status, err)
 	}
 	f.readyVolumes()
@@ -289,11 +295,12 @@ func TestDatabaseWaitsForItsClusterAndHoldsDeletionForUsers(t *testing.T) {
 	f.settle(f.databases, "db")
 	f.settle(f.users, "alice")
 	cm := &corev1.ConfigMap{}
-	if err := f.get("db-db", cm); err != nil || cm.Data["engine"] != "postgres" || !metav1.IsControlledBy(cm, db) {
+	if err := f.get("db-db", cm); err != nil || !maps.Equal(cm.Data, map[string]string{"cluster": "cluster", "engine": "postgres"}) || !metav1.IsControlledBy(cm, db) {
 		t.Fatalf("The Database's ConfigMap is %v, owned by %v, %v.", cm.Data, cm.OwnerReferences, err)
 	}
 	secret := &corev1.Secret{}
-	if err := f.get("alice-credentials", secret); err != nil || string(secret.Data["password"]) != Password(userObj()) || !metav1.IsControlledBy(secret, user) {
+	credentials := map[string][]byte{"database": []byte("db"), "username": []byte("alice"), "password": []byte(Password(userObj()))}
+	if err := f.get("alice-credentials", secret); err != nil || !maps.EqualFunc(secret.Data, credentials, bytes.Equal) || !metav1.IsControlledBy(secret, user) {
 		t.Fatalf("The User's Secret is %v, owned by %v, %v.", secret.Data, secret.OwnerReferences, err)
 	}
 
@@ -302,7 +309,8 @@ func TestDatabaseWaitsForItsClusterAndHoldsDeletionForUsers(t *testing.T) {
 	}
 	f.delete(db)
 	f.settle(f.databases, "db")
-	if err := f.get("db", db); err != nil || db.Status.Message != "waiting for 1 Users to go" {
+	deleting := fleetv1.CommonStatus{Phase: fleetv1.Deleting, ObservedGeneration: 1, Message: "Users that still name the Database: 1"}
+	if err := f.get("db", db); err != nil || db.Status != deleting {
 		t.Fatalf("With a User, the deleted Database is %+v, %v.", db.Status, err)
 	}
 	f.delete(user)
@@ -323,7 +331,7 @@ func TestUserWaitsForItsDatabase(t *testing.T) {
 	f := newFleet(t, userObj())
 	f.settle(f.users, "alice")
 	user := &fleetv1.User{}
-	if err := f.get("alice", user); err != nil || user.Status.Phase != fleetv1.Pending || user.Status.Message != "waiting for Database db" {
+	if err := f.get("alice", user); err != nil || user.Status != pending("waiting for Database db") {
 		t.Fatalf("Without a Database, the User is %+v, %v.", user.Status, err)
 	}
 }
@@ -344,14 +352,17 @@ func TestFinalizeLeavesACRItReleased(t *testing.T) {
 func TestClusterFinalizeCountsDependentsTheCacheMisses(t *testing.T) {
 	volume := &storagev1.Volume{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "cluster-vol-0", Labels: map[string]string{ClusterLabel: "cluster"},
 		OwnerReferences: []metav1.OwnerReference{{APIVersion: fleetv1.GroupVersion.String(), Kind: "Cluster", Name: "cluster", UID: "c1", Controller: ptr.To(true)}}}}
-	for kind, dependent := range map[string]client.Object{"Databases": databaseObj(), "Volumes": volume} {
+	for message, dependent := range map[string]client.Object{
+		"Databases that still name the Cluster: 1": databaseObj(),
+		"Volumes that remain: 1":                   volume,
+	} {
 		cluster := deleting(clusterObj(), fleetv1.ClusterFinalizer)
 		cluster.UID = "c1"
 		f := newFleet(t, cluster)
 		f.clusters.APIReader = newClient(t, dependent)
 		f.settle(f.clusters, "cluster")
-		if c := f.cluster(); c.Status.Message != "waiting for 1 "+kind+" to go" {
-			t.Errorf("With %s the cache misses, the deleted Cluster is %+v.", kind, c.Status)
+		if c := f.cluster(); c.Status.Message != message {
+			t.Errorf("With a %T the cache misses, the deleted Cluster is %+v, want %q.", dependent, c.Status, message)
 		}
 	}
 }
@@ -362,7 +373,7 @@ func TestDatabaseFinalizeCountsUsersTheCacheMisses(t *testing.T) {
 	f := newFleet(t, db)
 	f.databases.APIReader = newClient(t, userObj())
 	f.settle(f.databases, "db")
-	if err := f.get("db", db); err != nil || db.Status.Message != "waiting for 1 Users to go" {
+	if err := f.get("db", db); err != nil || db.Status.Message != "Users that still name the Database: 1" {
 		t.Fatalf("With a User the cache misses, the deleted Database is %+v, %v.", db.Status, err)
 	}
 }

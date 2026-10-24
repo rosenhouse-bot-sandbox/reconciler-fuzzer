@@ -15,7 +15,8 @@ const (
 	section       = "\n## Fleet toy\n"
 )
 
-// renderBugMatrix renders this toy's section: a B0 row for every plan.
+// renderBugMatrix renders this toy's section, with one B0 row that counts
+// the committed plans.
 func renderBugMatrix(plans []string) string {
 	return section + "\n" +
 		"Each Cluster owns Volumes of a third party's kind, which a model sets ready. " +

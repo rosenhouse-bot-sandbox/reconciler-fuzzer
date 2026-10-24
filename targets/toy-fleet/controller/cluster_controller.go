@@ -100,8 +100,8 @@ func (r *ClusterReconciler) syncVolumes(ctx context.Context, cluster *fleetv1.Cl
 	return ready, nil
 }
 
-// finalize waits for the Cluster's Databases to go, deletes its Volumes,
-// waits for them to go, and then releases the Cluster.
+// finalize waits until no Database names the Cluster, deletes its Volumes,
+// waits until none remains, and then removes its finalizer.
 func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Cluster) error {
 	if !controllerutil.ContainsFinalizer(cluster, fleetv1.ClusterFinalizer) {
 		return nil
@@ -124,9 +124,9 @@ func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Clust
 	cluster.Status.Phase = fleetv1.Deleting
 	switch {
 	case dependents > 0:
-		cluster.Status.Message = fmt.Sprintf("waiting for %d Databases to go", dependents)
+		cluster.Status.Message = fmt.Sprintf("Databases that still name the Cluster: %d", dependents)
 	case len(volumes) > 0:
-		cluster.Status.Message = fmt.Sprintf("waiting for %d Volumes to go", len(volumes))
+		cluster.Status.Message = fmt.Sprintf("Volumes that remain: %d", len(volumes))
 	default:
 		cluster.Status.Message = ""
 	}
