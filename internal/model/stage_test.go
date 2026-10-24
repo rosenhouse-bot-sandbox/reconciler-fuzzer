@@ -359,6 +359,20 @@ func TestStuckKeepsMatchingObjectsNotReadyUntilItEnds(t *testing.T) {
 	}
 }
 
+func TestStuckWritesEachObjectsOwnGeneration(t *testing.T) {
+	s, w, _ := testStage(t)
+	s.hear(gadget{name: "g1", uid: "u1", rv: "1", generation: 1, ready: readyFor(1)}.version())
+	s.hear(gadget{name: "g2", uid: "u2", rv: "2", generation: 2, ready: readyFor(2)}.version())
+	if _, err := s.Fault(stuck("")); err != nil {
+		t.Fatal(err)
+	}
+	for _, write := range w.await(t, 2) {
+		if got, want := readyCondition(t, write)["observedGeneration"], map[string]any{"g1": 1.0, "g2": 2.0}[write.ref.Name]; got != want {
+			t.Errorf("The stuck write to %s set observedGeneration %v, want %v.", write.ref.Name, got, want)
+		}
+	}
+}
+
 func TestStuckReplacesTheStatusFieldsUntilItEnds(t *testing.T) {
 	for name, c := range map[string]struct {
 		status, stuckStatus, readyWrite, stuckWrite string
