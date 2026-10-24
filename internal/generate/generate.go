@@ -608,7 +608,9 @@ func (g *Generator) kindWeight(n int, gr gvk.GroupResource) int {
 }
 
 // addRequests adds a request for each verb the RBAC grants on each resource
-// and its status, or get and list on a resource it does not name.
+// and its status, or get and list on a resource it does not name. A
+// resource's match has an empty subresource, so it also matches the
+// resource's status requests.
 func (g *Generator) addRequests() {
 	for n, gr := range g.resources {
 		kindWeight := g.kindWeight(n, gr)
