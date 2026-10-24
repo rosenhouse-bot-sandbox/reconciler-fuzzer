@@ -22,7 +22,8 @@ type Plan struct {
 }
 
 // Step is one unit of a run. Its fault period lasts Period, or until its
-// last action ends if that is later.
+// last action ends if that is later. Its faults last as long, unless a
+// create's wait for its slot ends them sooner.
 type Step struct {
 	Period  Duration `json:"period,omitempty"`
 	Actions []Action `json:"actions,omitempty"`
@@ -34,7 +35,10 @@ type Do string
 
 const (
 	// Create creates Object, or the sample when Object is empty. A create of
-	// a slot whose CR is still terminating waits until the name is free.
+	// a slot whose CR is still terminating waits until the name is free. Once
+	// Period has passed, the wait ends the step's faults and restarts a killed
+	// controller. It gives up as long after the faults end, or after the
+	// slot's delete if that is later, as the step's deadline allows.
 	Create Do = "create"
 	// Update merge-patches the slot's CR with Patch.
 	Update Do = "update"
@@ -43,7 +47,7 @@ const (
 	// Restart stops the controller with SIGTERM and starts it again.
 	Restart Do = "restart"
 	// Kill sends SIGKILL. The controller stays down until the fault period
-	// ends.
+	// ends, or until a create's wait for its slot restarts it.
 	Kill Do = "kill"
 	// Damage deletes the object Target selects among those the controller
 	// created, or merge-patches it with Patch when set. The harness never
@@ -91,10 +95,10 @@ type Target struct {
 	Nth int `json:"nth,omitempty"`
 }
 
-// Fault starts with the fault period and ends with it. A request fault acts
-// on one system's controller listener. A model fault, Stuck or SlowDelete,
-// acts on the stage model of the kind Match names, or on a fake service.
-// Exactly one effect is set.
+// Fault starts with the fault period and ends with it, or when a create's
+// wait for its slot ends it. A request fault acts on one system's controller
+// listener. A model fault, Stuck or SlowDelete, acts on the stage model of
+// the kind Match names, or on a fake service. Exactly one effect is set.
 type Fault struct {
 	// System defaults to "kube".
 	System string `json:"system,omitempty"`

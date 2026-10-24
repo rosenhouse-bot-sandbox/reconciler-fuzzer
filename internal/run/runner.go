@@ -25,7 +25,7 @@ import (
 // the harness itself fails; a controller that does not settle is a finding,
 // not an error.
 func (r *Runner) Execute(ctx context.Context, p *plan.Plan) error {
-	e := &execution{Runner: r, live: map[string]trace.Ref{}, deleted: map[string]trace.Ref{}, ix: trace.NewIndex(nil)}
+	e := &execution{Runner: r, live: map[string]trace.Ref{}, deleted: map[string]deletion{}, ix: trace.NewIndex(nil)}
 	for n, step := range p.Steps {
 		err := e.step(ctx, n, step)
 		if errors.Is(err, errSlotTaken) {
@@ -68,25 +68,32 @@ func (r *Runner) Quiet(ctx context.Context) error {
 	}
 }
 
-// errSlotTaken says a create waited the settle timeout for its slot's
-// previous CR to go. The step still settles, and then the plan skips to its
-// appended steps.
-var errSlotTaken = errors.New("the slot's previous CR is still there")
+// errSlotTaken says that a create's wait for its slot's previous CR timed
+// out. The step still settles, and then the plan skips to its appended
+// steps.
+var errSlotTaken = errors.New("the slot's name is still taken")
 
-// Deadline is end faults + settle + min(fault period, backoffCap) + the
-// longest poll interval of the systems the step touched. backoffBound says
-// that backoffCap was the smaller.
-func Deadline(endFaults, faultPeriod, maxPoll time.Duration, t config.Timeouts) (deadline time.Duration, backoffBound bool) {
-	return endFaults + t.Settle + min(faultPeriod, t.BackoffCap) + maxPoll, t.BackoffCap < faultPeriod
+// Deadline is end faults + settle + min(faultsLasted, backoffCap) + the
+// longest poll interval of the systems the step touched. faultsLasted is the
+// time from the step's start until its faults ended. backoffBound says that
+// backoffCap was the smaller.
+func Deadline(endFaults, faultsLasted, maxPoll time.Duration, t config.Timeouts) (deadline time.Duration, backoffBound bool) {
+	return endFaults + t.Settle + min(faultsLasted, t.BackoffCap) + maxPoll, t.BackoffCap < faultsLasted
 }
 
 type execution struct {
 	*Runner
 	live map[string]trace.Ref
-	// deleted holds the last CR deleted from each slot, which a later
-	// create of the slot waits out.
-	deleted map[string]trace.Ref
+	// deleted holds the last deletion from each slot, which a later create
+	// of the slot waits out.
+	deleted map[string]deletion
 	ix      *trace.Index
+}
+
+// deletion is a CR that a delete action removed from its slot, and when.
+type deletion struct {
+	ref trace.Ref
+	at  time.Time
 }
 
 func (e *execution) phase(step int, name trace.PhaseName) {
@@ -94,25 +101,22 @@ func (e *execution) phase(step int, name trace.PhaseName) {
 }
 
 func (e *execution) step(ctx context.Context, n int, step plan.Step) error {
-	start := time.Now()
+	s := &stepRun{execution: e, n: n, step: step, start: time.Now()}
 	e.phase(n, trace.FaultPeriod)
 	if err := e.Process.Supervise(false); err != nil {
 		return err
 	}
-	started, err := e.faultPeriod(ctx, n, step, start)
-	for i, f := range started {
-		f.end()
-		e.Recorder.Record(faultEvent(n, i, step.Faults[i], f.model, true))
-	}
+	err := s.faultPeriod(ctx)
 	if err != nil && !errors.Is(err, errSlotTaken) {
+		s.stopFaults()
 		return err
 	}
 	taken := err
-	if err := e.Process.Supervise(true); err != nil {
+	if err := s.resume(); err != nil {
 		return err
 	}
-	endFaults := e.Recorder.Now()
-	deadline, backoffBound := Deadline(endFaults, time.Since(start), e.maxPoll(step), e.Config.Timeouts)
+	allowance, backoffBound := s.allowance()
+	deadline := e.Recorder.Now() + allowance
 	e.Recorder.Record(trace.Event{Phase: &trace.Phase{Step: n, Name: trace.EndFaults, Deadline: deadline, BackoffBound: backoffBound}})
 	if err := e.settle(ctx, n, deadline); err != nil {
 		return err
@@ -151,37 +155,138 @@ type startedFault struct {
 	model string
 }
 
-// faultPeriod starts the step's faults, applies its actions and waits out
-// its period. It returns every fault it started.
-func (e *execution) faultPeriod(ctx context.Context, n int, step plan.Step, start time.Time) ([]startedFault, error) {
-	var started []startedFault
-	for i, f := range step.Faults {
-		target, model, err := e.target(f)
+// stepRun is step n while it runs. Its faults stop once: when a create still
+// waits for its slot after Period has passed, or else when the fault period
+// ends.
+type stepRun struct {
+	*execution
+	n             int
+	step          plan.Step
+	start         time.Time
+	started       []startedFault
+	faultsStopped time.Time
+}
+
+// periodEnd is when Period has passed. The fault period may last longer.
+func (s *stepRun) periodEnd() time.Time { return s.start.Add(time.Duration(s.step.Period)) }
+
+// stopFaults ends the started faults, once.
+func (s *stepRun) stopFaults() {
+	if !s.faultsStopped.IsZero() {
+		return
+	}
+	for i, f := range s.started {
+		f.end()
+		s.Recorder.Record(faultEvent(s.n, i, s.step.Faults[i], f.model, true))
+	}
+	s.faultsStopped = time.Now()
+}
+
+// resume stops the faults and resumes supervision, which restarts a killed
+// controller.
+func (s *stepRun) resume() error {
+	s.stopFaults()
+	return s.Process.Supervise(true)
+}
+
+// allowance is how long the step may take to settle once its faults have
+// stopped: its Deadline less end faults. bounded says that backoffCap
+// bounded it.
+func (s *stepRun) allowance() (allowance time.Duration, bounded bool) {
+	return Deadline(0, s.faultsStopped.Sub(s.start), s.maxPoll(s.step), s.Config.Timeouts)
+}
+
+// faultPeriod starts the step's faults, applies its actions and waits until
+// Period has passed.
+func (s *stepRun) faultPeriod(ctx context.Context) error {
+	for i, f := range s.step.Faults {
+		target, model, err := s.target(f)
 		if err != nil {
-			return started, fmt.Errorf("steps[%d].faults[%d]: %w", n, i, err)
+			return fmt.Errorf("steps[%d].faults[%d]: %w", s.n, i, err)
 		}
-		e.Recorder.Record(faultEvent(n, i, f, model, false))
+		s.Recorder.Record(faultEvent(s.n, i, f, model, false))
 		end, err := target.Fault(f)
 		if err != nil {
-			return started, fmt.Errorf("steps[%d].faults[%d]: %w", n, i, err)
+			return fmt.Errorf("steps[%d].faults[%d]: %w", s.n, i, err)
 		}
-		started = append(started, startedFault{end, model})
+		s.started = append(s.started, startedFault{end, model})
 	}
-	for i, a := range step.Actions {
-		if err := sleepUntil(ctx, start.Add(time.Duration(a.At))); err != nil {
-			return started, err
+	for i, a := range s.step.Actions {
+		if err := sleepUntil(ctx, s.start.Add(time.Duration(a.At))); err != nil {
+			return err
 		}
-		ref, err := e.act(ctx, a)
-		event := &trace.Action{Step: n, Index: i, Do: string(a.Do), Slot: a.Slot, Ref: ref}
+		ref, err := s.execution.act(ctx, a, s)
+		event := &trace.Action{Step: s.n, Index: i, Do: string(a.Do), Slot: a.Slot, Ref: ref}
 		if err != nil {
 			event.Error = err.Error()
 		}
-		e.Recorder.Record(trace.Event{Action: event})
+		s.Recorder.Record(trace.Event{Action: event})
 		if err != nil && !errors.Is(err, owner.ErrNoMatch) {
-			return started, fmt.Errorf("steps[%d].actions[%d] %s: %w", n, i, a.Do, err)
+			return fmt.Errorf("steps[%d].actions[%d] %s: %w", s.n, i, a.Do, err)
 		}
 	}
-	return started, sleepUntil(ctx, start.Add(time.Duration(step.Period)))
+	return sleepUntil(ctx, s.periodEnd())
+}
+
+// awaitGone waits until d's CR, the slot's previous one, no longer exists.
+// The step's faults or a kill may hold it. So once Period has passed with
+// the CR still there, awaitGone ends them. It gives up once the allowance
+// has passed since the faults stopped, or since d if that is later.
+func (s *stepRun) awaitGone(ctx context.Context, d deletion) error {
+	begun := time.Now()
+	if begun.Before(s.periodEnd()) {
+		if timedOut, err := s.waitGone(ctx, d.ref, s.periodEnd()); !timedOut {
+			return err
+		}
+	}
+	if gone, err := s.Cluster.Gone(ctx, d.ref); gone || err != nil {
+		return err
+	}
+	if err := s.resume(); err != nil {
+		return err
+	}
+	from := s.faultsStopped
+	if d.at.After(from) {
+		from = d.at
+	}
+	allowance, _ := s.allowance()
+	if timedOut, err := s.waitGone(ctx, d.ref, from.Add(allowance)); !timedOut {
+		return err
+	}
+	return s.slotTaken(d.ref, time.Since(begun))
+}
+
+// waitGone waits until ref names no object, or until the time until.
+func (e *execution) waitGone(ctx context.Context, ref trace.Ref, until time.Time) (timedOut bool, err error) {
+	wait, cancel := context.WithDeadline(ctx, until)
+	defer cancel()
+	err = e.Cluster.WaitGone(wait, ref)
+	if err != nil && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+		return true, nil
+	}
+	return false, err
+}
+
+// slotTaken is the error of a create that waited for ref, the slot's
+// previous CR, and gave up. The error describes the last version of ref that
+// the observer recorded, which may be of another CR with the same name.
+func (e *execution) slotTaken(ref trace.Ref, waited time.Duration) error {
+	taken := fmt.Errorf("%w after the create waited %v", errSlotTaken, waited.Round(time.Millisecond))
+	e.ix.Append(e.Recorder.EventsSince(e.ix.Len())...)
+	var cr struct {
+		Metadata struct {
+			DeletionTimestamp string   `json:"deletionTimestamp"`
+			Finalizers        []string `json:"finalizers"`
+		} `json:"metadata"`
+	}
+	v, found := e.ix.Latest(ref)
+	switch {
+	case !found || v.Deleted || json.Unmarshal(v.Body, &cr) != nil:
+		return taken
+	case cr.Metadata.DeletionTimestamp == "":
+		return fmt.Errorf("%w: the CR with that name is not being deleted", taken)
+	}
+	return fmt.Errorf("%w: the CR with that name has deletionTimestamp %s and finalizers %v", taken, cr.Metadata.DeletionTimestamp, cr.Metadata.Finalizers)
 }
 
 // faultEvent records a fault's start or end. A holdWatch's names its kind.
@@ -215,8 +320,9 @@ func (e *execution) target(f plan.Fault) (target FaultTarget, model string, err 
 	return target, "", nil
 }
 
-// act applies one action and returns the ref of the object it touched.
-func (e *execution) act(ctx context.Context, a plan.Action) (*trace.Ref, error) {
+// act applies one action of step run s and returns the ref of the object it
+// touched.
+func (e *execution) act(ctx context.Context, a plan.Action, s *stepRun) (*trace.Ref, error) {
 	switch a.Do {
 	case plan.Create:
 		obj, err := e.object(a)
@@ -224,13 +330,7 @@ func (e *execution) act(ctx context.Context, a plan.Action) (*trace.Ref, error) 
 			return nil, err
 		}
 		if previous, found := e.deleted[a.Slot]; found {
-			wait, cancel := context.WithTimeout(ctx, e.Config.Timeouts.Settle)
-			err := e.Cluster.WaitGone(wait, previous)
-			cancel()
-			if err != nil && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
-				return nil, fmt.Errorf("%w: %w", errSlotTaken, err)
-			}
-			if err != nil {
+			if err := s.awaitGone(ctx, previous); err != nil {
 				return nil, err
 			}
 			delete(e.deleted, a.Slot)
@@ -253,7 +353,7 @@ func (e *execution) act(ctx context.Context, a plan.Action) (*trace.Ref, error) 
 			return nil, err
 		}
 		delete(e.live, a.Slot)
-		e.deleted[a.Slot] = ref
+		e.deleted[a.Slot] = deletion{ref, time.Now()}
 		if err := e.Cluster.Delete(ctx, ref, a.Propagation); !errors.Is(err, system.ErrGone) {
 			return &ref, err
 		}

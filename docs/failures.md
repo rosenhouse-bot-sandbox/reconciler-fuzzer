@@ -49,6 +49,14 @@ step the trace ended too early to judge, or an unmapped request. Notes do
 not fail a run. A fault that picked no request tested nothing, so a plan
 with such notes may need a different fault.
 
+`the slot's name is still taken after the create waited 37s` means that
+a create gave up waiting until its slot's previous CR no longer existed.
+The step's faults had ended by then (DESIGN.md §9). When the observer last
+recorded a live CR with that name, the rest of the note names its
+`deletionTimestamp` and finalizers, or says that it is not being deleted.
+The run then skips to the `delete all` and `restart` steps that the runner
+appends.
+
 `cloud: unmapped request POST /v2/buckets/b-1/acl` means the system's API
 map could not place a controller request on a resource. No check judges
 that request, so a leak or duplicate it causes goes unseen. The `crud` map
@@ -95,7 +103,7 @@ Look at the clause first:
 failed again within `stable`.
 
 The `backoff-bound` label means `timeouts.backoffCap` set the deadline,
-because the fault period was longer. A controller whose retry backoff
+because the step's faults lasted longer. A controller whose retry backoff
 exceeds the cap fails there. Raise the cap if that backoff is intended.
 
 ### Crash: the controller exited

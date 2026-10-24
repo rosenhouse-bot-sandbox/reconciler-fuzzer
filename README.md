@@ -207,7 +207,8 @@ models:
   also fails one with no Gadget. `track: d` fails a CR that stays ready longer than `d` after
   the controller saw its Gadget not ready.
 - Generated plans then draw two model faults. `stuck` keeps Gadgets not ready, and `slowDelete`
-  holds their deletion, until the fault period ends. A plan step writes one as
+  holds their deletion. Each ends with the fault period. A create that waits until a deleted CR
+  no longer exists ends them once `period` has passed. A plan step writes one as
   `{"match": {"group": "example.com", "resource": "gadgets"}, "stuck": true}`.
 - `status:` adds literal fields to the model's status writes, such as a PVC's `{phase: Bound}`.
   While `stuck` lasts, the `stuckStatus:` fields, such as `{phase: Pending}`, replace them.
@@ -342,6 +343,9 @@ cluster. The settle condition counts a held watch as looking only once the hold 
 {"actions": [{"do": "delete", "slot": "a"}, {"do": "create", "slot": "a", "object": {}}],
  "period": "2s", "faults": [{"match": {"resource": "secrets"}, "holdWatch": true}]}
 ```
+
+The create waits until the deleted CR no longer exists. Once `period` has passed, the wait
+ends the hold, so that the controller can finish the delete.
 
 Generated plans draw it for kinds `launch.rbac` lets the controller watch, the listed and
 `owns` kinds most, in a step that deletes a CR and creates it again unchanged. About 1
