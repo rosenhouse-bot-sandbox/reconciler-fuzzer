@@ -59,14 +59,16 @@ func Restore(ix *trace.Index, s Spec) []Finding {
 }
 
 // damaged returns the groups, at t, of the instances step's damage actions
-// changed, and whether an owner key shares an owner or a CR with one.
+// changed, and whether an owner key shares an owner or a CR with one. It
+// takes each damaged ref's instance at t, because the controller can
+// recreate a deleted instance before the action's event.
 func (v *view) damaged(step int, t time.Duration) (map[group]bool, func(key string) bool) {
 	groups, keys, crs := map[group]bool{}, map[string]bool{}, map[string]bool{}
 	for _, e := range v.ix.Actions(step) {
 		if e.Action.Do != "damage" || e.Action.Ref == nil || e.Action.Error != "" {
 			continue
 		}
-		if i, found := v.w.Latest(*e.Action.Ref, e.At); found {
+		if i, found := v.w.Latest(*e.Action.Ref, t); found {
 			o := v.w.Owner(i, t)
 			groups[v.groupOf(i, t)], keys[o.Key()] = true, true
 			for _, cr := range o.CRs {
