@@ -26,22 +26,27 @@ func Restore(ix *trace.Index, s Spec) []Finding {
 		from, to := v.steps[n-1].ConfirmEnd, step.ConfirmEnd
 		damaged, touched := v.damaged(step.Step, from)
 		before, after := v.groups(from), v.groups(to)
-		kinds, roles := map[group]bool{}, map[group]bool{}
-		for g := range after {
+		// kinds holds each kind under a root, and remade each kind and role
+		// under a root that a CR made since from owns.
+		kinds, remade := map[group]bool{}, map[group]bool{}
+		for g, instances := range after {
 			kinds[group{kind: g.kind, root: g.root}] = true
-			roles[group{kind: g.kind, root: g.root, role: g.role}] = true
+			if v.madeSince(v.w.Owner(instances[0], to), from) {
+				remade[group{kind: g.kind, root: g.root, role: g.role}] = true
+			}
 		}
 		missing, replaced, changed := map[string][]string{}, map[string][]string{}, map[string][]string{}
 		for _, g := range slices.Collect(maps.Keys(merge(before, after))) {
 			was, is := before[g], after[g]
 			k := kind(g.kind)
 			if touched(g.root) {
-				// A damaged group must be live again while its owner lives, and
-				// leave its kind and role under its root once its owner is gone.
-				// A touched group that empties must leave its kind there.
+				// A damaged group must be live again while its owner lives. Once
+				// its owner is gone, a CR made since from must own its kind and
+				// role under its root. A touched group that empties must leave
+				// its kind there.
 				restored := kinds[group{kind: g.kind, root: g.root}]
 				if o, hit := damaged[g]; hit {
-					restored = !v.lives(o, to) && roles[group{kind: g.kind, root: g.root, role: g.role}]
+					restored = !v.lives(o, to) && remade[group{kind: g.kind, root: g.root, role: g.role}]
 				}
 				if len(was) > 0 && len(is) == 0 && !restored {
 					missing[k] = append(missing[k], v.describeAll(was[:1], from)...)
@@ -93,6 +98,13 @@ func (v *view) damaged(step int, t time.Duration) (map[group]owner.Owner, func(r
 
 // lives reports whether o names no CR, or a CR live at t.
 func (v *view) lives(o owner.Owner, t time.Duration) bool { return len(o.CRs) == 0 || !v.allGone(o, t) }
+
+// madeSince reports whether o names a CR created after t.
+func (v *view) madeSince(o owner.Owner, t time.Duration) bool {
+	uid, _ := o.Named()
+	cr, _ := v.w.Instance(uid)
+	return cr.Created > t
+}
 
 func merge[K comparable, V any](a, b map[K]V) map[K]V {
 	m := maps.Clone(a)

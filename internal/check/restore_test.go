@@ -356,17 +356,38 @@ func TestRestorePassesARule4ResourceRemadeAfterTheControllerMadeACR(t *testing.T
 	requireNone(t, restore(t, r))
 }
 
-func TestRestoreFailsADamagedResourceWhileASiblingCRKeepsOneOfItsRole(t *testing.T) {
+func TestRestoreFailsADamagedResourceDespiteASiblingCRsResourceOfItsRole(t *testing.T) {
 	cmB, cmC := tt.Ref("configmaps", "ns", "db-b1"), tt.Ref("configmaps", "ns", "db-c1")
-	r := fleetRun(2, clusters, databases)
-	r.Begin()
-	uid := r.CreateCR("a", clusterA)
-	r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), uid, true))
-	r.Create(ctl, databaseC, tt.OwnedBy(tt.CR("c", true), uid, true))
-	r.Create(ctl, cmB, tt.OwnedBy(tt.Generated("db-", "db-b1"), r.UID(databaseB), true))
-	r.Create(ctl, cmC, tt.OwnedBy(tt.Generated("db-", "db-c1"), r.UID(databaseC), true))
-	r.Ready(clusterA).EndFaults().Settle()
-	r.Begin().Delete(trace.Harness, cmB).Act("damage", "a", &cmB).EndFaults()
-	r.Call(ctl, "get", cmB, 404).Settle()
-	requireFinding(t, restore(t, r), "Restore", 1, "did not restore damaged resources", "kube/configmaps", "configmaps ns/db-b1 (rule 1, CR databases.toy ns/b)")
+	makeC := func(r *tt.Script) {
+		r.Create(ctl, databaseC, tt.OwnedBy(tt.CR("c", true), r.UID(clusterA), true))
+		r.Create(ctl, cmC, tt.OwnedBy(tt.Generated("db-", "db-c1"), r.UID(databaseC), true))
+	}
+	for name, c := range map[string]struct{ remakeB, makeCLater bool }{
+		"owner lives":                     {false, false},
+		"owner remade":                    {true, false},
+		"owner lives, sibling made later": {false, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := fleetRun(2, clusters, databases)
+			r.Begin()
+			uid := r.CreateCR("a", clusterA)
+			r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), uid, true))
+			r.Create(ctl, cmB, tt.OwnedBy(tt.Generated("db-", "db-b1"), r.UID(databaseB), true))
+			if !c.makeCLater {
+				makeC(r)
+			}
+			r.Ready(clusterA).EndFaults().Settle()
+			r.Begin().Delete(trace.Harness, cmB).Act("damage", "a", &cmB).EndFaults()
+			r.Call(ctl, "get", cmB, 404)
+			if c.remakeB {
+				r.Delete(ctl, databaseB)
+				r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), uid, true))
+			}
+			if c.makeCLater {
+				makeC(r)
+			}
+			r.Settle()
+			requireFinding(t, restore(t, r), "Restore", 1, "did not restore damaged resources", "kube/configmaps", "configmaps ns/db-b1 (rule 1, CR databases.toy ns/b)")
+		})
+	}
 }

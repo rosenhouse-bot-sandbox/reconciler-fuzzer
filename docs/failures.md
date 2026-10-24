@@ -141,7 +141,9 @@ from the previous step's end.
 
 - `did not restore damaged resources`: a damaged resource was not
   recreated, or every resource of some kind under the damaged resource's
-  root (DESIGN.md §11) is gone.
+  root (DESIGN.md §11) is gone. Once the controller deleted a damaged
+  resource's owner, a CR that it made in the step must own a resource of
+  the damaged one's kind and role under that root.
 - `replaced resources`: an undamaged resource was replaced, or a new one
   appeared.
 - `changed resources`: an undamaged resource's body changed. Each line

@@ -183,7 +183,9 @@ systems:
   prefers a CR in the child's namespace, and names no CR when it matches CRs in two other namespaces.
   A name that CRs of two kinds share names no CR.
 - Without either, Clean blames such a child on every CR that lived when it was created, except
-  those that the controller created. It fails only once all of them are gone.
+  those that the controller created. It fails only once all of them are gone. A child made while
+  none lived is shared, and fails only if the run ends with more shared children of its kind and
+  role than the first create saw.
 
 ### Objects another controller sets ready
 
