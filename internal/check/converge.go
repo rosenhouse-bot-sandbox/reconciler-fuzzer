@@ -53,13 +53,15 @@ func Converge(ix *trace.Index, s Spec) (findings []Finding, notes []string) {
 }
 
 // builtinStatusKinds are built-in kinds whose status another controller
-// writes, each with literal status fields that a model can add. A model
+// writes, each with the literal fields that a model of it can write. A stuck
+// Pod stays Running, as one that fails its readiness probe does. A stuck Job
+// keeps succeeded, because the API server refuses to lower it. A model
 // cannot track a Deployment's or StatefulSet's observedGeneration, so
 // those kinds are left out.
 var builtinStatusKinds = map[trace.Kind]string{
-	{Group: "batch", Version: "v1", Kind: "Job", Resource: "jobs"}:                     "{succeeded: 1}",
-	{Version: "v1", Kind: "Pod", Resource: "pods"}:                                     "{phase: Running}",
-	{Version: "v1", Kind: "PersistentVolumeClaim", Resource: "persistentvolumeclaims"}: "{phase: Bound}",
+	{Group: "batch", Version: "v1", Kind: "Job", Resource: "jobs"}:                     "status: {succeeded: 1}",
+	{Version: "v1", Kind: "Pod", Resource: "pods"}:                                     "status: {phase: Running}",
+	{Version: "v1", Kind: "PersistentVolumeClaim", Resource: "persistentvolumeclaims"}: "status: {phase: Bound}, stuckStatus: {phase: Pending}",
 }
 
 // unmodelledKinds names each status kind that the controller read or
@@ -97,8 +99,8 @@ func unmodelledKinds(ix *trace.Index, t time.Duration, s Spec) []string {
 			gvk = k.Group + "/" + gvk
 		}
 		entry := fmt.Sprintf("{kind: %s, stages: readyCondition, after: 200ms}", gvk)
-		if status, builtin := builtinStatusKinds[k]; builtin {
-			entry = fmt.Sprintf("{kind: %s, stages: readyCondition, after: 200ms, status: %s}, with status holding the fields the controller reads", gvk, status)
+		if fields, builtin := builtinStatusKinds[k]; builtin {
+			entry = fmt.Sprintf("{kind: %s, stages: readyCondition, after: 200ms, %s}, with status holding the fields the controller reads", gvk, fields)
 		}
 		lines = append(lines, fmt.Sprintf("The controller reads %s, whose status nothing models. If another controller sets it, add to models: - %s", gvk, entry))
 	}

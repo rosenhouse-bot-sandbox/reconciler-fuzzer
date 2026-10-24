@@ -52,7 +52,7 @@ func TestConvergeNamesAnUnmodelledKind(t *testing.T) {
 		"a watch":       {[]trace.Event{bare(gadgetA), watchOf(tt.Ref("toy/gadgets", "", ""))}, "toy/v1/Gadget"},
 		"a spec write":  {[]trace.Event{bare(gadgetA), watchOf(gadgetA), tt.Call(ctl, "patch", gadgetA, 200, "")}, "toy/v1/Gadget"},
 		"a pod":         {[]trace.Event{bare(pod), tt.Call(ctl, "get", pod, 200, "")}, "{kind: v1/Pod, stages: readyCondition, after: 200ms, status: {"},
-		"a pvc":         {[]trace.Event{bare(pvc), tt.Call(ctl, "get", pvc, 200, "")}, "{kind: v1/PersistentVolumeClaim,"},
+		"a pvc":         {[]trace.Event{bare(pvc), tt.Call(ctl, "get", pvc, 200, "")}, "{kind: v1/PersistentVolumeClaim, stages: readyCondition, after: 200ms, status: {phase: Bound}, stuckStatus: {phase: Pending}}"},
 		"a job":         {[]trace.Event{bare(job), tt.Call(ctl, "get", job, 200, "")}, "{kind: batch/v1/Job,"},
 	} {
 		lines := unmodelled(t, sp, c.events...)

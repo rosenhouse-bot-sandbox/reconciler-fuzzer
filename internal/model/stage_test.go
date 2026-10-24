@@ -377,10 +377,10 @@ func TestStuckReplacesTheStatusFieldsUntilItEnds(t *testing.T) {
 	for name, c := range map[string]struct {
 		status, stuckStatus, readyWrite, stuckWrite string
 	}{
-		"a Pod":     {`{"phase":"Running"}`, `{"phase":"Running"}`, `{"phase":"Running"}`, `{"phase":"Running"}`},
-		"a PVC":     {`{"phase":"Bound"}`, `{"phase":"Pending"}`, `{"phase":"Bound"}`, `{"phase":"Pending"}`},
-		"a Job":     {`{"succeeded":1}`, `{"active":1}`, `{"active":null,"succeeded":1}`, `{"active":1,"succeeded":null}`},
-		"a Service": {`{"loadBalancer":{"ingress":[{"ip":"10.0.0.1"}]}}`, `{"loadBalancer":{}}`, `{"loadBalancer":{"ingress":[{"ip":"10.0.0.1"}]}}`, `{"loadBalancer":{"ingress":null}}`},
+		"a Pod":      {`{"phase":"Running"}`, `{"phase":"Running"}`, `{"phase":"Running"}`, `{"phase":"Running"}`},
+		"a PVC":      {`{"phase":"Bound"}`, `{"phase":"Pending"}`, `{"phase":"Bound"}`, `{"phase":"Pending"}`},
+		"a database": {`{"endpoint":"10.0.0.1:5432"}`, `{"error":"no capacity"}`, `{"endpoint":"10.0.0.1:5432","error":null}`, `{"endpoint":null,"error":"no capacity"}`},
+		"a Service":  {`{"loadBalancer":{"ingress":[{"ip":"10.0.0.1"}]}}`, `{"loadBalancer":{}}`, `{"loadBalancer":{"ingress":[{"ip":"10.0.0.1"}]}}`, `{"loadBalancer":{"ingress":null}}`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s, w, _ := testStageWith(t, jsonObject(t, c.status), jsonObject(t, c.stuckStatus))
