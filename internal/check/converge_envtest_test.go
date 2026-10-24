@@ -105,7 +105,7 @@ func TestSuggestedBuiltinModelsWorkOnARealAPIServer(t *testing.T) {
 				}
 				t.Fatalf("The %s never showed Ready %s and %v. Its status is %v.", c.name, ready, fields, status)
 			}
-			stuck := func() func() {
+			startStuck := func() func() {
 				end, err := s.Fault(plan.Fault{Match: plan.Match{Group: kind.Group, Resource: kind.Resource, Name: c.name}, Stuck: true})
 				if err != nil {
 					t.Fatal(err)
@@ -114,7 +114,7 @@ func TestSuggestedBuiltinModelsWorkOnARealAPIServer(t *testing.T) {
 			}
 			var end func()
 			if c.createdUnderStuck {
-				end = stuck()
+				end = startStuck()
 			}
 			apiVersion := strings.TrimPrefix(kind.Group+"/"+kind.Version, "/")
 			if _, err := k.Create(ctx, map[string]any{"apiVersion": apiVersion, "kind": kind.Kind, "metadata": map[string]any{"name": c.name}, "spec": c.spec}); err != nil {
@@ -122,7 +122,7 @@ func TestSuggestedBuiltinModelsWorkOnARealAPIServer(t *testing.T) {
 			}
 			if !c.createdUnderStuck {
 				await("True", c.ready)
-				end = stuck()
+				end = startStuck()
 			}
 			if c.refused {
 				calls.awaitRefused(t, trace.Caller(s.Name()), c.name)

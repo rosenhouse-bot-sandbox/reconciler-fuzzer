@@ -374,7 +374,7 @@ func TestStuckWritesEachObjectsOwnGeneration(t *testing.T) {
 
 func TestStuckReplacesTheStatusFieldsUntilItEnds(t *testing.T) {
 	for name, c := range map[string]struct {
-		status, stuckStatus, readyWrite, stuckWrite string
+		status, stuckStatus, readyFields, stuckFields string
 	}{
 		"a Pod":         {`{"phase":"Running"}`, `null`, `{"phase":"Running"}`, `{"phase":"Running"}`},
 		"a PVC":         {`{"phase":"Bound"}`, `{"phase":"Pending"}`, `{"phase":"Bound"}`, `{"phase":"Pending"}`},
@@ -398,12 +398,16 @@ func TestStuckReplacesTheStatusFieldsUntilItEnds(t *testing.T) {
 			s.hear(g.version())
 			end()
 			endWrite := w.await(t, 3)[2]
-			for _, want := range []struct {
-				name, ready, fields string
-				write               write
-			}{{"first", "True", c.readyWrite, readyWrite}, {"stuck", "False", c.stuckWrite, stuckWrite}, {"end's", "True", c.readyWrite, endWrite}} {
-				if ready, fields := readyCondition(t, want.write)["status"], literalFields(want.write); ready != want.ready || fields != want.fields {
-					t.Errorf("The %s write set Ready %v and %s, want %s and %s.", want.name, ready, fields, want.ready, want.fields)
+			for _, step := range []struct {
+				name, wantReady, wantFields string
+				write                       write
+			}{
+				{"first", "True", c.readyFields, readyWrite},
+				{"stuck", "False", c.stuckFields, stuckWrite},
+				{"end's", "True", c.readyFields, endWrite},
+			} {
+				if ready, fields := readyCondition(t, step.write)["status"], literalFields(step.write); ready != step.wantReady || fields != step.wantFields {
+					t.Errorf("The %s write set Ready %v and %s, want %s and %s.", step.name, ready, fields, step.wantReady, step.wantFields)
 				}
 			}
 		})
