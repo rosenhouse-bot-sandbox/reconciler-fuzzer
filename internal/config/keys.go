@@ -60,12 +60,26 @@ func keyIn(node *yamlv3.Node, declared reflect.Type, path string) error {
 
 // fieldNamed matches a key as the JSON decoder does, whatever its case.
 func fieldNamed(declared reflect.Type, key string) (reflect.StructField, bool) {
-	for field := range declared.Fields() {
+	for _, field := range keyFields(declared) {
 		if strings.EqualFold(jsonName(field), key) {
 			return field, true
 		}
 	}
 	return reflect.StructField{}, false
+}
+
+// keyFields are declared's fields, with an embedded struct's fields in its
+// place, as the JSON decoder promotes them.
+func keyFields(declared reflect.Type) []reflect.StructField {
+	var fields []reflect.StructField
+	for field := range declared.Fields() {
+		if field.Anonymous {
+			fields = append(fields, keyFields(field.Type)...)
+			continue
+		}
+		fields = append(fields, field)
+	}
+	return fields
 }
 
 func jsonName(field reflect.StructField) string {
@@ -75,7 +89,7 @@ func jsonName(field reflect.StructField) string {
 
 func notAKey(key *yamlv3.Node, keyPath, parent string, declared reflect.Type) error {
 	var names []string
-	for field := range declared.Fields() {
+	for _, field := range keyFields(declared) {
 		names = append(names, jsonName(field))
 	}
 	if near := nearest(key.Value, names); near != "" {

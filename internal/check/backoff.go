@@ -80,17 +80,17 @@ func crsLive(w *owner.World, from, to time.Duration) int {
 }
 
 // ownedByAnother reports whether ref's instance at t has a rule 1 to 3 owning
-// CR other than cr, so that cr's generation does not bear on it.
+// CR other than cr, or else is a CR other than cr, so that cr's generation
+// does not bear on it.
 func ownedByAnother(w *owner.World, ref trace.Ref, cr string, t time.Duration) bool {
 	i, found := w.Latest(ref, t)
-	if !found || !i.Live(t) {
+	if !found || !i.Live(t) || i.UID == cr {
 		return false
 	}
-	if w.Primary(i) {
-		return i.UID != cr
+	if owner, named := w.Owner(i, t).Named(); named {
+		return owner != cr
 	}
-	owner, named := w.Owner(i, t).Named()
-	return named && owner != cr
+	return w.Primary(i)
 }
 
 const (
@@ -130,7 +130,7 @@ func backoffEvents(ix *trace.Index, s Spec) []trace.Event {
 			if c := e.Call; c.Caller == trace.Controller && judged(e) && !c.Watch && !c.Unknown() {
 				events = append(events, e)
 			}
-		case e.Version != nil && e.Version.Ref.Group == s.PrimaryGroup && e.Version.Ref.Resource == s.PrimaryResource:
+		case e.Version != nil && s.listed(e.Version.Ref):
 			metadata, _ := decode(e.Version.Body)["metadata"].(map[string]any)
 			was, seen := generations[e.Version.UID]
 			generations[e.Version.UID] = metadata["generation"]

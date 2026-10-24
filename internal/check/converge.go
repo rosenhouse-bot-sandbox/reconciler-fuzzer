@@ -25,18 +25,18 @@ func Converge(ix *trace.Index, s Spec) (findings []Finding, notes []string) {
 		if step.Reached[trace.Confirmed] && step.ConfirmEnd < to {
 			to = step.ConfirmEnd
 		}
-		end := recordedEnd(ix, steps, i)
+		end, ends := recordedEnd(ix, steps, i)
 		settled, ok := FirstSettled(ix, step.EndFaults, min(to, end), s)
 		confirm := settled + s.Stable
 		switch {
 		case !ok && end < to:
-			notes = append(notes, fmt.Sprintf("%s is not judged: the trace ends at %v, before its deadline %v.", stepName(ix, step.Step), end, to))
+			notes = append(notes, fmt.Sprintf("%s is not judged: %s at %v, before its deadline %v.", stepName(ix, step.Step), ends, end, to))
 			continue
 		case !ok:
 			f.At = to
 			f.describe("did not settle", unmetClauses(ix, to, s))
 		case confirm > end:
-			notes = append(notes, fmt.Sprintf("%s is not judged: it settled at %v, but the trace ends at %v, before its confirm window ends.", stepName(ix, step.Step), settled, end))
+			notes = append(notes, fmt.Sprintf("%s is not judged: it settled at %v and had to stay settled for stable, until %v, but %s at %v.", stepName(ix, step.Step), settled, confirm, ends, end))
 			continue
 		default:
 			unmets := unmetClauses(ix, confirm, s)
@@ -92,7 +92,8 @@ func unmodelledKinds(ix *trace.Index, t time.Duration, s Spec) []string {
 	}
 	var lines []string
 	for k := range read {
-		if written[k] || s.modelled(trace.Ref{System: "kube", Group: k.Group, Resource: k.Resource}) || k.Group == s.PrimaryGroup && k.Resource == s.PrimaryResource || !slices.ContainsFunc(ix.Live(k.Group, k.Resource, t), noStatus) {
+		ref := trace.Ref{System: "kube", Group: k.Group, Resource: k.Resource}
+		if written[k] || s.modelled(ref) || s.listed(ref) || !slices.ContainsFunc(ix.Live(k.Group, k.Resource, t), noStatus) {
 			continue
 		}
 		line := fmt.Sprintf("The controller reads %s, whose status nothing models. If another controller sets it, add to models: - %s", kindName(k), suggestedModel(k))
@@ -127,17 +128,18 @@ func noStatus(v trace.Version) bool {
 	return len(status) == 0
 }
 
-// recordedEnd is the last time the trace records for steps[i]: its confirm,
-// the next step's start, or the trace's last event.
-func recordedEnd(ix *trace.Index, steps []trace.StepSpan, i int) time.Duration {
+// recordedEnd is the last time the trace records for steps[i], and what
+// happens then: its confirm window ends, the next step starts, or the trace
+// ends.
+func recordedEnd(ix *trace.Index, steps []trace.StepSpan, i int) (time.Duration, string) {
 	if steps[i].Reached[trace.Confirmed] {
-		return steps[i].ConfirmEnd
+		return steps[i].ConfirmEnd, "its confirm window ends"
 	}
 	if i+1 < len(steps) && steps[i+1].Reached[trace.FaultPeriod] {
-		return steps[i+1].Start
+		return steps[i+1].Start, "the next step starts"
 	}
 	events := ix.Events()
-	return events[len(events)-1].At
+	return events[len(events)-1].At, "the trace ends"
 }
 
 // describe names the first unmet clause, and its object's kind, so that

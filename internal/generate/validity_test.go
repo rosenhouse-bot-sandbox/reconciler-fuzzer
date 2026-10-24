@@ -23,7 +23,7 @@ func countField(count int64, draws *int) field {
 
 func TestTheCRDJudgesWhatTheOverlayLoosens(t *testing.T) {
 	cfg := loadConfig(t, toyConfig)
-	cfg.Values.Overlay = map[string]map[string]any{"spec.count": {"minimum": 5, "maximum": 20}}
+	cfg.Primaries[0].Values.Overlay = map[string]map[string]any{"spec.count": {"minimum": 5, "maximum": 20}}
 	drawn := generatedAt(t, cfg, "spec", "count")
 	for _, count := range drawn {
 		if count.(float64) > 10 {
@@ -47,7 +47,7 @@ func TestAMutatePathTheCRDRefusesInTheSampleIsAConfigurationError(t *testing.T) 
 	} {
 		t.Run(testCase.mutate, func(t *testing.T) {
 			cfg := loadConfig(t, testCase.path)
-			cfg.Values.Mutate, cfg.Values.Overlay = []string{testCase.mutate}, testCase.overlay
+			cfg.Primaries[0].Values.Mutate, cfg.Primaries[0].Values.Overlay = []string{testCase.mutate}, testCase.overlay
 			_, err := New(cfg)
 			for _, want := range []string{"values.mutate " + testCase.mutate, testCase.reported} {
 				if err == nil || !strings.Contains(err.Error(), want) {
@@ -71,13 +71,13 @@ func TestNewReportsAFieldReconcilerFuzzerCannotDraw(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			cfg := loadConfig(t, rulesConfig)
-			cfg.Values.Mutate = []string{testCase.path}
-			cfg.Values.Overlay = map[string]map[string]any{testCase.path: testCase.overlay}
+			cfg.Primaries[0].Values.Mutate = []string{testCase.path}
+			cfg.Primaries[0].Values.Overlay = map[string]map[string]any{testCase.path: testCase.overlay}
 			_, err := New(cfg)
 			if want := "values.mutate " + testCase.path + ": " + cannotDraw; err == nil || !strings.HasSuffix(err.Error(), want) {
 				t.Errorf("New reported %v, want it to end %q.", err, want)
 			}
-			cfg.Values.Mutate = nil
+			cfg.Primaries[0].Values.Mutate = nil
 			if leftAlone := newGenerator(t, cfg).LeftAlone(); !slices.ContainsFunc(leftAlone, func(note string) bool {
 				return strings.Contains(note, testCase.path) && strings.Contains(note, cannotDraw)
 			}) {
@@ -93,7 +93,7 @@ func TestACannotDrawErrorQuotesAnyOtherPanic(t *testing.T) {
 		var missing *field
 		return missing.dotted
 	})}
-	err := g.rules.acceptsADraw(g.sample, panics)
+	err := g.kinds[0].rules.acceptsADraw(g.kinds[0].sample, panics)
 	if err == nil || !strings.Contains(err.Error(), "nil pointer dereference") || strings.Contains(err.Error(), "cannot draw") {
 		t.Errorf("acceptsADraw returned %v, want the panic's reason and no guess at its cause.", err)
 	}
@@ -111,7 +111,7 @@ func TestNewDrawsAFieldAHundredTimesToFindAValueTheCRDAccepts(t *testing.T) {
 		{0, 100, false},
 	} {
 		draws := 0
-		err := g.rules.acceptsADraw(g.sample, countField(testCase.count, &draws))
+		err := g.kinds[0].rules.acceptsADraw(g.kinds[0].sample, countField(testCase.count, &draws))
 		if (err == nil) != testCase.accepted || draws != testCase.draws {
 			t.Errorf("With every count %d, New drew %d times and returned %v, want %d draws and accepted=%t.",
 				testCase.count, draws, err, testCase.draws, testCase.accepted)
@@ -129,11 +129,11 @@ func TestATransitionRuleSeesTheOldObjectsDefaults(t *testing.T) {
 		{"count", 5, false},
 		{"minCount", 2, true},
 	} {
-		updated := g.sample.DeepCopy()
+		updated := g.kinds[0].sample.DeepCopy()
 		if err := unstructured.SetNestedField(updated.Object, testCase.value, "spec", testCase.field); err != nil {
 			t.Fatal(err)
 		}
-		if err := g.rules.refusal(updated.Object, g.sample.Object); (err != nil) != testCase.refused {
+		if err := g.kinds[0].rules.refusal(updated.Object, g.kinds[0].sample.Object); (err != nil) != testCase.refused {
 			t.Errorf("Setting spec.%s to %d returned %v, want refused=%t.", testCase.field, testCase.value, err, testCase.refused)
 		}
 	}
@@ -141,7 +141,7 @@ func TestATransitionRuleSeesTheOldObjectsDefaults(t *testing.T) {
 
 func TestUpdatesNeverBreakATransitionRule(t *testing.T) {
 	cfg := loadConfig(t, rulesConfig)
-	cfg.Values.Mutate = []string{"spec.count", "spec.minCount"}
+	cfg.Primaries[0].Values.Mutate = []string{"spec.count", "spec.minCount"}
 	minCount := func(raw []byte) (float64, bool) {
 		spec, _ := decode(t, raw)["spec"].(map[string]any)
 		value, set := spec["minCount"]
@@ -190,15 +190,15 @@ func TestASampleItsCRDRefusesIsAConfigurationError(t *testing.T) {
 	} {
 		t.Run(testCase.field, func(t *testing.T) {
 			cfg := loadConfig(t, rulesConfig)
-			sample, err := readObject(cfg.Primary.Sample)
+			sample, err := readObject(cfg.Primaries[0].Sample)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if err := unstructured.SetNestedField(sample, testCase.value, "spec", testCase.field); err != nil {
 				t.Fatal(err)
 			}
-			cfg.Primary.Sample = filepath.Join(t.TempDir(), "sample.json")
-			if err := os.WriteFile(cfg.Primary.Sample, marshal(sample), 0o644); err != nil {
+			cfg.Primaries[0].Sample = filepath.Join(t.TempDir(), "sample.json")
+			if err := os.WriteFile(cfg.Primaries[0].Sample, marshal(sample), 0o644); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := New(cfg); err == nil || !strings.Contains(err.Error(), "refuses the sample") || !strings.Contains(err.Error(), testCase.reported) {

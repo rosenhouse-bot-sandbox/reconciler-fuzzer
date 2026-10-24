@@ -32,9 +32,13 @@ type unmet struct {
 
 func unmetClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 	var unmets []unmet
-	live := ix.Live(s.PrimaryGroup, s.PrimaryResource, t)
-	for _, cr := range live {
-		unmets = append(unmets, crClauses(ix, cr, t, s)...)
+	crs := 0
+	for _, p := range s.Primaries {
+		live := ix.Live(p.Kind.Group, p.Kind.Resource, t)
+		for _, cr := range live {
+			unmets = append(unmets, crClauses(ix, p, cr, t, s)...)
+		}
+		crs += len(live)
 	}
 
 	since, up := ix.Up(t)
@@ -53,7 +57,7 @@ func unmetClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 	for _, model := range ix.Pending(t) {
 		unmets = append(unmets, unmet{6, "", "model " + model + " has work pending"})
 	}
-	return append(unmets, quietClauses(ix, t, s, max(1, len(live)))...)
+	return append(unmets, quietClauses(ix, t, s, max(1, crs))...)
 }
 
 // lookClauses holds the controller to looking at each object that the
@@ -132,9 +136,9 @@ func looksAt(c trace.Call, ref trace.Ref) bool {
 	return (succeeded(c) || c.Status == 404) && !c.Unknown() && c.Ref.Covers(ref)
 }
 
-// crClauses says whether cr is done at t, ready or halted, and not being
-// deleted.
-func crClauses(ix *trace.Index, cr trace.Version, t time.Duration, s Spec) []unmet {
+// crClauses says whether cr, a CR of p's kind, is done at t, ready or
+// halted, and not being deleted.
+func crClauses(ix *trace.Index, p Primary, cr trace.Version, t time.Duration, s Spec) []unmet {
 	name, k := describe(cr.Ref), kind(cr.Ref)
 	var body map[string]any
 	if err := json.Unmarshal(cr.Body, &body); err != nil {
@@ -143,22 +147,22 @@ func crClauses(ix *trace.Index, cr trace.Version, t time.Duration, s Spec) []unm
 	if metadata, _ := body["metadata"].(map[string]any); metadata["deletionTimestamp"] != nil {
 		return []unmet{{2, k, name + " is being deleted"}}
 	}
-	if ready, err := s.Ready(body); err != nil {
+	if ready, err := p.Ready(body); err != nil {
 		return []unmet{{1, k, fmt.Sprintf("%s: ready: %v", name, err)}}
-	} else if !ready && !halted(ix, cr, body, t, s) {
+	} else if !ready && !halted(ix, p, cr, body, t, s) {
 		return []unmet{{1, k, name + " is not ready"}}
 	}
 	return nil
 }
 
-// halted reports whether s.Halted accepts cr's body and the controller
+// halted reports whether p.Halted accepts cr's body and the controller
 // made a call of unknown outcome, by t, on cr or on an instance cr owns: by
 // rules 1 to 3, or by rule 4 as the one CR alive at its creation.
-func halted(ix *trace.Index, cr trace.Version, body map[string]any, t time.Duration, s Spec) bool {
-	if s.Halted == nil {
+func halted(ix *trace.Index, p Primary, cr trace.Version, body map[string]any, t time.Duration, s Spec) bool {
+	if p.Halted == nil {
 		return false
 	}
-	if ok, err := s.Halted(body); err != nil || !ok {
+	if ok, err := p.Halted(body); err != nil || !ok {
 		return false
 	}
 	var w *owner.World

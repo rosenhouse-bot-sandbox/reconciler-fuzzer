@@ -20,8 +20,8 @@ func TestToyConfigLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (schema.GroupVersionKind{Group: "toy.reconciler-fuzzer", Version: "v1", Kind: "Widget"}); c.Primary.Kind != want {
-		t.Errorf("kind = %v", c.Primary.Kind)
+	if want := (schema.GroupVersionKind{Group: "toy.reconciler-fuzzer", Version: "v1", Kind: "Widget"}); c.Primaries[0].Kind != want {
+		t.Errorf("kind = %v", c.Primaries[0].Kind)
 	}
 	if c.Timeouts != (config.Timeouts{Settle: 5 * time.Second, Stable: 2 * time.Second, BackoffCap: 60 * time.Second}) {
 		t.Errorf("timeouts = %+v", c.Timeouts)
@@ -119,7 +119,7 @@ func TestPathsResolveAgainstTheConfigDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := filepath.Dir(path)
-	if c.Launch.Binary != filepath.Join(dir, "bin/controller") || c.Primary.Sample != filepath.Join(dir, "sample.yaml") ||
+	if c.Launch.Binary != filepath.Join(dir, "bin/controller") || c.Primaries[0].Sample != filepath.Join(dir, "sample.yaml") ||
 		c.CRDs[0] != filepath.Join(dir, "crd.yaml") || c.Fixtures[0] != filepath.Join(dir, "fixture.yaml") ||
 		c.Launch.RBAC[0] != filepath.Join(dir, "role.yaml") {
 		t.Fatalf("config = %+v", c)
@@ -205,8 +205,8 @@ func TestKind(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", kind, err)
 		}
-		if c.Primary.Kind != want {
-			t.Errorf("%s parses as %v", kind, c.Primary.Kind)
+		if c.Primaries[0].Kind != want {
+			t.Errorf("%s parses as %v", kind, c.Primaries[0].Kind)
 		}
 	}
 	for _, kind := range []string{"ConfigMap", "apps/Deployment", "/v1/Thing", "a/b/c/d", "v1/"} {
@@ -259,8 +259,8 @@ func TestRetain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Primary.Retain != "has(self.keep)" {
-		t.Errorf("retain = %q", c.Primary.Retain)
+	if c.Primaries[0].Retain != "has(self.keep)" {
+		t.Errorf("retain = %q", c.Primaries[0].Retain)
 	}
 	for obj, want := range map[string]bool{`{"keep": 1}`: true, `{}`: false} {
 		var self map[string]any
@@ -288,11 +288,11 @@ func TestValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Values.Overlay["spec.count"]["maximum"] != float64(3) || c.Values.Distinct[0] != "spec.name" || c.Values.Mutate[0] != "spec.count" {
-		t.Errorf("values = %+v", c.Values)
+	if c.Primaries[0].Values.Overlay["spec.count"]["maximum"] != float64(3) || c.Primaries[0].Values.Distinct[0] != "spec.name" || c.Primaries[0].Values.Mutate[0] != "spec.count" {
+		t.Errorf("values = %+v", c.Primaries[0].Values)
 	}
-	if got := c.Values.Fixtures[c.Fixtures[0]]; len(got) != 1 || got[0] != "data.label" {
-		t.Errorf("fixtures = %v", c.Values.Fixtures)
+	if got := c.FixtureValues[c.Fixtures[0]]; len(got) != 1 || got[0] != "data.label" {
+		t.Errorf("fixtures = %v", c.FixtureValues)
 	}
 	if _, err := config.Load(writeConfig(t, minimal(t)+"values: {fixtures: {other.yaml: [data.x]}}\n")); err == nil || !strings.Contains(err.Error(), "other.yaml") {
 		t.Errorf("a fixture the config does not list: err = %v", err)
@@ -442,8 +442,8 @@ func TestOwns(t *testing.T) {
 		{Kind: schema.GroupVersionKind{Version: "v1", Kind: "Secret"}, Name: "self.spec.secretName"},
 		{Kind: schema.GroupVersionKind{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRole"}, Name: "'cr-' + self.metadata.name", Namespace: "''"},
 	}
-	if !reflect.DeepEqual(c.Primary.Owns, want) {
-		t.Errorf("owns = %+v", c.Primary.Owns)
+	if !reflect.DeepEqual(c.Primaries[0].Owns, want) {
+		t.Errorf("owns = %+v", c.Primaries[0].Owns)
 	}
 }
 
@@ -533,7 +533,7 @@ systems:
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := filepath.Dir(c.Primary.Sample)
+	dir := filepath.Dir(c.Primaries[0].Sample)
 	cloud, other, third := c.Systems[0], c.Systems[1], c.Systems[2]
 	want := config.System{
 		Name: "cloud-1", Owner: "self.labels['k8s-uid']", API: "crud",
@@ -560,8 +560,8 @@ func TestHalted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Primary.Halted != "has(self.halted)" {
-		t.Errorf("halted = %q", c.Primary.Halted)
+	if c.Primaries[0].Halted != "has(self.halted)" {
+		t.Errorf("halted = %q", c.Primaries[0].Halted)
 	}
 	for obj, want := range map[string]bool{`{"halted": 1}`: true, `{}`: false} {
 		var self map[string]any
@@ -592,8 +592,8 @@ func TestFakeOwns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []config.Owns{{System: "cloud", Collection: "buckets", Name: "self.status.bucketID"}}; !reflect.DeepEqual(c.Primary.Owns, want) {
-		t.Errorf("owns = %+v", c.Primary.Owns)
+	if want := []config.Owns{{System: "cloud", Collection: "buckets", Name: "self.status.bucketID"}}; !reflect.DeepEqual(c.Primaries[0].Owns, want) {
+		t.Errorf("owns = %+v", c.Primaries[0].Owns)
 	}
 	for owns, want := range map[string]string{
 		"{kind: 'nosuch:buckets', name: self.x}":                   "primary.owns[0].kind nosuch:buckets: systems declares no fake nosuch",

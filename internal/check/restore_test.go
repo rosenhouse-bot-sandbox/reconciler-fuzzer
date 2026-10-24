@@ -204,3 +204,88 @@ func TestRestoreComparesAnotherKindsStatus(t *testing.T) {
 	r.EndFaults().Settle()
 	requireFinding(t, restore(t, r), "Restore", 1, "changed resources", "kube/configmaps", "configmaps ns/a-0 (rule 1, slot a): status")
 }
+
+// madeDatabase settles a step in which the harness creates Cluster a, and
+// the controller makes Database b, a CR of a listed kind, for a, and the
+// ConfigMap b-0 for b.
+func madeDatabase() *tt.Script {
+	r := fleetRun(2, clusters, databases)
+	r.Begin()
+	uid := r.CreateCR("a", clusterA)
+	r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), uid, true))
+	r.Create(ctl, childB, tt.OwnedBy(tt.Object("b-0"), r.UID(databaseB), true))
+	return r.Ready(clusterA).EndFaults().Settle()
+}
+
+func TestRestoreLetsACRTheControllerMadeChangeWhenADamageTouchesIt(t *testing.T) {
+	r := madeDatabase()
+	r.Begin().Delete(trace.Harness, childB).Act("damage", "a", &childB).EndFaults()
+	r.Create(ctl, childB, tt.OwnedBy(tt.Object("b-0"), r.UID(databaseB), true))
+	r.Update(ctl, databaseB, tt.OwnedBy(named("b", map[string]any{"status": map[string]any{"ready": true, "since": "t2"}}), r.UID(clusterA), true))
+	r.Settle()
+	requireNone(t, restore(t, r))
+}
+
+func TestRestoreJudgesTheResourcesOfACRTheControllerMadeAgain(t *testing.T) {
+	for name, remade := range map[string]bool{"remade": true, "not remade": false} {
+		t.Run(name, func(t *testing.T) {
+			r := madeDatabase()
+			r.Begin().Delete(trace.Harness, databaseB).Act("damage", "a", &databaseB).EndFaults()
+			collect(r, childB)
+			r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), r.UID(clusterA), true))
+			if remade {
+				r.Create(ctl, childB, tt.OwnedBy(tt.Object("b-0"), r.UID(databaseB), true))
+			}
+			r.Settle()
+			if remade {
+				requireNone(t, restore(t, r))
+			} else {
+				requireFinding(t, restore(t, r), "Restore", 1, "did not restore damaged resources", "kube/configmaps", "configmaps ns/b-0 (rule 1, CR databases.toy ns/b)")
+			}
+		})
+	}
+}
+
+func TestRestorePassesAnOwnerAndItsResourceThatTheControllerMadeAgain(t *testing.T) {
+	role := tt.Ref("rbac.authorization.k8s.io/clusterroles", "", "a-reader")
+	binding := tt.Ref("rbac.authorization.k8s.io/clusterrolebindings", "", "a-reader")
+	makeBoth := func(r *tt.Script) {
+		r.Create(ctl, role, tt.Object("a-reader"))
+		r.Create(ctl, binding, tt.OwnedBy(tt.Object("a-reader"), r.UID(role), true))
+	}
+	r := newRun(2)
+	r.Begin()
+	r.CreateCR("a", widgetA)
+	makeBoth(r)
+	r.Ready(widgetA).EndFaults().Settle()
+	r.Begin().Delete(trace.Harness, role).Act("damage", "a", &role).EndFaults()
+	collect(r, binding)
+	makeBoth(r)
+	r.Settle()
+	requireNone(t, restore(t, r))
+}
+
+func TestRestoreNamesACRWithoutASlotByItsKindAndName(t *testing.T) {
+	r := madeDatabase()
+	r.Begin().Restart()
+	r.Update(ctl, childB, tt.OwnedBy(named("b-0", map[string]any{"data": "new"}), r.UID(databaseB), true))
+	r.EndFaults().Settle()
+	requireFinding(t, restore(t, r), "Restore", 1, "changed resources", "kube/configmaps", "configmaps ns/b-0 (rule 1, CR databases.toy ns/b): data")
+}
+
+func TestRestoreLetsARule4ResourceOfADamagedRootChange(t *testing.T) {
+	clusterC, shared := tt.Ref("toy/clusters", "ns", "c"), tt.Ref("configmaps", "ns", "x")
+	r := fleetRun(2, clusters, databases)
+	r.Begin()
+	uid := r.CreateCR("a", clusterA)
+	r.CreateCR("c", clusterC)
+	r.Create(ctl, shared, tt.Object("x"))
+	r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), uid, true))
+	r.Create(ctl, childB, tt.OwnedBy(tt.Object("b-0"), r.UID(databaseB), true))
+	r.Ready(clusterA).Ready(clusterC).EndFaults().Settle()
+	r.Begin().Delete(trace.Harness, childB).Act("damage", "a", &childB).EndFaults()
+	r.Create(ctl, childB, tt.OwnedBy(tt.Object("b-0"), r.UID(databaseB), true))
+	r.Update(ctl, shared, named("x", map[string]any{"data": "new"}))
+	r.Settle()
+	requireNone(t, restore(t, r))
+}

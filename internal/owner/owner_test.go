@@ -1,6 +1,7 @@
 package owner_test
 
 import (
+	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -202,8 +203,8 @@ func TestOwnerRule4IsTheCRsLiveAtCreation(t *testing.T) {
 
 func TestOwnerSurvivesAnOwnerReferenceCycle(t *testing.T) {
 	tl := twoWidgets()
-	tl.At(3*s, tt.Version(rs, "u-rs", "3", tt.OwnedBy(tt.Object("r"), "u-pod", true)),
-		tt.Version(pod, "u-pod", "3", tt.OwnedBy(tt.Object("p"), "u-rs", true)))
+	tl.At(3*s, tt.Create(ctl, rs, "u-rs", "3"), tt.Version(rs, "u-rs", "3", tt.OwnedBy(tt.Object("r"), "u-pod", true)),
+		tt.Create(ctl, pod, "u-pod", "3"), tt.Version(pod, "u-pod", "3", tt.OwnedBy(tt.Object("p"), "u-rs", true)))
 	if got := ownerAt(t, tl, "u-pod", 3*s); got.Rule != 4 {
 		t.Fatalf("owner = %+v", got)
 	}
@@ -273,10 +274,22 @@ func TestSelectPicksTheNthMatchInCreationOrder(t *testing.T) {
 		{ctl, plan.Target{Resource: "configmaps"}, "z", ""},
 	}
 	for _, c := range cases {
-		ref, found := w.Select(c.creator, c.target, c.slot, 10*s)
-		if found != (c.want != "") || ref.Name != c.want {
-			t.Errorf("Select(%s, %+v, %q) = %+v, %v; want %q", c.creator, c.target, c.slot, ref, found, c.want)
+		ref, err := w.Select(c.creator, c.target, c.slot, 10*s)
+		if (err == nil) != (c.want != "") || ref.Name != c.want {
+			t.Errorf("Select(%s, %+v, %q) = %+v, %v; want %q", c.creator, c.target, c.slot, ref, err, c.want)
 		}
+	}
+}
+
+func TestSelectMatchesTheNewestLiveCRInASlot(t *testing.T) {
+	widgetA2, child := tt.Ref("toy/widgets", "ns", "a2"), tt.Ref("configmaps", "ns", "a2-0")
+	tl := children()
+	tl.At(7*s, tt.Create(trace.Harness, widgetA2, "ua2", "7"), tt.Version(widgetA2, "ua2", "7", tt.Object("a2")),
+		tt.SlotAction(1, "create", "a", widgetA2)).
+		At(8*s, tt.Create(ctl, child, "c-a2", "8"), tt.Version(child, "c-a2", "8", tt.OwnedBy(tt.Object("a2-0"), "ua2", true)))
+	w := owner.New(tl.Index(), owner.Rules{})
+	if ref, err := w.Select(ctl, plan.Target{Resource: "configmaps"}, "a", 9*s); err != nil || ref != child {
+		t.Errorf("Select in slot a = %+v, %v; want %+v.", ref, err, child)
 	}
 }
 
@@ -288,7 +301,7 @@ func TestSelectSkipsGoneInstancesAndTheSlotsGoneCR(t *testing.T) {
 	if ref, _ := w.Select(ctl, plan.Target{Resource: "configmaps"}, "", 7*s); ref.Name != "a-1" {
 		t.Errorf("Select = %+v, want a-1", ref)
 	}
-	if ref, found := w.Select(ctl, plan.Target{Resource: "configmaps"}, "b", 8*s); found {
-		t.Errorf("Select in slot b after its CR went = %+v", ref)
+	if ref, err := w.Select(ctl, plan.Target{Resource: "configmaps"}, "b", 8*s); !errors.Is(err, owner.ErrNoMatch) {
+		t.Errorf("Select in slot b after its CR went = %+v, %v", ref, err)
 	}
 }

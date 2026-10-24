@@ -10,11 +10,12 @@ import (
 )
 
 // Script builds the trace of a run step by step on a clock that each call
-// moves on by Tick. The controller starts at 0 and lists the primary kind.
+// moves on by Tick. The controller starts at 0 and lists the kind of the
+// first primaries entry.
 type Script struct {
 	Timeline
-	// Spec is the trace's run event. A CR is ready when status.ready is
-	// true.
+	// Spec is the trace's run event. Its one primaries entry is ready when
+	// status.ready is true.
 	Spec *trace.Run
 	Now  time.Duration
 	Step int
@@ -25,20 +26,22 @@ type Script struct {
 	uids     map[trace.Ref]string
 	bodies   map[trace.Ref]map[string]any
 	index    map[int]int
+	// listed is what the controller lists at each start.
+	listed trace.Ref
 }
 
 // Tick is how far each call moves the clock.
 const Tick = 10 * time.Millisecond
 
-// NewScript starts a run of a plan of planSteps steps on primary.
-func NewScript(primary trace.Ref, planSteps int, stable time.Duration) *Script {
-	primary.Namespace, primary.Name = "", ""
-	r := &Script{Step: -1, uids: map[trace.Ref]string{}, bodies: map[trace.Ref]map[string]any{}, index: map[int]int{}}
-	r.Spec = &trace.Run{Namespace: "ns", Primary: primary, PlanSteps: planSteps,
-		Ready: "has(self.status) && self.status.ready == true", Stable: stable, Reads: 2, Writes: 4}
+// NewScript starts a run of a plan of planSteps steps whose one primaries
+// entry is kind.
+func NewScript(kind trace.Kind, planSteps int, stable time.Duration) *Script {
+	r := &Script{Step: -1, uids: map[trace.Ref]string{}, bodies: map[trace.Ref]map[string]any{}, index: map[int]int{},
+		listed: trace.Ref{System: "kube", Group: kind.Group, Resource: kind.Resource, Namespace: "ns"}}
+	r.Spec = &trace.Run{Namespace: "ns", Primaries: []trace.Primary{{Kind: kind, Ready: "has(self.status) && self.status.ready == true"}},
+		PlanSteps: planSteps, Stable: stable, Reads: 2, Writes: 4}
 	r.At(0, trace.Event{Run: r.Spec}, Start(1))
-	primary.Namespace = "ns"
-	r.Call(trace.Controller, "list", primary, 200)
+	r.Call(trace.Controller, "list", r.listed, 200)
 	return r
 }
 
@@ -199,14 +202,12 @@ func (r *Script) DeleteCR(slot string, ref trace.Ref) *Script {
 	return r.Delete(trace.Harness, ref).Act("delete", slot, &ref)
 }
 
-// Restart has the harness restart the controller, which lists the primary
-// kind again.
+// Restart has the harness restart the controller, which lists again what
+// it listed at its first start.
 func (r *Script) Restart() *Script {
 	r.n++
-	primary := r.Spec.Primary
-	primary.Namespace = "ns"
 	return r.Add(Exit("signal: terminated", true, ""), Start(r.n)).Act("restart", "", nil).
-		Call(trace.Controller, "list", primary, 200)
+		Call(trace.Controller, "list", r.listed, 200)
 }
 
 // CR is a body named name whose status.ready is ready.

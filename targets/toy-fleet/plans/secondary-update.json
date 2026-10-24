@@ -49,7 +49,6 @@
       ]
     },
     {
-      "period": "2s",
       "actions": [
         {
           "do": "update",

@@ -19,6 +19,7 @@ const (
 )
 
 var (
+	widgets = trace.Kind{Group: "toy", Version: "v1", Kind: "Widget", Resource: "widgets"}
 	widgetA = tt.Ref("toy/widgets", "ns", "a")
 	widgetB = tt.Ref("toy/widgets", "ns", "b")
 	cm      = tt.Ref("configmaps", "ns", "c")
@@ -27,16 +28,14 @@ var (
 )
 
 var spec = check.Spec{
-	PrimaryGroup:    "toy",
-	PrimaryResource: "widgets",
-	Ready: func(obj map[string]any) (bool, error) {
+	Primaries: []check.Primary{{Kind: widgets, Ready: func(obj map[string]any) (bool, error) {
 		status, _ := obj["status"].(map[string]any)
 		ready, isBool := status["ready"].(bool)
 		if !isBool {
 			return false, errors.New("status.ready is not a bool")
 		}
 		return ready, nil
-	},
+	}}},
 	Stable:  2 * s,
 	Budgets: config.Budgets{Reads: 2, Writes: 4},
 }

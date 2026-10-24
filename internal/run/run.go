@@ -78,8 +78,8 @@ type Runner struct {
 	// Actors maps a system name to what damages its objects.
 	Actors       map[string]Actor
 	FirstSettled FirstSettled
-	// Sample is the primary sample's body, which a create without an
-	// object uses.
+	// Sample is the first entry's sample, which a create without an object
+	// uses.
 	Sample map[string]any
 	// Select resolves a damage or changeFixture target. owner.World.Select
 	// implements it.
@@ -104,8 +104,9 @@ type Actor interface {
 }
 
 // Select resolves target at t among the live instances creator made, owned
-// by slot's CR when slot is set.
-type Select func(ix *trace.Index, creator trace.Caller, target plan.Target, slot string, t time.Duration) (trace.Ref, bool)
+// by slot's CR when slot is set. An error that is owner.ErrNoMatch says why
+// none matches.
+type Select func(ix *trace.Index, creator trace.Caller, target plan.Target, slot string, t time.Duration) (trace.Ref, error)
 
 // FaultTarget starts request faults. *interpose.Listener implements it.
 type FaultTarget interface {
@@ -149,7 +150,10 @@ func Run(ctx context.Context, o Options) (check.Report, error) {
 	} else if err := p.Validate(); err != nil {
 		return check.Report{}, err
 	}
-	sample, err := loadSample(cfg.Primary.Sample)
+	if err := p.ValidateKinds(cfg.ListedKinds()); err != nil {
+		return check.Report{}, err
+	}
+	samples, err := loadSamples(cfg.Primaries)
 	if err != nil {
 		return check.Report{}, err
 	}
@@ -163,7 +167,7 @@ func Run(ctx context.Context, o Options) (check.Report, error) {
 	if err != nil {
 		return check.Report{}, err
 	}
-	err = execute(ctx, o, cfg, p, sample, rec)
+	err = execute(ctx, o, cfg, p, samples, rec)
 	if closeErr := rec.Close(); err == nil {
 		err = closeErr
 	}
@@ -183,8 +187,9 @@ func Run(ctx context.Context, o Options) (check.Report, error) {
 }
 
 // execute starts the fake services, the Kubernetes system, the models and
-// the controller, runs the plan and stops them.
-func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, sample map[string]any, rec *trace.Recorder) (err error) {
+// the controller, runs the plan and stops them. samples are the entries'
+// samples, in config order.
+func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, samples []map[string]any, rec *trace.Recorder) (err error) {
 	env := &system.Env{Record: rec.Record, Dir: o.Out, Seed: p.Seed}
 	vars := map[string]map[string]string{}
 	controllerListeners := map[string]*interpose.Listener{}
@@ -207,8 +212,8 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 	}
 	watch, seen := modelKinds(cfg.Models)
 	k := kube.New(kube.Options{
-		CRDs: cfg.CRDs, RBAC: cfg.Launch.RBAC, Fixtures: cfg.Fixtures, Vars: flatten(vars), Warm: []map[string]any{sample},
-		Watch: slices.Concat([]schema.GroupVersionKind{cfg.Primary.Kind}, watch, ownsKinds(cfg.Primary.Owns)), Seen: seen,
+		CRDs: cfg.CRDs, RBAC: cfg.Launch.RBAC, Fixtures: cfg.Fixtures, Vars: flatten(vars), Warm: samples,
+		Watch: slices.Concat(primaryKinds(cfg.Primaries), watch), Seen: seen,
 	})
 	endpoints, err := k.Start(ctx, env)
 	if err != nil {
@@ -281,7 +286,7 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 		FirstSettled: func(ix *trace.Index, from, to time.Duration) (time.Duration, bool) {
 			return check.FirstSettled(ix, from, to, spec)
 		},
-		Sample: sample,
+		Sample: samples[0],
 		Failed: func() error {
 			var errs []error
 			for _, f := range fakes {
@@ -289,7 +294,7 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 			}
 			return errors.Join(errs...)
 		},
-		Select: func(ix *trace.Index, creator trace.Caller, target plan.Target, slot string, t time.Duration) (trace.Ref, bool) {
+		Select: func(ix *trace.Index, creator trace.Caller, target plan.Target, slot string, t time.Duration) (trace.Ref, error) {
 			return owner.New(ix, spec.Owners).Select(creator, target, slot, t)
 		},
 	}
@@ -351,15 +356,11 @@ func apiMap(s config.System) (fake.API, error) {
 
 // runEvent describes the run for the checks.
 func runEvent(cfg *config.Config, k *kube.Kube, planSteps int) (trace.Event, error) {
-	primary, err := k.Ref(cfg.Primary.Kind, "")
-	if err != nil {
-		return trace.Event{}, err
-	}
 	models, err := traceModels(cfg.Models, k.Ref)
 	if err != nil {
 		return trace.Event{}, err
 	}
-	owners, owns, err := owner.Sources(cfg, func(gvk schema.GroupVersionKind) (string, bool, error) {
+	owners, primaries, err := owner.Sources(cfg, func(gvk schema.GroupVersionKind) (string, bool, error) {
 		ref, err := k.Ref(gvk, "")
 		return ref.Resource, ref.Namespace != "", err
 	})
@@ -367,11 +368,10 @@ func runEvent(cfg *config.Config, k *kube.Kube, planSteps int) (trace.Event, err
 		return trace.Event{}, err
 	}
 	return trace.Event{Run: &trace.Run{
-		Namespace: k.Namespace(), Primary: primary, PlanSteps: planSteps,
-		Ready: cfg.Primary.Ready, Stable: cfg.Timeouts.Stable, Reads: cfg.Budgets.Reads, Writes: cfg.Budgets.Writes,
-		Retain: cfg.Primary.Retain, Models: models, StatusKinds: k.StatusKinds(), Kinds: k.Kinds(),
-		Owners: owners, Owns: owns, Halted: cfg.Primary.Halted, Systems: owner.Systems(cfg),
-		Properties: owner.Properties(cfg), Periodic: owner.Periodic(cfg),
+		Namespace: k.Namespace(), Primaries: primaries, PlanSteps: planSteps,
+		Stable: cfg.Timeouts.Stable, Reads: cfg.Budgets.Reads, Writes: cfg.Budgets.Writes,
+		Models: models, StatusKinds: k.StatusKinds(), Kinds: k.Kinds(),
+		Owners: owners, Systems: owner.Systems(cfg), Properties: owner.Properties(cfg),
 	}}, nil
 }
 
@@ -408,14 +408,16 @@ func traceModels(models []config.Model, ref func(schema.GroupVersionKind, string
 	return described, nil
 }
 
-// ownsKinds returns the kube kinds of the owns entries.
-func ownsKinds(owns []config.Owns) []schema.GroupVersionKind {
+// primaryKinds returns each entry's kind and the kube kinds of its owns.
+func primaryKinds(primaries []config.Primary) []schema.GroupVersionKind {
 	var kinds []schema.GroupVersionKind
-	for _, o := range owns {
-		if o.System != "" {
-			continue
+	for _, p := range primaries {
+		kinds = append(kinds, p.Kind)
+		for _, o := range p.Owns {
+			if o.System == "" {
+				kinds = append(kinds, o.Kind)
+			}
 		}
-		kinds = append(kinds, o.Kind)
 	}
 	return kinds
 }
@@ -442,14 +444,25 @@ func expandLaunch(l config.Launch, extra []string, systemVars map[string]map[str
 	return o, nil
 }
 
-func loadSample(path string) (map[string]any, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
+// loadSamples reads each entry's sample, in config order. A sample of
+// another kind than its entry's is an error.
+func loadSamples(primaries []config.Primary) ([]map[string]any, error) {
+	var samples []map[string]any
+	for _, p := range primaries {
+		data, err := os.ReadFile(p.Sample)
+		if err != nil {
+			return nil, err
+		}
+		var sample map[string]any
+		if err := yaml.Unmarshal(data, &sample); err != nil {
+			return nil, fmt.Errorf("loading sample %s: %w", p.Sample, err)
+		}
+		apiVersion, _ := sample["apiVersion"].(string)
+		kind, _ := sample["kind"].(string)
+		if got := schema.FromAPIVersionAndKind(apiVersion, kind).GroupKind(); got != p.Kind.GroupKind() {
+			return nil, fmt.Errorf("loading sample %s: it holds a %s, not a %s", p.Sample, got, p.Kind.GroupKind())
+		}
+		samples = append(samples, sample)
 	}
-	var sample map[string]any
-	if err := yaml.Unmarshal(data, &sample); err != nil {
-		return nil, fmt.Errorf("loading sample %s: %w", path, err)
-	}
-	return sample, nil
+	return samples, nil
 }
