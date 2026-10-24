@@ -79,8 +79,8 @@ func New(cfg *config.Config) (*Generator, error) {
 }
 
 func build(cfg *config.Config) (*Generator, error) {
-	listed := cfg.Primaries[0]
-	crd, plural, err := primaryCRD(cfg.CRDs, listed.Kind)
+	first := cfg.Primaries[0]
+	crd, plural, err := primaryCRD(cfg.CRDs, first.Kind)
 	if err != nil {
 		return nil, err
 	}
@@ -91,24 +91,24 @@ func build(cfg *config.Config) (*Generator, error) {
 		return nil, err
 	}
 	g := &Generator{rules: rules, stable: cfg.Timeouts.Stable, sample: &unstructured.Unstructured{}, granted: map[gvk.GroupResource][]string{}, modelFakes: map[string]bool{}, readOnly: map[string]bool{}}
-	if g.sample.Object, err = readObject(listed.Sample); err != nil {
+	if g.sample.Object, err = readObject(first.Sample); err != nil {
 		return nil, err
 	}
 	if err := rules.refusal(g.sample.Object, nil); err != nil {
 		return nil, fmt.Errorf("the CRD refuses the sample: %w", err)
 	}
-	primary, err := overlaid(crd, listed.Values.Overlay)
+	primary, err := overlaid(crd, first.Values.Overlay)
 	if err != nil {
 		return nil, err
 	}
-	fields, leftAlone, err := mutableFields(listed.Values.Mutate, primary, g.sample.Object)
+	fields, leftAlone, err := mutableFields(first.Values.Mutate, primary, g.sample.Object)
 	if err != nil {
 		return nil, err
 	}
-	if g.fields, g.leftAlone, err = g.drawable(len(listed.Values.Mutate) > 0, fields, leftAlone); err != nil {
+	if g.fields, g.leftAlone, err = g.drawable(len(first.Values.Mutate) > 0, fields, leftAlone); err != nil {
 		return nil, err
 	}
-	for _, dotted := range listed.Values.Distinct {
+	for _, dotted := range first.Values.Distinct {
 		path := strings.Split(dotted, ".")
 		if _, found, _ := unstructured.NestedString(g.sample.Object, path...); !found {
 			return nil, fmt.Errorf("values.distinct %s: the sample holds no string there", dotted)
@@ -121,7 +121,7 @@ func build(cfg *config.Config) (*Generator, error) {
 			return nil, fmt.Errorf("the CRD refuses the CR of slot %s: %w", slot, err)
 		}
 	}
-	g.addResource(gvk.GroupResource{Group: listed.Kind.Group, Resource: plural})
+	g.addResource(gvk.GroupResource{Group: first.Kind.Group, Resource: plural})
 	if err := g.readFixtures(cfg); err != nil {
 		return nil, err
 	}
@@ -129,7 +129,7 @@ func build(cfg *config.Config) (*Generator, error) {
 		return nil, err
 	}
 	g.addRequests()
-	for _, o := range listed.Owns {
+	for _, o := range first.Owns {
 		if o.System == "" {
 			gvr, _ := meta.UnsafeGuessKindToResource(o.Kind)
 			g.owned = append(g.owned, gvr.GroupResource())
