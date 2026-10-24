@@ -28,7 +28,7 @@ const SlowDeleteFinalizer = trace.SlowDeleteFinalizer
 
 // Stage plays the controller of one models entry's kind. Its name and
 // caller are trace.ModelCaller of the kind. DESIGN.md §7 says what it
-// writes, and what stuck and slowDelete do.
+// writes, and what its finalizer, stuck and slowDelete do.
 type Stage struct {
 	k      *kube.Kube
 	m      config.Model
@@ -74,7 +74,6 @@ type held struct {
 	// conflict, conflicted is the one it named.
 	awaited, conflicted string
 	timer               *time.Timer
-	due                 time.Time
 	// fresh is the message a fault's end writes.
 	fresh string
 }
@@ -285,6 +284,9 @@ func (s *Stage) hear(v trace.Version) {
 			h.generation, h.heardAt = body.Generation, time.Now()
 		}
 		h.rv, h.deleting, h.finalizers, h.ready = v.RV, body.DeletionTimestamp != nil, body.Finalizers, nil
+		if h.deleting && h.deletingAt.IsZero() {
+			h.deletingAt = time.Now()
+		}
 		for _, c := range body.Status.Conditions {
 			if c.Type == "Ready" {
 				h.ready = &c
@@ -312,22 +314,22 @@ func observed(heard, awaited string) bool {
 	return errH == nil && errA == nil && h > a
 }
 
-// decide returns the writes h needs now, and schedules h's timer when its
-// Ready write is due later. The caller holds s.mu.
+// decide returns the writes h needs now, and schedules h's timer when a
+// write is due later. The caller holds s.mu.
 func (s *Stage) decide(h *held, now time.Time) []stageOp {
 	if h.waiting() {
 		return nil
 	}
 	var ops []stageOp
-	has := slices.Contains(h.finalizers, SlowDeleteFinalizer)
-	switch hold := s.active(h, false); {
-	case hold && !has && !h.deleting:
-		ops = append(ops, stageOp{ref: h.ref, uid: h.uid, rv: h.rv, finalizers: append(slices.Clone(h.finalizers), SlowDeleteFinalizer)})
-	case !hold && has:
-		ops = append(ops, stageOp{ref: h.ref, uid: h.uid, rv: h.rv, finalizers: slices.DeleteFunc(slices.Clone(h.finalizers), func(f string) bool { return f == SlowDeleteFinalizer })})
+	finalizers, release := s.finalizers(h, now)
+	if !slices.Equal(finalizers, h.finalizers) {
+		ops = append(ops, stageOp{ref: h.ref, uid: h.uid, rv: h.rv, finalizers: finalizers})
 	}
 	h.stopTimer()
 	if h.deleting {
+		if !release.IsZero() {
+			s.schedule(h, release, now)
+		}
 		return ops
 	}
 	status := func(fields map[string]any, c metav1.Condition) stageOp {
@@ -348,14 +350,45 @@ func (s *Stage) decide(h *held, now time.Time) []stageOp {
 	case !now.Before(h.heardAt.Add(s.m.After)):
 		ops = append(ops, status(s.readyFields, metav1.Condition{Status: metav1.ConditionTrue, Reason: "Modelled", Message: "modelled ready"}))
 	default:
-		h.due = h.heardAt.Add(s.m.After)
-		h.timer = time.AfterFunc(h.due.Sub(now), func() {
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			s.queue()
-		})
+		s.schedule(h, h.heardAt.Add(s.m.After), now)
 	}
 	return ops
+}
+
+// finalizers returns the finalizers h needs now: slowDelete's while a
+// slowDelete fault matches h, and the model's own until its After past h's
+// deletion. The API server refuses a new finalizer on an object being
+// deleted. release is when the model's own finalizer is to go, or zero if h
+// has none to remove later.
+func (s *Stage) finalizers(h *held, now time.Time) (finalizers []string, release time.Time) {
+	finalizers = slices.Clone(h.finalizers)
+	keep := func(name string, wanted bool) {
+		switch has := slices.Contains(finalizers, name); {
+		case wanted && !has && !h.deleting:
+			finalizers = append(finalizers, name)
+		case !wanted && has:
+			finalizers = slices.DeleteFunc(finalizers, func(f string) bool { return f == name })
+		}
+	}
+	keep(SlowDeleteFinalizer, s.active(h, false))
+	if f := s.m.Finalizer; f != nil {
+		due := h.deletingAt.Add(f.After)
+		holding := !h.deleting || now.Before(due)
+		keep(f.Name, holding)
+		if h.deleting && holding && slices.Contains(finalizers, f.Name) {
+			release = due
+		}
+	}
+	return finalizers, release
+}
+
+// schedule queues a sweep at due. The caller holds s.mu.
+func (s *Stage) schedule(h *held, due, now time.Time) {
+	h.timer = time.AfterFunc(due.Sub(now), func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.queue()
+	})
 }
 
 // queue asks for a sweep. The caller holds s.mu.
