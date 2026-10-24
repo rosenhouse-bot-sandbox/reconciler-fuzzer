@@ -198,7 +198,7 @@ type Model struct {
 	Stage string
 	// Status holds literal fields the stage sets in each status write, and
 	// StuckStatus those it sets in their place while a stuck fault lasts.
-	// Load sets an unset StuckStatus to Status.
+	// A nil StuckStatus means Status, and an empty one means no fields.
 	Status, StuckStatus map[string]any
 	After               time.Duration
 	// Dependency is nil unless the kind is a readiness dependency of the
@@ -554,9 +554,6 @@ func models(d declaration, primary schema.GroupVersionKind) ([]Model, error) {
 		}
 		seen[kind.GroupKind()] = true
 		m := Model{Kind: kind, Stage: ReadyCondition, Status: declared.Status, StuckStatus: declared.StuckStatus}
-		if m.StuckStatus == nil {
-			m.StuckStatus = m.Status
-		}
 		if declared.Stages != "" && declared.Stages != ReadyCondition {
 			return nil, fmt.Errorf("%s.stages %q: the only stage is %s", key, declared.Stages, ReadyCondition)
 		}

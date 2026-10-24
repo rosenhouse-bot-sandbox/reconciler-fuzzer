@@ -110,8 +110,7 @@ func (w *stageWorks) get() []bool {
 const after = 60 * time.Millisecond
 
 func testStage(t *testing.T) (*Stage, *fakeStageWriter, *stageWorks) {
-	running := map[string]any{"phase": "Running"}
-	return testStageWith(t, running, running)
+	return testStageWith(t, map[string]any{"phase": "Running"}, nil)
 }
 
 func testStageWith(t *testing.T, status, stuckStatus map[string]any) (*Stage, *fakeStageWriter, *stageWorks) {
@@ -377,10 +376,11 @@ func TestStuckReplacesTheStatusFieldsUntilItEnds(t *testing.T) {
 	for name, c := range map[string]struct {
 		status, stuckStatus, readyWrite, stuckWrite string
 	}{
-		"a Pod":      {`{"phase":"Running"}`, `{"phase":"Running"}`, `{"phase":"Running"}`, `{"phase":"Running"}`},
-		"a PVC":      {`{"phase":"Bound"}`, `{"phase":"Pending"}`, `{"phase":"Bound"}`, `{"phase":"Pending"}`},
-		"a database": {`{"endpoint":"10.0.0.1:5432"}`, `{"error":"no capacity"}`, `{"endpoint":"10.0.0.1:5432","error":null}`, `{"endpoint":null,"error":"no capacity"}`},
-		"a Service":  {`{"loadBalancer":{"ingress":[{"ip":"10.0.0.1"}]}}`, `{"loadBalancer":{}}`, `{"loadBalancer":{"ingress":[{"ip":"10.0.0.1"}]}}`, `{"loadBalancer":{"ingress":null}}`},
+		"a Pod":         {`{"phase":"Running"}`, `null`, `{"phase":"Running"}`, `{"phase":"Running"}`},
+		"a PVC":         {`{"phase":"Bound"}`, `{"phase":"Pending"}`, `{"phase":"Bound"}`, `{"phase":"Pending"}`},
+		"a database":    {`{"endpoint":"10.0.0.1:5432"}`, `{"error":"no capacity"}`, `{"endpoint":"10.0.0.1:5432","error":null}`, `{"endpoint":null,"error":"no capacity"}`},
+		"a Service":     {`{"loadBalancer":{"ingress":[{"ip":"10.0.0.1"}]}}`, `{"loadBalancer":{}}`, `{"loadBalancer":{"ingress":[{"ip":"10.0.0.1"}]}}`, `{"loadBalancer":{"ingress":null}}`},
+		"a certificate": {`{"notAfter":"2027-01-01T00:00:00Z"}`, `{}`, `{"notAfter":"2027-01-01T00:00:00Z"}`, `{"notAfter":null}`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s, w, _ := testStageWith(t, jsonObject(t, c.status), jsonObject(t, c.stuckStatus))

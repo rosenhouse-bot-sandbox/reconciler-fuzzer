@@ -110,9 +110,13 @@ func NewStage(k *kube.Kube, m config.Model) (*Stage, error) {
 }
 
 func newStage(gvr schema.GroupVersionResource, m config.Model, w stageWriter, record func(trace.Event)) *Stage {
+	stuck := m.StuckStatus
+	if stuck == nil {
+		stuck = m.Status
+	}
 	return &Stage{
 		m: m, gvr: gvr, w: w, record: record,
-		readyFields: replacing(m.Status, m.StuckStatus), stuckFields: replacing(m.StuckStatus, m.Status),
+		readyFields: replacing(m.Status, stuck), stuckFields: replacing(stuck, m.Status),
 		objects: map[trace.Ref]*held{}, wake: make(chan struct{}, 1),
 	}
 }

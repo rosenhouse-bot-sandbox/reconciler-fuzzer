@@ -336,7 +336,7 @@ func TestModels(t *testing.T) {
 	}
 }
 
-func TestStuckStatusDefaultsToStatus(t *testing.T) {
+func TestModelsTellAnEmptyStuckStatusFromAnUnsetOne(t *testing.T) {
 	c, err := config.Load(writeConfig(t, minimal(t)+`models:
   - {kind: v1/Pod, after: 0s, status: {phase: Running}}
   - {kind: v1/PersistentVolumeClaim, after: 0s, status: {phase: Bound}, stuckStatus: {phase: Pending}}
@@ -345,7 +345,7 @@ func TestStuckStatusDefaultsToStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []map[string]any{{"phase": "Running"}, {"phase": "Pending"}, {}}
+	want := []map[string]any{nil, {"phase": "Pending"}, {}}
 	if len(c.Models) != len(want) {
 		t.Fatalf("models = %+v", c.Models)
 	}
