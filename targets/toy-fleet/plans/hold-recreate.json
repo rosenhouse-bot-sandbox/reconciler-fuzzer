@@ -1,0 +1,71 @@
+{
+  "steps": [
+    {
+      "actions": [
+        {
+          "do": "create",
+          "slot": "a",
+          "object": {
+            "apiVersion": "toy.reconciler-fuzzer/v1",
+            "kind": "Cluster",
+            "metadata": {
+              "name": "cluster"
+            },
+            "spec": {
+              "volumes": 2,
+              "volumeSize": "small"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "period": "3.6s",
+      "faults": [
+        {
+          "match": {
+            "group": "toy.reconciler-fuzzer",
+            "resource": "clusters"
+          },
+          "holdWatch": true
+        }
+      ],
+      "actions": [
+        {
+          "at": "36ms",
+          "do": "delete",
+          "slot": "a"
+        },
+        {
+          "at": "50ms",
+          "do": "create",
+          "slot": "a",
+          "object": {
+            "apiVersion": "toy.reconciler-fuzzer/v1",
+            "kind": "Cluster",
+            "metadata": {
+              "name": "cluster"
+            },
+            "spec": {
+              "volumes": 2,
+              "volumeSize": "small"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "actions": [
+        {
+          "do": "update",
+          "slot": "a",
+          "patch": {
+            "spec": {
+              "volumes": 3
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
