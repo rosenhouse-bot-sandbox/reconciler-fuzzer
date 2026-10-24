@@ -6,6 +6,12 @@ import "fmt"
 // controller. The fleet's bugs start at B100, past the other toys' bugs.
 type Bug int
 
+const (
+	B150 Bug = 150
+	B151 Bug = 151
+	B152 Bug = 152
+)
+
 // bugs holds every seeded bug ID.
 var bugs = map[Bug]bool{}
 

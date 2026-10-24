@@ -849,6 +849,156 @@ func TestExecuteRestartsAControllerKilledAfterASlotWaitEndedTheFaults(t *testing
 	}
 }
 
+// After a stop the controller stays down, so the runner appends no
+// delete-all and no restart.
+func TestExecuteAppendsNothingAfterAStop(t *testing.T) {
+	f := newFixture(t, nil)
+	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{{Do: plan.Stop}}}}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := f.process.all(), []string{"supervise(false)", "stop"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("process calls = %q, want %q", got, want)
+	}
+	if _, found := find(f.rec.Events(), 1, trace.FaultPeriod); found {
+		t.Error("The runner appended a step after the stop.")
+	}
+}
+
+// startedAfterStop lists the process calls after the stop that could start
+// the controller.
+func startedAfterStop(t *testing.T, f *fixture) []string {
+	t.Helper()
+	got := f.process.all()
+	i := slices.Index(got, "stop")
+	if i < 0 {
+		t.Fatalf("process calls = %q, want a stop", got)
+	}
+	return slices.DeleteFunc(got[i+1:], func(c string) bool { return c == "supervise(false)" })
+}
+
+func TestExecuteKeepsAStoppedControllerDownWhileThePlanGoesOn(t *testing.T) {
+	f := newFixture(t, nil)
+	p := &plan.Plan{Steps: []plan.Step{
+		{Actions: []plan.Action{{Do: plan.Create, Slot: "a", Object: widget("first")}}},
+		{Period: plan.Duration(50 * time.Millisecond), Faults: holdWidgets, Actions: []plan.Action{{Do: plan.Stop}}},
+		{Actions: []plan.Action{{Do: plan.Delete, Slot: "a"}}},
+	}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if got := startedAfterStop(t, f); len(got) != 0 {
+		t.Errorf("process calls after the stop = %q, want none that starts the controller", got)
+	}
+	want := []string{
+		"phase 0 faultPeriod", "action 0.0 create a first", "phase 0 endFaults", "phase 0 settled", "phase 0 confirmed",
+		"phase 1 faultPeriod", "fault 1.0 start", "action 1.0 stop ", "fault 1.0 end", "phase 1 endFaults", "phase 1 settled", "phase 1 confirmed",
+		"phase 2 faultPeriod", "action 2.0 delete a first", "phase 2 endFaults", "phase 2 settled", "phase 2 confirmed",
+	}
+	if got := summarize(f.rec.Events()); !reflect.DeepEqual(got, want) {
+		t.Errorf("events:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// lingering makes each deleted CR go lingers after a wait for it starts.
+func lingering(f *fixture, lingers time.Duration) {
+	f.cluster.waitGone = func(ctx context.Context) error {
+		select {
+		case <-time.After(lingers):
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+// A stop waits until the CRs the plan deleted are gone, as kubectl wait
+// --for=delete does, even those an earlier step deleted.
+func TestExecuteStopsOnceTheDeletedCRsAreGone(t *testing.T) {
+	f := newFixture(t, nil)
+	const lingers = 100 * time.Millisecond
+	lingering(f, lingers)
+	p := &plan.Plan{Steps: []plan.Step{
+		{Actions: []plan.Action{{Do: plan.Create, Slot: "a", Object: widget("first")}, {Do: plan.Create, Slot: "b", Object: widget("second")}}},
+		{Actions: []plan.Action{{Do: plan.Delete, Slot: "a"}}},
+		{Actions: []plan.Action{{Do: plan.Delete, Slot: "b"}, {Do: plan.Stop}}},
+	}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"first", "second"} {
+		waited, found := f.cluster.whenAfter("waitGone "+name, "delete second")
+		if !found {
+			t.Fatalf("cluster calls = %q, want the stop to wait for %s", f.cluster.all(), name)
+		}
+		if gap := f.process.when("stop").Sub(waited); gap < lingers-5*time.Millisecond {
+			t.Errorf("the stop came %v after its wait for %s began, want at least the %v it lingers", gap, name, lingers)
+		}
+	}
+	if errs := actionErrors(f.rec.Events()); len(errs) != 0 {
+		t.Errorf("action errors = %q, want none", errs)
+	}
+}
+
+// Once Period has passed with a deleted CR still there, the stop's wait
+// ends the faults and restarts a killed controller, as a create's does.
+func TestExecuteEndsTheFaultsAndRestartsAKilledControllerWhileAStopWaits(t *testing.T) {
+	f := newFixture(t, nil)
+	faultHoldsDeletedCRs(f, 0)
+	const period = 100 * time.Millisecond
+	p := &plan.Plan{Steps: []plan.Step{
+		{Actions: []plan.Action{{Do: plan.Create, Slot: "a", Object: widget("first")}}},
+		{Period: plan.Duration(period), Faults: holdWidgets, Actions: []plan.Action{{Do: plan.Kill}, {Do: plan.Delete, Slot: "a"}, {Do: plan.Stop}}},
+	}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"phase 0 faultPeriod", "action 0.0 create a first", "phase 0 endFaults", "phase 0 settled", "phase 0 confirmed",
+		"phase 1 faultPeriod", "fault 1.0 start", "action 1.0 kill ", "action 1.1 delete a first", "fault 1.0 end", "action 1.2 stop ",
+		"phase 1 endFaults", "phase 1 settled", "phase 1 confirmed",
+	}
+	if got := summarize(f.rec.Events()); !reflect.DeepEqual(got, want) {
+		t.Fatalf("events:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if lasted := faultLasted(t, f.rec.Events()); lasted < period-5*time.Millisecond || lasted > period+100*time.Millisecond {
+		t.Errorf("the fault lasted %v, want the period %v", lasted, period)
+	}
+	if restarted, found := f.process.whenAfter("supervise(true)", "kill"); !found || restarted.After(f.process.when("stop")) {
+		t.Errorf("process calls = %q, want supervise(true) between the kill and the stop", f.process.all())
+	}
+	if got := startedAfterStop(t, f); len(got) != 0 {
+		t.Errorf("process calls after the stop = %q, want none that starts the controller", got)
+	}
+}
+
+// A stop whose deleted CR stays stops the controller anyway, once the
+// allowance has passed, and Converge judges the CR.
+func TestExecuteStopsWhenADeletedCRStays(t *testing.T) {
+	f := newFixture(t, nil)
+	f.cluster.waitGone = func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	p := &plan.Plan{Steps: []plan.Step{
+		{Actions: []plan.Action{{Do: plan.Create, Slot: "a", Object: widget("first")}}},
+		{Actions: []plan.Action{{Do: plan.Delete, Slot: "a"}, {Do: plan.Stop}}},
+	}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	events := f.rec.Events()
+	deleted, _ := findAction(events, 1, 0)
+	stopped, found := findAction(events, 1, 1)
+	if !found || stopped.Action.Error != "" {
+		t.Fatalf("stop = %+v, want a stop without error", stopped.Action)
+	}
+	allowance, _ := Deadline(0, 0, 0, timeouts)
+	if gaveUp := stopped.At - deleted.At; gaveUp < allowance-20*time.Millisecond || gaveUp > allowance+100*time.Millisecond {
+		t.Errorf("the stop came %v after the delete, want the %v that Deadline allows", gaveUp, allowance)
+	}
+}
+
 func TestExecuteHonoursOffsetsAndPeriod(t *testing.T) {
 	f := newFixture(t, nil)
 	p := &plan.Plan{Steps: []plan.Step{{

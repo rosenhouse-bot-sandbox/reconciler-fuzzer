@@ -31,10 +31,16 @@ func TestRenderBugMatrix(t *testing.T) {
 		"\n## Fleet toy\n",
 		"| Bug | Description | Plan | Check | Step |\n|---|---|---|---|---|\n",
 		"| B0 | The correct controller. | all 2 committed plans | none | |\n",
+		"| B0 | The correct controller. | uninstall/stop-first | none | |\n",
+		"| B150 | Strips its finalizers from deleting CRs when it shuts down. | database/restart-cluster-delete | Converge | 1 |\n",
+		"| B152 | Errors when a dependent kind is not served, as after its CRD is deleted, so the parent's deletion never ends. | uninstall/crd-first | Converge | 2 |\n",
 	} {
 		if !strings.Contains(md, want) {
 			t.Errorf("Want %q in:\n%s", want, md)
 		}
+	}
+	if b0, b150 := strings.Index(md, "| B0 | The correct controller. | uninstall/recreate |"), strings.Index(md, "| B150 |"); b0 < 0 || b0 > b150 {
+		t.Errorf("Want the B0 rows before the B150 row:\n%s", md)
 	}
 }
 

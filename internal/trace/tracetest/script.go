@@ -210,6 +210,11 @@ func (r *Script) Restart() *Script {
 		Call(trace.Controller, "list", r.listed, 200)
 }
 
+// Stop has the harness stop the controller for good.
+func (r *Script) Stop() *Script {
+	return r.Add(Exit("signal: terminated", true, "")).Act("stop", "", nil)
+}
+
 // CR is a body named name whose status.ready is ready.
 func CR(name string, ready bool) map[string]any {
 	return map[string]any{"metadata": map[string]any{"name": name}, "status": map[string]any{"ready": ready}}

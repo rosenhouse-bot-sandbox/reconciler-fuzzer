@@ -480,3 +480,58 @@ func TestClause6NoModelHasWorkPending(t *testing.T) {
 		t.Errorf("unmet = %q", unmet)
 	}
 }
+
+// stopped adds, at t, the exit of the controller that a stop action of
+// step 1 stopped, and that action.
+func stopped(b *tt.Builder, t time.Duration) *tt.Builder {
+	return b.At(t).Add(tt.Exit("signal: terminated", true, ""), trace.Event{Action: &trace.Action{Step: 1, Do: "stop"}})
+}
+
+func TestAStoppedControllerOwesNoReadyCRAndNoRun(t *testing.T) {
+	b := settledAt3s()
+	b.At(2 * s).Add(tt.Version(widgetB, "ub", "2", ready(false)))
+	stopped(b, 2500*ms)
+	if unmet := check.Settled(b.Index(), 5*s, spec); len(unmet) != 0 {
+		t.Fatalf("unmet = %q, want none after the stop", unmet)
+	}
+}
+
+func TestAStoppedControllerOwesNoLookAtALaterChange(t *testing.T) {
+	b := settledAt3s()
+	stopped(b, 2*s)
+	b.At(2 * s).Add(tt.Phase(2, trace.FaultPeriod)).
+		At(2200 * ms).Add(tt.Action(2, "changeFixture", cm)).
+		At(2300 * ms).Add(tt.EndFaults(2, 10*s, false))
+	if unmet := check.Settled(b.Index(), 3*s, spec); len(unmet) != 0 {
+		t.Fatalf("unmet = %q, want none", unmet)
+	}
+}
+
+func TestAStoppedControllerMustHaveFinalizedTheCRsDeletingAtTheStop(t *testing.T) {
+	b := settledAt3s()
+	b.At(2 * s).Add(tt.Version(widgetA, "ua", "2", deleting()))
+	stopped(b, 2500*ms)
+	if unmet := check.Settled(b.Index(), 5*s, spec); !slices.Equal(unmet, []string{"widgets.toy ns/a is being deleted"}) {
+		t.Fatalf("unmet = %q, want only slot a's CR being deleted", unmet)
+	}
+}
+
+// No controller runs to remove the finalizers of a CR deleted after the
+// stop, so the CR may stay.
+func TestACRDeletedAfterTheStopMayStayDeleting(t *testing.T) {
+	b := settledAt3s()
+	stopped(b, 2*s)
+	b.At(2500 * ms).Add(tt.Version(widgetA, "ua", "2", deleting()))
+	if unmet := check.Settled(b.Index(), 5*s, spec); len(unmet) != 0 {
+		t.Fatalf("unmet = %q, want none", unmet)
+	}
+}
+
+func TestAStoppedRunWaitsForTheControllersLastWritesAndForModels(t *testing.T) {
+	b := settledAt3s()
+	b.At(2 * s).Add(tt.Call(ctl, "update", cm, 200, "5"))
+	stopped(b, 2100*ms)
+	b.At(2200 * ms).Add(trace.Event{Work: &trace.Work{System: "gc", Pending: true}})
+	requireUnmet(t, b, 3*s, "changed configmaps ns/c")
+	requireUnmet(t, b, 4500*ms, "model gc has work pending")
+}

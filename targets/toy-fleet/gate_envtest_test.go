@@ -23,6 +23,35 @@ func TestMain(m *testing.M) {
 }
 
 func TestGate(t *testing.T) {
+	for _, rows := range byRun(gate) {
+		g := rows[0]
+		verb := "catches"
+		if g.finding == "" {
+			verb = "passes"
+		}
+		t.Run(fmt.Sprintf("%s %s B%d", g.name(), verb, g.bug), func(t *testing.T) {
+			t.Parallel()
+			report, text := run1(t, g.configPath(), run.Options{PlanPath: g.planPath()}, g.bug)
+			if g.finding == "" && len(report.Findings) != 0 {
+				t.Errorf("Found %d, want no findings. report.md:\n%s", len(report.Findings), text)
+			}
+			if !notesMatch(report.Notes, g.note) {
+				t.Errorf("Found notes %q, want the one note %q or none. report.md:\n%s", report.Notes, g.note, text)
+			}
+			want := map[string]bool{}
+			for _, r := range rows {
+				if r.finding != "" && !hasFinding(text, r.finding, r.step, r.detail) {
+					t.Errorf("Want a finding %q at step %d that says %q. report.md:\n%s", r.finding, r.step, r.detail, text)
+				}
+				want[checkOf(r.finding)] = r.finding != ""
+			}
+			for _, got := range checksOf(text) {
+				if !want[got] {
+					t.Errorf("Found an unexpected %s finding. report.md:\n%s", got, text)
+				}
+			}
+		})
+	}
 	for _, config := range configs {
 		names, err := plans(config)
 		if err != nil || len(names) == 0 {

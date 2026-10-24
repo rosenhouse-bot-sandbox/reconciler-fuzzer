@@ -56,6 +56,7 @@ const (
 	// ChangeFixture merge-patches the fixture Target names with Patch, or
 	// deletes it when Patch is empty.
 	ChangeFixture Do = "changeFixture"
+	Stop          Do = "stop"
 )
 
 // Action is something the harness does once in a step, At after the fault
