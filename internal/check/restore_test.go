@@ -226,6 +226,21 @@ func TestRestoreLetsACRTheControllerMadeChangeWhenADamageTouchesIt(t *testing.T)
 	requireNone(t, restore(t, r))
 }
 
+func TestRestoreLetsACRTheControllerMadeForAFixtureChangeWhenADamageTouchesIt(t *testing.T) {
+	r := fleetRun(2, clusters, databases)
+	r.Begin()
+	r.CreateCR("a", clusterA)
+	fixture := r.Create(trace.Harness, tt.Ref("configmaps", "ns", "f"), tt.Object("f"))
+	r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), fixture, true))
+	r.Create(ctl, childB, tt.OwnedBy(tt.Object("b-0"), r.UID(databaseB), true))
+	r.Ready(clusterA).EndFaults().Settle()
+	r.Begin().Delete(trace.Harness, childB).Act("damage", "", &childB).EndFaults()
+	r.Create(ctl, childB, tt.OwnedBy(tt.Object("b-0"), r.UID(databaseB), true))
+	r.Update(ctl, databaseB, tt.OwnedBy(named("b", map[string]any{"status": map[string]any{"ready": true, "since": "t2"}}), fixture, true))
+	r.Settle()
+	requireNone(t, restore(t, r))
+}
+
 func TestRestoreJudgesTheResourcesOfACRTheControllerMadeAgain(t *testing.T) {
 	for name, remade := range map[string]bool{"remade": true, "not remade": false} {
 		t.Run(name, func(t *testing.T) {
@@ -288,4 +303,19 @@ func TestRestoreLetsARule4ResourceOfADamagedRootChange(t *testing.T) {
 	r.Update(ctl, shared, named("x", map[string]any{"data": "new"}))
 	r.Settle()
 	requireNone(t, restore(t, r))
+}
+
+func TestRestoreFailsADamagedResourceWhileASiblingCRKeepsOneOfItsRole(t *testing.T) {
+	cmB, cmC := tt.Ref("configmaps", "ns", "db-b1"), tt.Ref("configmaps", "ns", "db-c1")
+	r := fleetRun(2, clusters, databases)
+	r.Begin()
+	uid := r.CreateCR("a", clusterA)
+	r.Create(ctl, databaseB, tt.OwnedBy(tt.CR("b", true), uid, true))
+	r.Create(ctl, databaseC, tt.OwnedBy(tt.CR("c", true), uid, true))
+	r.Create(ctl, cmB, tt.OwnedBy(tt.Generated("db-", "db-b1"), r.UID(databaseB), true))
+	r.Create(ctl, cmC, tt.OwnedBy(tt.Generated("db-", "db-c1"), r.UID(databaseC), true))
+	r.Ready(clusterA).EndFaults().Settle()
+	r.Begin().Delete(trace.Harness, cmB).Act("damage", "a", &cmB).EndFaults()
+	r.Call(ctl, "get", cmB, 404).Settle()
+	requireFinding(t, restore(t, r), "Restore", 1, "did not restore damaged resources", "kube/configmaps", "configmaps ns/db-b1 (rule 1, CR databases.toy ns/b)")
 }

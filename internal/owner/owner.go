@@ -51,8 +51,9 @@ type Owner struct {
 	// CRs holds CR UIDs in order: one for rules 1 to 3, the set for rule 4.
 	// It is empty for a shared instance.
 	CRs []string
-	// Unlisted is, for rule 1 with no CR, the UID of the live instance
-	// that an ownerReference names and that the controller did not create.
+	// Unlisted is, for rule 1 with no CR, the UID of the live instance that
+	// the controller did not create and that ownerReferences name, directly
+	// or through live instances that the controller created.
 	Unlisted string
 }
 
@@ -423,9 +424,9 @@ func (w *World) object(i Instance, t time.Duration) map[string]any {
 // Primary reports whether i is a CR: a kube instance of a listed kind.
 func (w *World) Primary(i Instance) bool { return slices.ContainsFunc(w.listed, i.Ref.OfKind) }
 
-// Root is o with its one CR, while the controller created that CR,
-// replaced by that CR's owner at t. So the resources of a CR that the
-// controller made share a root with that CR.
+// Root returns o, or, if o names one CR that the controller created, that
+// CR's root at t. A cycle stops the climb. So a CR that the controller made
+// shares a root with its resources.
 func (w *World) Root(o Owner, t time.Duration) Owner {
 	for seen := map[string]bool{}; ; {
 		uid, _ := o.Named()
@@ -443,7 +444,7 @@ func (w *World) Owner(i Instance, t time.Duration) Owner {
 	if cr, found := w.follow(i, t, map[string]bool{}); found {
 		return Owner{Rule: 1, CRs: []string{cr}}
 	}
-	if owner, found := w.unlisted(i, t); found {
+	if owner, found := w.unlisted(i, t, map[string]bool{}); found {
 		return Owner{Rule: 1, Unlisted: owner}
 	}
 	if cr, found := w.named(i, t); found {
@@ -582,13 +583,22 @@ func (w *World) follow(i Instance, t time.Duration, seen map[string]bool) (strin
 	return "", false
 }
 
-// unlisted finds the first instance live at t that i's ownerReferences at t
-// name and that the controller did not create, such as a fixture. Owner
-// asks only once follow found no CR.
-func (w *World) unlisted(i Instance, t time.Duration) (string, bool) {
+// unlisted finds the first instance live at t that the controller did not
+// create, such as a fixture, that i's ownerReferences at t name, directly or
+// through live instances that the controller created. Owner asks only once
+// follow found no CR.
+func (w *World) unlisted(i Instance, t time.Duration, seen map[string]bool) (string, bool) {
+	seen[i.UID] = true
 	for _, ref := range w.ownerReferences(i, t) {
-		if owner, found := w.Instance(ref.UID); found && owner.Live(t) && owner.Creator != trace.Controller {
+		owner, found := w.Instance(ref.UID)
+		if !found || !owner.Live(t) || seen[owner.UID] {
+			continue
+		}
+		if owner.Creator != trace.Controller {
 			return owner.UID, true
+		}
+		if uid, found := w.unlisted(owner, t, seen); found {
+			return uid, true
 		}
 	}
 	return "", false

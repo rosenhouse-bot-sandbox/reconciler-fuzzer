@@ -14,11 +14,10 @@ import (
 
 // Restore fails a settled step without a create, update, delete or fixture
 // change whose controller resources differ from the previous settled step's.
-// It groups resources by root, so a damage under a CR that the controller
-// made touches that CR's owner too.
+// A damage touches each group under its root, so a damage under a CR that the
+// controller made touches that CR's owner too.
 func Restore(ix *trace.Index, s Spec) []Finding {
 	v := newView(ix, s)
-	v.byRoot = true
 	var findings []Finding
 	for n, step := range v.steps {
 		if n == 0 || v.steps[n-1].Step != step.Step-1 || v.has(step.Step, "create", "update", "delete", "changeFixture") {
@@ -29,14 +28,14 @@ func Restore(ix *trace.Index, s Spec) []Finding {
 		before, after := v.groups(from), v.groups(to)
 		kinds := map[group]bool{}
 		for g := range after {
-			kinds[group{kind: g.kind, owner: g.owner}] = true
+			kinds[group{kind: g.kind, root: g.root}] = true
 		}
 		missing, replaced, changed := map[string][]string{}, map[string][]string{}, map[string][]string{}
 		for _, g := range slices.Collect(maps.Keys(merge(before, after))) {
 			was, is := before[g], after[g]
 			k := kind(g.kind)
-			if touched(g.owner) {
-				if len(was) > 0 && len(is) == 0 && (damaged[g] || !kinds[group{kind: g.kind, owner: g.owner}]) {
+			if touched(g.root) {
+				if len(was) > 0 && len(is) == 0 && (damaged[g] || !kinds[group{kind: g.kind, root: g.root}]) {
 					missing[k] = append(missing[k], v.describeAll(was[:1], from)...)
 				}
 				continue
@@ -62,10 +61,10 @@ func Restore(ix *trace.Index, s Spec) []Finding {
 }
 
 // damaged returns the groups, at t, of the instances step's damage actions
-// changed, and whether an owner key shares an owner or a CR with one. It
-// takes each damaged ref's instance at t, because the controller can
+// changed, and whether a root key shares a root or a CR with one of theirs.
+// It takes each damaged ref's instance at t, because the controller can
 // recreate a deleted instance before the action's event.
-func (v *view) damaged(step int, t time.Duration) (map[group]bool, func(key string) bool) {
+func (v *view) damaged(step int, t time.Duration) (map[group]bool, func(root string) bool) {
 	groups, keys, crs := map[group]bool{}, map[string]bool{}, map[string]bool{}
 	for _, e := range v.ix.Actions(step) {
 		if e.Action.Do != "damage" || e.Action.Ref == nil || e.Action.Error != "" {
@@ -73,14 +72,14 @@ func (v *view) damaged(step int, t time.Duration) (map[group]bool, func(key stri
 		}
 		if i, found := v.w.Latest(*e.Action.Ref, t); found {
 			g := v.groupOf(i, t)
-			groups[g], keys[g.owner] = true, true
-			for _, cr := range v.owners[g.owner].CRs {
+			groups[g], keys[g.root] = true, true
+			for _, cr := range v.roots[g.root].CRs {
 				crs[cr] = true
 			}
 		}
 	}
-	return groups, func(key string) bool {
-		return keys[key] || slices.ContainsFunc(v.owners[key].CRs, func(uid string) bool { return crs[uid] })
+	return groups, func(root string) bool {
+		return keys[root] || slices.ContainsFunc(v.roots[root].CRs, func(uid string) bool { return crs[uid] })
 	}
 }
 

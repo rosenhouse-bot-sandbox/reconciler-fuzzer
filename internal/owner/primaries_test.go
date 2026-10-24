@@ -173,6 +173,19 @@ func TestAnObjectTheControllerCreatedIsNoUnlistedOwner(t *testing.T) {
 	wantOwner(t, ownerBy(t, tl, owner.Rules{}, "c1", 4*s), 4, "ua")
 }
 
+func TestAnUnlistedOwnerIsReachedThroughLiveObjectsTheControllerMade(t *testing.T) {
+	x, y := tt.Ref("configmaps", "ns", "x"), tt.Ref("configmaps", "ns", "y")
+	tl := fleet(clusters)
+	tl.At(3*s, made(x, "ux", "ub")...).
+		At(3*s, made(y, "uy", "ux")...).
+		At(5*s, tt.Deleted(x, "ux", "5", tt.OwnedBy(tt.Object("x"), "ub", true)))
+	w := owner.New(tl.Index(), owner.Rules{})
+	if o := w.Owner(instance(t, w, "uy"), 4*s); o.Rule != 1 || o.Unlisted != "ub" {
+		t.Errorf("owner while x lives = %+v, want rule 1 to unlisted owner ub, which owns x.", o)
+	}
+	wantOwner(t, w.Owner(instance(t, w, "uy"), 5*s), 4, "ua")
+}
+
 func TestSelectMatchesAResourceOfACRTheControllerCreated(t *testing.T) {
 	tl := fleet(clusters, databases)
 	tl.At(3*s, made(tt.Ref("toy/databases", "ns", "c"), "uc", "ua")...).

@@ -105,14 +105,12 @@ type view struct {
 	w  *owner.World
 	// steps are the settled steps, in order.
 	steps []trace.StepSpan
-	// owners maps each group's owner key to its owner.
-	owners map[string]owner.Owner
-	// byRoot groups each resource by its owner's root, not its owner.
-	byRoot bool
+	// roots maps each group's root key to its root.
+	roots map[string]owner.Owner
 }
 
 func newView(ix *trace.Index, s Spec) *view {
-	v := &view{ix: ix, s: s, w: owner.New(ix, s.Owners), owners: map[string]owner.Owner{}}
+	v := &view{ix: ix, s: s, w: owner.New(ix, s.Owners), roots: map[string]owner.Owner{}}
 	for _, step := range ix.Steps() {
 		if v.settled(step) {
 			v.steps = append(v.steps, step)
@@ -150,7 +148,9 @@ func (v *view) resources(t time.Duration) []owner.Instance {
 type group struct {
 	kind  trace.Ref
 	owner string
-	role  string
+	// root is the key of the owner's root, which survives a remade CR.
+	root string
+	role string
 }
 
 // groups returns the controller's resources at t by group, each in
@@ -171,11 +171,9 @@ func (v *view) groupOf(i owner.Instance, t time.Duration) group {
 	k := i.Ref
 	k.Name = ""
 	o := v.w.Owner(i, t)
-	if v.byRoot {
-		o = v.w.Root(o, t)
-	}
-	v.owners[o.Key()] = o
-	return group{kind: k, owner: o.Key(), role: i.Role}
+	root := v.w.Root(o, t)
+	v.roots[root.Key()] = root
+	return group{kind: k, owner: o.Key(), root: root.Key(), role: i.Role}
 }
 
 // describe names an instance, its owning rule and its CRs, or its unlisted

@@ -150,9 +150,10 @@ values: {fixtures: {settings.yaml: [data.theme]}}   # with primaries, only fixtu
   names another CR, such as a Database's `clusterRef`. So
   [targets/toy-fleet](targets/toy-fleet)'s `database/config.yaml` lists only Database, and
   makes the Cluster it names a fixture.
-- A fixture may not be a CR. An object whose ownerReferences lead to no CR, but name a live
-  object that the controller did not create, such as a fixture, belongs to that object. `owner`
-  and `owns` do not change this. Clean skips such an object while its owner lives.
+- A fixture may not be a CR. An object whose ownerReferences lead to no CR, but reach a live
+  object that the controller did not create, such as a fixture, belongs to that object. They may
+  reach it through live objects that the controller made. `owner` and `owns` do not change this.
+  Clean skips such an object while its owner lives.
 - A dependency belongs to the nearest CR that owns it, even one that the controller created.
   `dependency.required` binds only CRs of the first entry.
 

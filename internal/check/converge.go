@@ -36,7 +36,7 @@ func Converge(ix *trace.Index, s Spec) (findings []Finding, notes []string) {
 			f.At = to
 			f.describe("did not settle", unmetClauses(ix, to, s))
 		case confirm > end:
-			notes = append(notes, fmt.Sprintf("%s is not judged: it settled at %v and had to stay settled for stable, until %v, but %s at %v.", stepName(ix, step.Step), settled, confirm, ends, end))
+			notes = append(notes, fmt.Sprintf("%s is not judged: it settled at %v and had to stay settled until %v, but %s at %v.", stepName(ix, step.Step), settled, confirm, ends, end))
 			continue
 		default:
 			unmets := unmetClauses(ix, confirm, s)

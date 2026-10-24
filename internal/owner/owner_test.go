@@ -202,12 +202,16 @@ func TestOwnerRule4IsTheCRsLiveAtCreation(t *testing.T) {
 }
 
 func TestOwnerSurvivesAnOwnerReferenceCycle(t *testing.T) {
+	cycle := []trace.Event{tt.Version(rs, "u-rs", "3", tt.OwnedBy(tt.Object("r"), "u-pod", true)),
+		tt.Version(pod, "u-pod", "3", tt.OwnedBy(tt.Object("p"), "u-rs", true))}
 	tl := twoWidgets()
-	tl.At(3*s, tt.Create(ctl, rs, "u-rs", "3"), tt.Version(rs, "u-rs", "3", tt.OwnedBy(tt.Object("r"), "u-pod", true)),
-		tt.Create(ctl, pod, "u-pod", "3"), tt.Version(pod, "u-pod", "3", tt.OwnedBy(tt.Object("p"), "u-rs", true)))
-	if got := ownerAt(t, tl, "u-pod", 3*s); got.Rule != 4 {
-		t.Fatalf("owner = %+v", got)
+	tl.At(3*s, cycle...)
+	if got := ownerAt(t, tl, "u-pod", 3*s); got.Rule != 1 || len(got.CRs) != 0 || got.Unlisted != "u-rs" {
+		t.Errorf("owner in a cycle of objects that the controller did not create = %+v, want rule 1 to unlisted owner u-rs", got)
 	}
+	tl = twoWidgets()
+	tl.At(3*s, append(cycle, tt.Create(ctl, rs, "u-rs", "3"), tt.Create(ctl, pod, "u-pod", "3"))...)
+	wantOwner(t, ownerAt(t, tl, "u-pod", 3*s), 4, "ua", "ub")
 }
 
 func TestOwnerKeyIsTheCRSet(t *testing.T) {

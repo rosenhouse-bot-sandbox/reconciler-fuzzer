@@ -124,8 +124,8 @@ configmaps rf-9485af8b/db-0 (rule 1, CR databases.example.com rf-9485af8b/db)
 
 A rule 4 line usually means the resource lacks an ownerReference, so
 garbage collection could not delete it. Its ownerReferences may also lead
-to no CR: they name only objects that the trace never saw, gone objects,
-or objects that the controller made. While one names a live object that is
+to no CR: they reach only objects that the trace never saw, gone objects,
+or objects that the controller made. While they reach a live object that is
 not a CR and that the controller did not create, such as a fixture, Clean
 skips the resource. A rule 1 line on a cluster-scoped resource with a
 namespaced owner means garbage collection ignores that invalid
@@ -146,8 +146,8 @@ from the previous step's end.
   names the fields that differ.
 
 Each line names its resource's owner as Clean does. `rule 1, unlisted
-owner` names the live object, not a CR, that an ownerReference names and
-that the controller did not create.
+owner` names the live object, neither a CR nor the controller's, that the
+resource's ownerReferences reach.
 
 ### Unique: duplicate resources
 

@@ -277,18 +277,17 @@ from the config, or else the run event.
   `owner` CEL names a CR by UID, `namespace/name` or name, unless CRs of
   two kinds share that name; 3, an `owns` entry over a CR of its entry's
   kind names it; 4, otherwise, the set of other CRs live at its creation.
-  While an ownerReference names a live instance that the controller did not
-  create, and none reaches a CR, rule 1 gives that **unlisted owner** and no
-  CR (entry 80). An instance with no CR is **shared**. Its **root** is its
-  owner, or, when that names one CR that the controller created, that CR's
-  root.
+  While its ownerReferences reach a live instance that the controller did not
+  create, directly or through live instances that it did create, and none
+  reaches a CR, rule 1 gives that **unlisted owner** and no CR (entry 80). An
+  instance with no CR is **shared**. Its **root** is its owner, or, when that
+  names one CR that the controller created, that CR's root.
 - Its **role** is its system's `role` CEL over its first body. Without
   one, a kube instance's is its `generateName`, or else its name, and a
   fake's is empty.
 - The **controller's resources** at `t` are its live instances, minus
   ignored kinds (§10).
 - A **group** is a (system, group, resource, namespace, owning CRs, role).
-  Restore's groups take the root instead of the owning CRs.
 
 ## 12. Checks
 
@@ -523,6 +522,6 @@ Each entry changes a check, exception, `System` interface or ignore list.
 77. Honest skips a dependency the controller deleted with a `delete`, or last saw deleted, whatever the observer's lag, so a scale-down passes (#124).
 78. A property sees each kind in the run event's `kinds` or `owns` as an empty list while it has no object (#148).
 79. Every check judges each kind `primaries` lists, and a CR the controller creates is also its owner's resource (#126).
-80. A live unlisted owner, such as a fixture, keeps its children from rules 2 to 4, so deleting a CR blames none of them (#128). An object the controller made is never an unlisted owner, so its children stay judged.
+80. A live unlisted owner, such as a fixture, keeps what it owns, directly or through the controller's live objects, from rules 2 to 4, so deleting a CR blames none of it (#128). An object the controller made is never an unlisted owner.
 81. `required` binds only the first entry's CRs, so the kinds that own no dependency pass.
-82. Restore groups by root, so a damage under a CR the controller made touches its owner, and remaking the CR keeps its resources' groups.
+82. A `damage` touches each group under its root, and a touched group may empty while its kind lives under that root. So a damage under a CR that the controller made touches that CR's owner, and that CR may be remade.
