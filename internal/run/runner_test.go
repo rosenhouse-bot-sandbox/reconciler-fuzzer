@@ -253,9 +253,13 @@ func TestExecuteWaitsForADeletedSlotBeforeCreating(t *testing.T) {
 
 func TestExecuteEndsThePlanWhenADeletedSlotStaysTaken(t *testing.T) {
 	f := newFixture(t, nil)
+	f.rec.Record(trace.Event{Version: &trace.Version{
+		Ref: trace.Ref{System: "kube", Resource: "widgets", Namespace: "ns", Name: "first"}, UID: "u1", RV: "2",
+		Body: json.RawMessage(`{"metadata":{"name":"first","deletionTimestamp":"2026-10-24T09:06:40Z","finalizers":["toy/cleanup","toy/audit"]}}`),
+	}})
 	f.cluster.waitGone = func(ctx context.Context) error {
 		<-ctx.Done()
-		return fmt.Errorf("still there: %w", ctx.Err())
+		return fmt.Errorf(`Get "http://127.0.0.1:36123/widgets/first": %w`, ctx.Err())
 	}
 	p := &plan.Plan{Steps: []plan.Step{
 		{Actions: []plan.Action{{Do: plan.Create, Slot: "a", Object: widget("first")}}},
@@ -274,13 +278,115 @@ func TestExecuteEndsThePlanWhenADeletedSlotStaysTaken(t *testing.T) {
 	if got := summarize(f.rec.Events()); !reflect.DeepEqual(got, want) {
 		t.Errorf("events:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	if waited := f.cluster.when("waitGone first"); time.Since(waited) < timeouts.Settle {
-		t.Errorf("the wait ended %v after it began, want the settle timeout", time.Since(waited))
+	actions := f.rec.Events()
+	actions = slices.DeleteFunc(actions, func(e trace.Event) bool { return e.Action == nil || e.Action.Step != 1 })
+	if waited := actions[1].At - actions[0].At; waited < timeouts.Settle {
+		t.Errorf("the create waited %v, want the settle timeout", waited)
 	}
-	for _, e := range f.rec.Events() {
-		if e.Action != nil && e.Action.Step == 1 && e.Action.Index == 1 && !strings.Contains(e.Action.Error, "still there") {
-			t.Errorf("action error = %q, want the wait's", e.Action.Error)
+	want = []string{"the slot's previous CR is still there after the 300ms settle timeout: deletionTimestamp 2026-10-24T09:06:40Z, finalizers [toy/cleanup toy/audit]"}
+	if got := actionErrors(f.rec.Events()); !reflect.DeepEqual(got, want) {
+		t.Errorf("action errors = %q, want %q", got, want)
+	}
+}
+
+func actionErrors(events []trace.Event) []string {
+	var errs []string
+	for _, e := range events {
+		if e.Action != nil && e.Action.Error != "" {
+			errs = append(errs, e.Action.Error)
 		}
+	}
+	return errs
+}
+
+// faultHoldsDeletedCRs makes a deleted CR go only once a kube fault ends.
+func faultHoldsDeletedCRs(f *fixture) {
+	ended := make(chan struct{})
+	f.runner.Listeners["kube"] = fakeTarget{calls: f.faults, onEnd: func() { close(ended) }}
+	f.cluster.waitGone = func(ctx context.Context) error {
+		select {
+		case <-ended:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+// recreateUnder deletes and creates slot a, after actions before, in a
+// step with period and faults. The next step updates slot a.
+func recreateUnder(period time.Duration, faults []plan.Fault, before ...plan.Action) *plan.Plan {
+	return &plan.Plan{Steps: []plan.Step{
+		{Actions: []plan.Action{{Do: plan.Create, Slot: "a", Object: widget("first")}}},
+		{Period: plan.Duration(period), Faults: faults, Actions: append(before,
+			plan.Action{Do: plan.Delete, Slot: "a"}, plan.Action{Do: plan.Create, Slot: "a", Object: widget("second")})},
+		{Actions: []plan.Action{{Do: plan.Update, Slot: "a", Patch: json.RawMessage(`{"spec":{"count":2}}`)}}},
+	}}
+}
+
+var holdWidgets = []plan.Fault{{Match: plan.Match{Resource: "widgets"}, HoldWatch: true}}
+
+func TestExecuteEndsTheFaultsAtThePeriodWhileACreateWaits(t *testing.T) {
+	f := newFixture(t, nil)
+	faultHoldsDeletedCRs(f)
+	const period = 100 * time.Millisecond
+	if err := f.runner.Execute(context.Background(), recreateUnder(period, holdWidgets)); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"phase 0 faultPeriod", "action 0.0 create a first", "phase 0 endFaults", "phase 0 settled", "phase 0 confirmed",
+		"phase 1 faultPeriod", "fault 1.0 start", "action 1.0 delete a first", "fault 1.0 end", "action 1.1 create a second",
+		"phase 1 endFaults", "phase 1 settled", "phase 1 confirmed",
+		"phase 2 faultPeriod", "action 2.0 update a second", "phase 2 endFaults", "phase 2 settled", "phase 2 confirmed",
+		"phase 3 faultPeriod", "action 3.0 delete a second", "phase 3 endFaults", "phase 3 settled", "phase 3 confirmed",
+		"phase 4 faultPeriod", "action 4.0 restart ", "phase 4 endFaults", "phase 4 settled", "phase 4 confirmed",
+	}
+	if got := summarize(f.rec.Events()); !reflect.DeepEqual(got, want) {
+		t.Errorf("events:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	start, _ := find(f.rec.Events(), 1, trace.FaultPeriod)
+	for _, e := range f.rec.Events() {
+		if e.Fault != nil && e.Fault.Ended {
+			if lasted := e.At - start.At; lasted < period || lasted >= timeouts.Settle {
+				t.Errorf("the fault lasted %v, want the period %v", lasted, period)
+			}
+		}
+	}
+}
+
+func TestExecuteWaitsTheSettleTimeoutAfterAPeriodLongerThanIt(t *testing.T) {
+	f := newFixture(t, nil)
+	faultHoldsDeletedCRs(f)
+	if err := f.runner.Execute(context.Background(), recreateUnder(2*timeouts.Settle, holdWidgets)); err != nil {
+		t.Fatal(err)
+	}
+	if errs := actionErrors(f.rec.Events()); len(errs) != 0 {
+		t.Errorf("action errors = %q, want none", errs)
+	}
+}
+
+func TestExecuteRestartsAKilledControllerWhileACreateWaits(t *testing.T) {
+	f := newFixture(t, nil)
+	f.cluster.waitGone = func(ctx context.Context) error {
+		for {
+			if log := f.process.all(); log[len(log)-1] == "supervise(true)" {
+				return nil
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(5 * time.Millisecond):
+			}
+		}
+	}
+	if err := f.runner.Execute(context.Background(), recreateUnder(100*time.Millisecond, nil, plan.Action{Do: plan.Kill})); err != nil {
+		t.Fatal(err)
+	}
+	if errs := actionErrors(f.rec.Events()); len(errs) != 0 {
+		t.Errorf("action errors = %q, want none", errs)
+	}
+	if got := f.cluster.all(); !slices.Contains(got, `patch second {"spec":{"count":2}}`) {
+		t.Errorf("cluster calls = %q, want the next step's update", got)
 	}
 }
 
