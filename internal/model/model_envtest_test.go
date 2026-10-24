@@ -180,7 +180,8 @@ func TestAStageMakesAGadgetReadyThenStuckThenRecovered(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { k.Stop(ctx) })
-	s, err := NewStage(k, config.Model{Kind: gvk, Stage: config.ReadyCondition, After: 100 * time.Millisecond, Status: map[string]any{"phase": "Running"}})
+	s, err := NewStage(k, config.Model{Kind: gvk, Stage: config.ReadyCondition, After: 100 * time.Millisecond,
+		Status: map[string]any{"phase": "Running"}, StuckStatus: map[string]any{"phase": "Pending"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,8 +223,10 @@ func TestAStageMakesAGadgetReadyThenStuckThenRecovered(t *testing.T) {
 		t.Fatal(err)
 	}
 	await(t, "stuck", false, "Stuck")
+	await(t, "pending", false, `"phase":"Pending"`)
 	end()
 	await(t, "recovered", true, "fault 1 ended")
+	await(t, "running", true, `"phase":"Running"`)
 	// The observer can record the last write's version before the write's call.
 	deadline := time.Now().Add(10 * time.Second)
 	for recorded.count(func(e trace.Event) bool {

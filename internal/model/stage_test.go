@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strconv"
@@ -109,14 +110,14 @@ func (w *stageWorks) get() []bool {
 const after = 60 * time.Millisecond
 
 func testStage(t *testing.T) (*Stage, *fakeStageWriter, *stageWorks) {
-	return testStageWith(t, map[string]any{"phase": "Running"})
+	return testStageWith(t, map[string]any{"phase": "Running"}, nil)
 }
 
-func testStageWith(t *testing.T, status map[string]any) (*Stage, *fakeStageWriter, *stageWorks) {
+func testStageWith(t *testing.T, status, stuckStatus map[string]any) (*Stage, *fakeStageWriter, *stageWorks) {
 	t.Helper()
 	w := &fakeStageWriter{}
 	works := &stageWorks{}
-	m := config.Model{Kind: gadgetGVR.GroupVersion().WithKind("Gadget"), Stage: config.ReadyCondition, After: after, Status: status}
+	m := config.Model{Kind: gadgetGVR.GroupVersion().WithKind("Gadget"), Stage: config.ReadyCondition, After: after, Status: status, StuckStatus: stuckStatus}
 	s := newStage(gadgetGVR, m, w, works.record)
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel, s.done = cancel, make(chan struct{})
@@ -208,7 +209,7 @@ func TestStageWritesReadyAfterTheDelay(t *testing.T) {
 }
 
 func TestStageWritesOnlyTheConditionWithoutStatusFields(t *testing.T) {
-	s, w, _ := testStageWith(t, nil)
+	s, w, _ := testStageWith(t, nil, nil)
 	s.hear(gadget{name: "g", uid: "u", rv: "1", generation: 1}.version())
 	if got := w.await(t, 1)[0].patch["status"].(map[string]any); len(got) != 1 {
 		t.Errorf("Wrote status %v, want only conditions.", got)
@@ -355,6 +356,82 @@ func TestStuckKeepsMatchingObjectsNotReadyUntilItEnds(t *testing.T) {
 	if c := readyCondition(t, writes[2]); writes[2].ref.Name != "g1" || c["status"] != "True" || c["message"] != "fault 1 ended" || c["observedGeneration"] != 2.0 {
 		t.Errorf("end wrote %+v, want g1 Ready True with message 'fault 1 ended'.", writes[2])
 	}
+}
+
+func TestStuckWritesEachObjectsOwnGeneration(t *testing.T) {
+	s, w, _ := testStage(t)
+	s.hear(gadget{name: "g1", uid: "u1", rv: "1", generation: 1, ready: readyFor(1)}.version())
+	s.hear(gadget{name: "g2", uid: "u2", rv: "2", generation: 2, ready: readyFor(2)}.version())
+	if _, err := s.Fault(stuck("")); err != nil {
+		t.Fatal(err)
+	}
+	for _, write := range w.await(t, 2) {
+		if got, want := readyCondition(t, write)["observedGeneration"], map[string]any{"g1": 1.0, "g2": 2.0}[write.ref.Name]; got != want {
+			t.Errorf("The stuck write to %s set observedGeneration %v, want %v.", write.ref.Name, got, want)
+		}
+	}
+}
+
+func TestStuckReplacesTheStatusFieldsUntilItEnds(t *testing.T) {
+	for name, c := range map[string]struct {
+		status, stuckStatus, readyFields, stuckFields string
+	}{
+		"a Pod":                       {`{"phase":"Running"}`, `null`, `{"phase":"Running"}`, `{"phase":"Running"}`},
+		"a Pod with only stuckStatus": {`null`, `{"phase":"Pending"}`, `{"phase":null}`, `{"phase":"Pending"}`},
+		"a PVC":                       {`{"phase":"Bound"}`, `{"phase":"Pending"}`, `{"phase":"Bound"}`, `{"phase":"Pending"}`},
+		"a database":                  {`{"endpoint":"10.0.0.1:5432"}`, `{"error":"no capacity"}`, `{"endpoint":"10.0.0.1:5432","error":null}`, `{"endpoint":null,"error":"no capacity"}`},
+		"a Service":                   {`{"loadBalancer":{"ingress":[{"ip":"10.0.0.1"}]}}`, `{"loadBalancer":{}}`, `{"loadBalancer":{"ingress":[{"ip":"10.0.0.1"}]}}`, `{"loadBalancer":{"ingress":null}}`},
+		"a certificate":               {`{"notAfter":"2027-01-01T00:00:00Z"}`, `{}`, `{"notAfter":"2027-01-01T00:00:00Z"}`, `{"notAfter":null}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, w, _ := testStageWith(t, jsonObject(t, c.status), jsonObject(t, c.stuckStatus))
+			g := gadget{name: "g", uid: "u", rv: "1", generation: 1}
+			s.hear(g.version())
+			readyWrite := w.await(t, 1)[0]
+			g.rv, g.ready = readyWrite.rv, readyFor(1)
+			s.hear(g.version())
+			end, err := s.Fault(stuck(""))
+			if err != nil {
+				t.Fatal(err)
+			}
+			stuckWrite := w.await(t, 2)[1]
+			g.rv, g.ready = stuckWrite.rv, &condition{"False", "Stuck", 1}
+			s.hear(g.version())
+			end()
+			endWrite := w.await(t, 3)[2]
+			for _, step := range []struct {
+				name, wantReady, wantFields string
+				write                       write
+			}{
+				{"first", "True", c.readyFields, readyWrite},
+				{"stuck", "False", c.stuckFields, stuckWrite},
+				{"end's", "True", c.readyFields, endWrite},
+			} {
+				if ready, fields := readyCondition(t, step.write)["status"], literalFields(step.write); ready != step.wantReady || fields != step.wantFields {
+					t.Errorf("The %s write set Ready %v and %s, want %s and %s.", step.name, ready, fields, step.wantReady, step.wantFields)
+				}
+			}
+		})
+	}
+}
+
+func jsonObject(t *testing.T, s string) map[string]any {
+	t.Helper()
+	var object map[string]any
+	if err := json.Unmarshal([]byte(s), &object); err != nil {
+		t.Fatal(err)
+	}
+	return object
+}
+
+// literalFields returns, as JSON, the status fields a write sets other than
+// conditions.
+func literalFields(w write) string {
+	status, _ := w.patch["status"].(map[string]any)
+	fields := maps.Clone(status)
+	delete(fields, "conditions")
+	raw, _ := json.Marshal(fields)
+	return string(raw)
 }
 
 func TestAFaultsEndRewritesAReadyObjectWithItsCount(t *testing.T) {

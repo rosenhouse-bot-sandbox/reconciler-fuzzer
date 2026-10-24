@@ -196,9 +196,11 @@ const ReadyConditionCEL = `has(self.status) && has(self.status.conditions) && se
 type Model struct {
 	Kind  schema.GroupVersionKind
 	Stage string
-	// Status holds literal fields the stage adds to every status write.
-	Status map[string]any
-	After  time.Duration
+	// Status holds literal fields the stage sets in each status write, and
+	// StuckStatus those it sets in their place while a stuck fault lasts.
+	// A nil StuckStatus means Status, and an empty one means no fields.
+	Status, StuckStatus map[string]any
+	After               time.Duration
 	// Dependency is nil unless the kind is a readiness dependency of the
 	// primary.
 	Dependency *Dependency
@@ -262,11 +264,12 @@ type declaration struct {
 	} `json:"primary"`
 	Fixtures []string `json:"fixtures"`
 	Models   []struct {
-		Kind       string              `json:"kind"`
-		Stages     string              `json:"stages"`
-		Status     map[string]any      `json:"status"`
-		After      string              `json:"after"`
-		Dependency *declaredDependency `json:"dependency"`
+		Kind        string              `json:"kind"`
+		Stages      string              `json:"stages"`
+		Status      map[string]any      `json:"status"`
+		StuckStatus map[string]any      `json:"stuckStatus"`
+		After       string              `json:"after"`
+		Dependency  *declaredDependency `json:"dependency"`
 	} `json:"models"`
 	Values struct {
 		Overlay  map[string]map[string]any `json:"overlay"`
@@ -550,7 +553,7 @@ func models(d declaration, primary schema.GroupVersionKind) ([]Model, error) {
 			return nil, fmt.Errorf("%s.kind %s: the primary or another model has this kind", key, declared.Kind)
 		}
 		seen[kind.GroupKind()] = true
-		m := Model{Kind: kind, Stage: ReadyCondition, Status: declared.Status}
+		m := Model{Kind: kind, Stage: ReadyCondition, Status: declared.Status, StuckStatus: declared.StuckStatus}
 		if declared.Stages != "" && declared.Stages != ReadyCondition {
 			return nil, fmt.Errorf("%s.stages %q: the only stage is %s", key, declared.Stages, ReadyCondition)
 		}

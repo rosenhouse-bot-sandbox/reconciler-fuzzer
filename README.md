@@ -170,6 +170,10 @@ models:
 - Generated plans then draw two model faults. `stuck` keeps Gadgets not ready, and `slowDelete`
   holds their deletion, until the fault period ends. A plan step writes one as
   `{"match": {"group": "example.com", "resource": "gadgets"}, "stuck": true}`.
+- `status:` adds literal fields to the model's status writes, such as a PVC's `{phase: Bound}`.
+  While `stuck` lasts, the `stuckStatus:` fields, such as `{phase: Pending}`, replace them.
+  `stuckStatus:` defaults to `status:`. Each write removes the fields that only the other key
+  sets. A model with only `stuckStatus: {phase: Pending}` thus removes `phase` while ready.
 - If a run fails to converge while an object of a kind nothing models has no status,
   `report.md` names the kind and suggests a `models:` entry for it.
 

@@ -156,8 +156,8 @@ cross-scope, foreground and orphan rules (`gc.go`). `namespace` finishes a
 terminating namespace. `model.NewStage` makes a stage model per `models:`
 entry, named `trace.ModelCaller` of its kind, which writes `Ready` True and the
 `status:` fields `after` a generation's first version. `stuck` writes matching
-objects `Ready` False, and `slowDelete` adds a finalizer; either's end writes
-`Ready` True.
+objects `Ready` False and the `stuckStatus:` fields instead, and `slowDelete`
+adds a finalizer. Either's end writes `Ready` True and the `status:` fields.
 
 **Fake services.** `fake.New` makes a System of a `systems:` entry with a
 `process`. Start runs it in the config's directory with
@@ -388,11 +388,11 @@ timeouts: {settle: 30s, stable: 3s, backoffCap: 60s}    # defaults
 ```
 
 A model's kind is neither the primary's nor another model's; its stage is
-`readyCondition`, and `dependency.required` defaults to true. A fake's name
-matches `[a-z][a-z0-9-]*`. A `command[0]` with a slash resolves against the
-file's directory. `vault` needs a `token`. `access: read` says the controller
-only reads the fake. `values.fixtures` may name a system's fixtures file, whose
-entries' body paths `changeFixture` sets.
+`readyCondition`. `dependency.required` defaults to true, and `stuckStatus` to
+`status`. A fake's name matches `[a-z][a-z0-9-]*`. A `command[0]` with a slash
+resolves against the file's directory. `vault` needs a `token`. `access: read`
+says the controller only reads the fake. `values.fixtures` may name a system's
+fixtures file, whose entries' body paths `changeFixture` sets.
 
 ## 14. Generation, replay and shrinking
 
