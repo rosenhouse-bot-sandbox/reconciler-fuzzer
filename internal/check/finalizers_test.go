@@ -232,13 +232,21 @@ func TestFinalizersPassesANoOpWriteAnsweredWithAnotherCallersRemoval(t *testing.
 	}
 }
 
-// The model's no-op is sent after the controller's answer, so the
-// controller's write made the version that both answers carry.
-func TestFinalizersFailsARemovalWhoseVersionALaterNoOpCarries(t *testing.T) {
-	r, uid := heldGadget()
-	r.Add(write(ctl, "update", gadgetA, "c1"), tt.Version(gadgetA, uid, "c1", gadgetBody(false)))
-	r.Add(write(gadgetModel, "patch", gadgetA, "c1"))
-	requireFinding(t, finalizerFindings(t, r), "Finalizers", 0, removed, "kube/toy/gadgets", protect+", added by model:gadgets.toy")
+// A no-op sent after the removal's answer made neither the version it
+// carries nor a second removal.
+func TestFinalizersReportsARemovalOnceThoughALaterNoOpCarriesItsVersion(t *testing.T) {
+	for _, noOp := range []trace.Caller{gadgetModel, ctl} {
+		t.Run(string(noOp), func(t *testing.T) {
+			r, uid := heldGadget()
+			r.Add(write(ctl, "update", gadgetA, "c1"), tt.Version(gadgetA, uid, "c1", gadgetBody(false)))
+			r.Add(write(noOp, "patch", gadgetA, "c1"))
+			findings := finalizerFindings(t, r)
+			requireFinding(t, findings, "Finalizers", 0, removed, "kube/toy/gadgets", protect+", added by model:gadgets.toy, removed by update")
+			if details := findings[0].Details; len(details) != 1 {
+				t.Errorf("details = %q, want only the update's removal", details)
+			}
+		})
+	}
 }
 
 // A built-in kind's status write can change its finalizers.
@@ -319,6 +327,18 @@ func TestFinalizersNamesTheCallerThatLastAddedTheFinalizer(t *testing.T) {
 	r.Add(write(gadgetModel, "patch", gadgetA, "m1", protect), tt.Version(gadgetA, uid, "m1", gadgetBody(false, protect)))
 	r.Add(write(trace.Harness, "patch", gadgetA, "h1", protect), tt.Version(gadgetA, uid, "h1", gadgetBody(false, protect)))
 	r.Add(write(ctl, "update", gadgetA, "c3"), tt.Version(gadgetA, uid, "c3", gadgetBody(false)))
+	requireFinding(t, finalizerFindings(t, r), "Finalizers", 0, removed, "kube/toy/gadgets", "added by model:gadgets.toy")
+}
+
+// Here the gc's no-op overlaps the model's patch that adds protect.
+func TestFinalizersNamesTheFirstRecordedOfTwoPossibleAdders(t *testing.T) {
+	r := newRun(1)
+	r.Begin()
+	uid := r.Create(ctl, gadgetA, gadgetBody(false))
+	r.Tick(5 * tt.Tick)
+	r.Add(write(gadgetModel, "patch", gadgetA, "m1", protect), tt.Version(gadgetA, uid, "m1", gadgetBody(false, protect)))
+	r.Add(sent(write(trace.GC, "patch", gadgetA, "m1", protect), 2*tt.Tick))
+	r.Add(write(ctl, "update", gadgetA, "c1"), tt.Version(gadgetA, uid, "c1", gadgetBody(false)))
 	requireFinding(t, finalizerFindings(t, r), "Finalizers", 0, removed, "kube/toy/gadgets", "added by model:gadgets.toy")
 }
 

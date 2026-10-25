@@ -30,10 +30,8 @@ func Finalizers(ix *trace.Index, s Spec) []Finding {
 			if slices.Contains(*c.ResultFinalizers, f) {
 				continue
 			}
-			// A sample, a fixture or a plan may give the harness the
-			// controller's own finalizer.
-			by := adder(ix, base, f)
-			if by == trace.Controller || by == trace.Harness || by == trace.Cluster {
+			by, foreign := adder(ix, base, f)
+			if !foreign {
 				continue
 			}
 			key := findingKey{stepAt(steps, e.At), removedForeign, kind(base.Ref)}
@@ -78,7 +76,8 @@ func judgedWrite(c trace.Call, s Spec) bool {
 // answers with the request's object at the old version.
 func replaced(ix *trace.Index, e trace.Event) trace.Version {
 	ref, rv := e.Call.Object(), e.Call.ResultRV
-	if ix.Changed(e) && slices.Equal(makers(ix, ref, rv), []trace.Caller{e.Call.Caller}) {
+	others := slices.ContainsFunc(makers(ix, ref, rv), func(c trace.Caller) bool { return c != e.Call.Caller })
+	if ix.Changed(e) && !others {
 		v, _ := ix.Previous(ref, rv)
 		return v
 	}
@@ -93,21 +92,23 @@ func replaced(ix *trace.Index, e trace.Event) trace.Version {
 func makers(ix *trace.Index, ref trace.Ref, rv string) []trace.Caller {
 	var callers []trace.Caller
 	for _, a := range ix.Answers(ref, rv) {
-		if ix.Changed(a) && !slices.Contains(callers, a.Call.Caller) {
+		if ix.Changed(a) {
 			callers = append(callers, a.Call.Caller)
 		}
 	}
 	return callers
 }
 
-// adder is who added f, which v holds. The API server adds the garbage
-// collector's finalizers for a delete's propagation policy. Any other
-// finalizer's adder made the first of the versions, up to v, that all hold
-// f: the controller or else the harness when either may have, or else the
-// first maker, or Cluster when no recorded write made it.
-func adder(ix *trace.Index, v trace.Version, f string) trace.Caller {
+// adder is who added f, which v holds, and whether it was another caller
+// than the controller. The API server adds the garbage collector's
+// finalizers for a delete's propagation policy. Any other finalizer's
+// adders made the first of the versions, up to v, that all hold f. f may be
+// the controller's own when no recorded write made that version, or when
+// the controller or the harness may have: a sample, a fixture or a plan may
+// carry the controller's own finalizer.
+func adder(ix *trace.Index, v trace.Version, f string) (trace.Caller, bool) {
 	if f == metav1.FinalizerDeleteDependents || f == metav1.FinalizerOrphanDependents {
-		return trace.GC
+		return trace.GC, true
 	}
 	for {
 		previous, _ := ix.Previous(v.Ref, v.RV)
@@ -117,15 +118,10 @@ func adder(ix *trace.Index, v trace.Version, f string) trace.Caller {
 		v = previous
 	}
 	callers := makers(ix, v.Ref, v.RV)
-	switch {
-	case slices.Contains(callers, trace.Controller):
-		return trace.Controller
-	case slices.Contains(callers, trace.Harness):
-		return trace.Harness
-	case len(callers) == 0:
-		return trace.Cluster
+	if len(callers) == 0 || slices.ContainsFunc(callers, func(c trace.Caller) bool { return c == trace.Controller || c == trace.Harness }) {
+		return "", false
 	}
-	return callers[0]
+	return callers[0], true
 }
 
 func finalizers(v trace.Version) []string {

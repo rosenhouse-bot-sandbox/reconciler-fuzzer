@@ -21,7 +21,7 @@ const (
 // bugs describes each seeded bug of controller/.
 var bugs = map[int]string{
 	0:   "The correct controller.",
-	116: "Removes every finalizer from a deleting Volume.",
+	116: "Removes every finalizer from a deleting Volume while its Cluster is deleted.",
 	150: "Strips its finalizers from deleting CRs when it shuts down.",
 	151: "Puts a finalizer on each Volume, and releases a deleted Cluster before its Volumes, whose finalizers it strips only afterwards.",
 	152: "Errors when a dependent kind is not served, as after its CRD is deleted, so the parent's deletion never ends.",
@@ -64,8 +64,8 @@ func TestRenderBugMatrix(t *testing.T) {
 		"\n## Fleet toy\n",
 		"| Bug | Description | Plan | Check | Step |\n|---|---|---|---|---|\n",
 		"| B0 | The correct controller. | all 2 plans of config.yaml, database/config.yaml, protect/config.yaml | none | |\n",
-		"| B116 | Removes every finalizer from a deleting Volume. | protect/b0 | Finalizers | 2 |\n" +
-			"| B116 | Removes every finalizer from a deleting Volume. | slow-delete | Finalizers | 1 |\n",
+		"| B116 | Removes every finalizer from a deleting Volume while its Cluster is deleted. | protect/b0 | Finalizers | 2 |\n" +
+			"| B116 | Removes every finalizer from a deleting Volume while its Cluster is deleted. | slow-delete | Finalizers | 1 |\n",
 		"| B0 | The correct controller. | uninstall/stop-first | none | |\n",
 		"| B150 | Strips its finalizers from deleting CRs when it shuts down. | database/restart-cluster-delete | Converge | 1 |\n",
 		"| B152 | Errors when a dependent kind is not served, as after its CRD is deleted, so the parent's deletion never ends. | uninstall/crd-first-stop | Converge | 2 |\n",

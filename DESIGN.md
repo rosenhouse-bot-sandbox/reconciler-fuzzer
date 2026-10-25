@@ -61,11 +61,12 @@ Only `check` decides what is a bug.
 
 `system.System` has `Name() string`, `Start(ctx, env) (Endpoints, error)`,
 `Snapshot(ctx) ([]Resource, error)`, `Pending() bool` and `Fault(plan.Fault)
-(end func(), err error)`. `Endpoints` holds the controller and harness listeners
-and `Vars`, which expand as `${systems.<name>.<key>}` in launch args and env,
-and kube fixtures. Request faults go to a system's controller listener. Model
-faults go to the first stage model or fake service that `Takes` them. Damage
-goes to the system the target names. Checks read `work` events, never `Pending`.
+(end func(), err error)`. `Endpoints` holds the controller and harness
+listeners and `Vars`, which expand as `${systems.<name>.<key>}` in launch args
+and env, and kube fixtures. Request faults go to a system's controller
+listener. Model faults go to the first stage model or fake service that
+`Takes` them. Damage goes to the system the target names. Checks read `work`
+events, never `Pending`.
 
 ## 4. Trace
 
@@ -139,11 +140,12 @@ name, and `update` otherwise.
 `kube.Start` starts envtest, the run namespace, the controller's identity, both
 listeners and the observer, and creates the fixtures. Fixtures expand
 `${systems.<fake>.<key>}`. `Vars` holds `kubeconfig`, `namespace` and `url`.
-Harness actions return once the observer has recorded their effect. The observer
-list-watches cluster-wide each installed CRD, each served kind the config or a
-fixture names, and each served kind `launch.rbac` names that is not ignored
-(§10). These are the run event's `kinds`. It then watches any kind a listener
-records a call on, and records one `version` per (ref, resourceVersion).
+Harness actions return once the observer has recorded their effect. The
+observer list-watches cluster-wide each installed CRD, each served kind the
+config or a fixture names, and each served kind `launch.rbac` names that is not
+ignored (§10). These are the run event's `kinds`. It then watches any kind a
+listener records a call on, and records one `version` per
+(ref, resourceVersion).
 
 ## 7. Models and fake services
 
@@ -290,7 +292,7 @@ from the config, or else the run event.
 
 ## 12. Checks
 
-Every check is `func(*trace.Index, Spec) []Finding`. A finding's signature is
+Most checks are `func(*trace.Index, Spec) []Finding`. A finding's signature is
 its check, summary and `kind` (`system/group/resource`). `check.Judge` runs
 every check, and notes each action error, each request fault that picked no
 request, each `holdWatch` while the controller had no watch of its kind, each
@@ -349,11 +351,9 @@ new generation breaks it. With `n` CRs live, it fails when each gap between
 calls `5n + 1` to `10n + 1` is under 100 ms: `retried a failing request in a
 tight loop`. It skips 409s on a held kind until `stable / 4` after the hold.
 
-**Finalizers.** A controller `update` or `patch` of an object or its `status`
-fails when its answer lacks a finalizer that the version it replaced holds and
-another recorded caller added: `removed another caller's finalizer`. The adder
-wrote the first of the unbroken run of versions that hold it. A write made its
-answer's version if it answered first and `Index.Changed` holds (entry 85).
+**Finalizers.** A controller `update` or `patch` of an object, or of a built-in
+kind's `status`, fails when its answer drops a finalizer that a model or the gc
+added (entry 85): `removed another caller's finalizer`.
 
 **Property.** A `step` property is judged at each settled step's end, and an
 `always` one at each `version` event. Its CEL sees `crs`, the live CRs' bodies,
@@ -526,4 +526,4 @@ Each entry changes a check, exception, `System` interface or ignore list.
 80. A live unlisted owner, such as a fixture, keeps what it owns, directly or through the controller's live objects, from rules 2 to 4, so deleting a CR blames none of it (#128). An object the controller made is never an unlisted owner.
 81. `required` binds only the first entry's CRs, so the kinds that own no dependency pass.
 82. A `damage` touches each group under its root. An undamaged touched group may empty while its kind lives under that root, and a damaged one whose owner is gone while a CR made in the step owns its kind and role there. So a damage under a CR that the controller made touches that CR's owner, and the controller may remake that CR.
-85. A kube write's call records its answer's finalizers, for Finalizers (#133). A write that did not make its answer's version replaced that version. An update that empties a deleting object's finalizers deletes it and answers with the old version, and the deleted version keeps them.
+85. A kube write's call records its answer's finalizers, for Finalizers (#133), since an update that empties a deleting object's finalizers deletes it and answers with the old version. The gc owns `foregroundDeletion` and `orphan`, which the API server adds for whoever deletes. A finalizer the harness wrote, from a sample, a fixture or a plan, may be the controller's own. Listeners record answers in no fixed order, so a version that overlapping writes of two callers carry may be either's. A CRD's status write keeps its metadata.

@@ -71,8 +71,8 @@ Each Cluster owns Volumes of a third party's kind, which a model sets ready. A D
 | B0 | The correct controller. | uninstall/recreate | none | |
 | B0 | The correct controller. | uninstall/stop-after-delete | none | |
 | B0 | The correct controller. | uninstall/stop-first | none | |
-| B116 | Removes every finalizer from a deleting Volume. | protect/b0 | Finalizers | 2 |
-| B116 | Removes every finalizer from a deleting Volume. | slow-delete | Finalizers | 1 |
+| B116 | Removes every finalizer from a deleting Volume while its Cluster is deleted. | protect/b0 | Finalizers | 2 |
+| B116 | Removes every finalizer from a deleting Volume while its Cluster is deleted. | slow-delete | Finalizers | 1 |
 | B150 | Strips its finalizers from deleting CRs when it shuts down. | database/restart-cluster-delete | Converge | 1 |
 | B151 | Puts a finalizer on each Volume, and releases a deleted Cluster before its Volumes, whose finalizers it strips only afterwards. | uninstall/kill-recreate | Converge | 1 |
 | B151 | Puts a finalizer on each Volume, and releases a deleted Cluster before its Volumes, whose finalizers it strips only afterwards. | uninstall/stop-after-delete | Clean | 1 |

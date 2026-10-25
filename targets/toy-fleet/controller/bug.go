@@ -7,7 +7,8 @@ import "fmt"
 type Bug int
 
 const (
-	// B116 removes every finalizer from a deleting Volume.
+	// B116 removes every finalizer from a deleting Volume while its Cluster is
+	// deleted.
 	B116 Bug = 116
 	// B150 strips its finalizers from deleting CRs when it shuts down.
 	B150 Bug = 150
