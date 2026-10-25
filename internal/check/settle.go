@@ -61,11 +61,11 @@ func unmetClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 }
 
 // lookClauses holds the controller to looking at each object that the
-// damage and changeFixture actions of the latest step changed, until the
-// step's lapse time. It also holds the step for Stable after each change,
-// after a holdWatch released the watch that saw it, and, without a watch
-// across the change, after the first request that looked, so that clause 7
-// sees the controller's reaction. A held watch does not look.
+// latest step's damage, changeFixture and createFixture actions changed,
+// until the step's lapse time. It also holds the step for Stable after each
+// change, after a holdWatch released the watch that saw it, and, without a
+// watch across the change, after the first request that looked, so that
+// clause 7 sees the controller's reaction. A held watch does not look.
 func lookClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 	step, found := latestStep(ix, t)
 	if !found || step.Reached[trace.EndFaults] && t >= lapse(ix, step, s) {
@@ -119,12 +119,12 @@ func lapse(ix *trace.Index, step trace.StepSpan, s Spec) time.Duration {
 	return step.EndFaults + poll*3/2
 }
 
-// changes are the step's damage and changeFixture actions that changed an
-// object without error.
+// changes are the step's damage, changeFixture and createFixture actions
+// that changed an object without error.
 func changes(ix *trace.Index, step int) []trace.Event {
 	var changed []trace.Event
 	for _, e := range ix.Actions(step) {
-		if (e.Action.Do == "damage" || e.Action.Do == "changeFixture") && e.Action.Ref != nil && e.Action.Error == "" {
+		if slices.Contains([]string{"damage", "changeFixture", "createFixture"}, e.Action.Do) && e.Action.Ref != nil && e.Action.Error == "" {
 			changed = append(changed, e)
 		}
 	}
@@ -136,8 +136,8 @@ func looksAt(c trace.Call, ref trace.Ref) bool {
 	return (succeeded(c) || c.Status == 404) && !c.Unknown() && c.Ref.Covers(ref)
 }
 
-// crClauses says whether cr, a CR of p's kind, is done at t, ready or
-// halted, and not being deleted.
+// crClauses says whether cr, a CR of p's kind, is done at t, and not being
+// deleted: ready, halted, or held back by a reference.
 func crClauses(ix *trace.Index, p Primary, cr trace.Version, t time.Duration, s Spec) []unmet {
 	name, k := describe(cr.Ref), kind(cr.Ref)
 	var body map[string]any
@@ -149,7 +149,7 @@ func crClauses(ix *trace.Index, p Primary, cr trace.Version, t time.Duration, s 
 	}
 	if ready, err := p.Ready(body); err != nil {
 		return []unmet{{1, k, fmt.Sprintf("%s: ready: %v", name, err)}}
-	} else if !ready && !halted(ix, p, cr, body, t, s) {
+	} else if !ready && !halted(ix, p, cr, body, t, s) && !s.heldBack(ix, cr.Ref, body, t) {
 		return []unmet{{1, k, name + " is not ready"}}
 	}
 	return nil

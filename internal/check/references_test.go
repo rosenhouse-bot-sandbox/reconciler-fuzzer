@@ -62,7 +62,6 @@ func TestHonestPassesACRReadyAfterSeeingWhatItNamesReady(t *testing.T) {
 }
 
 func TestHonestFailsACRReadyBeforeSeeingWhatItNamesReady(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	for name, c := range map[string]struct {
 		secret map[string]any
 		look   func(r *tt.Script)
@@ -87,7 +86,6 @@ func TestHonestFailsACRReadyBeforeSeeingWhatItNamesReady(t *testing.T) {
 }
 
 func TestHonestFailsACRReadyWhileWhatItRequiresIsMissing(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	for name, c := range map[string]struct {
 		secret map[string]any
 		look   func(r *tt.Script)
@@ -113,7 +111,6 @@ func TestHonestFailsACRReadyWhileWhatItRequiresIsMissing(t *testing.T) {
 }
 
 func TestHonestPassesACRReadyWhileWhatItNamesWithoutRequiredIsMissing(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	optional := secretRef()
 	optional.Required = false
 	for name, look := range map[string]func(r *tt.Script){
@@ -139,7 +136,6 @@ func TestHonestPassesACRReadyWhileTheControllerLastReadWhatItNamesOpaquely(t *te
 }
 
 func TestHonestJudgesWhatEachValueNames(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	r := secretRun(secretRef(), secret(false))
 	r.Update(ctl, databaseB, database(true, ""))
 	requireNone(t, honest(t, r))
@@ -167,7 +163,6 @@ func TestHonestJudgesWhatEachValueNames(t *testing.T) {
 }
 
 func TestHonestJudgesAClusterScopedCRsReferenceByItsNamespaceValue(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	tenants := trace.Kind{Group: "toy", Version: "v1", Kind: "Tenant", Resource: "tenants"}
 	tenantB := tt.Ref("toy/tenants", "", "b")
 	for _, namespace := range []string{"", "ns"} {
@@ -191,7 +186,6 @@ func TestHonestJudgesAClusterScopedCRsReferenceByItsNamespaceValue(t *testing.T)
 }
 
 func TestHonestJudgesAReferenceToAListedKindByItsReady(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	for name, c := range map[string]struct {
 		look    func(r *tt.Script)
 		finding bool
@@ -238,7 +232,6 @@ func notReadySeen(r *tt.Script) { r.Update(trace.Harness, pw, secret(false)).See
 func deletedSeen(r *tt.Script) { r.Delete(trace.Harness, pw).SeeDeleted(ctl, pw) }
 
 func TestHonestWithTrackFailsACRThatStaysReadyNamingWhatHoldsItBack(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	tracked := secretRef()
 	tracked.Track = 500 * ms
 	for name, c := range map[string]struct {
@@ -300,7 +293,6 @@ func TestHonestWithTrackPassesACRThatReactsInTime(t *testing.T) {
 }
 
 func TestSettleExcusesACRNotReadyWhileAReferenceHoldsItBack(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	optional := secretRef()
 	optional.Required = false
 	for name, c := range map[string]struct {
@@ -343,24 +335,21 @@ func TestSettleExcusesACRNotReadyWhileAReferenceHoldsItBack(t *testing.T) {
 }
 
 func TestSettleStillWaitsForACRNoReferenceHoldsBack(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	r := secretRun(secretRef(), nil)
 	namesNothing := database(false, "")
 	namesNothing["metadata"] = map[string]any{"name": "c"}
 	r.Create(trace.Harness, databaseC, namesNothing)
-	r.Act("create", "c", &databaseC).EndFaults()
+	r.Act("create", "c", &databaseC).Call(ctl, "get", databaseC, 200).EndFaults()
 	if unmet := settledAt(t, r, r.Now+5*s); !slices.Equal(unmet, []string{"databases.toy ns/c is not ready"}) {
 		t.Errorf("unmet = %q, want only that Database c, which names nothing, is not ready.", unmet)
 	}
 }
 
 func TestClause5HoldsTheControllerToLookingAtACreatedFixture(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	requireUnmet(t, damagedAt1200ms("createFixture"), 3200*ms, "has not looked at configmaps ns/c since the createFixture at 1.2s")
 }
 
 func TestRestoreSkipsAStepThatCreatesAFixture(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	r := twoCRs()
 	r.Begin().Restart().Act("createFixture", "", &cm)
 	r.Update(ctl, childA, map[string]any{"data": "changed"})
@@ -369,7 +358,6 @@ func TestRestoreSkipsAStepThatCreatesAFixture(t *testing.T) {
 }
 
 func TestSpecForReadsTheRunEventsReferences(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	run := tt.Run("toy", "widgets")
 	run.Run.Primaries[0].Ready, run.Run.Stable, run.Run.Reads, run.Run.Writes = "self.ok", 4*s, 3, 5
 	run.Run.References = []trace.Reference{
@@ -403,7 +391,6 @@ func TestSpecForReadsTheRunEventsReferences(t *testing.T) {
 }
 
 func TestSpecForTakesReferencesFromTheConfig(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	c, err := config.Load("../../targets/toy-widget/config.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -427,5 +414,62 @@ func TestSpecForTakesReferencesFromTheConfig(t *testing.T) {
 	c.References[0].To = schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
 	if _, err := check.SpecFor(c, ix); err == nil || !strings.Contains(err.Error(), "ConfigMap") {
 		t.Errorf("SpecFor = %v, want an error that names ConfigMap, whose seens the trace did not record.", err)
+	}
+}
+
+func TestSpecForRefusesAConfigReferenceToAKindTheTraceDidNotSee(t *testing.T) {
+	c, err := config.Load("../../targets/toy-widget/config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := tt.Run("toy.reconciler-fuzzer", "widgets")
+	run.Run.References = []trace.Reference{
+		{From: run.Run.Primaries[0].Kind, To: secrets, Namespaced: true, Name: "spec.secretName", Ready: "true"},
+		{From: run.Run.Primaries[0].Kind, System: "vault", To: trace.Kind{Resource: "secret"}, Name: "spec.path", Ready: "true"},
+	}
+	var b tt.Builder
+	ix := b.Add(run).Index()
+	for _, want := range []struct {
+		to      config.Reference
+		refused string
+	}{
+		{config.Reference{To: schema.GroupVersionKind{Version: "v1", Kind: "Secret"}, Namespaced: true}, ""},
+		{config.Reference{System: "vault", Collection: "other"}, ""},
+		{config.Reference{To: schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}, Namespaced: true}, "v1/ConfigMap"},
+		{config.Reference{To: schema.GroupVersionKind{Group: "other.io", Version: "v1", Kind: "Secret"}, Namespaced: true}, "other.io/v1/Secret"},
+		{config.Reference{System: "cloud", Collection: "secret"}, "cloud:secret"},
+	} {
+		r := want.to
+		r.From, r.Name, r.Ready = c.Primaries[0].Kind, "spec.name", "true"
+		c.References = []config.Reference{r}
+		_, err := check.SpecFor(c, ix)
+		switch {
+		case want.refused == "" && err != nil:
+			t.Errorf("SpecFor = %v, want no error, as the run event names %+v.", err, want.to)
+		case want.refused != "" && (err == nil || !strings.Contains(err.Error(), want.refused)):
+			t.Errorf("SpecFor = %v, want an error that names %s.", err, want.refused)
+		}
+	}
+	c.References[0] = config.Reference{From: c.Primaries[0].Kind, To: schema.GroupVersionKind{Version: "v1", Kind: "Secret"}, Name: "spec.name", Ready: "self.("}
+	if _, err := check.SpecFor(c, ix); err == nil {
+		t.Error("SpecFor accepts a config reference whose ready does not compile.")
+	}
+}
+
+func TestSpecForTakesAConfigReferencesResourceFromTheRunEvent(t *testing.T) {
+	c, err := config.Load("../../targets/toy-widget/config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.References = []config.Reference{{From: c.Primaries[0].Kind, To: schema.GroupVersionKind{Version: "v1", Kind: "Endpoints"}, Namespaced: true, Name: "spec.service", Ready: "true"}}
+	run := tt.Run("toy.reconciler-fuzzer", "widgets")
+	run.Run.References = []trace.Reference{{From: run.Run.Primaries[0].Kind, To: trace.Kind{Version: "v1", Kind: "Endpoints", Resource: "endpoints"}, Namespaced: true, Name: "spec.service", Ready: "true"}}
+	var b tt.Builder
+	got, err := check.SpecFor(c, b.Add(run).Index())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.References) != 1 || got.References[0].To != (trace.Ref{System: "kube", Resource: "endpoints"}) {
+		t.Errorf("references = %+v, want one to endpoints, the run event's resource for Endpoints.", got.References)
 	}
 }

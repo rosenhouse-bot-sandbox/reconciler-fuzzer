@@ -379,6 +379,16 @@ func (ix *Index) Latest(ref Ref) (Version, bool) {
 	return *versions[len(versions)-1].Version, true
 }
 
+// LatestAt is the last version of ref that the observer recorded by t.
+func (ix *Index) LatestAt(ref Ref, t time.Duration) (Version, bool) {
+	versions := ix.versions[kindOf(ref)][ref]
+	n := after(versions, t)
+	if n == 0 {
+		return Version{}, false
+	}
+	return *versions[n-1].Version, true
+}
+
 // Previous is the version of ref, of the same instance, that the observer
 // recorded just before ref's version rv.
 func (ix *Index) Previous(ref Ref, rv string) (Version, bool) {

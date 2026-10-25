@@ -65,6 +65,9 @@ type Primary struct {
 	Periodic       *trace.Periodic
 }
 
+// ready reports whether p's ready accepts cr.
+func (p Primary) ready(cr map[string]any) bool { return satisfies(p.Ready, cr) }
+
 // primary is the entry of ref's kind, if ref names a CR.
 func (s Spec) primary(ref trace.Ref) (Primary, bool) {
 	i := slices.IndexFunc(s.Primaries, func(p Primary) bool { return ref.OfKind(p.Kind) })
@@ -182,6 +185,9 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 		if s.Properties, err = compileProperties(owner.Properties(c)); err != nil {
 			return Spec{}, fmt.Errorf("the config's properties: %w", err)
 		}
+		if s.References, err = configReferences(c, run); err != nil {
+			return Spec{}, err
+		}
 		return s, nil
 	}
 	if run.Stable <= 0 || run.Reads <= 0 || run.Writes <= 0 {
@@ -208,7 +214,49 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 	if s.Properties, err = compileProperties(run.Properties); err != nil {
 		return Spec{}, fmt.Errorf("the trace's properties: %w", err)
 	}
+	if s.References, err = compileReferences(run.References); err != nil {
+		return Spec{}, fmt.Errorf("the trace's references: %w", err)
+	}
 	return s, nil
+}
+
+// configReferences compiles c's references. The run event's references must
+// name each To kind, since the listeners recorded seens of no other kind.
+func configReferences(c *config.Config, run trace.Run) ([]Reference, error) {
+	for i, r := range c.References {
+		if !slices.ContainsFunc(run.References, func(recorded trace.Reference) bool {
+			return recorded.System == r.System && recorded.To.Group == r.To.Group && recorded.To.Kind == r.To.Kind
+		}) {
+			to := r.System + ":" + r.Collection
+			if r.System == "" {
+				to = kindName(trace.Kind{Group: r.To.Group, Version: r.To.Version, Kind: r.To.Kind})
+			}
+			return nil, fmt.Errorf("the config's references[%d] names %s, but no reference of the trace's run event does, so the trace holds no seens of it", i, to)
+		}
+	}
+	references, err := owner.References(c, recordedResource(run))
+	if err != nil {
+		return nil, fmt.Errorf("the config: %w", err)
+	}
+	compiled, err := compileReferences(references)
+	if err != nil {
+		return nil, fmt.Errorf("the config's references: %w", err)
+	}
+	return compiled, nil
+}
+
+// compileReferences compiles each reference's ready.
+func compileReferences(references []trace.Reference) ([]Reference, error) {
+	var compiled []Reference
+	for i, r := range references {
+		ready, err := config.CompileReady(r.Ready)
+		if err != nil {
+			return nil, fmt.Errorf("ready of references[%d]: %w", i, err)
+		}
+		compiled = append(compiled, Reference{From: r.From, To: trace.Ref{System: cmp.Or(r.System, "kube"), Group: r.To.Group, Resource: r.To.Resource},
+			Namespaced: r.Namespaced, Name: r.Name, Namespace: r.Namespace, Ready: ready, Required: r.Required, Track: r.Track})
+	}
+	return compiled, nil
 }
 
 // listedKinds names each entry's kind as resource.group, in order.
@@ -273,15 +321,20 @@ func (s Spec) modelled(ref trace.Ref) bool {
 	})
 }
 
-// recordedResource maps a listed or owns kind to the run event's resource
-// for it, or else a guess. It counts every kind as namespaced, since the run
-// refused a namespace on a cluster-scoped kind.
+// recordedResource maps a listed, owns or reference kind to the run event's
+// resource for it, or else a guess. It counts every kind as namespaced, since
+// the run refused a namespace on a cluster-scoped kind.
 func recordedResource(run trace.Run) func(schema.GroupVersionKind) (string, bool, error) {
 	var recorded []trace.Kind
 	for _, p := range run.Primaries {
 		recorded = append(recorded, p.Kind)
 		for _, o := range p.Owns {
 			recorded = append(recorded, o.Kind)
+		}
+	}
+	for _, r := range run.References {
+		if r.System == "" {
+			recorded = append(recorded, r.To)
 		}
 	}
 	return func(gvk schema.GroupVersionKind) (string, bool, error) {

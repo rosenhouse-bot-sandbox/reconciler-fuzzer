@@ -419,6 +419,21 @@ func TestLatest(t *testing.T) {
 	}
 }
 
+func TestLatestAt(t *testing.T) {
+	var b tt.Builder
+	b.At(1*s).Add(tt.Version(widgetA, "u", "1", nil)).
+		At(2*s).Add(tt.Version(widgetA, "u", "2", nil), tt.Version(widgetB, "w", "5", nil))
+	ix := b.Index()
+	for at, want := range map[time.Duration]string{999 * time.Millisecond: "", 1 * s: "1", 1999 * time.Millisecond: "1", 2 * s: "2"} {
+		if v, _ := ix.LatestAt(widgetA, at); v.RV != want {
+			t.Errorf("LatestAt(a, %v) = version %q, want %q", at, v.RV, want)
+		}
+	}
+	if v, found := ix.LatestAt(cm, 2*s); found {
+		t.Errorf("LatestAt(c) = %+v, want none", v)
+	}
+}
+
 // A fake's partial write carries no resourceVersion, so the observer's
 // next version says whether it changed anything.
 func TestChangedJudgesAFakesWriteWithNoRVByTheObserver(t *testing.T) {

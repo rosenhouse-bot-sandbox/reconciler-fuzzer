@@ -20,7 +20,7 @@ func Restore(ix *trace.Index, s Spec) []Finding {
 	v := newView(ix, s)
 	var findings []Finding
 	for n, step := range v.steps {
-		if n == 0 || v.steps[n-1].Step != step.Step-1 || v.has(step.Step, "create", "update", "delete", "changeFixture") {
+		if n == 0 || v.steps[n-1].Step != step.Step-1 || v.has(step.Step, "create", "update", "delete", "changeFixture", "createFixture") {
 			continue
 		}
 		from, to := v.steps[n-1].ConfirmEnd, step.ConfirmEnd

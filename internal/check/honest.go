@@ -13,18 +13,16 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 )
 
-// Honest fails a CR that reports Ready on a dependency the controller did
-// not see ready, or, with track, that stays Ready too long after the
-// controller saw a dependency not ready. DESIGN.md §12 defines it.
+// Honest fails a CR that reports Ready on a dependency, or on an object it
+// names, that the controller did not see ready, or, with track, that stays
+// Ready too long after the controller saw one not ready. DESIGN.md §12
+// defines it.
 func Honest(ix *trace.Index, s Spec) []Finding {
 	var deps []Model
 	for _, m := range s.Models {
 		if m.Dependency != nil {
 			deps = append(deps, m)
 		}
-	}
-	if len(deps) == 0 {
-		return nil
 	}
 	h := &honesty{ix: ix, s: s, w: owner.New(ix, s.Owners), steps: ix.Steps(), deletes: controllerDeletes(ix), found: map[findingKey]*Finding{}}
 	order, crs := crVersions(ix, s)
@@ -34,6 +32,7 @@ func Honest(ix *trace.Index, s Spec) []Finding {
 		h.judgeTriggers(uid, p, versions, deps)
 		if events := ix.Events(); len(events) > 0 {
 			h.judgeTrack(uid, p, versions, deps, events[len(events)-1].At)
+			h.judgeReferenceTrack(uid, p, versions, events[len(events)-1].At)
 		}
 	}
 	keys := slices.SortedFunc(maps.Keys(h.found), func(a, b findingKey) int {
@@ -79,6 +78,8 @@ func crVersions(ix *trace.Index, s Spec) ([]string, map[string][]trace.Event) {
 // judgeTriggers judges each version of the CR, of p's kind, that the
 // controller wrote that becomes ready, or raises observedGeneration while
 // ready. Only a CR of the first entry's kind needs a required dependency.
+// The version fails on an object it names that the controller's sight holds
+// back, or that the controller never looked at while it lived.
 func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, deps []Model) {
 	requires := p.Kind == h.s.Primaries[0].Kind
 	wasReady, wasObserved := false, 0.0
@@ -103,6 +104,17 @@ func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, d
 					h.add(t0, beforeSeeing, kind(dep.Ref), fmt.Sprintf("%s: %s %s", crName(h.w, uid), describe(dep.Ref), why))
 				}
 			}
+		}
+		for _, n := range h.s.names(v.Ref, body) {
+			g := h.s.sight(h.ix, n, t0)
+			if g.unknown || !g.holds(h.s.References[n.ref].Required) && (g.looked || g.missing) {
+				continue
+			}
+			summary := beforeSeeing
+			if g.missing {
+				summary = noDependency
+			}
+			h.add(t0, summary, kind(n.object), fmt.Sprintf("%s: %s %s", crName(h.w, uid), describe(n.object), g.describe()))
 		}
 	}
 }
@@ -251,7 +263,7 @@ func (h *honesty) judgeTrack(uid string, p Primary, versions []trace.Event, deps
 			for _, seen := range h.ix.Seen(trace.Controller, dep.UID) {
 				at := seen.At + d
 				if at > end || h.ready(seen, m) || seen.Seen.Deleted || h.seenDeleting(seen) ||
-					!h.streak(dep, m, seen.At, at) || !readyThrough(p, versions, seen.At, at) || h.excused(uid, seen.At, at) ||
+					!h.streak(dep, m, seen.At, at) || !through(versions, seen.At, at, p.ready) || h.excused(uid, seen.At, at) ||
 					h.ix.Opaque(trace.Controller, dep.Ref, seen.At, at) {
 					continue
 				}
@@ -302,18 +314,48 @@ func (h *honesty) streak(dep owner.Instance, m Model, from, to time.Duration) bo
 	})
 }
 
-// readyThrough reports whether the CR's version at from, and every later
-// one until to, satisfies p's ready.
-func readyThrough(p Primary, versions []trace.Event, from, to time.Duration) bool {
+// judgeReferenceTrack fails a CR, of p's kind, that stays ready, naming an
+// object, for its reference's track after a look at the object that held
+// the CR back, while every later look held it back too.
+func (h *honesty) judgeReferenceTrack(uid string, p Primary, versions []trace.Event, end time.Duration) {
+	cr := versions[0].Version.Ref
+	var objects []named
+	for _, e := range versions {
+		for _, n := range h.s.names(cr, decode(e.Version.Body)) {
+			if h.s.References[n.ref].Track > 0 && !slices.Contains(objects, n) {
+				objects = append(objects, n)
+			}
+		}
+	}
+	for _, n := range objects {
+		r := h.s.References[n.ref]
+		looks := h.ix.Looks(trace.Controller, n.object)
+		holds := func(look trace.Event) bool { return h.s.shown(h.ix, n, look).holds(r.Required) }
+		readyNaming := func(body map[string]any) bool { return p.ready(body) && slices.Contains(h.s.names(cr, body), n) }
+		for i, look := range looks {
+			at := look.At + r.Track
+			if at > end || !holds(look) || slices.ContainsFunc(looks[i+1:], func(e trace.Event) bool { return e.At <= at && !holds(e) }) ||
+				!through(versions, look.At, at, readyNaming) || h.excused(uid, look.At, at) || h.ix.Opaque(trace.Controller, n.object, look.At, at) {
+				continue
+			}
+			h.add(at, stayedReady, kind(n.object), fmt.Sprintf("%s: %s %s at %v", crName(h.w, uid), describe(n.object), h.s.shown(h.ix, n, look).describe(), look.At))
+			break
+		}
+	}
+}
+
+// through reports whether ok accepts the CR's version at from, and every
+// later one until to. A deleted version fails.
+func through(versions []trace.Event, from, to time.Duration, ok func(body map[string]any) bool) bool {
 	current := false
 	for _, e := range versions {
 		if e.At > to {
 			break
 		}
-		ok := !e.Version.Deleted && satisfies(p.Ready, decode(e.Version.Body))
+		accepted := !e.Version.Deleted && ok(decode(e.Version.Body))
 		if e.At <= from {
-			current = ok
-		} else if !ok {
+			current = accepted
+		} else if !accepted {
 			return false
 		}
 	}
