@@ -15,11 +15,12 @@ import (
 const (
 	clusterConfig   = "cluster/config.yaml"
 	databaseConfig  = "database/config.yaml"
+	protectConfig   = "protect/config.yaml"
 	uninstallConfig = "uninstall/config.yaml"
 )
 
 // configs are the configs whose every plan B0 passes with no notes.
-var configs = []string{"config.yaml", databaseConfig}
+var configs = []string{"config.yaml", databaseConfig, protectConfig}
 
 type gateRow struct {
 	plan    string

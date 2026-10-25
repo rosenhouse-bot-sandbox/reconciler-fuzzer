@@ -158,7 +158,9 @@ terminating namespace. `model.NewStage` makes a stage model per `models:`
 entry, named `trace.ModelCaller` of its kind, which writes `Ready` True and the
 `status:` fields `after` a generation's first version. `stuck` writes matching
 objects `Ready` False and the `stuckStatus:` fields instead, and `slowDelete`
-adds a finalizer. Either's end writes `Ready` True and the `status:` fields.
+adds its own finalizer. Either's end writes `Ready` True and the `status:`
+fields. A stage model keeps its `finalizer:` on each live object, and removes it
+`finalizer.after` past the first deleting version. Each hold is pending work.
 
 **Fake services.** `fake.New` makes a System of a `systems:` entry with a
 `process`. Start runs it in the config's directory with
@@ -423,18 +425,16 @@ in-process, rejects invalid ones. `Plan(seed)` draws 3 to 8 steps of 1 to 4
 actions and at most one fault each. A create draws its kind uniformly from
 `primaries`, and each CR takes its kind's `values`. Step 0 creates slot `a`.
 About 30% of steps hold one `restart`, `kill` or `damage`, so Restore has steps
-to judge. About 30% of multi-action steps are bursts within 50 ms: two updates
-of a CR, or a delete and a create of its slot and kind. A kube fault draws its
-request from what `launch.rbac` grants, creates weighted most (§17, entry 20).
-2 of 7 kube fault draws (of 9 with `models:`, 2 of which are `stuck` or
-`slowDelete`) hold a kind `launch.rbac` lets the controller watch, the listed
-and `owns` kinds weighted most, with the traffic `holdTraffic` documents. With
-fakes, half of the fault draws and of the `damage` draws name a fake: a request
-fault by verb alone, or a model fault on a `crud` fake, and a target by system
-alone. A read-only fake takes no damage and only read faults. `changeFixture`
-draws kube and system fixtures alike. `damage` only deletes. About 1 in 4 CR
-deletes is `Foreground`. A fault period lasts 0.5 s to `2 × stable`, plus the
-longest `track` for a model fault. `generate.go` documents the weights.
+to judge. A kube fault draws its request from what `launch.rbac` grants,
+creates weighted most (§17, entry 20). 2 of 7 kube fault draws (of 9 with
+`models:`, 2 of which are `stuck` or `slowDelete`) hold a kind `launch.rbac`
+lets the controller watch, the listed and `owns` kinds weighted most, with the
+traffic `holdTraffic` documents. With fakes, half of the fault draws and of the
+`damage` draws name a fake: a request fault by verb alone, or a model fault on
+a `crud` fake, and a target by system alone. A read-only fake takes no damage
+and only read faults. `changeFixture` draws kube and system fixtures alike.
+`damage` only deletes. `generate.go` documents the weights, bursts and fault
+periods.
 
 **Hunt.** `hunt.Hunt` runs each seed, keeps runs with a new signature, replays
 each 5 times and shrinks it (`shrink.go`), trying at most 16 candidates.
@@ -463,9 +463,10 @@ owns one bucket in the `crudfake` system `cloud`; its bugs start at B30, and
 `halted/` runs `--halt` under `primary.halted`. In `targets/toy-fleet`, a
 Cluster owns modelled third-party Volumes, a Database names a Cluster, and a
 User a Database. Its bugs start at B100. `config.yaml` lists all three kinds.
-The generated test fuzzes `cluster/`, which lists Clusters alone, and
-`database/`, which lists Databases on a fixture Cluster. `uninstall/` makes
-the Database CRD a fixture, which a plan may delete.
+The generated test fuzzes `cluster/`, which lists Clusters alone, `database/`,
+which lists Databases on a fixture Cluster, and `protect/`, whose Volume model
+holds each Volume's deletion with its finalizer. `uninstall/` makes the
+Database CRD a fixture, which a plan may delete.
 
 Each config's `plans/` holds its gated bugs' and B0's plans. A toy's
 `gate_envtest_test.go` runs `gate_test.go`'s rows, and its `bugmatrix_test.go`
