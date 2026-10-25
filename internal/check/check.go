@@ -221,7 +221,8 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 }
 
 // configReferences compiles c's references. The run event's references must
-// name each To kind, since the listeners recorded seens of no other kind.
+// name each kube To kind and each fake To system, since the listeners
+// recorded seens of no other.
 func configReferences(c *config.Config, run trace.Run) ([]Reference, error) {
 	for i, r := range c.References {
 		if !slices.ContainsFunc(run.References, func(recorded trace.Reference) bool {
@@ -253,8 +254,8 @@ func compileReferences(references []trace.Reference) ([]Reference, error) {
 		if err != nil {
 			return nil, fmt.Errorf("ready of references[%d]: %w", i, err)
 		}
-		compiled = append(compiled, Reference{From: r.From, To: trace.Ref{System: cmp.Or(r.System, "kube"), Group: r.To.Group, Resource: r.To.Resource},
-			Namespaced: r.Namespaced, Name: r.Name, Namespace: r.Namespace, Ready: ready, Required: r.Required, Track: r.Track})
+		compiled = append(compiled, Reference{From: r.From, To: r.ToRef(), Namespaced: r.Namespaced, Name: r.Name, Namespace: r.Namespace,
+			Ready: ready, Required: r.Required, Track: r.Track})
 	}
 	return compiled, nil
 }

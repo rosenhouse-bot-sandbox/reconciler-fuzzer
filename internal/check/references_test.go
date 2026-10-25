@@ -428,6 +428,9 @@ func TestSettleExcusesACRNotReadyWhileAReferenceHoldsItBack(t *testing.T) {
 			changed["type"] = "Opaque"
 			r.See(ctl, pw).Update(trace.Harness, pw, changed)
 		}, true},
+		"missing until after t": {secretRef(), nil, func(r *tt.Script) {
+			r.At(r.Now+time.Minute, tt.Version(pw, "u-pw", "99", secret(true)))
+		}, true},
 		"seen missing, then created ready": {secretRef(), nil, func(r *tt.Script) {
 			r.Call(ctl, "get", pw, 404).Create(trace.Harness, pw, secret(true))
 		}, false},

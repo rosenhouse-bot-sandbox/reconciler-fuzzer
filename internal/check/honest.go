@@ -107,7 +107,7 @@ func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, d
 		}
 		for _, n := range h.s.names(v.Ref, body) {
 			g := h.s.sight(h.ix, n, t0)
-			if g.unknown || !g.holds(h.s.References[n.ref].Required) && (g.looked || g.missing) {
+			if g.unknown || (g.looked || g.missing) && !g.holds(h.s.References[n.ref].Required) {
 				continue
 			}
 			summary := beforeSeeing

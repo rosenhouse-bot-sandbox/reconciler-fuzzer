@@ -3,6 +3,7 @@
 package trace
 
 import (
+	"cmp"
 	"encoding/json"
 	"time"
 )
@@ -109,6 +110,11 @@ type Reference struct {
 	Ready      string        `json:"ready"`
 	Required   bool          `json:"required,omitempty"`
 	Track      time.Duration `json:"track,omitempty"`
+}
+
+// ToRef names r's To kind by a ref with no namespace or name.
+func (r Reference) ToRef() Ref {
+	return Ref{System: cmp.Or(r.System, "kube"), Group: r.To.Group, Resource: r.To.Resource}
 }
 
 // Primary is one primaries entry as the checks need it. Ready, Retain and

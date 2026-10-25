@@ -212,7 +212,7 @@ func (ix *Index) addCall(e Event) {
 	case c.Unknown():
 	case c.Verb == "get" && c.Subresource == "" && c.Status == 404:
 		addBy(ix.looks, c.Caller, c.Ref, e)
-	case c.Verb == "list" && !c.Partial && c.Ref.System == "kube" && c.Status >= 200 && c.Status <= 299:
+	case c.Verb == "list" && c.Method != "HEAD" && !c.Partial && c.Ref.System == "kube" && c.Status >= 200 && c.Status <= 299:
 		addBy(ix.lists, c.Caller, kindOf(c.Ref), e)
 	}
 	if c.ResultRV == "" {
@@ -419,9 +419,10 @@ func (ix *Index) Seen(caller Caller, uid string) []Event { return ix.seen[caller
 // of its Seen events of ref that is not opaque, a deleted one showing ref
 // missing, and each of its calls that showed ref missing. Such a call is a
 // get of ref without a subresource that answered 404, or a 2xx kube list,
-// not Partial, that covers ref, of a kind that a run event reference names
-// as To, with no Seen of ref, opaque or not, outside a watch between its
-// send and its Call event. No call of unknown outcome counts.
+// not Partial nor a HEAD, that covers ref, of a kind that a run event
+// reference names as To, with no Seen of ref, opaque or not, outside a
+// watch between its send and its Call event. No call of unknown outcome
+// counts.
 func (ix *Index) Looks(caller Caller, ref Ref) []Event {
 	looks := slices.Clone(ix.looks[caller][ref])
 	if !ix.referenced(ref) {
@@ -443,9 +444,7 @@ func kindOf(ref Ref) Ref { return Ref{System: ref.System, Group: ref.Group, Reso
 // names as To.
 func (ix *Index) referenced(ref Ref) bool {
 	run, _ := ix.Run()
-	return slices.ContainsFunc(run.References, func(r Reference) bool {
-		return cmp.Or(r.System, "kube") == ref.System && r.To.Group == ref.Group && r.To.Resource == ref.Resource
-	})
+	return slices.ContainsFunc(run.References, func(r Reference) bool { return r.ToRef() == kindOf(ref) })
 }
 
 // shownDuring reports whether a response outside a watch showed caller ref,

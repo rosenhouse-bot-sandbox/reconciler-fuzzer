@@ -43,6 +43,7 @@ func TestLooks(t *testing.T) {
 		At(5*time.Second).Add(list(secrets, func(c *trace.Call) { c.Partial = true }),
 		list(tt.Ref("configmaps", "ns", ""), nil), list(tt.Ref("other/secrets", "ns", ""), nil), list(tt.Ref("secrets", "elsewhere", ""), nil),
 		list(secrets, func(c *trace.Call) { c.Injected = trace.DropResponse }), list(secrets, func(c *trace.Call) { c.Status, c.Injected = 0, "drop" }),
+		list(secrets, func(c *trace.Call) { c.Method = "HEAD" }),
 		call(trace.Controller, "get", pw, 404, func(c *trace.Call) { c.Injected = trace.KillAfter }),
 		call(trace.Controller, "get", pw, 404, func(c *trace.Call) { c.Subresource = "status" }),
 		call(trace.Controller, "delete", pw, 404, nil), call(trace.Controller, "get", pw, 500, nil),
