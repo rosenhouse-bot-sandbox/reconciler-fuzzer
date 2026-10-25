@@ -177,7 +177,8 @@ func TestConvergeNotesADeletionTheStopDidNotWaitFor(t *testing.T) {
 	r := newRun(2)
 	r.Begin()
 	r.CreateCR("a", widgetA)
-	r.Ready(widgetA).EndFaults().Settle()
+	r.CreateCR("b", widgetB)
+	r.Ready(widgetA).Ready(widgetB).EndFaults().Settle()
 	r.Begin().Update(trace.Harness, widgetA, terminating("a")).Stop().EndFaults().Settle()
 	findings, notes := convergeOf(t, r)
 	if len(findings) != 0 {
