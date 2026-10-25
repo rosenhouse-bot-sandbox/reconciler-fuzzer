@@ -44,7 +44,8 @@ type Generator struct {
 	// fixtures are those whose strings changeFixture may set.
 	fixtures []fixture
 	// referenced are the kube fixtures of a reference's to kind other than
-	// Namespaces, which changeFixture deletes and createFixture makes again.
+	// core Namespaces, which changeFixture deletes and createFixture makes
+	// again.
 	referenced []plan.Target
 	// watchable are the resources the RBAC lets the controller watch,
 	// which holdWatch faults hold. A kind appears once per unit of its

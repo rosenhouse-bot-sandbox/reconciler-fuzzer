@@ -449,9 +449,11 @@ defaults to that of a listed kind, a model or a fake. `name` and `namespace`
 are field paths as in `values.mutate`; `[*]` names a field of each list item.
 An empty or absent value names nothing. `config.Load` reads each kind's scope
 from `crds` and a table of core kinds. It refuses a `from` that `primaries`
-does not list, a `to` of unknown scope, without `ready` or that the `from`
-entry `owns`, and a namespaced `to` of a cluster-scoped `from` without
-`namespace` (`references.go`).
+does not list, a `from` or `to` at another version than the config declares,
+a `to` of unknown scope, without `ready` or that the `from` entry `owns`, a
+`name` in the `from` entry's `values.distinct`, a `namespace` that does not
+read with `[*]` exactly the lists it shares with `name`, and a namespaced `to`
+of a cluster-scoped `from` without `namespace` (`references.go`).
 
 ## 14. Generation, replay and shrinking
 

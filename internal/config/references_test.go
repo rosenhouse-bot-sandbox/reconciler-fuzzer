@@ -33,7 +33,8 @@ primaries:
 `
 
 // writeReferences writes referencesHead, then rest, with the CRDs of
-// Cluster and Database in crd.yaml and of User, Tenant and Volume in crds/.
+// Cluster and Database in crd.yaml and of User, Tenant, Volume and Gadget in
+// crds/.
 func writeReferences(t *testing.T, rest string) string {
 	t.Helper()
 	path := writeConfig(t, referencesHead+rest)
@@ -43,7 +44,7 @@ func writeReferences(t *testing.T, rest string) string {
 	}
 	for file, content := range map[string]string{
 		"crd.yaml":                crd("Cluster", "Namespaced") + "---\n" + crd("Database", "Namespaced"),
-		"crds/more.yaml":          crd("User", "Namespaced") + "---\n" + crd("Tenant", "Cluster") + "---\n" + crd("Volume", "Namespaced"),
+		"crds/more.yaml":          crd("User", "Namespaced") + "---\n" + crd("Tenant", "Cluster") + "---\n" + crd("Volume", "Namespaced") + "---\n" + crd("Gadget", "Namespaced"),
 		"crds/kustomization.yaml": "resources: [more.yaml]\n",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o644); err != nil {
@@ -78,6 +79,7 @@ func TestReferencesLoad(t *testing.T) {
   - {from: toy/v1/Tenant, to: v1/Secret, name: spec.secretRef.name, namespace: spec.secretRef.namespace, ready: "true"}
   - {from: toy/v1/User, to: "cloud:buckets", name: spec.bucket}
   - {from: toy/v1/Tenant, to: v1/Namespace, name: spec.namespace, ready: "true"}
+  - {from: toy/v1/User, to: toy/v2/Gadget, name: spec.gadget, ready: "true"}
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -89,6 +91,7 @@ func TestReferencesLoad(t *testing.T) {
 		{From: toyKind("toy", "Tenant"), To: toyKind("", "Secret"), Namespaced: true, Name: "spec.secretRef.name", Namespace: "spec.secretRef.namespace", Ready: "true", Required: true},
 		{From: toyKind("toy", "User"), System: "cloud", Collection: "buckets", Name: "spec.bucket", Ready: "self.state == 'ready'", Required: true},
 		{From: toyKind("toy", "Tenant"), To: toyKind("", "Namespace"), Name: "spec.namespace", Ready: "true", Required: true},
+		{From: toyKind("toy", "User"), To: schema.GroupVersionKind{Group: "toy", Version: "v2", Kind: "Gadget"}, Namespaced: true, Name: "spec.gadget", Ready: "true", Required: true},
 	}
 	if !reflect.DeepEqual(c.References, want) {
 		t.Errorf("References =\n%+v\nwant\n%+v", c.References, want)
@@ -100,8 +103,10 @@ func TestReferencesRefusals(t *testing.T) {
 		"no from":                                    {"{to: v1/Secret, name: spec.s, ready: \"true\"}", "references[0].from is required"},
 		"a malformed from":                           {"{from: Database, to: v1/Secret, name: spec.s, ready: \"true\"}", "references[0].from"},
 		"an unlisted from":                           {"{from: toy/v1/Gadget, to: v1/Secret, name: spec.s, ready: \"true\"}", "references[0].from"},
+		"a listed kind's name in another group":      {"{from: other/v1/Database, to: v1/Secret, name: spec.s, ready: \"true\"}", "references[0].from other/v1/Database: primaries does not list this kind"},
 		"a from at another version":                  {"{from: toy/v2/Database, to: v1/Secret, name: spec.s, ready: \"true\"}", "references[0].from toy/v2/Database: primaries lists this kind at version v1"},
-		"a listed to at another version":             {"{from: toy/v1/Database, to: toy/v9/Cluster, name: spec.clusterRef}", "references[0].to toy/v9/Cluster: primaries lists this kind at version v1"},
+		"a listed to at another version":             {"{from: toy/v1/Database, to: toy/v9/Cluster, name: spec.clusterRef}", "references[0].to toy/v9/Cluster: the config declares this kind at version v1"},
+		"a model's to at another version":            {"{from: toy/v1/Database, to: toy/v2/Volume, name: spec.volume}", "references[0].to toy/v2/Volume: the config declares this kind at version v1"},
 		"no to":                                      {"{from: toy/v1/Database, name: spec.s, ready: \"true\"}", "references[0].to is required"},
 		"a malformed to":                             {"{from: toy/v1/Database, to: Secret, name: spec.s, ready: \"true\"}", "references[0].to"},
 		"a to of unknown scope":                      {"{from: toy/v1/Database, to: example.com/v1/Widget, name: spec.w, ready: \"true\"}", "references[0].to"},
@@ -158,6 +163,17 @@ func TestACRDWithoutAScopeIsNamespaced(t *testing.T) {
 	}
 	if _, err := config.Load(path); err != nil {
 		t.Errorf("Load = %v, want a CRD without a scope read as namespaced, as Kubernetes defaulted it.", err)
+	}
+}
+
+func TestOnlyCRDsGiveScopes(t *testing.T) {
+	path := writeReferences(t, "references: [{from: toy/v1/Database, to: toy/v1/Widget, name: spec.widget, ready: \"true\"}]\n")
+	xrd := strings.Replace(crd("Widget", "Namespaced"), "kind: CustomResourceDefinition", "kind: CompositeResourceDefinition", 1)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "crds", "xrd.yaml"), []byte(xrd), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err == nil || !strings.Contains(err.Error(), "references[0].to toy/v1/Widget: neither crds nor the core kinds give its scope") {
+		t.Errorf("Load = %v, want toy/v1/Widget of unknown scope, since only a CompositeResourceDefinition describes it.", err)
 	}
 }
 

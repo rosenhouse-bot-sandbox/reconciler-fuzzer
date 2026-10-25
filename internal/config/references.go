@@ -14,8 +14,8 @@ import (
 // Reference is one references entry: a field by which a CR of From names an
 // object it does not own. Load reads each kind's scope from the CRDs, or
 // else from a table of core kinds. It refuses an entry whose From is not
-// listed, whose From or To primaries lists at another version, whose To has
-// no known scope or no Ready, whose To the From entry's owns names, or
+// listed, whose From or To the config declares at another version, whose To
+// has no known scope or no Ready, whose To the From entry's owns names, or
 // whose Name the From entry's values.distinct lists; a Namespace on a
 // cluster-scoped or fake To; a namespaced To of a cluster-scoped From
 // without a Namespace; a Namespace that does not read with [*] each list it
@@ -90,11 +90,11 @@ func (c *Config) reference(key string, d declaredReference, scopes map[schema.Gr
 		return Reference{}, fmt.Errorf("%s.from %q: %w", key, d.From, err)
 	}
 	from := c.listed(r.From.GroupKind())
-	if from < 0 {
+	switch {
+	case from < 0:
 		return Reference{}, fmt.Errorf("%s.from %s: primaries does not list this kind", key, d.From)
-	}
-	if err := c.atListedVersion(r.From); err != nil {
-		return Reference{}, fmt.Errorf("%s.from %s: %w", key, d.From, err)
+	case c.Primaries[from].Kind != r.From:
+		return Reference{}, fmt.Errorf("%s.from %s: primaries lists this kind at version %s", key, d.From, c.Primaries[from].Kind.Version)
 	}
 
 	var fake System
@@ -110,7 +110,7 @@ func (c *Config) reference(key string, d declaredReference, scopes map[schema.Gr
 		if r.To, err = parseGVK(d.To); err != nil {
 			return Reference{}, fmt.Errorf("%s.to %q: %w", key, d.To, err)
 		}
-		if err := c.atListedVersion(r.To); err != nil {
+		if err := c.atDeclaredVersion(r.To); err != nil {
 			return Reference{}, fmt.Errorf("%s.to %s: %w", key, d.To, err)
 		}
 		var known bool
@@ -181,13 +181,23 @@ func checkNamespace(key string, r Reference, name []pathSegment, scopes map[sche
 
 // listed is the index of kind's primaries entry, or -1.
 func (c *Config) listed(kind schema.GroupKind) int {
-	return slices.Index(c.ListedKinds(), kind)
+	return slices.IndexFunc(c.Primaries, func(p Primary) bool { return p.Kind.GroupKind() == kind })
 }
 
-// atListedVersion refuses a kind that primaries lists at another version.
-func (c *Config) atListedVersion(kind schema.GroupVersionKind) error {
-	if i := c.listed(kind.GroupKind()); i >= 0 && c.Primaries[i].Kind.Version != kind.Version {
-		return fmt.Errorf("primaries lists this kind at version %s", c.Primaries[i].Kind.Version)
+// atDeclaredVersion refuses a kind that primaries or models declare at
+// another version.
+func (c *Config) atDeclaredVersion(kind schema.GroupVersionKind) error {
+	var declared []schema.GroupVersionKind
+	for _, p := range c.Primaries {
+		declared = append(declared, p.Kind)
+	}
+	for _, m := range c.Models {
+		declared = append(declared, m.Kind)
+	}
+	for _, d := range declared {
+		if d.GroupKind() == kind.GroupKind() && d.Version != kind.Version {
+			return fmt.Errorf("the config declares this kind at version %s", d.Version)
+		}
 	}
 	return nil
 }
@@ -238,9 +248,9 @@ func scopeOf(kind schema.GroupKind, crds map[schema.GroupKind]bool) (namespaced,
 	return namespaced, known
 }
 
-// crdScopes says whether each kind that the CRDs describe is namespaced. A
-// CRD without a scope is namespaced, as Kubernetes defaulted it before
-// apiextensions.k8s.io/v1.
+// crdScopes says whether each kind that a CustomResourceDefinition in paths
+// describes is namespaced. A CRD without a scope is namespaced, as
+// Kubernetes defaulted it before apiextensions.k8s.io/v1.
 func crdScopes(paths []string) (map[schema.GroupKind]bool, error) {
 	documents, err := ReadManifests(paths)
 	if err != nil {
@@ -248,6 +258,9 @@ func crdScopes(paths []string) (map[schema.GroupKind]bool, error) {
 	}
 	scopes := map[schema.GroupKind]bool{}
 	for _, document := range documents {
+		if document["kind"] != "CustomResourceDefinition" {
+			continue
+		}
 		spec, _ := document["spec"].(map[string]any)
 		names, _ := spec["names"].(map[string]any)
 		group, _ := spec["group"].(string)

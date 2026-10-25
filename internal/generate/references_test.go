@@ -291,11 +291,9 @@ func TestReferencedFixturesAreTheKubeFixturesOfToKinds(t *testing.T) {
 	}
 }
 
-// TestANamespaceIsACandidateThatNoPlanDeletes adds references to a
+// TestACoreNamespaceIsACandidateButNotReferenced adds references to a
 // Namespace fixture and to a fixture of another group's Namespace kind.
-// envtest runs no namespace controller, so a deleted Namespace would never
-// go.
-func TestANamespaceIsACandidateThatNoPlanDeletes(t *testing.T) {
+func TestACoreNamespaceIsACandidateButNotReferenced(t *testing.T) {
 	cfg := loadConfig(t, linksConfig)
 	for _, c := range []struct{ apiVersion, name string }{{"v1", "spec.namespace"}, {"example.com/v1", "spec.otherNamespace"}} {
 		fixture := filepath.Join(t.TempDir(), "namespace.yaml")
