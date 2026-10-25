@@ -166,9 +166,8 @@ func TestHonestPassesAReadyWriteThatTheControllerCorrectsWithinStable(t *testing
 // The CR's next reconcile can read the CR from a cache that lacks the
 // ready write, so that its write conflicts.
 func TestHonestPassesACorrectionThatAFailedWriteOfTheCRDelays(t *testing.T) {
-	dropped := tt.Call(ctl, "update", databaseB, 200, "")
+	dropped := slowCall("update", databaseB, 200)
 	dropped.Call.Injected = trace.DropResponse
-	conflict := tt.Call(ctl, "update", databaseB, 409, "")
 	for name, c := range map[string]struct {
 		call trace.Event
 		// sent is how long after the ready write the call is sent. after
@@ -176,19 +175,96 @@ func TestHonestPassesACorrectionThatAFailedWriteOfTheCRDelays(t *testing.T) {
 		sent, after time.Duration
 		fails       bool
 	}{
-		"a conflict":                         {conflict, 0, 0, false},
+		"a conflict":                         {slowCall("update", databaseB, 409), 0, 0, false},
+		"a server error":                     {slowCall("update", databaseB, 500), 0, 0, false},
+		"a conflicting patch":                {slowCall("patch", databaseB, 409), 0, 0, false},
 		"an unknown outcome":                 {dropped, 0, 0, false},
-		"a success":                          {tt.Call(ctl, "update", databaseB, 200, ""), 0, 0, true},
-		"a conflict sent too late":           {conflict, 1500 * ms, 0, true},
-		"a conflict, then a late correction": {conflict, 0, 1100 * ms, true},
-		"a failed get":                       {tt.Call(ctl, "get", databaseB, 500, ""), 0, 0, true},
-		"a conflict of another object":       {tt.Call(ctl, "update", databaseC, 409, ""), 0, 0, true},
+		"a success":                          {slowCall("update", databaseB, 200), 0, 0, true},
+		"a conflict sent too late":           {slowCall("update", databaseB, 409), 1500 * ms, 0, true},
+		"a conflict, then a late correction": {slowCall("update", databaseB, 409), 0, 1100 * ms, true},
+		"a failed get":                       {slowCall("get", databaseB, 500), 0, 0, true},
+		"a conflict of another object":       {slowCall("update", databaseC, 409), 0, 0, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := secretRun(secretRef(), secret(true))
 			deletedSeen(r.See(ctl, pw))
-			c.call.Call.Latency = 1 * s
 			readyB(r).Tick(c.sent+1*s).Add(c.call).Tick(c.after).Update(ctl, databaseB, database(false, "pw"))
+			if findings := honest(t, r); c.fails {
+				requireFinding(t, findings, "Honest", 0, noDependency, "kube/secrets", "slot b: secrets ns/pw seen missing")
+			} else {
+				requireNone(t, findings)
+			}
+		})
+	}
+}
+
+// slowCall is the controller's call on ref that changes nothing and returns
+// 1s after it is sent.
+func slowCall(verb string, ref trace.Ref, status int) trace.Event {
+	e := tt.Call(ctl, verb, ref, status, "")
+	e.Call.Latency = 1 * s
+	return e
+}
+
+func TestHonestPassesACorrectionThatFailedWritesInARowDelay(t *testing.T) {
+	r := secretRun(secretRef(), secret(true))
+	deletedSeen(r.See(ctl, pw))
+	readyB(r)
+	for range 2 {
+		r.Tick(1 * s).Add(slowCall("update", databaseB, 409))
+	}
+	r.Tick(900*ms).Update(ctl, databaseB, database(false, "pw"))
+	requireNone(t, honest(t, r))
+}
+
+func TestHonestPassesACorrectionSentInTimeThatReturnsLate(t *testing.T) {
+	r := secretRun(secretRef(), secret(true))
+	deletedSeen(r.See(ctl, pw))
+	readyB(r).Tick(900*ms).UpdateInFlight(ctl, databaseB, database(false, "pw"), 1*s)
+	requireNone(t, honest(t, r))
+}
+
+// A killed controller restarts only once the fault period ends.
+func TestHonestGivesARestartedControllerStableToCorrectAReadyWrite(t *testing.T) {
+	for name, c := range map[string]struct {
+		// exit is how long after the ready write the controller exits.
+		// after is how long after its restart, 3s later, it corrects.
+		exit, after time.Duration
+		fails       bool
+	}{
+		"an exit in time":                {0, 0, false},
+		"an exit too late":               {1 * s, 0, true},
+		"a late correction once started": {0, 1100 * ms, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := secretRun(secretRef(), secret(true))
+			deletedSeen(r.See(ctl, pw))
+			readyB(r).Tick(c.exit).Add(tt.Exit("signal: killed", true, "")).Tick(3*s).Add(tt.Start(2)).
+				Tick(c.after).Update(ctl, databaseB, database(false, "pw"))
+			if findings := honest(t, r); c.fails {
+				requireFinding(t, findings, "Honest", 0, noDependency, "kube/secrets", "slot b: secrets ns/pw seen missing")
+			} else {
+				requireNone(t, findings)
+			}
+		})
+	}
+}
+
+// A reconcile that read its cache before the look may wait on a delayed
+// request before it writes ready.
+func TestHonestExcusesACorrectedReadyWriteOnlyWithinTwiceStableOfTheLook(t *testing.T) {
+	for name, c := range map[string]struct {
+		// after is how long after the look the ready write is sent.
+		after time.Duration
+		fails bool
+	}{
+		"at twice stable":    {2 * s, false},
+		"after twice stable": {2*s + tt.Tick, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := secretRun(secretRef(), secret(true))
+			deletedSeen(r.See(ctl, pw))
+			readyB(r.Tick(c.after-tt.Tick)).Update(ctl, databaseB, database(false, "pw"))
 			if findings := honest(t, r); c.fails {
 				requireFinding(t, findings, "Honest", 0, noDependency, "kube/secrets", "slot b: secrets ns/pw seen missing")
 			} else {

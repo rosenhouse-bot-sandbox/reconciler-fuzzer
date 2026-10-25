@@ -231,6 +231,16 @@ func TestClause5LapsesAfterTheLongestPollOfTheChangedSystems(t *testing.T) {
 	}
 }
 
+func TestFirstSettledIsAFakeCallPlusItsPoll(t *testing.T) {
+	sp := spec
+	sp.Polls = map[string]time.Duration{"cloud": 4 * s}
+	b := settledAt3s()
+	b.At(1100*ms).Add(tt.Call(ctl, "get", bucketA, 404, ""), tt.Call(ctl, "get", bucketA, 404, ""), tt.Call(ctl, "get", bucketA, 404, ""))
+	if got, ok := check.FirstSettled(b.Index(), 4*s, 20*s, sp); !ok || got != 5100*ms {
+		t.Fatalf("FirstSettled = %v, %v; want 5.1s", got, ok)
+	}
+}
+
 func TestClause5LooksAtABucket(t *testing.T) {
 	b := fakeDamagedAt1200ms(bucketA)
 	b.At(1500 * ms).Add(tt.Call(ctl, "get", bucketA, 404, ""))

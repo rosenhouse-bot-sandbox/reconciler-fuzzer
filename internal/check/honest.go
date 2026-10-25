@@ -83,7 +83,8 @@ func crVersions(ix *trace.Index, s Spec) ([]string, map[string][]trace.Event) {
 // ready. Only a CR of the first entry's kind needs a required dependency.
 // The version fails on an object it names that the controller's sight holds
 // back, or that the controller never looked at while it lived, unless the
-// controller had looked at the object and corrected the version in time.
+// controller wrote it within twice stable of a look at the object and
+// corrected it in time.
 func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, deps []Model) {
 	requires := p.Kind == h.s.Primaries[0].Kind
 	wasReady, wasObserved := false, 0.0
@@ -111,7 +112,7 @@ func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, d
 		}
 		for _, n := range h.s.names(v.Ref, body) {
 			g := h.s.sight(h.ix, n, t0)
-			if g.allowsReady(h.s.References[n.ref].Required) || g.looked && h.corrected(p, call, versions[i+1:], n) {
+			if g.allowsReady(h.s.References[n.ref].Required) || g.looked && t0 <= g.at+2*h.s.Stable && h.corrected(p, call, versions[i+1:], n) {
 				continue
 			}
 			summary := beforeSeeing
@@ -124,20 +125,10 @@ func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, d
 }
 
 // corrected reports whether the controller sent a write of one of later,
-// the CR's later versions, that is not ready or does not name n, by due.
-// A reconcile that read its cache before a look may write ready after it,
-// and the CR's next reconcile starts only once that write returns. So due
-// is stable after the response of ready, the write that made the CR ready.
-// A write of the CR sent by due that fails, as one from a cache that lacks
-// ready does, or whose outcome is unknown, moves due to stable after its
-// response.
+// the CR's later versions, that is not ready or does not name n, by the
+// correctionDue of ready, the write that made the CR ready.
 func (h *honesty) corrected(p Primary, ready trace.Event, later []trace.Event, n named) bool {
-	due := ready.At + h.s.Stable
-	for _, e := range h.ix.Calls(trace.Controller, ready.At, math.MaxInt64) {
-		if c := e.Call; e.At-c.Latency <= due && trace.Mutating(c.Verb) && c.Object() == ready.Call.Object() && (!succeeded(*c) || c.Unknown()) {
-			due = e.At + h.s.Stable
-		}
-	}
+	due := h.correctionDue(ready)
 	return slices.ContainsFunc(later, func(e trace.Event) bool {
 		v := e.Version
 		call, found := h.ix.WriteCall(v.Ref, v.RV)
@@ -148,6 +139,39 @@ func (h *honesty) corrected(p Primary, ready trace.Event, later []trace.Event, n
 		return !p.ready(body) || !slices.Contains(h.s.names(v.Ref, body), n)
 	})
 }
+
+// correctionDue is when the controller must correct ready. A reconcile that
+// read its cache before a look may write ready after it, and the CR's next
+// reconcile starts only once that write returns. So the controller has
+// stable from the latest of ready's response, the response of each write of
+// the CR sent in time that failed, as one from a cache that lacks ready
+// does, or had an unknown outcome, and its first start after each exit in
+// time.
+func (h *honesty) correctionDue(ready trace.Event) time.Duration {
+	latest := ready.At
+	for {
+		due := latest + h.s.Stable
+		for _, e := range h.ix.Calls(trace.Controller, ready.At, math.MaxInt64) {
+			if c := e.Call; e.At-c.Latency <= due && trace.Mutating(c.Verb) && c.Object() == ready.Call.Object() && unconfirmed(*c) {
+				latest = max(latest, e.At)
+			}
+		}
+		exited := false
+		for _, e := range h.ix.Procs() {
+			if e.Proc.Event == trace.Exit && e.At <= due {
+				exited = true
+			} else if e.Proc.Event == trace.Start && exited {
+				latest, exited = max(latest, e.At), false
+			}
+		}
+		if latest+h.s.Stable == due {
+			return due
+		}
+	}
+}
+
+// unconfirmed reports whether c, a write, failed or had an unknown outcome.
+func unconfirmed(c trace.Call) bool { return !succeeded(c) || c.Unknown() }
 
 const (
 	beforeSeeing = "reported ready before seeing its dependency ready"
@@ -329,7 +353,7 @@ func (h *honesty) excused(uid string, from, to time.Duration) bool {
 		if e.At > to {
 			return e.At-c.Latency <= to
 		}
-		return c.Status < 200 || c.Status > 299 || c.Unknown()
+		return unconfirmed(*c)
 	})
 }
 
