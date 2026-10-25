@@ -14,11 +14,13 @@ import (
 // Reference is one references entry: a field by which a CR of From names an
 // object it does not own. Load reads each kind's scope from the CRDs, or
 // else from a table of core kinds. It refuses an entry whose From is not
-// listed, whose To has no known scope or no Ready, or whose To the From
-// entry's owns names; a Namespace on a cluster-scoped or fake To; a
-// namespaced To of a cluster-scoped From without a Namespace; a Namespace
-// with [*] that does not read the list item Name reads; and a second entry
-// of one From and Name.
+// listed, whose From or To primaries lists at another version, whose To has
+// no known scope or no Ready, whose To the From entry's owns names, or
+// whose Name the From entry's values.distinct lists; a Namespace on a
+// cluster-scoped or fake To; a namespaced To of a cluster-scoped From
+// without a Namespace; a Namespace that does not read with [*] each list it
+// shares with Name, or that reads another list; and a second entry of one
+// From and Name.
 type Reference struct {
 	// From is a listed kind.
 	From schema.GroupVersionKind
@@ -87,9 +89,12 @@ func (c *Config) reference(key string, d declaredReference, scopes map[schema.Gr
 	if r.From, err = parseGVK(d.From); err != nil {
 		return Reference{}, fmt.Errorf("%s.from %q: %w", key, d.From, err)
 	}
-	from := slices.IndexFunc(c.Primaries, func(p Primary) bool { return p.Kind.GroupKind() == r.From.GroupKind() })
+	from := c.listed(r.From.GroupKind())
 	if from < 0 {
 		return Reference{}, fmt.Errorf("%s.from %s: primaries does not list this kind", key, d.From)
+	}
+	if err := c.atListedVersion(r.From); err != nil {
+		return Reference{}, fmt.Errorf("%s.from %s: %w", key, d.From, err)
 	}
 
 	var fake System
@@ -104,6 +109,9 @@ func (c *Config) reference(key string, d declaredReference, scopes map[schema.Gr
 	default:
 		if r.To, err = parseGVK(d.To); err != nil {
 			return Reference{}, fmt.Errorf("%s.to %q: %w", key, d.To, err)
+		}
+		if err := c.atListedVersion(r.To); err != nil {
+			return Reference{}, fmt.Errorf("%s.to %s: %w", key, d.To, err)
 		}
 		var known bool
 		if r.Namespaced, known = scopeOf(r.To.GroupKind(), scopes); !known {
@@ -123,8 +131,11 @@ func (c *Config) reference(key string, d declaredReference, scopes map[schema.Gr
 	if err != nil {
 		return Reference{}, fmt.Errorf("%s.name %q: %w", key, r.Name, err)
 	}
-	if err := checkNamespace(r, name, scopes); err != nil {
-		return Reference{}, fmt.Errorf("%s.namespace%w", key, err)
+	if slices.Contains(c.Primaries[from].Values.Distinct, r.Name) {
+		return Reference{}, fmt.Errorf("%s.name %s: the from entry's values.distinct lists it", key, r.Name)
+	}
+	if err := checkNamespace(key+".namespace", r, name, scopes); err != nil {
+		return Reference{}, err
 	}
 
 	if r.Ready == "" {
@@ -144,26 +155,39 @@ func (c *Config) reference(key string, d declaredReference, scopes map[schema.Gr
 }
 
 // checkNamespace refuses a namespace path that is malformed, that reads
-// list items name does not, or that the to kind has no use for. Without a
-// namespace path, it refuses a namespaced to of a from that the CRDs say is
-// cluster-scoped. Each error reads as if it followed the namespace key.
-func checkNamespace(r Reference, name []pathSegment, scopes map[schema.GroupKind]bool) error {
+// lists otherwise than name does, or that the to kind has no use for.
+// Without a namespace path, it refuses a namespaced to of a from that the
+// CRDs say is cluster-scoped.
+func checkNamespace(key string, r Reference, name []pathSegment, scopes map[schema.GroupKind]bool) error {
 	if r.Namespace == "" {
 		if fromNamespaced, known := scopeOf(r.From.GroupKind(), scopes); r.Namespaced && known && !fromNamespaced {
-			return errors.New(" is required: the from kind is cluster-scoped and the to kind namespaced")
+			return fmt.Errorf("%s is required: the from kind is cluster-scoped and the to kind namespaced", key)
 		}
 		return nil
 	}
 	namespace, err := parsePath(r.Namespace)
 	switch {
 	case err != nil:
-		return fmt.Errorf(" %q: %w", r.Namespace, err)
-	case !readsItemsOf(namespace, name):
-		return fmt.Errorf(" %s: each [*] in it must read a list item that name reads", r.Namespace)
+		return fmt.Errorf("%s %q: %w", key, r.Namespace, err)
+	case !listsAgree(namespace, name):
+		return fmt.Errorf("%s %s: it must read with [*] each list it shares with name, and no other list", key, r.Namespace)
 	case r.System != "":
-		return errors.New(": a fake's resources have no namespace")
+		return fmt.Errorf("%s: a fake's resources have no namespace", key)
 	case !r.Namespaced:
-		return errors.New(": the to kind is cluster-scoped")
+		return fmt.Errorf("%s: the to kind is cluster-scoped", key)
+	}
+	return nil
+}
+
+// listed is the index of kind's primaries entry, or -1.
+func (c *Config) listed(kind schema.GroupKind) int {
+	return slices.Index(c.ListedKinds(), kind)
+}
+
+// atListedVersion refuses a kind that primaries lists at another version.
+func (c *Config) atListedVersion(kind schema.GroupVersionKind) error {
+	if i := c.listed(kind.GroupKind()); i >= 0 && c.Primaries[i].Kind.Version != kind.Version {
+		return fmt.Errorf("primaries lists this kind at version %s", c.Primaries[i].Kind.Version)
 	}
 	return nil
 }
@@ -174,7 +198,7 @@ func (c *Config) defaultReady(r Reference, fake System) string {
 	if r.System != "" {
 		return fake.Ready
 	}
-	if i := slices.IndexFunc(c.Primaries, func(p Primary) bool { return p.Kind.GroupKind() == r.To.GroupKind() }); i >= 0 {
+	if i := c.listed(r.To.GroupKind()); i >= 0 {
 		return c.Primaries[i].Ready
 	}
 	if slices.ContainsFunc(c.Models, func(m Model) bool { return m.Kind.GroupKind() == r.To.GroupKind() }) {
@@ -214,7 +238,9 @@ func scopeOf(kind schema.GroupKind, crds map[schema.GroupKind]bool) (namespaced,
 	return namespaced, known
 }
 
-// crdScopes says whether each kind that the CRDs describe is namespaced.
+// crdScopes says whether each kind that the CRDs describe is namespaced. A
+// CRD without a scope is namespaced, as Kubernetes defaulted it before
+// apiextensions.k8s.io/v1.
 func crdScopes(paths []string) (map[schema.GroupKind]bool, error) {
 	documents, err := ReadManifests(paths)
 	if err != nil {
@@ -222,14 +248,11 @@ func crdScopes(paths []string) (map[schema.GroupKind]bool, error) {
 	}
 	scopes := map[schema.GroupKind]bool{}
 	for _, document := range documents {
-		if document["kind"] != "CustomResourceDefinition" {
-			continue
-		}
 		spec, _ := document["spec"].(map[string]any)
 		names, _ := spec["names"].(map[string]any)
 		group, _ := spec["group"].(string)
 		kind, _ := names["kind"].(string)
-		scopes[schema.GroupKind{Group: group, Kind: kind}] = spec["scope"] == "Namespaced"
+		scopes[schema.GroupKind{Group: group, Kind: kind}] = spec["scope"] != "Cluster"
 	}
 	return scopes, nil
 }
@@ -268,11 +291,17 @@ func lastEach(path []pathSegment) int {
 	return -1
 }
 
-// readsItemsOf says whether each list segment of namespace reads a list
-// item that name reads: namespace up to its last [*] starts name.
-func readsItemsOf(namespace, name []pathSegment) bool {
-	shared := lastEach(namespace) + 1
-	return shared <= len(name) && slices.Equal(namespace[:shared], name[:shared])
+// listsAgree says whether namespace reads with [*] each list in the start it
+// shares with name, and no other list.
+func listsAgree(namespace, name []pathSegment) bool {
+	shared := true
+	for i, s := range namespace {
+		shared = shared && i < len(name) && s.field == name[i].field
+		if s.each != (shared && name[i].each) {
+			return false
+		}
+	}
+	return true
 }
 
 // ReferencedNames returns the name that each item of the name path holds in
