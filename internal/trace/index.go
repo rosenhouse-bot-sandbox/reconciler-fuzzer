@@ -32,6 +32,11 @@ type Index struct {
 	// ones.
 	seen   map[Caller]map[string][]Event
 	opaque map[Caller][]Event
+	// looks holds by ref each caller's Seen events that are not opaque and
+	// its gets that answered 404. lists holds by kind its 2xx kube lists that
+	// are not Partial. Neither holds a call of unknown outcome.
+	looks map[Caller]map[Ref][]Event
+	lists map[Caller]map[Ref][]Event
 	// watches holds each caller's watch calls; watchEnds the time each
 	// stream ended.
 	watches   map[Caller][]Event
@@ -70,6 +75,8 @@ func NewIndex(events []Event) *Index {
 		byRV:      map[objectRV]Event{},
 		seen:      map[Caller]map[string][]Event{},
 		opaque:    map[Caller][]Event{},
+		looks:     map[Caller]map[Ref][]Event{},
+		lists:     map[Caller]map[Ref][]Event{},
 
 		watches:   map[Caller][]Event{},
 		watchEnds: map[WatchEnd]time.Duration{},
@@ -113,8 +120,17 @@ func (ix *Index) Append(events ...Event) {
 				ix.seen[e.Seen.Caller] = map[string][]Event{}
 			}
 			ix.seen[e.Seen.Caller][e.Seen.UID] = append(ix.seen[e.Seen.Caller][e.Seen.UID], e)
+			addBy(ix.looks, e.Seen.Caller, e.Seen.Ref, e)
 		}
 	}
+}
+
+// addBy appends e to what m holds for caller and key.
+func addBy(m map[Caller]map[Ref][]Event, caller Caller, key Ref, e Event) {
+	if m[caller] == nil {
+		m[caller] = map[Ref][]Event{}
+	}
+	m[caller][key] = append(m[caller][key], e)
 }
 
 func (ix *Index) addHold(e Event) {
@@ -191,6 +207,13 @@ func (ix *Index) addCall(e Event) {
 	ix.calls[c.Caller] = append(ix.calls[c.Caller], e)
 	if c.Watch {
 		ix.watches[c.Caller] = append(ix.watches[c.Caller], e)
+	}
+	switch {
+	case c.Unknown():
+	case c.Verb == "get" && c.Subresource == "" && c.Status == 404:
+		addBy(ix.looks, c.Caller, c.Ref, e)
+	case c.Verb == "list" && !c.Partial && c.Ref.System == "kube" && c.Status >= 200 && c.Status <= 299:
+		addBy(ix.lists, c.Caller, kindOf(c.Ref), e)
 	}
 	if c.ResultRV == "" {
 		return
@@ -385,12 +408,44 @@ func (ix *Index) Seen(caller Caller, uid string) []Event { return ix.seen[caller
 // Looks returns, in Seq order, the responses that showed caller ref: each
 // of its Seen events of ref that is not opaque, a deleted one showing ref
 // missing, and each of its calls that showed ref missing. Such a call is a
-// get of ref that answered 404, or a 2xx kube list, not Partial, that covers
-// ref, of a kind that a run event reference names as To, with no Seen of
-// ref, opaque or not, outside a watch between its send and its Call event.
-// No call of unknown outcome counts.
+// get of ref without a subresource that answered 404, or a 2xx kube list,
+// not Partial, that covers ref, of a kind that a run event reference names
+// as To, with no Seen of ref, opaque or not, outside a watch between its
+// send and its Call event. No call of unknown outcome counts.
 func (ix *Index) Looks(caller Caller, ref Ref) []Event {
-	return nil
+	looks := slices.Clone(ix.looks[caller][ref])
+	if !ix.referenced(ref) {
+		return looks
+	}
+	for _, e := range ix.lists[caller][kindOf(ref)] {
+		if e.Call.Ref.Covers(ref) && !ix.shownDuring(caller, ref, e) {
+			looks = append(looks, e)
+		}
+	}
+	slices.SortFunc(looks, func(a, b Event) int { return cmp.Compare(a.Seq, b.Seq) })
+	return looks
+}
+
+// kindOf names ref's kind by a ref with no namespace or name.
+func kindOf(ref Ref) Ref { return Ref{System: ref.System, Group: ref.Group, Resource: ref.Resource} }
+
+// referenced reports whether ref is of a kind that a run event reference
+// names as To.
+func (ix *Index) referenced(ref Ref) bool {
+	run, _ := ix.Run()
+	return slices.ContainsFunc(run.References, func(r Reference) bool {
+		return cmp.Or(r.System, "kube") == ref.System && r.To.Group == ref.Group && r.To.Resource == ref.Resource
+	})
+}
+
+// shownDuring reports whether a response outside a watch showed caller ref,
+// or an opaque one may have, between list's send and its Call event.
+func (ix *Index) shownDuring(caller Caller, ref Ref, list Event) bool {
+	send := list.At - list.Call.Latency
+	during := func(e Event) bool {
+		return e.Seen != nil && e.Seen.Stream == 0 && e.Seen.Ref.Covers(ref) && e.At >= send && e.Seq < list.Seq
+	}
+	return slices.ContainsFunc(ix.looks[caller][ref], during) || slices.ContainsFunc(ix.opaque[caller], during)
 }
 
 // Opaque reports whether a response that caller's listener could not

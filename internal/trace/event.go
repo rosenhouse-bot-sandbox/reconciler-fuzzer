@@ -211,7 +211,8 @@ type Phase struct {
 }
 
 // Action records one plan action as the harness applied it. Ref is the CR
-// of a CR action, and the object a damage or changeFixture action changed.
+// of a CR action, and the object a damage, changeFixture or createFixture
+// action changed.
 type Action struct {
 	Step  int    `json:"step"`
 	Index int    `json:"index"`
