@@ -118,8 +118,13 @@ func (s Spec) showing(n named, body map[string]any) state {
 
 // heldBack reports whether a reference holds back the CR at cr, whose body
 // is body, at t, as the controller last saw and as a look at t would see,
-// or leaves it unknown.
+// or leaves it unknown. It excuses no CR until stable after the latest
+// step's faults end, so that clause 7 sees the controller react to the
+// step's create or update of the CR.
 func (s Spec) heldBack(ix *trace.Index, cr trace.Ref, body map[string]any, t time.Duration) bool {
+	if step, _ := latestStep(ix, t); !step.Reached[trace.EndFaults] || t < step.EndFaults+s.Stable {
+		return false
+	}
 	for _, n := range s.names(cr, body) {
 		required := s.References[n.ref].Required
 		if g := s.sight(ix, n, t); g.unknown || g.holds(required) && s.world(ix, n, t).holds(required) {

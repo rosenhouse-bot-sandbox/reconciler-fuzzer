@@ -458,6 +458,22 @@ func TestSettleExcusesACRNotReadyWhileAReferenceHoldsItBack(t *testing.T) {
 	}
 }
 
+// The controller reacts to a held-back CR's create within stable, so the
+// step must not settle before it does.
+func TestSettleExcusesAHeldBackCROnlyStableAfterTheFaultsEnd(t *testing.T) {
+	r := secretRun(secretRef(), nil).Tick(5 * s)
+	if !slices.Contains(settledAt(t, r, r.Now), "databases.toy ns/b is not ready") {
+		t.Error("The Database is excused before the faults end.")
+	}
+	r.EndFaults()
+	endFaults := r.Now - tt.Tick
+	for at, excused := range map[time.Duration]bool{endFaults + r.Spec.Stable - time.Millisecond: false, endFaults + r.Spec.Stable: true} {
+		if waits := slices.Contains(settledAt(t, r, at), "databases.toy ns/b is not ready"); waits == excused {
+			t.Errorf("At %v, the Database is excused: %v, want %v.", at, !waits, excused)
+		}
+	}
+}
+
 func TestSettleStillWaitsForACRNoReferenceHoldsBack(t *testing.T) {
 	r := secretRun(secretRef(), nil)
 	namesNothing := database(false, "")
