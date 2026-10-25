@@ -193,7 +193,7 @@ func (ix *Index) addPhase(e Event) {
 	case EndFaults:
 		span.EndFaults = e.At
 		span.Deadline = p.Deadline
-		span.BackoffBound = p.BackoffBound
+		span.Backoff, span.BackoffBound = p.Backoff, p.BackoffBound
 	case Settled:
 		span.WaitEnd = e.At
 		span.Settled = true
@@ -289,6 +289,7 @@ type StepSpan struct {
 	Start        time.Duration
 	EndFaults    time.Duration
 	Deadline     time.Duration
+	Backoff      time.Duration
 	BackoffBound bool
 	// WaitEnd is when the settle wait ended, by Settled or TimedOut.
 	WaitEnd    time.Duration

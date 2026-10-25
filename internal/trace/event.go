@@ -212,9 +212,11 @@ type Phase struct {
 	Step     int           `json:"step"`
 	Name     PhaseName     `json:"name"`
 	Deadline time.Duration `json:"deadline,omitempty"`
-	// BackoffBound says that backoffCap, not the time from the step's start
-	// until its faults ended, set Deadline.
-	BackoffBound bool `json:"backoffBound,omitempty"`
+	// Backoff is the part of Deadline that allows for the controller's
+	// backoff: the time from the step's start until its faults ended, at
+	// most backoffCap. BackoffBound says that backoffCap was the smaller.
+	Backoff      time.Duration `json:"backoff,omitempty"`
+	BackoffBound bool          `json:"backoffBound,omitempty"`
 }
 
 // Action records one plan action as the harness applied it. Ref is the CR

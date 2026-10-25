@@ -593,23 +593,30 @@ func TestExecuteRestartsAKilledControllerWhileACreateWaits(t *testing.T) {
 }
 
 func TestExecuteBoundsTheBackoffByHowLongTheFaultsLasted(t *testing.T) {
-	f := newFixture(t, nil)
-	f.runner.Config.Timeouts.BackoffCap = 350 * time.Millisecond
-	faultHoldsDeletedCRs(f, 200*time.Millisecond)
-	p := recreateUnder(50*time.Millisecond, holdWidgets)
-	p.Steps[1].Actions[1].At = plan.Duration(250 * time.Millisecond)
-	if err := f.runner.Execute(context.Background(), p); err != nil {
-		t.Fatal(err)
-	}
-	events := f.rec.Events()
-	lasted := faultLasted(t, events)
-	if lasted < 245*time.Millisecond {
-		t.Fatalf("the fault lasted %v, want it to outlast the period until the create", lasted)
-	}
-	endFaults, _ := find(events, 1, trace.EndFaults)
-	want, wantBound := Deadline(endFaults.At, lasted, f.runner.Config.Poll("kube"), f.runner.Config.Timeouts)
-	if got := endFaults.Phase; (got.Deadline-want).Abs() > 20*time.Millisecond || got.BackoffBound != wantBound {
-		t.Errorf("deadline = %v, backoff-bound %v, want about %v, %v", got.Deadline, got.BackoffBound, want, wantBound)
+	for _, backoffCap := range []time.Duration{350 * time.Millisecond, 100 * time.Millisecond} {
+		t.Run(fmt.Sprint("backoffCap ", backoffCap), func(t *testing.T) {
+			f := newFixture(t, nil)
+			f.runner.Config.Timeouts.BackoffCap = backoffCap
+			faultHoldsDeletedCRs(f, 200*time.Millisecond)
+			p := recreateUnder(50*time.Millisecond, holdWidgets)
+			p.Steps[1].Actions[1].At = plan.Duration(250 * time.Millisecond)
+			if err := f.runner.Execute(context.Background(), p); err != nil {
+				t.Fatal(err)
+			}
+			events := f.rec.Events()
+			lasted := faultLasted(t, events)
+			if lasted < 245*time.Millisecond {
+				t.Fatalf("the fault lasted %v, want it to outlast the period until the create", lasted)
+			}
+			endFaults, _ := find(events, 1, trace.EndFaults)
+			want, wantBound := Deadline(endFaults.At, lasted, f.runner.Config.Poll("kube"), f.runner.Config.Timeouts)
+			if got := endFaults.Phase; (got.Deadline-want).Abs() > 20*time.Millisecond || got.BackoffBound != wantBound {
+				t.Errorf("deadline = %v, backoff-bound %v, want about %v, %v", got.Deadline, got.BackoffBound, want, wantBound)
+			}
+			if got, want := endFaults.Phase.Backoff, min(lasted, backoffCap); (got - want).Abs() > 20*time.Millisecond {
+				t.Errorf("backoff = %v, want about %v", got, want)
+			}
+		})
 	}
 }
 

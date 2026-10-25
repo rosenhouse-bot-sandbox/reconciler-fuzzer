@@ -88,7 +88,13 @@ var errStillTaken = errors.New("is still taken")
 // time from the step's start until its faults ended. backoffBound says that
 // backoffCap was the smaller.
 func Deadline(endFaults, faultsLasted, maxPoll time.Duration, t config.Timeouts) (deadline time.Duration, backoffBound bool) {
-	return endFaults + t.Settle + min(faultsLasted, t.BackoffCap) + maxPoll, t.BackoffCap < faultsLasted
+	return endFaults + t.Settle + backoff(faultsLasted, t) + maxPoll, t.BackoffCap < faultsLasted
+}
+
+// backoff is how long after the faults end a controller in backoff may
+// retry what failed during them: min(faultsLasted, backoffCap).
+func backoff(faultsLasted time.Duration, t config.Timeouts) time.Duration {
+	return min(faultsLasted, t.BackoffCap)
 }
 
 type execution struct {
@@ -151,7 +157,8 @@ func (e *execution) step(ctx context.Context, n int, step plan.Step) error {
 	}
 	allowance, backoffBound := s.allowance()
 	deadline := e.Recorder.Now() + allowance
-	e.Recorder.Record(trace.Event{Phase: &trace.Phase{Step: n, Name: trace.EndFaults, Deadline: deadline, BackoffBound: backoffBound}})
+	e.Recorder.Record(trace.Event{Phase: &trace.Phase{Step: n, Name: trace.EndFaults, Deadline: deadline,
+		Backoff: backoff(s.faultsLasted(), e.Config.Timeouts), BackoffBound: backoffBound}})
 	if err := e.settle(ctx, n, deadline); err != nil {
 		return err
 	}
@@ -231,8 +238,11 @@ func (s *stepRun) resume() error {
 // stopped: its Deadline less end faults. bounded says that backoffCap
 // bounded it.
 func (s *stepRun) allowance() (allowance time.Duration, bounded bool) {
-	return Deadline(0, s.faultsStopped.Sub(s.start), s.maxPoll(s.step), s.Config.Timeouts)
+	return Deadline(0, s.faultsLasted(), s.maxPoll(s.step), s.Config.Timeouts)
 }
+
+// faultsLasted is the time from the step's start until its faults stopped.
+func (s *stepRun) faultsLasted() time.Duration { return s.faultsStopped.Sub(s.start) }
 
 // faultPeriod starts the step's faults, applies its actions and waits until
 // Period has passed.

@@ -458,16 +458,18 @@ func TestSettleExcusesACRNotReadyWhileAReferenceHoldsItBack(t *testing.T) {
 	}
 }
 
-// The controller reacts to a held-back CR's create within stable, so the
-// step must not settle before it does.
-func TestSettleExcusesAHeldBackCROnlyStableAfterTheFaultsEnd(t *testing.T) {
+// A controller reacts to a held-back CR's create within stable, after a
+// backoff that the faults may have started, so the step must not settle
+// before then.
+func TestSettleExcusesAHeldBackCROnlyStableAfterTheBackoff(t *testing.T) {
 	r := secretRun(secretRef(), nil).Tick(5 * s)
 	if !slices.Contains(settledAt(t, r, r.Now), "databases.toy ns/b is not ready") {
 		t.Error("The Database is excused before the faults end.")
 	}
-	r.EndFaults()
-	endFaults := r.Now - tt.Tick
-	for at, excused := range map[time.Duration]bool{endFaults + r.Spec.Stable - time.Millisecond: false, endFaults + r.Spec.Stable: true} {
+	const backoff = 4 * s
+	r.Add(trace.Event{Phase: &trace.Phase{Step: r.Step, Name: trace.EndFaults, Deadline: r.Now + 30*s, Backoff: backoff}})
+	excuse := r.Now - tt.Tick + backoff + r.Spec.Stable
+	for at, excused := range map[time.Duration]bool{excuse - time.Millisecond: false, excuse: true} {
 		if waits := slices.Contains(settledAt(t, r, at), "databases.toy ns/b is not ready"); waits == excused {
 			t.Errorf("At %v, the Database is excused: %v, want %v.", at, !waits, excused)
 		}
