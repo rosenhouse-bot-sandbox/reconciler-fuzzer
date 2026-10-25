@@ -1,10 +1,8 @@
 package check
 
 import (
-	"cmp"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"math"
 	"slices"
 
@@ -15,18 +13,17 @@ const removedForeign = "removed another caller's finalizer"
 
 // Finalizers fails a controller update or patch whose answer lacks a
 // finalizer that another recorded caller added. DESIGN.md §12 defines it.
+// Its findings come in order of their first removal.
 func Finalizers(ix *trace.Index) []Finding {
 	steps := ix.Steps()
 	found := map[findingKey]*Finding{}
+	var order []findingKey
 	for _, e := range ix.Calls(trace.Controller, -1, math.MaxInt64) {
 		c := e.Call
-		if c.Verb != "update" && c.Verb != "patch" || !succeeded(*c) || trace.Ignored(*c) || c.ResultFinalizers == nil {
+		if c.Verb != "update" && c.Verb != "patch" || trace.Ignored(*c) || c.ResultFinalizers == nil {
 			continue
 		}
-		base, ok := replaced(ix, e)
-		if !ok {
-			continue
-		}
+		base := replaced(ix, e)
 		for _, f := range finalizers(base) {
 			if slices.Contains(*c.ResultFinalizers, f) {
 				continue
@@ -38,31 +35,33 @@ func Finalizers(ix *trace.Index) []Finding {
 			key := findingKey{stepAt(steps, e.At), removedForeign, kind(base.Ref)}
 			if found[key] == nil {
 				found[key] = &Finding{Check: "Finalizers", Step: key.step, At: e.At, Summary: removedForeign, Kind: key.kind}
+				order = append(order, key)
 			}
 			if detail := fmt.Sprintf("%s: %s, added by %s", describe(base.Ref), f, adder); !slices.Contains(found[key].Details, detail) {
 				found[key].Details = append(found[key].Details, detail)
 			}
 		}
 	}
-	var findings []Finding
-	for _, key := range slices.SortedFunc(maps.Keys(found), func(a, b findingKey) int {
-		return cmp.Or(cmp.Compare(a.step, b.step), cmp.Compare(a.kind, b.kind))
-	}) {
-		findings = append(findings, *found[key])
+	findings := make([]Finding, len(order))
+	for n, key := range order {
+		findings[n] = *found[key]
 	}
 	return findings
 }
 
-// replaced is the version a write replaced. A write that made its answer's
-// version replaced the one before it. A write answered with an older version
-// changed nothing, or emptied a deleting object's finalizers, which deletes
-// the object and answers with the request's object at the old version.
-func replaced(ix *trace.Index, e trace.Event) (trace.Version, bool) {
+// replaced is the version a write replaced, or no version when the trace
+// lacks it. A write that made its answer's version replaced the one before
+// it. A write answered with an older version changed nothing, or emptied a
+// deleting object's finalizers, which deletes the object and answers with
+// the request's object at the old version.
+func replaced(ix *trace.Index, e trace.Event) trace.Version {
 	ref, rv := e.Call.Object(), e.Call.ResultRV
-	if first, found := ix.WriteCall(ref, rv); found && first.Seq == e.Seq {
-		return ix.Previous(ref, rv)
+	if first, _ := ix.WriteCall(ref, rv); first.Seq == e.Seq {
+		v, _ := ix.Previous(ref, rv)
+		return v
 	}
-	return ix.VersionOf(ref, rv)
+	v, _ := ix.VersionOf(ref, rv)
+	return v
 }
 
 // firstHolder is the writer of the first of the versions, up to v, that

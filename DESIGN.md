@@ -61,12 +61,11 @@ Only `check` decides what is a bug.
 
 `system.System` has `Name() string`, `Start(ctx, env) (Endpoints, error)`,
 `Snapshot(ctx) ([]Resource, error)`, `Pending() bool` and `Fault(plan.Fault)
-(end func(), err error)`. `Endpoints` holds the controller and harness
-listeners and `Vars`, which expand as `${systems.<name>.<key>}` in launch args
-and env, and kube fixtures. Request faults go to a system's controller
-listener. Model faults go to the stage model or fake service that `Takes` them.
-Damage goes to the system the target names. Checks read `work` events, never
-`Pending`.
+(end func(), err error)`. `Endpoints` holds the controller and harness listeners
+and `Vars`, which expand as `${systems.<name>.<key>}` in launch args and env,
+and kube fixtures. Request faults go to a system's controller listener. Model
+faults go to the stage model or fake service that `Takes` them. Damage goes to
+the system the target names. Checks read `work` events, never `Pending`.
 
 ## 4. Trace
 
@@ -140,12 +139,11 @@ name, and `update` otherwise.
 `kube.Start` starts envtest, the run namespace, the controller's identity, both
 listeners and the observer, and creates the fixtures. Fixtures expand
 `${systems.<fake>.<key>}`. `Vars` holds `kubeconfig`, `namespace` and `url`.
-Harness actions return once the observer has recorded their effect. The
-observer list-watches cluster-wide each installed CRD, each served kind the
-config or a fixture names, and each served kind `launch.rbac` names that is not
-ignored (§10). These are the run event's `kinds`. It then watches any kind a
-listener records a call on, and records one `version` per
-(ref, resourceVersion).
+Harness actions return once the observer has recorded their effect. The observer
+list-watches cluster-wide each installed CRD, each served kind the config or a
+fixture names, and each served kind `launch.rbac` names that is not ignored
+(§10). These are the run event's `kinds`. It then watches any kind a listener
+records a call on, and records one `version` per (ref, resourceVersion).
 
 ## 7. Models and fake services
 
@@ -351,6 +349,12 @@ new generation breaks it. With `n` CRs live, it fails when each gap between
 calls `5n + 1` to `10n + 1` is under 100 ms: `retried a failing request in a
 tight loop`. It skips 409s on a held kind until `stable / 4` after the hold.
 
+**Finalizers.** A controller `update` or `patch` fails when its answer drops a
+finalizer, of the version it replaced, that another recorded caller added:
+`removed another caller's finalizer`. The adder wrote the earliest of the
+unbroken run of versions up to that one that hold it. A write answered with an
+older version replaced that one (entry 85).
+
 **Property.** A `step` property is judged at each settled step's end, and an
 `always` one at each `version` event. Its CEL sees `crs`, the live CRs' bodies,
 and `world.<system>.<key>`, the live instances' bodies, where a key is
@@ -509,13 +513,8 @@ Each entry changes a check, exception, `System` interface or ignore list.
 48. A restart, exit or failed CR write excuses `track`.
 52. A `delete` may be `Foreground` (B29). `Orphan` would fail Clean.
 64. `holdWatch` holds whole streams of one kind and delivers them in order, so it reorders nothing (#63).
-65. An API map reads response headers and may show partial objects, for S3.
-66. The `vault` and `s3` maps number incarnations, since paths and names are reused.
-67. Emulators list through their own API (`fake.Lister`), and take no model faults.
-68. moto, not MinIO, emulates S3: MinIO's downloads are blocked, and ACK needs no more.
 69. Properties judge settled step ends; `firstWrittenUnder` follows a value across instances, for #63.
 70. `primary.periodic` lets a timer's CR writes pass clause 7, for an external-secrets rotation.
-71. Fakes start before kube, so kube fixtures can name their urls.
 72. Clause 5 holds `stable` after a polling controller's look, for ACK's repair.
 73. A held watch looks only `stable` after its hold, and Backoff allows its 409s until `stable / 4` after.
 74. A fake's write without a resourceVersion is a change only if the observer saw one, for ACK.
@@ -527,3 +526,4 @@ Each entry changes a check, exception, `System` interface or ignore list.
 80. A live unlisted owner, such as a fixture, keeps what it owns, directly or through the controller's live objects, from rules 2 to 4, so deleting a CR blames none of it (#128). An object the controller made is never an unlisted owner.
 81. `required` binds only the first entry's CRs, so the kinds that own no dependency pass.
 82. A `damage` touches each group under its root. An undamaged touched group may empty while its kind lives under that root, and a damaged one whose owner is gone while a CR made in the step owns its kind and role there. So a damage under a CR that the controller made touches that CR's owner, and the controller may remake that CR.
+85. A kube write's call records its answer's finalizers, since a write that empties a deleting object's finalizers deletes it, so no version lacks them (#133).

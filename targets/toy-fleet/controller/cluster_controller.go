@@ -137,7 +137,7 @@ func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Clust
 			if err := r.Delete(ctx, v); client.IgnoreNotFound(err) != nil {
 				return fmt.Errorf("deleting Volume %s: %w", v.Name, err)
 			}
-		} else if r.Bug == B116 && len(v.Finalizers) > 0 {
+		} else if r.Bug == B116 {
 			v.Finalizers = nil
 			if err := r.Update(ctx, v); client.IgnoreNotFound(err) != nil {
 				return fmt.Errorf("stripping Volume %s: %w", v.Name, err)

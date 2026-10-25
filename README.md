@@ -3,8 +3,8 @@
 reconciler-fuzzer finds bugs in Kubernetes controllers. It runs your controller on your machine
 against envtest's kube-apiserver and etcd. It follows a plan of steps: CR changes, faults on the
 controller's API requests, restarts, and damage to objects the controller created. It records
-every request and object version in a trace, including requests to fake HTTP services. Then it judges the trace with seven checks: Converge,
-Crash, Clean, Restore, Unique, Honest and Backoff ([DESIGN.md §12](DESIGN.md#12-checks)).
+every request and object version in a trace, including requests to fake HTTP services. Then it judges the trace with eight checks: Converge,
+Crash, Clean, Restore, Unique, Honest, Backoff and Finalizers ([DESIGN.md §12](DESIGN.md#12-checks)).
 
 You write no test code. One YAML config describes your controller.
 

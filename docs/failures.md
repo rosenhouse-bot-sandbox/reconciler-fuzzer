@@ -190,6 +190,14 @@ names the verb, the object, the status and the calls. Retry through a rate
 limiter, such as controller-runtime's default, rather than a short
 `RequeueAfter`.
 
+### Finalizers: removed another caller's finalizer
+
+A controller update or patch dropped a finalizer that another caller,
+such as a stage model, put on the object. Each line names the object, the
+finalizer and the caller that added it. Remove only your own finalizer,
+as `controllerutil.RemoveFinalizer` does. A sample that carries the
+controller's own finalizer makes the harness its adder.
+
 ## When a run exits 2
 
 Exit 2 means a usage or harness error: the run judged nothing. The error

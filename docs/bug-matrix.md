@@ -65,4 +65,6 @@ Each Cluster owns Volumes of a third party's kind, which a model sets ready. A D
 
 | Bug | Description | Plan | Check | Step |
 |---|---|---|---|---|
-| B0 | The correct controller. | all 13 committed plans | none | |
+| B0 | The correct controller. | all 13 plans of config.yaml, database/config.yaml, protect/config.yaml | none | |
+| B116 | Removes every finalizer from a deleting Volume. | protect/b0 | Finalizers | 2 |
+| B116 | Removes every finalizer from a deleting Volume. | slow-delete | Finalizers | 1 |

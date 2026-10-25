@@ -516,7 +516,7 @@ func (rec *recorder) readResult(encoding string) {
 	rec.call.ResultName = meta.Name
 	rec.call.ResultUID = string(meta.UID)
 	rec.call.ResultRV = meta.ResourceVersion
-	if meta.ResourceVersion != "" && !rec.dryRun {
+	if meta.Name != "" && !rec.dryRun {
 		finalizers := append([]string{}, meta.Finalizers...)
 		rec.call.ResultFinalizers = &finalizers
 	}

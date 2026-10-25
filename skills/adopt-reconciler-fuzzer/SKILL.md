@@ -5,7 +5,7 @@ description: Sets up reconciler-fuzzer for a Kubernetes controller. Writes confi
 # Adopt reconciler-fuzzer
 
 reconciler-fuzzer runs a controller against envtest, follows a plan of CR changes, faults,
-restarts and damage, and judges the trace with seven checks. This skill writes the config for
+restarts and damage, and judges the trace with eight checks. This skill writes the config for
 one controller and runs it until reconciler-fuzzer tests the controller.
 
 Never edit the controller's source without the user's consent.
@@ -314,6 +314,7 @@ controller:
 | Honest, `reported ready with no dependency` | The CR can be ready without that kind, or does not own it. | Set `required: false` in the first case. In the second, add `owns` or `owner`, or drop `dependency`. |
 | Clean | The controller keeps resources by design. | Set the entry's `retain`. |
 | Unique, on a fake | The CR owns several resources in one collection by design. | Set the system's `role`. |
+| Finalizers, `added by harness` | The sample carries the controller's own finalizer. | Take the finalizer out of the sample. |
 | Converge, with a CR that halted after a create of unknown outcome | The controller stops on purpose and waits for a person. | Set the entry's `halted` to CEL over its halted condition. |
 
 Every other finding is a bug in the controller. Never hide one to make a check pass, and ask

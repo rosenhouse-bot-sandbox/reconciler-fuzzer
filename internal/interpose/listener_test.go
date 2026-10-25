@@ -313,6 +313,7 @@ func TestADryRunOrAnAnswerWithoutAnObjectRecordsNoFinalizers(t *testing.T) {
 	for _, c := range []struct{ name, method, path, body string }{
 		{"a dry run", "PUT", "/api/v1/namespaces/ns1/configmaps/cm?dryRun=All", createdBody},
 		{"a status", "DELETE", "/api/v1/namespaces/ns1/configmaps/cm", `{"kind":"Status","status":"Success"}`},
+		{"a list", "DELETE", "/api/v1/namespaces/ns1/configmaps", `{"kind":"ConfigMapList","metadata":{"resourceVersion":"7"},"items":[]}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			l, recorded := listen(t, respond("application/json", c.body))

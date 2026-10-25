@@ -3,6 +3,7 @@ package check_test
 import (
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/check"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
@@ -166,7 +167,15 @@ func TestFinalizersNamesTheCallerThatLastAddedTheFinalizer(t *testing.T) {
 	requireFinding(t, check.Finalizers(r.Index()), "Finalizers", 0, removed, "kube/toy/gadgets", "added by model:gadgets.toy")
 }
 
-func TestFinalizersGivesOneFindingPerStepAndKind(t *testing.T) {
+func TestFinalizersPassesAControllerThatKeepsAnotherCallersFinalizer(t *testing.T) {
+	const own = "toy/cleanup"
+	r, uid := heldGadget(gadgetModel)
+	r.Add(write(ctl, "update", gadgetA, "c1", protect, own), tt.Version(gadgetA, uid, "c1", held(false, protect, own)))
+	r.Add(write(ctl, "update", gadgetA, "c2", protect), tt.Version(gadgetA, uid, "c2", held(false, protect)))
+	requireNone(t, check.Finalizers(r.Index()))
+}
+
+func TestFinalizersGivesOneFindingPerStepAndKindInOrderOfFirstRemoval(t *testing.T) {
 	gadgetB := tt.Ref("toy/gadgets", "ns", "b")
 	r := newRun(2)
 	r.Begin()
@@ -179,19 +188,26 @@ func TestFinalizersGivesOneFindingPerStepAndKind(t *testing.T) {
 	r.Add(write(ctl, "update", gadgetB, "b2"), tt.Version(gadgetB, b, "b2", heldBody("b", false)))
 	r.Add(write(ctl, "update", cm, "c1"), tt.Version(cm, c, "c1", heldBody("c", false)))
 	r.EndFaults().Settle().Begin()
-	for _, rvs := range [][2]string{{"a3", "a4"}, {"a5", "a6"}} {
+	var firstRemoval time.Duration
+	for n, rvs := range [][2]string{{"a3", "a4"}, {"a5", "a6"}} {
 		r.Add(write(gadgetModel, "patch", gadgetA, rvs[0], protect), tt.Version(gadgetA, a, rvs[0], held(false, protect)))
+		if n == 0 {
+			firstRemoval = r.Now
+		}
 		r.Add(write(ctl, "update", gadgetA, rvs[1]), tt.Version(gadgetA, a, rvs[1], held(false)))
 	}
 	findings := check.Finalizers(r.Index())
 	if len(findings) != 3 {
 		t.Fatalf("findings = %+v, want three", findings)
 	}
+	if findings[2].At != firstRemoval {
+		t.Errorf("Step 1's finding is at %v, want its first removal's %v.", findings[2].At, firstRemoval)
+	}
 	for n, want := range []struct {
 		step    int
 		kind    string
 		details int
-	}{{0, "kube/configmaps", 1}, {0, "kube/toy/gadgets", 2}, {1, "kube/toy/gadgets", 1}} {
+	}{{0, "kube/toy/gadgets", 2}, {0, "kube/configmaps", 1}, {1, "kube/toy/gadgets", 1}} {
 		if f := findings[n]; f.Step != want.step || f.Kind != want.kind || len(f.Details) != want.details {
 			t.Errorf("finding %d = %+v, want step %d of %s with %d details", n, f, want.step, want.kind, want.details)
 		}
