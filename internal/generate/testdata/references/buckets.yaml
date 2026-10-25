@@ -1,0 +1,1 @@
+- {resource: buckets, name: shared, body: {state: READY}}

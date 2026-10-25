@@ -41,7 +41,11 @@ type Generator struct {
 	granted map[gvk.GroupResource][]string
 	// requests are what faults match, each with the weight of its draw.
 	requests []request
+	// fixtures are those whose strings changeFixture may set.
 	fixtures []fixture
+	// referenced are the kube fixtures of a reference's to kind, which
+	// changeFixture deletes and createFixture makes again.
+	referenced []plan.Target
 	// watchable are the resources the RBAC lets the controller watch,
 	// which holdWatch faults hold. A kind appears once per unit of its
 	// holdWeight.
@@ -71,9 +75,12 @@ type crKind struct {
 	fields    []field
 	leftAlone []string
 	distinct  [][]string
+	// references are the config's references from this kind.
+	references []*reference
 }
 
-// fixture is one fixture whose strings changeFixture may set.
+// fixture is one fixture that changeFixture patches at one of its paths, or
+// deletes when it has none.
 type fixture struct {
 	target plan.Target
 	paths  [][]string
@@ -81,8 +88,8 @@ type fixture struct {
 
 var slots = []string{"a", "b", "c"}
 
-// New reads each listed kind's CRD schema, sample and values, and the
-// fixtures of cfg.
+// New reads each listed kind's CRD schema, sample and values, the fixtures
+// and the references of cfg.
 func New(cfg *config.Config) (*Generator, error) {
 	g, err := build(cfg)
 	if err != nil {
@@ -111,6 +118,9 @@ func build(cfg *config.Config) (*Generator, error) {
 		}
 	}
 	if err := g.readFixtures(cfg); err != nil {
+		return nil, err
+	}
+	if err := g.readReferences(cfg); err != nil {
 		return nil, err
 	}
 	if err := g.readRBAC(cfg.Launch.RBAC); err != nil {
@@ -254,13 +264,12 @@ func (g *Generator) readFixtures(cfg *config.Config) error {
 			return fmt.Errorf("values.fixtures %s: the file holds %d objects, want 1", path, len(documents))
 		}
 		for _, document := range documents {
-			object := unstructured.Unstructured{Object: document}
-			gvr, _ := meta.UnsafeGuessKindToResource(object.GroupVersionKind())
-			g.addResource(gvr.GroupResource())
+			target := kubeFixture(document)
+			g.addResource(gvk.GroupResource{Group: target.Group, Resource: target.Resource})
 			if len(paths) == 0 {
 				continue
 			}
-			f := fixture{target: plan.Target{Group: gvr.Group, Resource: gvr.Resource, Namespace: object.GetNamespace(), Name: object.GetName()}}
+			f := fixture{target: target}
 			for _, dotted := range paths {
 				f.paths = append(f.paths, strings.Split(dotted, "."))
 			}
@@ -287,6 +296,13 @@ func (g *Generator) readFixtures(cfg *config.Config) error {
 		}
 	}
 	return nil
+}
+
+// kubeFixture is the target of a fixture's object.
+func kubeFixture(document map[string]any) plan.Target {
+	object := unstructured.Unstructured{Object: document}
+	gvr, _ := meta.UnsafeGuessKindToResource(object.GroupVersionKind())
+	return plan.Target{Group: gvr.Group, Resource: gvr.Resource, Namespace: object.GetNamespace(), Name: object.GetName()}
 }
 
 // readRBAC adds the resources the rules name, without wildcards and
@@ -365,8 +381,20 @@ func (g *Generator) Plan(seed uint64) (p *plan.Plan, err error) {
 }
 
 // state is what the plan so far leaves each slot holding: its CR as last
-// written, or nil once deleted.
+// written, or nil once deleted. A fixture that the plan deleted maps, by its
+// gone key, to nil until a createFixture makes it again.
 type state map[string]map[string]any
+
+// gone is the state key of a deleted fixture. No slot has it.
+func gone(target plan.Target) string {
+	return "\x00deleted " + target.System + "/" + target.Group + "/" + target.Resource + "/" + target.Namespace + "/" + target.Name
+}
+
+// deleted says whether the plan deleted the fixture at target.
+func (s state) deleted(target plan.Target) bool {
+	_, deleted := s[gone(target)]
+	return deleted
+}
 
 func (s state) live() []string {
 	return slices.DeleteFunc(slices.Clone(slots), func(slot string) bool { return s[slot] == nil })
@@ -505,8 +533,13 @@ func (g *Generator) action(t *rapid.T, at state) plan.Action {
 	if g.damageable() {
 		legal = append(legal, plan.Damage)
 	}
-	if len(g.fixtures) > 0 {
+	changes := g.fixtureChanges(at)
+	if len(changes) > 0 {
 		legal = append(legal, plan.ChangeFixture)
+	}
+	deleted := g.deletedFixtures(at)
+	if len(deleted) > 0 {
+		legal = append(legal, plan.CreateFixture)
 	}
 	switch do := sampled(t, legal, "do"); do {
 	case plan.Create:
@@ -518,9 +551,11 @@ func (g *Generator) action(t *rapid.T, at state) plan.Action {
 	case plan.Damage:
 		return g.damage(t, at)
 	case plan.ChangeFixture:
-		f := sampled(t, g.fixtures, "fixture")
-		target := f.target
-		return plan.Action{Do: do, Target: &target, Patch: marshal(nest(sampled(t, f.paths, "path"), fixtureWords.Draw(t, "word")))}
+		return changeFixture(t, at, sampled(t, changes, "fixture"))
+	case plan.CreateFixture:
+		target := sampled(t, deleted, "fixture")
+		delete(at, gone(target))
+		return plan.Action{Do: do, Target: &target}
 	default:
 		return plan.Action{Do: do}
 	}
@@ -531,19 +566,32 @@ func (g *Generator) create(t *rapid.T, at state, slot string) plan.Action {
 	return g.createOf(t, at, slot, sampled(t, g.kinds, "kind"))
 }
 
+// createOf creates the slot's CR of kind k. It writes candidates at each
+// reference's name, unless the CRD refuses them.
 func (g *Generator) createOf(t *rapid.T, at state, slot string, k *crKind) plan.Action {
-	cr := k.cr(t, slot)
-	at[slot] = cr.Object
-	return plan.Action{Do: plan.Create, Slot: slot, Object: marshal(cr.Object)}
+	cr := k.cr(t, slot).Object
+	for _, r := range k.references {
+		if written := g.refer(t, at, r, nil, cr).(map[string]any); k.rules.refusal(written, nil) == nil {
+			cr = written
+		}
+	}
+	at[slot] = cr
+	return plan.Action{Do: plan.Create, Slot: slot, Object: marshal(cr)}
 }
 
 // update changes one field of the slot's CR, or restarts the controller
-// when its CRD refused every patch drawn.
+// when its CRD refused every patch drawn. A drawn field that holds a
+// reference's name holds a candidate there.
 func (g *Generator) update(t *rapid.T, at state, slot string) plan.Action {
 	k := g.kindOf(at[slot])
 	for range updateDraws {
 		mutable := sampled(t, k.fields, "field")
-		value, _ := mutable.draw(t)
+		value, present := mutable.draw(t)
+		if present {
+			for _, r := range k.references {
+				value = g.refer(t, at, r, mutable.path, value)
+			}
+		}
 		// A merge patch removes the field where the draw left it absent.
 		patch := nest(mutable.path, value)
 		patched := mergePatch(runtime.DeepCopyJSON(at[slot]), patch)
