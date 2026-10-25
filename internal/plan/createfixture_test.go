@@ -7,7 +7,6 @@ import (
 )
 
 func TestValidateCreateFixture(t *testing.T) {
-	t.Skip("enabled by the config package")
 	secret := &Target{Resource: "secrets", Name: "admin-password"}
 	deleted := Action{Do: ChangeFixture, Target: secret}
 	again := Action{Do: CreateFixture, Target: secret}
@@ -21,6 +20,8 @@ func TestValidateCreateFixture(t *testing.T) {
 		"another fixture deleted": {[]Step{{Actions: []Action{{Do: ChangeFixture, Target: fixture}, again}}}, "steps[0].actions[1]: createFixture of secrets admin-password follows no changeFixture"},
 		"no target":               {[]Step{{Actions: []Action{{Do: CreateFixture}}}}, "createFixture needs a target with a resource and a name"},
 		"no name":                 {[]Step{{Actions: []Action{{Do: CreateFixture, Target: cms}}}}, "createFixture needs a target with a resource and a name"},
+		"no resource":             {[]Step{{Actions: []Action{{Do: CreateFixture, Target: &Target{Name: "admin-password"}}}}}, "createFixture needs a target with a resource and a name"},
+		"a group and namespace":   {[]Step{{Actions: []Action{{Do: CreateFixture, Target: &Target{Group: "storage.thirdparty", Resource: "volumes", Namespace: "ns", Name: "v"}}}}}, "createFixture of volumes.storage.thirdparty ns/v follows no changeFixture"},
 		"a fake":                  {[]Step{{Actions: []Action{{Do: CreateFixture, Target: &Target{System: "cloud", Resource: "buckets", Name: "b"}}}}}, "createFixture acts only on kube"},
 		"a slot":                  {[]Step{{Actions: []Action{deleted, {Do: CreateFixture, Slot: "a", Target: secret}}}}, "createFixture takes no slot, object or patch"},
 		"a patch":                 {[]Step{{Actions: []Action{deleted, {Do: CreateFixture, Target: secret, Patch: json.RawMessage(`{}`)}}}}, "createFixture takes no slot, object or patch"},
@@ -33,7 +34,6 @@ func TestValidateCreateFixture(t *testing.T) {
 }
 
 func TestValidateAcceptsCreateFixtureAfterADelete(t *testing.T) {
-	t.Skip("enabled by the config package")
 	secret := &Target{Resource: "secrets", Name: "admin-password"}
 	p := &Plan{Steps: []Step{
 		{Actions: []Action{{Do: ChangeFixture, Target: secret}}},

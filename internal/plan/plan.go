@@ -82,9 +82,9 @@ type Propagation string
 // Foreground deletes the CR's blocking dependents before the CR.
 const Foreground Propagation = "Foreground"
 
-// Target selects one object for damage or changeFixture. It is resolved
-// when the action runs. An empty field matches any value. Resource is
-// required on kube.
+// Target selects one object for damage, changeFixture or createFixture. It
+// is resolved when the action runs. An empty field matches any value.
+// Resource is required on kube.
 type Target struct {
 	// System defaults to "kube".
 	System   string `json:"system,omitempty"`
@@ -210,12 +210,15 @@ func (p *Plan) Validate() error {
 	// namespace and name, which is sampleName for the sample and empty for a
 	// generated name. A slot an earlier delete emptied maps to emptied.
 	names := map[string]string{}
+	// deleted holds the target of each changeFixture that deleted a fixture
+	// no later createFixture made again, with an empty system read as kube.
+	deleted := map[Target]bool{}
 	for i, step := range p.Steps {
 		if step.Period < 0 {
 			return fmt.Errorf("steps[%d]: period is negative", i)
 		}
 		for j, a := range step.Actions {
-			if err := a.validate(names); err != nil {
+			if err := a.validate(names, deleted); err != nil {
 				return fmt.Errorf("steps[%d].actions[%d]: %w", i, j, err)
 			}
 		}
@@ -256,11 +259,11 @@ const (
 	emptied    = "\x00emptied"
 )
 
-func (a Action) validate(names map[string]string) error {
+func (a Action) validate(names map[string]string, deleted map[Target]bool) error {
 	if a.At < 0 {
 		return errors.New("at is negative")
 	}
-	if a.Target != nil && a.Do != Damage && a.Do != ChangeFixture {
+	if a.Target != nil && a.Do != Damage && a.Do != ChangeFixture && a.Do != CreateFixture {
 		return fmt.Errorf("%s takes no target", a.Do)
 	}
 	switch {
@@ -306,14 +309,16 @@ func (a Action) validate(names map[string]string) error {
 			return fmt.Errorf("%s takes no slot, object or patch", a.Do)
 		}
 	case Damage, ChangeFixture:
-		return a.validateChange(names)
+		return a.validateChange(names, deleted)
+	case CreateFixture:
+		return a.validateCreateFixture(deleted)
 	default:
 		return fmt.Errorf("unknown do %q", a.Do)
 	}
 	return nil
 }
 
-func (a Action) validateChange(names map[string]string) error {
+func (a Action) validateChange(names map[string]string, deleted map[Target]bool) error {
 	if a.Target == nil {
 		return fmt.Errorf("%s needs a target with a resource", a.Do)
 	}
@@ -333,6 +338,9 @@ func (a Action) validateChange(names map[string]string) error {
 		if a.Target.Name == "" {
 			return errors.New("changeFixture needs a target name")
 		}
+		if a.Patch == nil {
+			deleted[withSystem(*a.Target)] = true
+		}
 		return nil
 	}
 	if a.Object != nil {
@@ -348,6 +356,43 @@ func (a Action) validateChange(names map[string]string) error {
 		return fmt.Errorf("damage names slot %q, which an earlier delete emptied", a.Slot)
 	}
 	return nil
+}
+
+func (a Action) validateCreateFixture(deleted map[Target]bool) error {
+	switch {
+	case a.Target == nil || a.Target.Resource == "" || a.Target.Name == "":
+		return errors.New("createFixture needs a target with a resource and a name")
+	case !onKube(a.Target.System):
+		return errors.New("createFixture acts only on kube")
+	case a.Slot != "" || a.Object != nil || a.Patch != nil:
+		return errors.New("createFixture takes no slot, object or patch")
+	}
+	target := withSystem(*a.Target)
+	if !deleted[target] {
+		return fmt.Errorf("createFixture of %s follows no changeFixture that deleted it", target.object())
+	}
+	delete(deleted, target)
+	return nil
+}
+
+// withSystem is t with an empty system read as kube.
+func withSystem(t Target) Target {
+	if t.System == "" {
+		t.System = "kube"
+	}
+	return t
+}
+
+// object names t's resource and object, such as "secrets ns/admin-password".
+func (t Target) object() string {
+	resource, name := t.Resource, t.Name
+	if t.Group != "" {
+		resource += "." + t.Group
+	}
+	if t.Namespace != "" {
+		name = t.Namespace + "/" + name
+	}
+	return resource + " " + name
 }
 
 // createdName is the group, kind, namespace and name of object, sampleName
