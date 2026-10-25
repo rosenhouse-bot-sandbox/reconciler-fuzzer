@@ -115,16 +115,16 @@ names a kube kind by `group` (empty is the core group) and `resource`, and
 picks no request: while it lasts, every controller watch of the kind forwards
 nothing, and at its end each stream delivers what it held, in order.
 
-**Seen.** A listener records a `seen` for each object of its `Seen` kinds, or
-of every kind with `SeenAll`, that a 2xx response shows its caller. These are
-the dependency kinds and the references' `to` kinds. An undecodable response
-records an `opaque` seen of its ref. A kube listener drops protobuf from such
-a request's `Accept`, since controller-runtime asks for built-in kinds in
-protobuf, whose lists and watch frames it cannot decode. It marks a list or
-watch that may leave objects out (`Call.Partial`): one with a label or field
-selector, or with a `continue` token in its request or decoded answer. A
-response of unknown outcome shows nothing. `Shown` hears every object any
-response carries, unknown outcomes included.
+**Seen.** A listener records a `seen` for each object of its `Seen` kinds, or of
+every kind with `SeenAll`, that a 2xx response shows its caller. These are the
+dependency kinds and the references' `to` kinds. An undecodable response, or a
+Table, records an `opaque` seen of its ref. A kube listener asks for JSON of
+these kinds in place of protobuf or CBOR, with the same parameters, since
+controller-runtime asks for built-in kinds in protobuf, whose lists and watch
+frames it cannot decode. It marks a list or watch that may leave objects out
+(`Call.Partial`): one with a label or field selector, or with a `continue` token
+in its request or decoded answer. A response of unknown outcome shows nothing.
+`Shown` hears every object any response carries, unknown outcomes included.
 
 **The `crud` map** reads `GET /<c>` as `list`, `POST /<c>` as `create`
 (`requestName` is the body's `name`), and `GET`, `PUT`, `PATCH` and `DELETE

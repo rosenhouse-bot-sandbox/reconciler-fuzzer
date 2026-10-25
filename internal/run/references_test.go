@@ -3,6 +3,7 @@ package run
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"slices"
@@ -123,6 +124,34 @@ func TestExecuteNotesACreateFixtureWhoseLastChangeFixtureDeletedNothing(t *testi
 	}
 	if a, _ := findAction(f.rec.Events(), 3, 0); a.Action == nil || a.Action.Error == "" || a.Action.Ref != nil {
 		t.Errorf("second createFixture action = %+v, want an error and no ref", a.Action)
+	}
+}
+
+func TestExecuteCreatesAgainOnlyWhatAChangeFixtureDeleted(t *testing.T) {
+	f := newFixture(t, nil)
+	made := trace.Ref{System: "kube", Resource: "secrets", Namespace: "ns", Name: "made"}
+	f.runner.Select = func(_ *trace.Index, creator trace.Caller, _ plan.Target, _ string, _ time.Duration) (trace.Ref, error) {
+		if creator == trace.Controller {
+			return made, nil
+		}
+		return passwordSecret, nil
+	}
+	p := recreatePassword()
+	p.Steps = slices.Insert(p.Steps, 1, plan.Step{Actions: []plan.Action{{Do: plan.Damage, Target: &plan.Target{Resource: "secrets", Name: "pw"}}}})
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := f.cluster.all(), []string{"delete pw", "delete made", "gone pw", "createFixture pw"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("cluster calls = %q, want %q", got, want)
+	}
+}
+
+func TestExecuteFailsWhenItCannotCreateAFixtureAgain(t *testing.T) {
+	f := newFixture(t, nil)
+	selecting(f, map[string]trace.Ref{"secrets": passwordSecret})
+	f.cluster.createErr = errors.New("refused")
+	if err := f.runner.Execute(context.Background(), recreatePassword()); err == nil || !strings.Contains(err.Error(), "refused") {
+		t.Errorf("Execute = %v, want the createFixture's error", err)
 	}
 }
 
