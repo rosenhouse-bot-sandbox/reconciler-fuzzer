@@ -21,6 +21,7 @@ import (
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/yaml"
 
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 )
 
@@ -66,6 +67,9 @@ type Launch struct {
 	// RBAC holds Role and ClusterRole manifests that the controller's
 	// identity is bound to.
 	RBAC []string
+	// Upgrades are the later versions that generated plans restart into, in
+	// order. Their paths are absolute.
+	Upgrades []plan.Upgrade
 }
 
 // Primary describes one CR kind the controller serves, which the harness
@@ -659,6 +663,12 @@ func (c *Config) checkLaunchVars() error {
 		}
 	}
 	return nil
+}
+
+// CheckArgs reports the first of args that holds a ${key} the config's
+// systems lack, as in "args[2]: unknown key x".
+func (c *Config) CheckArgs(args []string) error {
+	return errors.New("CheckArgs is not implemented")
 }
 
 // keys returns each ${key} in s.

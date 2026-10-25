@@ -15,6 +15,13 @@ func TestRunRejectsAnUnknownBug(t *testing.T) {
 	}
 }
 
+func TestRunRejectsAnUnknownVersion(t *testing.T) {
+	t.Skip("enabled by the toy-fleet package")
+	if err := run([]string{"--version=3"}, nil); err == nil || !strings.Contains(err.Error(), "--version=3: want 1 or 2") {
+		t.Errorf("run(--version=3) = %v, want an error naming --version=3", err)
+	}
+}
+
 func TestCacheOptionsFollowTheWatchNamespace(t *testing.T) {
 	if got := cacheOptions(""); got.DefaultNamespaces != nil {
 		t.Errorf("no namespace gave %v", got.DefaultNamespaces)

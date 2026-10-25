@@ -553,6 +553,13 @@ func (k *Kube) Subscribe(hear func(trace.Version)) {
 	k.observer.hear = append(k.observer.hear, hear)
 }
 
+// InstallCRDs creates or updates, as admin, the CRDs in paths, files or
+// directories, waits until discovery serves them, and has the observer
+// watch their kinds. Kinds and StatusKinds stay as Start left them.
+func (k *Kube) InstallCRDs(ctx context.Context, paths []string) error {
+	return errors.New("InstallCRDs is not implemented")
+}
+
 // Kinds names each kind the observer watches from the start, by a ref with
 // no namespace or name. Call it after Start.
 func (k *Kube) Kinds() []trace.Ref { return slices.Clone(k.kinds) }

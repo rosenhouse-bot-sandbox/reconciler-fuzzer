@@ -41,6 +41,7 @@ type Process interface {
 	Stop(ctx context.Context) error
 	Kill(ctx context.Context) error
 	Supervise(on bool) error
+	SetCommand(path string, args []string)
 }
 
 // Cluster applies CR actions as the harness. *kube.Kube implements it.
@@ -50,6 +51,7 @@ type Cluster interface {
 	Delete(ctx context.Context, ref trace.Ref, propagation plan.Propagation) error
 	Gone(ctx context.Context, ref trace.Ref, uid string) (bool, error)
 	WaitGone(ctx context.Context, ref trace.Ref, uid string) error
+	InstallCRDs(ctx context.Context, paths []string) error
 }
 
 var (
@@ -88,6 +90,11 @@ type Runner struct {
 	// Failed returns the error of a failed system, such as a fake that
 	// exited. Nil means none can fail.
 	Failed func() error
+	// Vars expand as ${key} in a restart's args, such as
+	// systems.kube.kubeconfig.
+	Vars map[string]string
+	// LaunchArgs follow a restart's args, as they follow the launch's.
+	LaunchArgs []string
 }
 
 func (r *Runner) failed() error {

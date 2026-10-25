@@ -66,6 +66,9 @@ type reconciler struct {
 	APIReader client.Reader
 	Scheme    *runtime.Scheme
 	Bug       Bug
+	// Version is 1 or 2. Version 2 renames the Cluster finalizer, the
+	// Volumes it makes and the phase Provisioning.
+	Version int
 }
 
 // unserved says whether a list failed because the server no longer serves

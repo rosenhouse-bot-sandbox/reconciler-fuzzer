@@ -44,7 +44,8 @@ const (
 	Update Do = "update"
 	// Delete deletes the slot's CR.
 	Delete Do = "delete"
-	// Restart stops the controller with SIGTERM and starts it again.
+	// Restart applies the Upgrade's CRDs, stops the controller with SIGTERM,
+	// and starts it again with the Upgrade's binary and args.
 	Restart Do = "restart"
 	// Kill sends SIGKILL. The controller stays down until the fault period
 	// ends, or until a create's or a stop's wait for a deleted CR restarts
@@ -77,6 +78,8 @@ type Action struct {
 	// Propagation is a delete's propagation policy. Empty is the server's
 	// default.
 	Propagation Propagation `json:"propagation,omitempty"`
+	// Upgrade is a restart's.
+	Upgrade
 }
 
 // Propagation is a delete's propagation policy.
