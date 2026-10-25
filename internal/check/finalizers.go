@@ -18,11 +18,15 @@ const removedForeign = "removed another caller's finalizer"
 // of their first removal.
 func Finalizers(ix *trace.Index, s Spec) []Finding {
 	steps := ix.Steps()
+	missed := firstMissed(ix)
 	found := map[findingKey]*Finding{}
 	var order []findingKey
 	for _, e := range ix.Calls(trace.Controller, -1, math.MaxInt64) {
 		c := e.Call
 		if !judgedWrite(*c, s) {
+			continue
+		}
+		if seq, missing := missed[c.Object()]; missing && seq < e.Seq {
 			continue
 		}
 		base := replaced(ix, e)
@@ -34,7 +38,7 @@ func Finalizers(ix *trace.Index, s Spec) []Finding {
 			if !foreign {
 				continue
 			}
-			key := findingKey{stepAt(steps, e.At), removedForeign, kind(base.Ref)}
+			key := findingKey{stepAt(steps, e.At-c.Latency), removedForeign, kind(base.Ref)}
 			if found[key] == nil {
 				found[key] = &Finding{Check: "Finalizers", Step: key.step, At: e.At, Summary: removedForeign, Kind: key.kind}
 				order = append(order, key)
@@ -69,6 +73,27 @@ func judgedWrite(c trace.Call, s Spec) bool {
 	return c.Subresource == ""
 }
 
+// firstMissed gives the Seq of each object's first answer that carries a
+// version the observer never recorded, as when its watch relists. The trace
+// may lack the finalizer changes before it.
+func firstMissed(ix *trace.Index) map[trace.Ref]uint64 {
+	missed := map[trace.Ref]uint64{}
+	for _, e := range ix.Events() {
+		c := e.Call
+		if c == nil || c.ResultFinalizers == nil {
+			continue
+		}
+		ref := c.Object()
+		if _, observed := ix.VersionOf(ref, c.ResultRV); observed {
+			continue
+		}
+		if _, found := missed[ref]; !found {
+			missed[ref] = e.Seq
+		}
+	}
+	return missed
+}
+
 // replaced is the version a write replaced, or no version when the trace
 // lacks it. A write that made its answer's version replaced the one before.
 // Any other write replaced its answer's version: it changed nothing, or it
@@ -99,13 +124,13 @@ func makers(ix *trace.Index, ref trace.Ref, rv string) []trace.Caller {
 	return callers
 }
 
-// adder is who added f, which v holds, and whether it was another caller
-// than the controller. The API server adds the garbage collector's
-// finalizers for a delete's propagation policy. Any other finalizer's
-// adders made the first of the versions, up to v, that all hold f. f may be
-// the controller's own when no recorded write made that version, or when
-// the controller or the harness may have: a sample, a fixture or a plan may
-// carry the controller's own finalizer.
+// adder returns the caller that added f, which v holds, and false when f
+// may be the controller's own. The gc owns the finalizers that the API
+// server adds for a delete's propagation policy. Any other finalizer's
+// adder made the first version of the unbroken run, ending at v, that holds
+// f. f may be the controller's own when the trace names no maker of that
+// version, or names the controller or the harness. A sample, a fixture or a
+// plan may carry the controller's own finalizer.
 func adder(ix *trace.Index, v trace.Version, f string) (trace.Caller, bool) {
 	if f == metav1.FinalizerDeleteDependents || f == metav1.FinalizerOrphanDependents {
 		return trace.GC, true

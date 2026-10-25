@@ -88,6 +88,14 @@ func TestFinalizersFailsAControllerWriteThatDropsAModelsFinalizer(t *testing.T) 
 		"an update that releases the deleted object": {func(r *tt.Script, uid string) {
 			release(r, uid, ctl)
 		}, "update"},
+		"an update after a get, whose answer the listener does not read": {func(r *tt.Script, uid string) {
+			r.Add(tt.Call(ctl, "get", gadgetA, 200, ""))
+			r.Add(write(ctl, "update", gadgetA, "c1"), tt.Version(gadgetA, uid, "c1", gadgetBody(false)))
+		}, "update"},
+		"an update before an answer whose version the observer missed": {func(r *tt.Script, uid string) {
+			r.Add(write(ctl, "update", gadgetA, "c1"), tt.Version(gadgetA, uid, "c1", gadgetBody(false)))
+			r.Add(write(gadgetModel, "patch", gadgetA, "m1", protect))
+		}, "update"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r, uid := heldGadget()
@@ -192,6 +200,43 @@ func TestFinalizersFailsAControllerWriteThatDropsTheGarbageCollectorsFinalizer(t
 	}
 }
 
+// The observer misses versions when its watch relists. The trace then lacks
+// the changes they made.
+func TestFinalizersSkipsAWriteAfterAnAnswerWhoseVersionTheObserverMissed(t *testing.T) {
+	for name, race := range map[string]func(r *tt.Script, uid string){
+		"after another caller's removal": func(r *tt.Script, uid string) {
+			r.Add(write(gadgetModel, "patch", gadgetA, "m1"))
+			r.Add(write(ctl, "update", gadgetA, "c1"), tt.Version(gadgetA, uid, "c1", gadgetBody(false)))
+		},
+		"between two answers": func(r *tt.Script, uid string) {
+			r.Add(write(gadgetModel, "patch", gadgetA, "m1"))
+			r.Add(write(ctl, "update", gadgetA, "c1"), tt.Version(gadgetA, uid, "c1", gadgetBody(false)))
+			r.Add(write(gadgetModel, "patch", gadgetA, "m2", protect))
+		},
+		"after the controller's add": func(r *tt.Script, uid string) {
+			r.Add(write(ctl, "update", gadgetA, "c1", protect, own))
+			r.Add(write(gadgetModel, "patch", gadgetA, "m1", protect, own), tt.Version(gadgetA, uid, "m1", gadgetBody(false, protect, own)))
+			r.Add(write(ctl, "update", gadgetA, "c2", protect), tt.Version(gadgetA, uid, "c2", gadgetBody(false, protect)))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, uid := heldGadget()
+			race(r, uid)
+			requireNone(t, finalizerFindings(t, r))
+		})
+	}
+}
+
+// A delay fault can hold a write past the end of the step that sent it.
+func TestFinalizersGivesAWriteTheStepThatSentIt(t *testing.T) {
+	r, uid := heldGadget()
+	r.EndFaults().Settle()
+	sentAt := r.Now
+	r.Tick(tt.Tick).Begin()
+	r.Add(sent(write(ctl, "update", gadgetA, "c1"), r.Now-sentAt), tt.Version(gadgetA, uid, "c1", gadgetBody(false)))
+	requireFinding(t, finalizerFindings(t, r), "Finalizers", 0, removed, "kube/toy/gadgets", protect)
+}
+
 // The API server deletes an object once its last finalizer is removed.
 func TestFinalizersPassesAModelThatReleasesTheDeletedObject(t *testing.T) {
 	r, uid := heldGadget()
@@ -263,13 +308,11 @@ func TestFinalizersFailsAStatusWriteThatDropsAFinalizer(t *testing.T) {
 		"services ns/s: "+protect+", added by model:services, removed by status update")
 }
 
-// The API server keeps a CRD's metadata on a status write. Here the observer
-// missed the model's removal, so the write seems to replace a version that
-// holds protect.
+// The API server keeps a CRD's metadata on a status write, so the write
+// removes no finalizer. Here the trace lacks the removal.
 func TestFinalizersSkipsAStatusWriteOfAnInstalledCRD(t *testing.T) {
 	r, uid := heldGadget()
 	r.Spec.StatusKinds = []trace.Kind{{Group: "toy", Version: "v1", Kind: "Gadget", Resource: "gadgets"}}
-	r.Add(write(gadgetModel, "patch", gadgetA, "m1"))
 	status := write(ctl, "update", gadgetA, "s1")
 	status.Call.Subresource = "status"
 	r.Add(status, tt.Version(gadgetA, uid, "s1", gadgetBody(false)))
