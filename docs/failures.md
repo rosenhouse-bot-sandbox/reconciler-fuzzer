@@ -51,8 +51,10 @@ with such notes may need a different fault.
 
 `the slot's name is still taken after the create waited 37s` means that
 a create gave up waiting until its slot's previous CR no longer existed.
+`the name of secrets ns/pw is still taken after the createFixture waited
+37s` says the same of a `createFixture` and the fixture it makes again.
 The step's faults had ended by then (DESIGN.md §9). When the observer last
-recorded a live CR with that name, the rest of the note names its
+recorded a live object with that name, the rest of the note names its
 `deletionTimestamp` and finalizers, or says that it is not being deleted.
 The run then skips to the `delete all` and `restart` steps that the runner
 appends.
@@ -95,7 +97,7 @@ Look at the clause first:
 | 2 | A CR is still being deleted. | Its finalizers, and why the controller did not remove them. |
 | 3 | The controller is down, or restarted within `stable`. | `controller.log`, and any Crash finding. |
 | 4 | The controller made no successful request since it started. | Its startup in `controller.log`, and its RBAC. |
-| 5 | The controller did not look at an object a `damage` or `changeFixture` changed. | Its watches and the kinds it reads. |
+| 5 | The controller did not look at an object a `damage`, `changeFixture` or `createFixture` changed. | Its watches and the kinds it reads. |
 | 6 | A model, such as `gc`, has work pending. | What the model waits on. Churn under clause 7 often keeps it busy. |
 | 7 | The controller kept changing objects, or went over the `budgets`. | The first changed write the detail names: it shows what the controller fights over. |
 

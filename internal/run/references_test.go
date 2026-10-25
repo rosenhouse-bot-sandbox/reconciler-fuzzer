@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/owner"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/system"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
@@ -101,6 +103,29 @@ func TestExecuteNotesACreateFixtureWhoseChangeFixtureDeletedNothing(t *testing.T
 	}
 }
 
+func TestExecuteNotesACreateFixtureWhoseLastChangeFixtureDeletedNothing(t *testing.T) {
+	f := newFixture(t, nil)
+	selecting(f, map[string]trace.Ref{"secrets": passwordSecret})
+	selected := f.runner.Select
+	f.runner.Select = func(ix *trace.Index, creator trace.Caller, target plan.Target, slot string, at time.Duration) (trace.Ref, error) {
+		if slices.Contains(f.cluster.all(), "createFixture pw") {
+			return trace.Ref{}, owner.ErrNoMatch
+		}
+		return selected(ix, creator, target, slot, at)
+	}
+	p := recreatePassword()
+	p.Steps = append(p.Steps, recreatePassword().Steps...)
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := f.cluster.all(), []string{"delete pw", "gone pw", "createFixture pw"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("cluster calls = %q, want %q", got, want)
+	}
+	if a, _ := findAction(f.rec.Events(), 3, 0); a.Action == nil || a.Action.Error == "" || a.Action.Ref != nil {
+		t.Errorf("second createFixture action = %+v, want an error and no ref", a.Action)
+	}
+}
+
 func TestExecuteDeletesEachReferencingKindBeforeTheKindItNames(t *testing.T) {
 	f := newFixture(t, nil)
 	toy := func(kind string) schema.GroupVersionKind {
@@ -131,6 +156,7 @@ func TestReferenceKindsAreTheKubeKindsReferencesName(t *testing.T) {
 		{From: sprocketKind, To: gadgetKind, Name: "spec.gadget"},
 		{From: sprocketKind, System: "cloud", Collection: "buckets", Name: "spec.bucket"},
 		{From: gadgetKind, To: secretKind, Name: "spec.secret"},
+		{From: sprocketKind, To: secretKind, Name: "spec.secret"},
 	}
 	if got, want := referenceKinds(references), []schema.GroupVersionKind{gadgetKind, secretKind}; !reflect.DeepEqual(got, want) {
 		t.Errorf("referenceKinds = %v, want %v", got, want)

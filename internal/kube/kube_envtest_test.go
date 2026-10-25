@@ -383,6 +383,7 @@ func TestKube(t *testing.T) {
 		for _, ref := range []trace.Ref{
 			{System: Name, Resource: "configmaps", Namespace: ns, Name: "not-a-fixture"},
 			{System: Name, Resource: "configmaps", Namespace: "rf-far", Name: "widget-config"},
+			{System: Name, Resource: "secrets", Namespace: ns, Name: "widget-config"},
 		} {
 			if _, err := k.CreateFixture(ctx, ref); err == nil {
 				t.Errorf("CreateFixture(%+v) made an object no fixture file declares.", ref)

@@ -110,8 +110,7 @@ type deletion struct {
 }
 
 // deleteOrder is the slots that hold a live CR, by Config.DeleteOrder of the
-// kind each created, and else by name. A kind DeleteOrder does not list
-// comes first.
+// kind each created, and else by name.
 func (e *execution) deleteOrder() []string {
 	order := e.Config.DeleteOrder()
 	slots := slices.Sorted(maps.Keys(e.live))
@@ -427,7 +426,7 @@ func (e *execution) act(ctx context.Context, a plan.Action, s *stepRun) (*trace.
 		if errors.Is(err, system.ErrGone) {
 			return nil, fmt.Errorf("%w: %w", owner.ErrNoMatch, err)
 		}
-		if err == nil && a.Do == plan.ChangeFixture {
+		if a.Do == plan.ChangeFixture {
 			e.fixtures[fixtureKey(*a.Target)] = deleted
 		}
 		return &ref, err
