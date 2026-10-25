@@ -75,11 +75,17 @@ type fakeCluster struct {
 	*calls
 	createErr error
 	created   []map[string]any
+	// rec, when set, records a version of each created CR, whose UID is u
+	// and the number of the create.
+	rec *trace.Recorder
 	// waitGone, when set, makes deleted CRs linger: Gone reports them there,
 	// and WaitGone answers with waitGone.
 	waitGone  func(ctx context.Context) error
 	goneErr   error
 	deleteErr error
+	// replaced makes Delete find that another CR, which it records, took
+	// the name, and so remove nothing.
+	replaced bool
 }
 
 func (c *fakeCluster) Create(_ context.Context, obj map[string]any) (trace.Ref, error) {
@@ -87,7 +93,12 @@ func (c *fakeCluster) Create(_ context.Context, obj map[string]any) (trace.Ref, 
 	c.add("create %s", name)
 	c.created = append(c.created, obj)
 	obj["mutated"] = true
-	return trace.Ref{System: "kube", Resource: "widgets", Namespace: "ns", Name: name}, c.createErr
+	ref := trace.Ref{System: "kube", Resource: "widgets", Namespace: "ns", Name: name}
+	if c.rec != nil {
+		uid := fmt.Sprintf("u%d", len(c.created))
+		c.rec.Record(trace.Event{Version: &trace.Version{Ref: ref, UID: uid, RV: uid}})
+	}
+	return ref, c.createErr
 }
 
 func (c *fakeCluster) Patch(_ context.Context, ref trace.Ref, patch []byte) error {
@@ -101,16 +112,21 @@ func (c *fakeCluster) Delete(_ context.Context, ref trace.Ref, propagation plan.
 	} else {
 		c.add("delete %s %s", ref.Name, propagation)
 	}
+	if c.replaced {
+		c.rec.Record(trace.Event{Version: &trace.Version{Ref: ref, UID: "other", RV: "other"}})
+		return system.ErrGone
+	}
 	return c.deleteErr
 }
 
-func (c *fakeCluster) Gone(_ context.Context, ref trace.Ref) (bool, error) {
-	c.add("gone %s", ref.Name)
+// Gone and WaitGone log a uid after the name.
+func (c *fakeCluster) Gone(_ context.Context, ref trace.Ref, uid string) (bool, error) {
+	c.add("%s", strings.TrimSpace("gone "+ref.Name+" "+uid))
 	return c.waitGone == nil && c.goneErr == nil, c.goneErr
 }
 
-func (c *fakeCluster) WaitGone(ctx context.Context, ref trace.Ref) error {
-	c.add("waitGone %s", ref.Name)
+func (c *fakeCluster) WaitGone(ctx context.Context, ref trace.Ref, uid string) error {
+	c.add("%s", strings.TrimSpace("waitGone "+ref.Name+" "+uid))
 	if c.waitGone != nil {
 		return c.waitGone(ctx)
 	}
@@ -750,57 +766,161 @@ func TestExecuteReturnsACancelDuringTheSlotWait(t *testing.T) {
 	}
 }
 
-func TestExecuteReturnsTheRunsDeadlineDuringTheSlotWait(t *testing.T) {
-	f := newFixture(t, nil)
-	ctx, cancel := context.WithTimeout(context.Background(), timeouts.Settle/3)
-	defer cancel()
-	f.cluster.waitGone = func(wait context.Context) error {
-		<-wait.Done()
-		return wait.Err()
-	}
-	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{{Do: plan.Create, Slot: "a"}, {Do: plan.Delete, Slot: "a"}, {Do: plan.Create, Slot: "a"}}}}}
-	if err := f.runner.Execute(ctx, p); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Execute = %v, want the deadline", err)
-	}
-	if got, want := actionErrors(f.rec.Events()), []string{context.DeadlineExceeded.Error()}; !reflect.DeepEqual(got, want) {
-		t.Errorf("action errors = %q, want %q", got, want)
+// waiters are steps whose last action waits for slot a's deleted CR: a
+// create into the slot, or a stop.
+var waiters = map[string][]plan.Action{
+	"create": {{Do: plan.Create, Slot: "a"}, {Do: plan.Delete, Slot: "a"}, {Do: plan.Create, Slot: "a"}},
+	"stop":   {{Do: plan.Create, Slot: "a"}, {Do: plan.Delete, Slot: "a"}, {Do: plan.Stop}},
+}
+
+func TestExecuteReturnsTheRunsDeadlineWhileItWaitsForADeletedCR(t *testing.T) {
+	for name, actions := range waiters {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, nil)
+			ctx, cancel := context.WithTimeout(context.Background(), timeouts.Settle/3)
+			defer cancel()
+			f.cluster.waitGone = func(wait context.Context) error {
+				<-wait.Done()
+				return wait.Err()
+			}
+			if err := f.runner.Execute(ctx, &plan.Plan{Steps: []plan.Step{{Actions: actions}}}); !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("Execute = %v, want the deadline", err)
+			}
+			if got, want := actionErrors(f.rec.Events()), []string{context.DeadlineExceeded.Error()}; !reflect.DeepEqual(got, want) {
+				t.Errorf("action errors = %q, want %q", got, want)
+			}
+		})
 	}
 }
 
 func TestExecuteReturnsAGoneError(t *testing.T) {
-	f := newFixture(t, nil)
-	f.cluster.goneErr = errors.New("forbidden")
-	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{{Do: plan.Create, Slot: "a"}, {Do: plan.Delete, Slot: "a"}, {Do: plan.Create, Slot: "a"}}}}}
-	if err := f.runner.Execute(context.Background(), p); err == nil || !strings.Contains(err.Error(), "forbidden") {
-		t.Fatalf("Execute = %v, want Gone's error", err)
+	for name, actions := range waiters {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, nil)
+			f.cluster.goneErr = errors.New("forbidden")
+			if err := f.runner.Execute(context.Background(), &plan.Plan{Steps: []plan.Step{{Actions: actions}}}); err == nil || !strings.Contains(err.Error(), "forbidden") {
+				t.Fatalf("Execute = %v, want Gone's error", err)
+			}
+		})
 	}
 }
 
 func TestExecuteReturnsAWaitGoneError(t *testing.T) {
+	for name, actions := range waiters {
+		for _, c := range []struct {
+			name   string
+			period time.Duration
+		}{
+			{"before the period ends", 100 * time.Millisecond},
+			{"after the period", 0},
+		} {
+			t.Run(name+" "+c.name, func(t *testing.T) {
+				f := newFixture(t, nil)
+				waits := 0
+				f.cluster.waitGone = func(context.Context) error {
+					// A wait that goes on after the error succeeds.
+					if waits++; waits == 1 {
+						return errors.New("forbidden")
+					}
+					return nil
+				}
+				p := &plan.Plan{Steps: []plan.Step{{Period: plan.Duration(c.period), Actions: actions}}}
+				if err := f.runner.Execute(context.Background(), p); err == nil || !strings.Contains(err.Error(), "forbidden") {
+					t.Fatalf("Execute = %v, want the wait's error", err)
+				}
+			})
+		}
+	}
+}
+
+// A create needs its CR's name, whichever CR holds it. A stop waits for the
+// CR that a delete removed, which another CR may replace under its name, as
+// kubectl wait --for=delete does.
+func TestExecuteWaitsForTheNameAtACreateAndForTheDeletedCRAtAStop(t *testing.T) {
 	for _, c := range []struct {
 		name   string
 		period time.Duration
+		// waits are the calls of each wait. Before Period ends, it polls
+		// with WaitGone. After, it checks with Gone first.
+		waits []string
 	}{
-		{"before the period ends", 100 * time.Millisecond},
-		{"after the period", 0},
+		{"before the period ends", 100 * time.Millisecond, []string{"waitGone"}},
+		{"after the period", 0, []string{"gone", "waitGone"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newFixture(t, nil)
-			waits := 0
-			f.cluster.waitGone = func(context.Context) error {
-				// A create that goes on waiting after the error succeeds.
-				if waits++; waits == 1 {
-					return errors.New("forbidden")
-				}
-				return nil
+			f.cluster.rec = f.rec
+			lingering(f, 20*time.Millisecond)
+			p := &plan.Plan{Steps: []plan.Step{
+				{Actions: []plan.Action{{Do: plan.Create, Slot: "a", Object: widget("first")}}},
+				{Period: plan.Duration(c.period), Actions: []plan.Action{
+					{Do: plan.Delete, Slot: "a"}, {Do: plan.Create, Slot: "a", Object: widget("first")}, {Do: plan.Delete, Slot: "a"}, {Do: plan.Stop},
+				}},
+			}}
+			if err := f.runner.Execute(context.Background(), p); err != nil {
+				t.Fatal(err)
 			}
-			p := &plan.Plan{Steps: []plan.Step{{Period: plan.Duration(c.period), Actions: []plan.Action{
-				{Do: plan.Create, Slot: "a"}, {Do: plan.Delete, Slot: "a"}, {Do: plan.Create, Slot: "a"},
-			}}}}
-			if err := f.runner.Execute(context.Background(), p); err == nil || !strings.Contains(err.Error(), "forbidden") {
-				t.Fatalf("Execute = %v, want the wait's error", err)
+			want := []string{"create first", "delete first"}
+			for _, w := range c.waits {
+				want = append(want, w+" first")
+			}
+			want = append(want, "create first", "delete first")
+			for _, w := range c.waits {
+				want = append(want, w+" first u2")
+			}
+			if got := f.cluster.all(); !reflect.DeepEqual(got, want) {
+				t.Errorf("cluster calls = %q, want %q", got, want)
 			}
 		})
+	}
+}
+
+// The stop's event names the CRs it waited for: the last that a delete
+// removed from each slot that no create filled again.
+func TestExecuteRecordsTheCRsThatAStopWaitedFor(t *testing.T) {
+	f := newFixture(t, nil)
+	f.cluster.rec = f.rec
+	p := &plan.Plan{Steps: []plan.Step{
+		{Actions: []plan.Action{
+			{Do: plan.Create, Slot: "a", Object: widget("first")},
+			{Do: plan.Create, Slot: "b", Object: widget("second")},
+			{Do: plan.Create, Slot: "c", Object: widget("third")},
+		}},
+		{Actions: []plan.Action{
+			{Do: plan.Delete, Slot: "a"}, {Do: plan.Delete, Slot: "b"}, {Do: plan.Delete, Slot: "c"},
+			{Do: plan.Create, Slot: "b", Object: widget("second")}, {Do: plan.Create, Slot: "d", Object: widget("first")},
+			{Do: plan.Stop}, {Do: plan.Delete, Slot: "b"},
+		}},
+	}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	waited := map[string][]string{}
+	for _, e := range f.rec.Events() {
+		if e.Action != nil && e.Action.Waited != nil {
+			waited[e.Action.Do] = e.Action.Waited
+		}
+	}
+	if want := map[string][]string{"stop": {"u1", "u3"}}; !reflect.DeepEqual(waited, want) {
+		t.Errorf("waited = %q, want only the stop's, with slot a's CR u1 and slot c's CR u3", waited)
+	}
+}
+
+// A delete that finds another CR at the slot's name removes nothing. The
+// stop waits for the slot's CR, not for the other.
+func TestExecuteStopsWithoutWaitingForACRThatTookTheNameBeforeTheDelete(t *testing.T) {
+	f := newFixture(t, nil)
+	f.cluster.rec = f.rec
+	f.cluster.replaced = true
+	p := &plan.Plan{Steps: []plan.Step{
+		{Actions: []plan.Action{{Do: plan.Create, Slot: "a", Object: widget("first")}}},
+		{Actions: []plan.Action{{Do: plan.Delete, Slot: "a"}, {Do: plan.Stop}}},
+	}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"create first", "delete first", "gone first u1"}; !reflect.DeepEqual(f.cluster.all(), want) {
+		t.Errorf("cluster calls = %q, want %q", f.cluster.all(), want)
 	}
 }
 
@@ -862,6 +982,164 @@ func TestExecuteRestartsAControllerKilledAfterASlotWaitEndedTheFaults(t *testing
 	got := f.process.all()
 	if i := slices.Index(got, "kill"); i < 0 || i+1 == len(got) || got[i+1] != "supervise(true)" {
 		t.Errorf("process calls = %q, want supervise(true) right after the kill", got)
+	}
+}
+
+// After a stop the controller stays down, so the runner appends no
+// delete-all and no restart.
+func TestExecuteAppendsNothingAfterAStop(t *testing.T) {
+	f := newFixture(t, nil)
+	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{{Do: plan.Stop}}}}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := f.process.all(), []string{"supervise(false)", "supervise(false)", "stop"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("process calls = %q, want %q", got, want)
+	}
+	if _, found := find(f.rec.Events(), 1, trace.FaultPeriod); found {
+		t.Error("The runner appended a step after the stop.")
+	}
+}
+
+// startedAfterStop lists the process calls after the stop that could start
+// the controller.
+func startedAfterStop(t *testing.T, f *fixture) []string {
+	t.Helper()
+	got := f.process.all()
+	i := slices.Index(got, "stop")
+	if i < 0 {
+		t.Fatalf("process calls = %q, want a stop", got)
+	}
+	return slices.DeleteFunc(got[i+1:], func(c string) bool { return c == "supervise(false)" })
+}
+
+func TestExecuteKeepsAStoppedControllerDownWhileThePlanGoesOn(t *testing.T) {
+	f := newFixture(t, nil)
+	p := &plan.Plan{Steps: []plan.Step{
+		{Actions: []plan.Action{{Do: plan.Create, Slot: "a", Object: widget("first")}}},
+		{Period: plan.Duration(50 * time.Millisecond), Faults: holdWidgets, Actions: []plan.Action{{Do: plan.Stop}}},
+		{Actions: []plan.Action{{Do: plan.Delete, Slot: "a"}}},
+	}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if got := startedAfterStop(t, f); len(got) != 0 {
+		t.Errorf("process calls after the stop = %q, want none that starts the controller", got)
+	}
+	want := []string{
+		"phase 0 faultPeriod", "action 0.0 create a first", "phase 0 endFaults", "phase 0 settled", "phase 0 confirmed",
+		"phase 1 faultPeriod", "fault 1.0 start", "action 1.0 stop ", "fault 1.0 end", "phase 1 endFaults", "phase 1 settled", "phase 1 confirmed",
+		"phase 2 faultPeriod", "action 2.0 delete a first", "phase 2 endFaults", "phase 2 settled", "phase 2 confirmed",
+	}
+	if got := summarize(f.rec.Events()); !reflect.DeepEqual(got, want) {
+		t.Errorf("events:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// lingering makes each wait for a deleted CR end lingers after it starts.
+func lingering(f *fixture, lingers time.Duration) {
+	f.cluster.waitGone = func(ctx context.Context) error {
+		select {
+		case <-time.After(lingers):
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+// A stop waits until the CRs the plan deleted are gone, as kubectl wait
+// --for=delete does, even those an earlier step deleted.
+func TestExecuteStopsOnceTheDeletedCRsAreGone(t *testing.T) {
+	f := newFixture(t, nil)
+	const lingers = 100 * time.Millisecond
+	lingering(f, lingers)
+	p := &plan.Plan{Steps: []plan.Step{
+		{Actions: []plan.Action{{Do: plan.Create, Slot: "a", Object: widget("first")}, {Do: plan.Create, Slot: "b", Object: widget("second")}}},
+		{Actions: []plan.Action{{Do: plan.Delete, Slot: "a"}}},
+		{Actions: []plan.Action{{Do: plan.Delete, Slot: "b"}, {Do: plan.Stop}}},
+	}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"first", "second"} {
+		waited, found := f.cluster.whenAfter("waitGone "+name, "delete second")
+		if !found {
+			t.Fatalf("cluster calls = %q, want the stop to wait for %s", f.cluster.all(), name)
+		}
+		if gap := f.process.when("stop").Sub(waited); gap < lingers-5*time.Millisecond {
+			t.Errorf("the stop came %v after its wait for %s began, want at least the %v it lingers", gap, name, lingers)
+		}
+	}
+	if errs := actionErrors(f.rec.Events()); len(errs) != 0 {
+		t.Errorf("action errors = %q, want none", errs)
+	}
+}
+
+// Once Period has passed with a deleted CR still there, the stop's wait
+// ends the faults and restarts a killed controller, as a create's does.
+func TestExecuteEndsTheFaultsAndRestartsAKilledControllerWhileAStopWaits(t *testing.T) {
+	f := newFixture(t, nil)
+	faultHoldsDeletedCRs(f, 0)
+	const period = 100 * time.Millisecond
+	p := &plan.Plan{Steps: []plan.Step{
+		{Actions: []plan.Action{{Do: plan.Create, Slot: "a", Object: widget("first")}}},
+		{Period: plan.Duration(period), Faults: holdWidgets, Actions: []plan.Action{{Do: plan.Kill}, {Do: plan.Delete, Slot: "a"}, {Do: plan.Stop}}},
+	}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"phase 0 faultPeriod", "action 0.0 create a first", "phase 0 endFaults", "phase 0 settled", "phase 0 confirmed",
+		"phase 1 faultPeriod", "fault 1.0 start", "action 1.0 kill ", "action 1.1 delete a first", "fault 1.0 end", "action 1.2 stop ",
+		"phase 1 endFaults", "phase 1 settled", "phase 1 confirmed",
+	}
+	if got := summarize(f.rec.Events()); !reflect.DeepEqual(got, want) {
+		t.Fatalf("events:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if lasted := faultLasted(t, f.rec.Events()); lasted < period-5*time.Millisecond || lasted > period+100*time.Millisecond {
+		t.Errorf("the fault lasted %v, want the period %v", lasted, period)
+	}
+	if restarted, found := f.process.whenAfter("supervise(true)", "kill"); !found || restarted.After(f.process.when("stop")) {
+		t.Errorf("process calls = %q, want supervise(true) between the kill and the stop", f.process.all())
+	}
+	if calls := f.process.all(); slices.Index(calls, "stop") < 1 || calls[slices.Index(calls, "stop")-1] != "supervise(false)" {
+		t.Errorf("process calls = %q, want supervise(false) right before the stop, so that no restart follows it", calls)
+	}
+	if got := startedAfterStop(t, f); len(got) != 0 {
+		t.Errorf("process calls after the stop = %q, want none that starts the controller", got)
+	}
+}
+
+// A stop whose deleted CR stays stops the controller anyway, once the
+// allowance has passed. It names the CR as waited for, so Converge judges
+// the CR.
+func TestExecuteStopsWhenADeletedCRStays(t *testing.T) {
+	f := newFixture(t, nil)
+	f.cluster.rec = f.rec
+	f.cluster.waitGone = func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	p := &plan.Plan{Steps: []plan.Step{
+		{Actions: []plan.Action{{Do: plan.Create, Slot: "a", Object: widget("first")}}},
+		{Actions: []plan.Action{{Do: plan.Delete, Slot: "a"}, {Do: plan.Stop}}},
+	}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	events := f.rec.Events()
+	deleted, _ := findAction(events, 1, 0)
+	stopped, found := findAction(events, 1, 1)
+	if !found || stopped.Action.Error != "" {
+		t.Fatalf("stop = %+v, want a stop without error", stopped.Action)
+	}
+	if want := []string{"u1"}; !slices.Equal(stopped.Action.Waited, want) {
+		t.Errorf("the stop waited for %q, want %q, the CR that stayed", stopped.Action.Waited, want)
+	}
+	allowance, _ := Deadline(0, 0, 0, timeouts)
+	if gaveUp := stopped.At - deleted.At; gaveUp < allowance-20*time.Millisecond || gaveUp > allowance+100*time.Millisecond {
+		t.Errorf("the stop came %v after the delete, want the %v that Deadline allows", gaveUp, allowance)
 	}
 }
 

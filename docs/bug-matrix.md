@@ -65,7 +65,16 @@ Each Cluster owns Volumes of a third party's kind, which a model sets ready. A D
 
 | Bug | Description | Plan | Check | Step |
 |---|---|---|---|---|
-| B0 | The correct controller. | all 17 committed plans | none | |
+| B0 | The correct controller. | all 19 plans of config.yaml, database/config.yaml, protect/config.yaml | none | |
+| B0 | The correct controller. | uninstall/crd-first-stop | none | |
+| B0 | The correct controller. | uninstall/kill-recreate | none | |
+| B0 | The correct controller. | uninstall/recreate | none | |
+| B0 | The correct controller. | uninstall/stop-after-delete | none | |
+| B0 | The correct controller. | uninstall/stop-first | none | |
 | B123 | Readies a Database on a Cluster that is not Ready. | create-together | Honest | 0 |
 | B124 | Readies a Database without checking its Secret. | secret-late | Honest | 0 |
 | B125 | Keeps a Ready Database ready after its Secret goes. | secret-recreate | Honest | 1 |
+| B150 | Strips its finalizers from deleting CRs when it shuts down. | database/restart-cluster-delete | Converge | 1 |
+| B151 | Puts a finalizer on each Volume, and releases a deleted Cluster before its Volumes, whose finalizers it strips only afterwards. | uninstall/kill-recreate | Converge | 1 |
+| B151 | Puts a finalizer on each Volume, and releases a deleted Cluster before its Volumes, whose finalizers it strips only afterwards. | uninstall/stop-after-delete | Clean | 1 |
+| B152 | Errors when a dependent kind is not served, as after its CRD is deleted, so the parent's deletion never ends. | uninstall/crd-first-stop | Converge | 2 |

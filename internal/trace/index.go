@@ -18,6 +18,8 @@ type Index struct {
 	procs  []Event
 	// actions holds the Action events of each step.
 	actions map[int][]Event
+	// stop is the first stop action that did not fail.
+	stop *Event
 	// versions holds each object's Version events by kind: a Ref with no
 	// namespace or name.
 	versions map[Ref]map[Ref][]Event
@@ -106,7 +108,7 @@ func (ix *Index) Append(events ...Event) {
 		case e.Proc != nil:
 			ix.procs = append(ix.procs, e)
 		case e.Action != nil:
-			ix.actions[e.Action.Step] = append(ix.actions[e.Action.Step], e)
+			ix.addAction(e)
 		case e.WatchEnd != nil:
 			ix.watchEnds[*e.WatchEnd] = e.At
 		case e.Work != nil:
@@ -544,8 +546,29 @@ func (ix *Index) Up(t time.Duration) (since time.Duration, up bool) {
 	return 0, false
 }
 
+func (ix *Index) addAction(e Event) {
+	a := e.Action
+	ix.actions[a.Step] = append(ix.actions[a.Step], e)
+	if a.Do == "stop" && a.Error == "" && ix.stop == nil {
+		ix.stop = &e
+	}
+}
+
 // Actions returns the Action events of step in Seq order.
 func (ix *Index) Actions(step int) []Event { return ix.actions[step] }
+
+// Stop returns the first stop action that did not fail, when it came by t.
+func (ix *Index) Stop(t time.Duration) (Event, bool) {
+	if ix.stop == nil || ix.stop.At > t {
+		return Event{}, false
+	}
+	return *ix.stop, true
+}
+
+// StopWaitedFor reports whether the stop waited for the CR with uid.
+func (ix *Index) StopWaitedFor(uid string) bool {
+	return ix.stop != nil && slices.Contains(ix.stop.Action.Waited, uid)
+}
 
 // Procs returns every Proc event in Seq order.
 func (ix *Index) Procs() []Event { return ix.procs }

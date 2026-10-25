@@ -69,8 +69,9 @@ type Run struct {
 	// Primaries are the config's primaries entries, in order. They name
 	// the CR kinds.
 	Primaries []Primary `json:"primaries,omitempty"`
-	// PlanSteps counts the plan's steps. The runner's delete-all step is
-	// step PlanSteps and its restart step PlanSteps+1.
+	// PlanSteps counts the plan's steps. Unless the plan stops the
+	// controller, the runner's delete-all step is step PlanSteps and its
+	// restart step PlanSteps+1.
 	PlanSteps int `json:"planSteps"`
 	// Stable, Reads and Writes are the config values the checks read, so
 	// that judge needs no config.
@@ -218,14 +219,16 @@ type Phase struct {
 
 // Action records one plan action as the harness applied it. Ref is the CR
 // of a CR action, and the object a damage, changeFixture or createFixture
-// action changed.
+// action changed. Waited holds the UIDs of the deleted CRs that a stop
+// waited for.
 type Action struct {
-	Step  int    `json:"step"`
-	Index int    `json:"index"`
-	Do    string `json:"do"`
-	Slot  string `json:"slot,omitempty"`
-	Ref   *Ref   `json:"ref,omitempty"`
-	Error string `json:"error,omitempty"`
+	Step   int      `json:"step"`
+	Index  int      `json:"index"`
+	Do     string   `json:"do"`
+	Slot   string   `json:"slot,omitempty"`
+	Ref    *Ref     `json:"ref,omitempty"`
+	Waited []string `json:"waited,omitempty"`
+	Error  string   `json:"error,omitempty"`
 }
 
 // SlowDeleteFinalizer is the finalizer a slowDelete fault holds objects

@@ -23,11 +23,11 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 )
 
-// Execute runs the plan's steps, then step len(p.Steps), which deletes each
-// slot's live CR, then step len(p.Steps)+1, which restarts the controller.
-// It records Phase, Action and Fault events. It returns an error only when
-// the harness itself fails; a controller that does not settle is a finding,
-// not an error.
+// Execute runs the plan's steps. Unless a stop action ran, it then runs step
+// len(p.Steps), which deletes each slot's live CR, and step len(p.Steps)+1,
+// which restarts the controller. It records Phase, Action and Fault events.
+// It returns an error only when the harness itself fails; a controller that
+// does not settle is a finding, not an error.
 func (r *Runner) Execute(ctx context.Context, p *plan.Plan) error {
 	e := &execution{
 		Runner: r, live: map[string]slotCR{}, deleted: map[string]deletion{},
@@ -41,6 +41,9 @@ func (r *Runner) Execute(ctx context.Context, p *plan.Plan) error {
 		if err != nil {
 			return err
 		}
+	}
+	if e.stopped {
+		return nil
 	}
 	n := len(p.Steps)
 	var deleteAll plan.Step
@@ -77,7 +80,7 @@ func (r *Runner) Quiet(ctx context.Context) error {
 
 // errStillTaken says that a create's or a createFixture's wait for the
 // object its name last held timed out. The step still settles, and then the
-// plan skips to its appended steps.
+// plan skips to the steps that Execute appends.
 var errStillTaken = errors.New("is still taken")
 
 // Deadline is end faults + settle + min(faultsLasted, backoffCap) + the
@@ -92,12 +95,14 @@ type execution struct {
 	*Runner
 	live map[string]slotCR
 	// deleted holds the last deletion from each slot, which a later create
-	// of the slot waits out.
+	// of the slot or a stop waits out.
 	deleted map[string]deletion
 	// fixtures holds, by the Key of its target, each fixture that a
 	// changeFixture deleted and no createFixture has made again.
 	fixtures map[plan.Target]deletion
 	ix       *trace.Index
+	// stopped says that a stop action stopped the controller for good.
+	stopped bool
 }
 
 // slotCR is the live CR a slot holds, and its kind.
@@ -110,6 +115,7 @@ type slotCR struct {
 // when.
 type deletion struct {
 	ref trace.Ref
+	uid string
 	at  time.Time
 }
 
@@ -183,9 +189,9 @@ type startedFault struct {
 	model string
 }
 
-// stepRun is step n while it runs. Its faults stop once: when a create or a
-// createFixture still waits for its name after Period has passed, or else
-// when the fault period ends.
+// stepRun is step n while it runs. Its faults stop once: when a create, a
+// createFixture or a stop still waits for a deleted object after Period has
+// passed, or else when the fault period ends.
 type stepRun struct {
 	*execution
 	n             int
@@ -193,6 +199,7 @@ type stepRun struct {
 	start         time.Time
 	started       []startedFault
 	faultsStopped time.Time
+	waited        []string
 }
 
 // periodEnd is when Period has passed. The fault period may last longer.
@@ -210,10 +217,13 @@ func (s *stepRun) stopFaults() {
 	s.faultsStopped = time.Now()
 }
 
-// resume stops the faults and resumes supervision, which restarts a killed
-// controller.
+// resume stops the faults and, unless a stop action ran, resumes
+// supervision, which restarts a killed controller.
 func (s *stepRun) resume() error {
 	s.stopFaults()
+	if s.stopped {
+		return nil
+	}
 	return s.Process.Supervise(true)
 }
 
@@ -245,6 +255,9 @@ func (s *stepRun) faultPeriod(ctx context.Context) error {
 		}
 		ref, err := s.execution.act(ctx, a, s)
 		event := &trace.Action{Step: s.n, Index: i, Do: string(a.Do), Slot: a.Slot, Ref: ref}
+		if a.Do == plan.Stop {
+			event.Waited = s.waited
+		}
 		if err != nil {
 			event.Error = err.Error()
 		}
@@ -256,40 +269,65 @@ func (s *stepRun) faultPeriod(ctx context.Context) error {
 	return sleepUntil(ctx, s.periodEnd())
 }
 
-// awaitGone waits until d's object, whose name action a needs, no longer
-// exists. The step's faults or a kill may hold it. So once Period has passed
-// with the object still there, awaitGone ends them. It gives up once the
-// allowance has passed since the faults stopped, or since d if that is
-// later.
+// awaitGone waits until no object holds the name of d's object, which
+// action a, a create or a createFixture, needs. It fails with errStillTaken
+// when it gives up.
 func (s *stepRun) awaitGone(ctx context.Context, a plan.Action, d deletion) error {
 	begun := time.Now()
-	if begun.Before(s.periodEnd()) {
-		if timedOut, err := s.waitGone(ctx, d.ref, s.periodEnd()); !timedOut {
-			return err
-		}
-	}
-	if gone, err := s.Cluster.Gone(ctx, d.ref); gone || err != nil {
-		return err
-	}
-	if err := s.resume(); err != nil {
-		return err
-	}
-	from := s.faultsStopped
-	if d.at.After(from) {
-		from = d.at
-	}
-	allowance, _ := s.allowance()
-	if timedOut, err := s.waitGone(ctx, d.ref, from.Add(allowance)); !timedOut {
+	if timedOut, err := s.outwait(ctx, d.ref, "", d.at); !timedOut {
 		return err
 	}
 	return s.stillTaken(a, d.ref, time.Since(begun))
 }
 
-// waitGone waits until ref names no object, or until the time until.
-func (e *execution) waitGone(ctx context.Context, ref trace.Ref, until time.Time) (timedOut bool, err error) {
+// outwait waits until Gone holds for ref and uid. The step's faults or a
+// kill may hold the object. So once Period has passed with it still there,
+// outwait ends them. It gives up once the allowance has passed since the
+// faults stopped, or since deleted if that is later.
+func (s *stepRun) outwait(ctx context.Context, ref trace.Ref, uid string, deleted time.Time) (timedOut bool, err error) {
+	if time.Now().Before(s.periodEnd()) {
+		if timedOut, err := s.waitGone(ctx, ref, uid, s.periodEnd()); !timedOut {
+			return false, err
+		}
+	}
+	if gone, err := s.Cluster.Gone(ctx, ref, uid); gone || err != nil {
+		return false, err
+	}
+	if err := s.resume(); err != nil {
+		return false, err
+	}
+	from := s.faultsStopped
+	if deleted.After(from) {
+		from = deleted
+	}
+	allowance, _ := s.allowance()
+	return s.waitGone(ctx, ref, uid, from.Add(allowance))
+}
+
+// stop waits until the CRs that deletes removed are gone, or until each
+// wait gives up, and then stops the controller for good. A CR is gone once
+// its name is free or another CR holds it. Converge judges a CR still
+// there.
+func (s *stepRun) stop(ctx context.Context) error {
+	for _, slot := range slices.Sorted(maps.Keys(s.deleted)) {
+		d := s.deleted[slot]
+		if _, err := s.outwait(ctx, d.ref, d.uid, d.at); err != nil {
+			return err
+		}
+		s.waited = append(s.waited, d.uid)
+	}
+	if err := s.Process.Supervise(false); err != nil {
+		return err
+	}
+	s.stopped = true
+	return s.Process.Stop(ctx)
+}
+
+// waitGone waits until Gone holds for ref and uid, or until the time until.
+func (e *execution) waitGone(ctx context.Context, ref trace.Ref, uid string, until time.Time) (timedOut bool, err error) {
 	wait, cancel := context.WithDeadline(ctx, until)
 	defer cancel()
-	err = e.Cluster.WaitGone(wait, ref)
+	err = e.Cluster.WaitGone(wait, ref, uid)
 	if err != nil && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
 		return true, nil
 	}
@@ -388,11 +426,16 @@ func (e *execution) act(ctx context.Context, a plan.Action, s *stepRun) (*trace.
 		if err != nil {
 			return nil, err
 		}
+		// The create returned once the observer recorded the slot's CR, so
+		// the latest version is of it.
+		e.ix.Append(e.Recorder.EventsSince(e.ix.Len())...)
+		cr, _ := e.ix.Latest(ref)
 		delete(e.live, a.Slot)
-		e.deleted[a.Slot] = deletion{ref, time.Now()}
-		if err := e.Cluster.Delete(ctx, ref, a.Propagation); !errors.Is(err, system.ErrGone) {
+		at := time.Now()
+		if err := e.Cluster.Delete(ctx, ref, a.Propagation); err != nil && !errors.Is(err, system.ErrGone) {
 			return &ref, err
 		}
+		e.deleted[a.Slot] = deletion{ref, cr.UID, at}
 		return &ref, nil
 	case plan.Restart:
 		if err := e.Process.Stop(ctx); err != nil {
@@ -401,6 +444,8 @@ func (e *execution) act(ctx context.Context, a plan.Action, s *stepRun) (*trace.
 		return nil, e.Process.Start(ctx)
 	case plan.Kill:
 		return nil, e.Process.Kill(ctx)
+	case plan.Stop:
+		return nil, s.stop(ctx)
 	case plan.Damage, plan.ChangeFixture:
 		creator := trace.Controller
 		if a.Do == plan.ChangeFixture {
@@ -418,7 +463,7 @@ func (e *execution) act(ctx context.Context, a plan.Action, s *stepRun) (*trace.
 		if a.Patch != nil {
 			return &ref, actor.Patch(ctx, ref, a.Patch)
 		}
-		deleted := deletion{ref, time.Now()}
+		deleted := deletion{ref: ref, at: time.Now()}
 		err = actor.Delete(ctx, ref, "")
 		if errors.Is(err, system.ErrGone) {
 			return nil, fmt.Errorf("%w: %w", owner.ErrNoMatch, err)

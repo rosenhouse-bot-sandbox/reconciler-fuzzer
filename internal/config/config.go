@@ -17,8 +17,11 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/yaml"
+
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 )
 
 // Config is a loaded target config. Every path is absolute, resolved against
@@ -210,8 +213,18 @@ type Model struct {
 	// A nil StuckStatus means Status, and an empty one means no fields.
 	Status, StuckStatus map[string]any
 	After               time.Duration
+	// Finalizer is nil unless the model holds each object's deletion.
+	Finalizer *Finalizer
 	// Dependency is nil unless the kind is a readiness dependency.
 	Dependency *Dependency
+}
+
+// Finalizer is a finalizer the model adds to each live object it hears. It
+// removes the finalizer After past the first version the stage hears with a
+// deletionTimestamp.
+type Finalizer struct {
+	Name  string
+	After time.Duration
 }
 
 // Dependency marks a model kind or a fake as a readiness dependency of the
@@ -265,6 +278,7 @@ type declaration struct {
 		Status      map[string]any      `json:"status"`
 		StuckStatus map[string]any      `json:"stuckStatus"`
 		After       string              `json:"after"`
+		Finalizer   *declaredFinalizer  `json:"finalizer"`
 		Dependency  *declaredDependency `json:"dependency"`
 	} `json:"models"`
 	// Values holds primary's overlay, distinct and mutate beside fixtures.
@@ -342,6 +356,11 @@ type declaredValues struct {
 type declaredDependency struct {
 	Required *bool  `json:"required"`
 	Track    string `json:"track"`
+}
+
+type declaredFinalizer struct {
+	Name  string `json:"name"`
+	After string `json:"after"`
 }
 
 // Load reads the file strictly: an unknown key is an error that names its
@@ -692,12 +711,43 @@ func models(d declaration, listed []schema.GroupKind) ([]Model, error) {
 		if m.After, err = time.ParseDuration(declared.After); err != nil || m.After < 0 {
 			return nil, fmt.Errorf("%s.after %q: want a duration of 0 or more", key, declared.After)
 		}
+		if m.Finalizer, err = finalizer(key, declared.Finalizer); err != nil {
+			return nil, err
+		}
 		if m.Dependency, err = dependency(key, declared.Dependency); err != nil {
 			return nil, err
 		}
 		models = append(models, m)
 	}
 	return models, nil
+}
+
+// finalizer refuses slowDelete's name and any name without a domain. On a
+// built-in kind, the API server refuses a name without a domain unless it is
+// one of its own, such as gc's orphan.
+func finalizer(key string, declared *declaredFinalizer) (*Finalizer, error) {
+	if declared == nil {
+		return nil, nil
+	}
+	key += ".finalizer"
+	switch problems := validation.IsQualifiedName(declared.Name); {
+	case declared.Name == "":
+		return nil, fmt.Errorf("%s.name is required", key)
+	case len(problems) > 0:
+		return nil, fmt.Errorf("%s.name %q: %s", key, declared.Name, strings.Join(problems, "; "))
+	case !strings.Contains(declared.Name, "/"):
+		return nil, fmt.Errorf("%s.name %s: want a domain-qualified name, such as example.com/%s", key, declared.Name, declared.Name)
+	case declared.Name == trace.SlowDeleteFinalizer:
+		return nil, fmt.Errorf("%s.name %s: slowDelete faults hold objects with this finalizer", key, declared.Name)
+	}
+	if declared.After == "" {
+		return nil, fmt.Errorf("%s.after is required", key)
+	}
+	after, err := time.ParseDuration(declared.After)
+	if err != nil || after < 0 {
+		return nil, fmt.Errorf("%s.after %q: want a duration of 0 or more", key, declared.After)
+	}
+	return &Finalizer{Name: declared.Name, After: after}, nil
 }
 
 func dependency(key string, declared *declaredDependency) (*Dependency, error) {

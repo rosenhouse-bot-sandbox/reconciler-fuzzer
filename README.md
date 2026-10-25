@@ -210,6 +210,12 @@ models:
   holds their deletion. Each ends with the fault period. A create that waits until a deleted CR
   no longer exists ends them once `period` has passed. A plan step writes one as
   `{"match": {"group": "example.com", "resource": "gadgets"}, "stuck": true}`.
+- `finalizer: {name: example.com/cleanup, after: 500ms}` plays a controller, such as a storage
+  controller, that holds each Gadget's deletion with its own finalizer. The model adds the
+  finalizer to each live Gadget it hears, and removes it 500 ms after it hears the deletion.
+  Keep `after` under `timeouts.stable`, or a step can settle before the controller reacts to
+  the release. A step waits for every hold to end, so raise `timeouts.settle` for a controller
+  that waits out holds one by one.
 - `status:` adds literal fields to the model's status writes, such as a PVC's `{phase: Bound}`.
   While `stuck` lasts, the `stuckStatus:` fields, such as `{phase: Pending}`, replace them.
   `stuckStatus:` defaults to `status:`. Each write removes the fields that only the other key
@@ -220,6 +226,8 @@ models:
 [targets/toy-widget/gadget](targets/toy-widget/gadget) runs the toy with a Gadget model.
 Another toy, in [targets/toy-fleet](targets/toy-fleet), reconciles Cluster, Database and User
 CRs, and its config models the third-party Volumes each Cluster owns.
+[targets/toy-fleet/protect](targets/toy-fleet/protect/config.yaml) also holds each Volume's
+deletion with a model finalizer.
 
 ### Fake services
 
@@ -352,6 +360,22 @@ Generated plans draw it for kinds `launch.rbac` lets the controller watch, the l
 cert-manager seed in 11 holds Secrets this way, so a 20-seed `make hunt-cert-manager` usually,
 but not always, finds #63. A report notes a `holdWatch` while the controller had no watch of
 its kind, such as one with a misspelt resource.
+
+### Uninstalling
+
+A `stop` action lets a plan test an uninstall. It waits until the CRs the plan deleted are gone,
+and then stops the controller for good:
+
+```json
+{"actions": [{"do": "delete", "slot": "a"}, {"do": "stop"}]}
+```
+
+The runner appends two steps to a plan without a stop: one deletes every CR, and one restarts
+the controller. After a stop, a plan's only actions are deletes and fixture changes, and the
+runner appends no steps. Clean then judges the plan's last step, but spares what a live CR owns.
+No controller is left to clean up after a CR that the plan deletes after the stop, so Clean
+counts that CR as live. A CR that the stop did not wait for, such as that one, may keep its
+finalizers, and gets a note.
 
 ### Examples
 

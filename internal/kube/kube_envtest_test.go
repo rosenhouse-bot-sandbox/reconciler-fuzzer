@@ -217,7 +217,7 @@ func TestKube(t *testing.T) {
 		}
 		waitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		if err := k.WaitGone(waitCtx, ref); err != nil {
+		if err := k.WaitGone(waitCtx, ref, ""); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -342,7 +342,7 @@ func TestKube(t *testing.T) {
 		}
 		waitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		if err := k.WaitGone(waitCtx, widget); err != nil {
+		if err := k.WaitGone(waitCtx, widget, ""); err != nil {
 			t.Fatal(err)
 		}
 		if err := k.Delete(ctx, widget, ""); !errors.Is(err, system.ErrGone) {
@@ -357,7 +357,7 @@ func TestKube(t *testing.T) {
 		fixture, _ := k.Ref(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}, "widget-config")
 		waitCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
 		defer cancel()
-		if err := k.WaitGone(waitCtx, fixture); err == nil {
+		if err := k.WaitGone(waitCtx, fixture, ""); err == nil {
 			t.Error("WaitGone returned nil for a live object.")
 		}
 	})
@@ -374,7 +374,7 @@ func TestKube(t *testing.T) {
 				t.Fatal(err)
 			}
 			waitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			err := k.WaitGone(waitCtx, ref)
+			err := k.WaitGone(waitCtx, ref, "")
 			cancel()
 			if err != nil {
 				t.Fatal(err)

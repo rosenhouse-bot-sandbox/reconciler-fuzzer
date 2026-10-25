@@ -50,9 +50,11 @@ func newClient(t *testing.T, objects ...client.Object) client.WithWatch {
 		WithObjects(objects...).Build()
 }
 
-func newFleet(t *testing.T, objects ...client.Object) *fleet {
+func newFleet(t *testing.T, objects ...client.Object) *fleet { return newBuggyFleet(t, 0, objects...) }
+
+func newBuggyFleet(t *testing.T, bug Bug, objects ...client.Object) *fleet {
 	c := newClient(t, objects...)
-	base := reconciler{Client: c, APIReader: c, Scheme: c.Scheme()}
+	base := reconciler{Client: c, APIReader: c, Scheme: c.Scheme(), Bug: bug}
 	return &fleet{t, c, &ClusterReconciler{base}, &DatabaseReconciler{base}, &UserReconciler{base}}
 }
 
@@ -619,8 +621,8 @@ func TestReconcileOfAMissingCRSucceeds(t *testing.T) {
 }
 
 func TestParseBugAcceptsOnlyKnownBugs(t *testing.T) {
-	for _, id := range []int{0, 123, 124, 125} {
-		if b, err := ParseBug(id); b != Bug(id) || err != nil {
+	for _, id := range []int{0, 123, 124, 125, 150, 151, 152} {
+		if b, err := ParseBug(id); int(b) != id || err != nil {
 			t.Errorf("ParseBug(%d) = %v, %v", id, b, err)
 		}
 	}

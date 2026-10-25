@@ -174,9 +174,14 @@ Fill each key from the project:
   done, such as `{phase: Bound}`. Otherwise a controller that reads only those fields never
   sees the fault. For a Job, set `stuckStatus: {active: 1}`. A Job created during the fault
   then stays unfinished. The API server refuses to lower a done Job's `succeeded`, so that Job
-  stays done and `Ready`. The model retries the refused write until the fault ends.
+  stays done and `Ready`. The model retries the refused write until the fault ends. Add
+  `finalizer: {name, after}` when something else puts a finalizer on each object, such as
+  Kubernetes' `kubernetes.io/pvc-protection` on a PVC. The model adds `name` to each live
+  object, and removes it `after` past the deletion. Keep `after` under `timeouts.stable`, or
+  a step can settle before the controller reacts to the release.
 - `budgets` and `timeouts`: leave them out at first. Raise `timeouts.settle` for a slow
-  controller, and `stable` for one that requeues with a delay by design. Ask the user first.
+  controller, or one that waits out `finalizer` holds one by one, and `stable` for one that
+  requeues with a delay by design. Ask the user first.
 
 ### External APIs
 
@@ -278,8 +283,10 @@ that damages a resource, `{"do": "damage", "slot": "a", "target": {"system": "cl
 Vault fixture, add a step that writes a new version, `{"do": "changeFixture", "target":
 {"system": "vault", "resource": "secret", "name": "token"}, "patch": {"value": "new"}}`. A step
 that deletes and creates slot `a` with `"faults": [{"match": {"resource": "secrets"},
-"holdWatch": true}]` tests how the controller acts on a stale cache. A report note that the
-`holdWatch` held no watch means the controller watches no such kind, or the match is wrong.
+"holdWatch": true}]` tests how the controller acts on a stale cache. A last step
+`{"actions": [{"do": "delete", "slot": "a"}, {"do": "stop"}]}` tests an uninstall. A report
+note that the `holdWatch` held no watch means the controller watches no such kind, or the match
+is wrong.
 A note that a `stuck` fault held no object means no object matched, or the API server refused
 each stuck write. `trace.jsonl` records a refused write as a model call with status 422. The
 API server refuses every stuck write to a done Job. Otherwise, check `stuckStatus:` against the

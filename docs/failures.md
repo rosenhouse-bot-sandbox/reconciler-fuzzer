@@ -39,13 +39,14 @@ configmaps rf-da5dd4dd/widget-0 (rule 1, slot a)
 
 The heading is the check and its summary. The first line names the step,
 counting from 0, and the time since the run started. `Before step 0` means
-during startup. The runner appends two steps to every plan:
-`Step N (delete all)` and `Step N+1 (restart)`.
+during startup. The runner appends two steps to every plan without a
+`stop`: `Step N (delete all)` and `Step N+1 (restart)`.
 A `Labels:` line may follow. The block lists the detail lines.
 
 A `# Notes` section follows the findings. A note says what the trace could
 not decide: an action that failed, a fault that picked no request, a
-step the trace ended too early to judge, or an unmapped request. Notes do
+step the trace ended too early to judge, a CR still being deleted that a
+`stop` did not wait for, or an unmapped request. Notes do
 not fail a run. A fault that picked no request tested nothing, so a plan
 with such notes may need a different fault.
 
@@ -98,11 +99,15 @@ Look at the clause first:
 | 3 | The controller is down, or restarted within `stable`. | `controller.log`, and any Crash finding. |
 | 4 | The controller made no successful request since it started. | Its startup in `controller.log`, and its RBAC. |
 | 5 | The controller did not look at an object a `damage`, `changeFixture` or `createFixture` changed. | Its watches and the kinds it reads. |
-| 6 | A model, such as `gc`, has work pending. | What the model waits on. Churn under clause 7 often keeps it busy. |
+| 6 | A model, such as `gc`, has work pending. | What the model waits on. Churn under clause 7 often keeps it busy. A stage model's `finalizer:` holds each deletion for `finalizer.after`, so lower it, or raise `timeouts.settle`. |
 | 7 | The controller kept changing objects, or went over the `budgets`. | The first changed write the detail names: it shows what the controller fights over. |
 
 `did not stay settled (clause k)` means the condition held once, then
 failed again within `stable`.
+
+After a `stop`, only clauses 2, 6 and 7 apply, and clause 2 only in the
+stop's step. It names a CR that was still being deleted when the stop's wait
+for it gave up.
 
 The `backoff-bound` label means `timeouts.backoffCap` set the deadline,
 because the step's faults lasted longer. A controller whose retry backoff
@@ -143,6 +148,10 @@ resource. A rule 1 line on a cluster-scoped resource with a namespaced
 owner means garbage collection ignores that invalid ownerReference. A rule
 2 or 3 line usually means a finalizer forgot the resource. A resource that
 should outlive its CR needs its entry's `retain`.
+
+After a `stop`, a line names a resource whose CRs were deleted before the
+stop, so an uninstall leaves it behind. A common cause is a controller
+that removes a child's finalizer only after the CR is gone.
 
 ### Restore
 

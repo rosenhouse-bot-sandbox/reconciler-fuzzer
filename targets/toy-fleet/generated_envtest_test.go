@@ -19,7 +19,7 @@ import (
 // fails if fewer than 3 of a config's plans had a request or model fault that
 // picked a request or held an object, so it catches faults that stop firing.
 func TestGeneratedPlansWithFaultsPassB0(t *testing.T) {
-	for _, cfg := range []string{clusterConfig, databaseConfig} {
+	for _, cfg := range []string{clusterConfig, databaseConfig, protectConfig} {
 		t.Run(cfg, func(t *testing.T) {
 			t.Parallel()
 			generatedPlansPassB0(t, cfg)

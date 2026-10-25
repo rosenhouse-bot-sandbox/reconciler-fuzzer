@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -37,6 +38,9 @@ func (r *ClusterReconciler) SetupWithManager(m ctrl.Manager) error {
 func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	cluster := &fleetv1.Cluster{}
 	if err := r.Get(ctx, req.NamespacedName, cluster); err != nil {
+		if apierrors.IsNotFound(err) && r.Bug == B151 {
+			return ctrl.Result{}, r.releaseVolumes(ctx, req.NamespacedName)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !cluster.DeletionTimestamp.IsZero() {
@@ -83,6 +87,9 @@ func (r *ClusterReconciler) syncVolumes(ctx context.Context, cluster *fleetv1.Cl
 				volume.Labels = map[string]string{}
 			}
 			volume.Labels[ClusterLabel] = cluster.Name
+			if r.Bug == B151 {
+				controllerutil.AddFinalizer(volume, VolumeFinalizer)
+			}
 			return controllerutil.SetControllerReference(cluster, volume, r.Scheme)
 		}); err != nil {
 			return 0, fmt.Errorf("ensuring Volume %s: %w", name, err)
@@ -108,7 +115,7 @@ func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Clust
 		return nil
 	}
 	databases := &fleetv1.DatabaseList{}
-	if err := r.APIReader.List(ctx, databases, client.InNamespace(cluster.Namespace)); err != nil {
+	if err := r.APIReader.List(ctx, databases, client.InNamespace(cluster.Namespace)); err != nil && !r.unserved(err) {
 		return fmt.Errorf("listing Databases: %w", err)
 	}
 	named := slices.ContainsFunc(databases.Items, func(db fleetv1.Database) bool { return db.Spec.ClusterRef == cluster.Name })
@@ -139,11 +146,27 @@ func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Clust
 			}
 		}
 	}
-	if len(volumes) > 0 {
+	if len(volumes) > 0 && r.Bug != B151 {
 		return nil // A Volume's deletion requeues the Cluster.
 	}
 	controllerutil.RemoveFinalizer(cluster, fleetv1.ClusterFinalizer)
 	return client.IgnoreNotFound(r.Update(ctx, cluster))
+}
+
+// releaseVolumes strips VolumeFinalizer from the gone Cluster's Volumes.
+func (r *ClusterReconciler) releaseVolumes(ctx context.Context, cluster types.NamespacedName) error {
+	list := &storagev1.VolumeList{}
+	if err := r.List(ctx, list, client.InNamespace(cluster.Namespace), client.MatchingLabels{ClusterLabel: cluster.Name}); err != nil {
+		return fmt.Errorf("listing Volumes: %w", err)
+	}
+	for i := range list.Items {
+		if v := &list.Items[i]; controllerutil.RemoveFinalizer(v, VolumeFinalizer) {
+			if err := r.Update(ctx, v); client.IgnoreNotFound(err) != nil {
+				return fmt.Errorf("releasing Volume %s: %w", v.Name, err)
+			}
+		}
+	}
+	return nil
 }
 
 // ownedVolumes lists, through reader, the Volumes the Cluster controls.

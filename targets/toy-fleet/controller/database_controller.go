@@ -128,7 +128,7 @@ func (r *DatabaseReconciler) finalize(ctx context.Context, db *fleetv1.Database)
 		return nil
 	}
 	users := &fleetv1.UserList{}
-	if err := r.APIReader.List(ctx, users, client.InNamespace(db.Namespace)); err != nil {
+	if err := r.APIReader.List(ctx, users, client.InNamespace(db.Namespace)); err != nil && !r.unserved(err) {
 		return fmt.Errorf("listing Users: %w", err)
 	}
 	named := slices.ContainsFunc(users.Items, func(u fleetv1.User) bool { return u.Spec.DatabaseRef == db.Name })

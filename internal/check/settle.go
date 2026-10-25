@@ -30,17 +30,48 @@ type unmet struct {
 	text   string
 }
 
+// unmetClauses holds a stopped controller only to clauses 2, 6 and 7, and
+// to clause 2 only in the stop's step, for the CRs that the stop waited for.
 func unmetClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
+	stop, stopped := ix.Stop(t)
+	step, _ := latestStep(ix, t)
 	var unmets []unmet
 	crs := 0
 	for _, p := range s.Primaries {
 		live := ix.Live(p.Kind.Group, p.Kind.Resource, t)
-		for _, cr := range live {
-			unmets = append(unmets, crClauses(ix, p, cr, t, s)...)
+		switch {
+		case !stopped:
+			for _, cr := range live {
+				unmets = append(unmets, crClauses(ix, p, cr, t, s)...)
+			}
+		case step.Step == stop.Action.Step:
+			unmets = append(unmets, unfinalized(ix, live)...)
 		}
 		crs += len(live)
 	}
+	if !stopped {
+		unmets = append(unmets, runClauses(ix, t, s)...)
+	}
+	for _, model := range ix.Pending(t) {
+		unmets = append(unmets, unmet{6, "", "model " + model + " has work pending"})
+	}
+	return append(unmets, quietClauses(ix, t, s, max(1, crs))...)
+}
 
+// unfinalized are the CRs of live being deleted that the stop waited for.
+func unfinalized(ix *trace.Index, live []trace.Version) []unmet {
+	var unmets []unmet
+	for _, cr := range live {
+		if deleting(cr.Body) && ix.StopWaitedFor(cr.UID) {
+			unmets = append(unmets, unmet{2, kind(cr.Ref), describe(cr.Ref) + " is being deleted"})
+		}
+	}
+	return unmets
+}
+
+// runClauses holds the controller to clauses 3 to 5.
+func runClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
+	var unmets []unmet
 	since, up := ix.Up(t)
 	switch {
 	case !up:
@@ -53,11 +84,7 @@ func unmetClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 	}) {
 		unmets = append(unmets, unmet{4, "", fmt.Sprintf("the controller has made no successful request since it started at %v", since)})
 	}
-	unmets = append(unmets, lookClauses(ix, t, s)...)
-	for _, model := range ix.Pending(t) {
-		unmets = append(unmets, unmet{6, "", "model " + model + " has work pending"})
-	}
-	return append(unmets, quietClauses(ix, t, s, max(1, crs))...)
+	return append(unmets, lookClauses(ix, t, s)...)
 }
 
 // lookClauses holds the controller to looking at each object that the

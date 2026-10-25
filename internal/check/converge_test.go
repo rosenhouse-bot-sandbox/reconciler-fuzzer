@@ -119,3 +119,87 @@ func TestConvergeNamesOnlyAKindReadOnKubeByTheFinding(t *testing.T) {
 		t.Errorf("a read after the finding: details = %q", f.Details)
 	}
 }
+
+// terminating is the body of a ready CR named name that a finalizer holds
+// after its delete.
+func terminating(name string) map[string]any {
+	body := tt.CR(name, true)
+	body["metadata"].(map[string]any)["deletionTimestamp"] = "2026-01-01T00:00:00Z"
+	return body
+}
+
+func convergeOf(t *testing.T, r *tt.Script) ([]check.Finding, []string) {
+	t.Helper()
+	ix := r.Index()
+	sp, err := check.SpecFor(nil, ix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return check.Converge(ix, sp)
+}
+
+// The plan stops the controller before it deletes slot a's CR, whose
+// finalizer then stays, as it should.
+func TestConvergeNotesACRDeletedAfterTheStop(t *testing.T) {
+	r := newRun(3)
+	r.Begin()
+	r.CreateCR("a", widgetA)
+	r.Ready(widgetA).EndFaults().Settle()
+	r.Begin().Stop().EndFaults().Settle()
+	r.Begin().Update(trace.Harness, widgetA, terminating("a")).Act("delete", "a", &widgetA).EndFaults().Settle()
+	findings, notes := convergeOf(t, r)
+	if len(findings) != 0 {
+		t.Errorf("findings = %+v, want none", findings)
+	}
+	want := "widgets.toy ns/a is not judged: the stop did not wait for it, and it is still being deleted when the trace ends."
+	if !slices.Equal(notes, []string{want}) {
+		t.Errorf("notes = %q, want %q", notes, want)
+	}
+}
+
+func TestConvergeFailsAStopStepWhoseDeletedCRStays(t *testing.T) {
+	r := newRun(2)
+	r.Begin()
+	r.CreateCR("a", widgetA)
+	r.Ready(widgetA).EndFaults().Settle()
+	r.Begin().Update(trace.Harness, widgetA, terminating("a")).Act("delete", "a", &widgetA).Stop(r.UID(widgetA)).EndFaults().TimeOut()
+	findings, notes := convergeOf(t, r)
+	requireFinding(t, findings, "Converge", 1, "did not settle (clause 2)", "kube/toy/widgets")
+	if !slices.Equal(findings[0].Details, []string{"widgets.toy ns/a is being deleted"}) {
+		t.Errorf("details = %q, want only slot a's CR being deleted", findings[0].Details)
+	}
+	if len(notes) != 0 {
+		t.Errorf("notes = %q, want none", notes)
+	}
+}
+
+func TestConvergeNotesADeletionTheStopDidNotWaitFor(t *testing.T) {
+	r := newRun(2)
+	r.Begin()
+	r.CreateCR("a", widgetA)
+	r.CreateCR("b", widgetB)
+	r.Ready(widgetA).Ready(widgetB).EndFaults().Settle()
+	r.Begin().Update(trace.Harness, widgetA, terminating("a")).Stop().EndFaults().Settle()
+	findings, notes := convergeOf(t, r)
+	if len(findings) != 0 {
+		t.Errorf("findings = %+v, want none", findings)
+	}
+	want := "widgets.toy ns/a is not judged: the stop did not wait for it, and it is still being deleted when the trace ends."
+	if !slices.Equal(notes, []string{want}) {
+		t.Errorf("notes = %q, want %q", notes, want)
+	}
+}
+
+// Only a stopped run notes a CR that is still being deleted at its end.
+func TestConvergeNotesNoDeletionOfARunWithoutAStop(t *testing.T) {
+	r := newRun(2)
+	r.Begin()
+	r.CreateCR("a", widgetA)
+	r.Ready(widgetA).EndFaults().Settle()
+	r.Begin().Update(trace.Harness, widgetA, terminating("a")).Act("delete", "a", &widgetA).EndFaults().TimeOut()
+	findings, notes := convergeOf(t, r)
+	requireFinding(t, findings, "Converge", 1, "did not settle (clause 2)", "kube/toy/widgets")
+	if len(notes) != 0 {
+		t.Errorf("notes = %q, want none", notes)
+	}
+}

@@ -6,6 +6,8 @@ import (
 	"fmt"
 
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -76,6 +78,12 @@ type reconciler struct {
 	APIReader client.Reader
 	Scheme    *runtime.Scheme
 	Bug       Bug
+}
+
+// unserved says whether a list failed because the server no longer serves
+// the kind, which then has no dependents.
+func (r reconciler) unserved(err error) bool {
+	return r.Bug != B152 && (apierrors.IsNotFound(err) || meta.IsNoMatchError(err))
 }
 
 // writeStatus writes obj's status when it differs from old.
