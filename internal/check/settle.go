@@ -308,13 +308,15 @@ func describe(ref trace.Ref) string {
 }
 
 // FirstSettled is the earliest time in [from, to] at which Settled holds.
-// The condition changes only at an event, an event plus Stable, or a
-// clause 5 lapse, so those are the only candidate times.
+// The condition changes only at an event, an event plus Stable, a clause 5
+// lapse or a step's excuseStart, so those are the only candidate times.
 func FirstSettled(ix *trace.Index, from, to time.Duration, s Spec) (time.Duration, bool) {
 	candidates := []time.Duration{from}
 	for _, step := range ix.Steps() {
-		if t := lapse(ix, step, s); from <= t && t <= to {
-			candidates = append(candidates, t)
+		for _, t := range []time.Duration{lapse(ix, step, s), s.excuseStart(step)} {
+			if from <= t && t <= to {
+				candidates = append(candidates, t)
+			}
 		}
 	}
 	for _, e := range ix.EventsIn(from-s.Stable-1, to) {

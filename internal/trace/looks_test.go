@@ -112,7 +112,7 @@ func TestLooksCountTheEndOfAWatchsInitialEvents(t *testing.T) {
 	var b tt.Builder
 	b.Add(run).
 		At(1*s).Add(watch(ctl, secrets, nil), frame(tt.Seen(ctl, pw, "u1", "1")), synced(ctl)).
-		At(2*s).Add(watch(ctl, tt.Ref("secrets", "", ""), nil), synced(ctl)).
+		At(2*s).Add(watch(ctl, tt.Ref("secrets", "", ""), nil), synced(ctl), frame(tt.Seen(ctl, other, "u2", "2"))).
 		At(3*s).Add(watch(ctl, secrets, func(c *trace.Call) { c.Partial = true }), synced(ctl)).
 		At(4*s).Add(watch(ctl, tt.Ref("secrets", "elsewhere", ""), nil), synced(ctl)).
 		At(5*s).Add(watch(ctl, secrets, nil), trace.Event{Seen: &trace.Seen{Caller: ctl, Ref: secrets, Stream: stream, Opaque: true}}, synced(ctl)).
@@ -136,7 +136,7 @@ func TestLooksCountTheEndOfAWatchsInitialEvents(t *testing.T) {
 		want   []string
 	}{
 		{ctl, pw, []string{"1s seen", "2s synced"}},
-		{ctl, other, []string{"1s synced", "2s synced"}},
+		{ctl, other, []string{"1s synced", "2s synced", "2s seen"}},
 		{trace.Harness, other, []string{"6s synced"}},
 		{ctl, tt.Ref("configmaps", "ns", "other"), nil},
 	} {

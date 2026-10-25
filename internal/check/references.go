@@ -149,11 +149,10 @@ func (s Spec) describeLooks(ix *trace.Index, cr trace.Ref, body map[string]any, 
 
 // heldBack reports whether a reference holds back the CR at cr, whose body
 // is body, at t, as the controller last saw and as a look at t would see,
-// or leaves it unknown. It excuses no CR until the latest step's backoff
-// allowance and stable have passed since its faults ended, so that clause 7
-// sees a controller in backoff react to the step's create or update.
+// or leaves it unknown. It excuses no CR before the latest step's
+// excuseStart.
 func (s Spec) heldBack(ix *trace.Index, cr trace.Ref, body map[string]any, t time.Duration) bool {
-	if step, _ := latestStep(ix, t); !step.Reached[trace.EndFaults] || t < step.EndFaults+step.Backoff+s.Stable {
+	if step, _ := latestStep(ix, t); !step.Reached[trace.EndFaults] || t < s.excuseStart(step) {
 		return false
 	}
 	for _, n := range s.names(cr, body) {
@@ -163,4 +162,12 @@ func (s Spec) heldBack(ix *trace.Index, cr trace.Ref, body map[string]any, t tim
 		}
 	}
 	return false
+}
+
+// excuseStart is when the settle condition starts to excuse a CR that a
+// reference holds back in step: its backoff allowance and stable after its
+// faults end, so that clause 7 sees a controller in backoff react to the
+// step's create or update.
+func (s Spec) excuseStart(step trace.StepSpan) time.Duration {
+	return step.EndFaults + step.Backoff + s.Stable
 }

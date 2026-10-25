@@ -542,6 +542,22 @@ func TestSettleExcusesAHeldBackCROnlyStableAfterTheBackoff(t *testing.T) {
 	}
 }
 
+func TestFirstSettledIsWhenTheHeldBackCRsExcuseStarts(t *testing.T) {
+	r := secretRun(secretRef(), nil).Call(ctl, "get", databaseB, 200)
+	const backoff = 4 * s
+	r.Add(trace.Event{Phase: &trace.Phase{Step: r.Step, Name: trace.EndFaults, Deadline: r.Now + 30*s, Backoff: backoff}})
+	endFaults := r.Now - tt.Tick
+	ix := r.Index()
+	spec, err := check.SpecFor(nil, ix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	excuse := endFaults + backoff + r.Spec.Stable
+	if got, ok := check.FirstSettled(ix, endFaults, excuse+time.Second, spec); !ok || got != excuse {
+		t.Errorf("FirstSettled = %v, %v; want %v.", got, ok, excuse)
+	}
+}
+
 // waitsForB reports whether unmet holds that Database b is not ready.
 func waitsForB(unmet []string) bool {
 	return slices.ContainsFunc(unmet, func(u string) bool { return strings.HasPrefix(u, "databases.toy ns/b is not ready") })
