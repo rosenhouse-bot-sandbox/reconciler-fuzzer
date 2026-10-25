@@ -262,7 +262,7 @@ crds: [%[1]s/crds/]
 fixtures: [secret.yaml]
 primary: {kind: toy.reconciler-fuzzer/v1/Widget, sample: %[1]s/widget.yaml, ready: "true"}
 references:
-  - {from: toy.reconciler-fuzzer/v1/Widget, to: v1/Secret, name: spec.secretName, ready: has(self.data.password)}
+  - {from: toy.reconciler-fuzzer/v1/Widget, to: v1/Secret, name: metadata.annotations.secret, ready: has(self.data.password)}
 timeouts: {settle: 10s, stable: 500ms}
 budgets: {reads: 100}
 `, toyDir),
