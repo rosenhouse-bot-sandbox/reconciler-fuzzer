@@ -282,8 +282,8 @@ type Call struct {
 	// Unmapped says the system's API map could not place the request.
 	Unmapped bool `json:"unmapped,omitempty"`
 	// Partial says a kube list or watch may leave objects out: it has a
-	// label or field selector, or a continue token in its request or in
-	// the list it answered with.
+	// label or field selector, or a continue token in its request or, for
+	// a Seen kind, in the list it answered with.
 	Partial bool `json:"partial,omitempty"`
 }
 

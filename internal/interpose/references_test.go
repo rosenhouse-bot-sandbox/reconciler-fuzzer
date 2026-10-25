@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/crud"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/interpose"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 )
@@ -53,13 +54,16 @@ func (n *negotiating) accepted() []string {
 	return slices.Clone(n.accepts)
 }
 
-func getAccepting(t *testing.T, l *interpose.Listener, path, accept string) {
+// getAccepting sends a GET with one Accept header line per accept.
+func getAccepting(t *testing.T, l *interpose.Listener, path string, accept ...string) {
 	t.Helper()
 	req, err := http.NewRequest("GET", l.URL()+path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set("Accept", accept)
+	for _, a := range accept {
+		req.Header.Add("Accept", a)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("GET %s: %v", path, err)
@@ -69,47 +73,65 @@ func getAccepting(t *testing.T, l *interpose.Listener, path, accept string) {
 }
 
 func TestARequestOfASeenKindAsksForJSON(t *testing.T) {
-	t.Skip("enabled by the run package")
-	for _, accept := range []string{"application/vnd.kubernetes.protobuf,application/json", "application/vnd.kubernetes.protobuf"} {
+	const metadataList = "as=PartialObjectMetadataList;g=meta.k8s.io;v=v1"
+	for _, c := range []struct {
+		accept []string
+		want   string
+	}{
+		{[]string{"application/vnd.kubernetes.protobuf,application/json"}, "application/json"},
+		{[]string{"application/vnd.kubernetes.protobuf"}, "application/json"},
+		{[]string{"application/vnd.kubernetes.protobuf, */*"}, "*/*"},
+		{[]string{"application/vnd.kubernetes.protobuf;" + metadataList + ",application/json;" + metadataList + ",application/json"}, "application/json;" + metadataList + ",application/json"},
+		{[]string{"application/vnd.kubernetes.protobuf", "application/json;" + metadataList}, "application/json;" + metadataList},
+	} {
 		for _, path := range []string{gadgetsPath + "/g1", gadgetsPath, gadgetsPath + "?watch=true"} {
-			t.Run(accept+" "+path, func(t *testing.T) {
+			t.Run(strings.Join(c.accept, " ")+" "+path, func(t *testing.T) {
 				upstream := &negotiating{}
 				l, recorded := listen(t, upstream, seeingGadgets)
 
-				getAccepting(t, l, path, accept)
+				getAccepting(t, l, path, c.accept...)
 
 				recorded.waitCalls(t, 1)
 				l.Close()
-				if got := upstream.accepted(); len(got) != 1 || strings.Contains(got[0], "protobuf") {
-					t.Errorf("The upstream got Accept %q, want one without protobuf.", got)
+				if got := upstream.accepted(); !slices.Equal(got, []string{c.want}) {
+					t.Errorf("The upstream got Accept %q, want %q.", got, c.want)
 				}
-				want := seenGadget("g1", "u1", "5")
+				seen := seenGadget("g1", "u1", "5")
 				if strings.Contains(path, "watch") {
-					want.Stream = 1
+					seen.Stream = 1
 				}
-				if got := recorded.seen(); !reflect.DeepEqual(got, []trace.Seen{want}) {
-					t.Errorf("Recorded %+v, want %+v.", got, []trace.Seen{want})
+				if got := recorded.seen(); !reflect.DeepEqual(got, []trace.Seen{seen}) {
+					t.Errorf("Recorded %+v, want %+v.", got, []trace.Seen{seen})
 				}
 			})
 		}
 	}
 }
 
-func TestARequestOfAnotherKindKeepsItsAccept(t *testing.T) {
+func TestARequestOfAnotherKindOrToAFakeKeepsItsAccept(t *testing.T) {
 	const accept = "application/vnd.kubernetes.protobuf,application/json"
-	upstream := &negotiating{}
-	l, recorded := listen(t, upstream, seeingGadgets)
+	toCloud := func(o *interpose.Options) {
+		m := crud.New("cloud")
+		m.SetCollections([]string{"buckets"})
+		o.System, o.API, o.SeenAll = "cloud", m, true
+	}
+	for path, configure := range map[string]func(*interpose.Options){
+		"/api/v1/namespaces/ns1/configmaps/g1": seeingGadgets,
+		"/buckets/b-1":                         toCloud,
+	} {
+		upstream := &negotiating{}
+		l, recorded := listen(t, upstream, configure)
 
-	getAccepting(t, l, "/api/v1/namespaces/ns1/configmaps/g1", accept)
+		getAccepting(t, l, path, accept)
 
-	recorded.waitCalls(t, 1)
-	if got := upstream.accepted(); !slices.Equal(got, []string{accept}) {
-		t.Errorf("The upstream got Accept %q, want %q.", got, accept)
+		recorded.waitCalls(t, 1)
+		if got := upstream.accepted(); !slices.Equal(got, []string{accept}) {
+			t.Errorf("GET %s: the upstream got Accept %q, want %q.", path, got, accept)
+		}
 	}
 }
 
 func TestAListOrWatchRecordsWhetherItIsPartial(t *testing.T) {
-	t.Skip("enabled by the run package")
 	for path, want := range map[string]bool{
 		gadgetsPath:                                       false,
 		gadgetsPath + "?labelSelector=app%3Dx":            true,
@@ -119,6 +141,7 @@ func TestAListOrWatchRecordsWhetherItIsPartial(t *testing.T) {
 		gadgetsPath + "?limit=500&continue=next":          true,
 		gadgetsPath + "?watch=true":                       false,
 		gadgetsPath + "?watch=true&labelSelector=app%3Dx": true,
+		gadgetsPath + "/g1?labelSelector=app%3Dx":         false,
 	} {
 		l, recorded := listen(t, ok())
 
@@ -128,14 +151,21 @@ func TestAListOrWatchRecordsWhetherItIsPartial(t *testing.T) {
 			t.Errorf("GET %s records Partial %v, want %v.", path, got, want)
 		}
 	}
-	for page, want := range map[string]bool{`"continue":"next"`: true, `"continue":""`: false} {
-		body := `{"kind":"GadgetList","metadata":{` + page + `},"items":[` + gadgetJSON("g1", "u1", "5") + `]}`
+	for _, c := range []struct {
+		query, page string
+		want        bool
+	}{
+		{"?limit=1", `"continue":"next"`, true},
+		{"?limit=1", `"continue":""`, false},
+		{"?labelSelector=app%3Dx", `"continue":""`, true},
+	} {
+		body := `{"kind":"GadgetList","metadata":{` + c.page + `},"items":[` + gadgetJSON("g1", "u1", "5") + `]}`
 		l, recorded := listen(t, respondOK("application/json", "", body), seeingGadgets)
 
-		do(t, l, "GET", gadgetsPath+"?limit=1")
+		do(t, l, "GET", gadgetsPath+c.query)
 
-		if got := recorded.waitCalls(t, 1)[0].Partial; got != want {
-			t.Errorf("A list that answers with %s records Partial %v, want %v.", page, got, want)
+		if got := recorded.waitCalls(t, 1)[0].Partial; got != c.want {
+			t.Errorf("A list %s that answers with %s records Partial %v, want %v.", c.query, c.page, got, c.want)
 		}
 	}
 }

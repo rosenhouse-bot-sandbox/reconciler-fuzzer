@@ -20,6 +20,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -208,6 +209,9 @@ func (l *Listener) serve(w http.ResponseWriter, r *http.Request) {
 	defer l.inFlight.Done()
 
 	req := l.classify(r)
+	if l.o.API == nil && l.sees(req.Ref) {
+		askForJSON(r.Header)
+	}
 	rec := &recorder{
 		ResponseWriter: w,
 		listener:       l,
@@ -216,7 +220,7 @@ func (l *Listener) serve(w http.ResponseWriter, r *http.Request) {
 			Caller: l.o.Caller, Method: r.Method, Path: r.URL.Path,
 			Verb: req.Verb, APIVersion: req.APIVersion, Ref: req.Ref,
 			Subresource: req.Subresource, Watch: req.Watch,
-			RequestName: req.RequestName, Unmapped: req.Unmapped,
+			RequestName: req.RequestName, Unmapped: req.Unmapped, Partial: req.Partial,
 		},
 		req:    req,
 		ctx:    r.Context(),
@@ -273,6 +277,24 @@ func (l *Listener) classify(r *http.Request) Request {
 // sees reports whether the listener records Seen events of ref's kind.
 func (l *Listener) sees(ref trace.Ref) bool {
 	return ref.Resource != "" && (l.o.SeenAll || l.seen[schema.GroupResource{Group: ref.Group, Resource: ref.Resource}])
+}
+
+// askForJSON drops protobuf from the media ranges of an Accept header, since
+// a listener cannot decode protobuf lists and watch frames. A header with no
+// other range asks for JSON.
+func askForJSON(header http.Header) {
+	var kept []string
+	for _, value := range header.Values("Accept") {
+		for _, item := range strings.Split(value, ",") {
+			if media(item) != protobufType {
+				kept = append(kept, item)
+			}
+		}
+	}
+	if len(kept) == 0 {
+		kept = []string{"application/json"}
+	}
+	header.Set("Accept", strings.Join(kept, ","))
 }
 
 // upstream keeps a write going after its client leaves, since the server
@@ -547,7 +569,7 @@ type objectMeta struct {
 }
 
 // readSeen records a Seen for each list item, or the one object of any
-// other response.
+// other response. A list with a continue token is Partial.
 func (rec *recorder) readSeen(encoding string) {
 	body := decompress(bytes.NewReader(rec.seenBody.Bytes()), encoding)
 	if body == nil {
@@ -557,13 +579,15 @@ func (rec *recorder) readSeen(encoding string) {
 	var objects []objectMeta
 	if rec.call.Verb == "list" {
 		var list struct {
-			Items []objectMeta `json:"items"`
+			Metadata metav1.ListMeta `json:"metadata"`
+			Items    []objectMeta    `json:"items"`
 		}
 		if json.NewDecoder(body).Decode(&list) != nil {
 			rec.recordOpaque()
 			return
 		}
 		objects = list.Items
+		rec.call.Partial = rec.call.Partial || list.Metadata.Continue != ""
 	} else {
 		var object objectMeta
 		if json.NewDecoder(body).Decode(&object) != nil {
