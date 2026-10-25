@@ -48,9 +48,9 @@ func heldGadget(adder trace.Caller) (*tt.Script, string) {
 }
 
 // release has the controller delete slot a's Gadget, which protect holds,
-// and then write it with finalizers. The API server deletes it instead: its
-// answer carries the last resourceVersion, and its deleted version the last
-// body.
+// and writer write it with finalizers. The API server deletes it instead:
+// its answer carries the last resourceVersion, and its deleted version the
+// last body.
 func release(r *tt.Script, uid string, writer trace.Caller, finalizers ...string) {
 	r.Add(write(ctl, "delete", gadgetA, "d1", protect), tt.Version(gadgetA, uid, "d1", held(true, protect)))
 	r.Add(write(writer, "update", gadgetA, "d1", finalizers...), tt.Deleted(gadgetA, uid, "d2", held(true, protect)))
