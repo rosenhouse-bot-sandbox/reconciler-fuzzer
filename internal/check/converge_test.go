@@ -151,7 +151,7 @@ func TestConvergeNotesACRDeletedAfterTheStop(t *testing.T) {
 	if len(findings) != 0 {
 		t.Errorf("findings = %+v, want none", findings)
 	}
-	want := "widgets.toy ns/a is not judged: the plan deleted it after the stop, and it is still being deleted when the trace ends."
+	want := "widgets.toy ns/a is not judged: the stop did not wait for it, and it is still being deleted when the trace ends."
 	if !slices.Equal(notes, []string{want}) {
 		t.Errorf("notes = %q, want %q", notes, want)
 	}

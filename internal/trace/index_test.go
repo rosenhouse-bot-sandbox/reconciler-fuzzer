@@ -471,3 +471,23 @@ func TestStoppedIsTheFirstStopThatDidNotFail(t *testing.T) {
 		}
 	}
 }
+
+func TestTheStopWaitsForEachSlotsLastDeletedCR(t *testing.T) {
+	widgetC := tt.Ref("toy/widgets", "ns", "c")
+	action := func(do, slot string, ref *trace.Ref) trace.Event {
+		return trace.Event{Action: &trace.Action{Step: 1, Do: do, Slot: slot, Ref: ref}}
+	}
+	var b tt.Builder
+	b.At(1*s).Add(action("delete", "a", &widgetA), action("delete", "b", &widgetB)).
+		At(2 * s).Add(action("create", "b", &widgetB))
+	ix := b.Index()
+	if ix.StopWaitedFor(widgetA) {
+		t.Error("StopWaitedFor(a) = true before any stop")
+	}
+	ix.Append(trace.Event{At: 3 * s, Action: &trace.Action{Step: 1, Do: "stop"}}, trace.Event{At: 4 * s, Action: &trace.Action{Step: 1, Do: "delete", Slot: "c", Ref: &widgetC}})
+	for ref, want := range map[trace.Ref]bool{widgetA: true, widgetB: false, widgetC: false} {
+		if got := ix.StopWaitedFor(ref); got != want {
+			t.Errorf("StopWaitedFor(%s) = %v, want %v", ref.Name, got, want)
+		}
+	}
+}

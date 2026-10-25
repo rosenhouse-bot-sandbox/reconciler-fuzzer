@@ -60,20 +60,14 @@ func unwaitedDeletions(ix *trace.Index, s Spec) []string {
 		return nil
 	}
 	end := events[len(events)-1].At
-	stop, stopped := ix.Stopped(end)
-	if !stopped {
+	if _, stopped := ix.Stopped(end); !stopped {
 		return nil
 	}
 	var notes []string
 	for _, p := range s.Primaries {
-		waited, unwaited := deletionsAt(ix, p, stop)
 		for _, cr := range ix.Live(p.Kind.Group, p.Kind.Resource, end) {
-			switch {
-			case !deleting(cr.Body) || waited[cr.UID]:
-			case unwaited[cr.UID]:
+			if deleting(cr.Body) && !ix.StopWaitedFor(cr.Ref) {
 				notes = append(notes, describe(cr.Ref)+" is not judged: the stop did not wait for it, and it is still being deleted when the trace ends.")
-			default:
-				notes = append(notes, describe(cr.Ref)+" is not judged: the plan deleted it after the stop, and it is still being deleted when the trace ends.")
 			}
 		}
 	}

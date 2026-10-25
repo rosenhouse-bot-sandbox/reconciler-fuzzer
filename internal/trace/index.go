@@ -2,6 +2,7 @@ package trace
 
 import (
 	"cmp"
+	"maps"
 	"math"
 	"slices"
 	"sort"
@@ -20,6 +21,9 @@ type Index struct {
 	actions map[int][]Event
 	// stop is the first stop action that did not fail.
 	stop *Event
+	// deleted holds, until the stop, the CR that a delete last removed from
+	// each slot that no create has filled since.
+	deleted map[string]Ref
 	// versions holds each object's Version events by kind: a Ref with no
 	// namespace or name.
 	versions map[Ref]map[Ref][]Event
@@ -66,6 +70,7 @@ func NewIndex(events []Event) *Index {
 		steps:     map[int]*StepSpan{},
 		calls:     map[Caller][]Event{},
 		actions:   map[int][]Event{},
+		deleted:   map[string]Ref{},
 		versions:  map[Ref]map[Ref][]Event{},
 		firstRV:   map[objectRV]Event{},
 		writeCall: map[objectRV]Event{},
@@ -101,10 +106,7 @@ func (ix *Index) Append(events ...Event) {
 		case e.Proc != nil:
 			ix.procs = append(ix.procs, e)
 		case e.Action != nil:
-			ix.actions[e.Action.Step] = append(ix.actions[e.Action.Step], e)
-			if e.Action.Do == "stop" && e.Action.Error == "" && ix.stop == nil {
-				ix.stop = &e
-			}
+			ix.addAction(e)
 		case e.WatchEnd != nil:
 			ix.watchEnds[*e.WatchEnd] = e.At
 		case e.Work != nil:
@@ -474,6 +476,20 @@ func (ix *Index) Up(t time.Duration) (since time.Duration, up bool) {
 	return 0, false
 }
 
+func (ix *Index) addAction(e Event) {
+	a := e.Action
+	ix.actions[a.Step] = append(ix.actions[a.Step], e)
+	switch {
+	case ix.stop != nil:
+	case a.Do == "create":
+		delete(ix.deleted, a.Slot)
+	case a.Do == "delete" && a.Ref != nil:
+		ix.deleted[a.Slot] = *a.Ref
+	case a.Do == "stop" && a.Error == "":
+		ix.stop = &e
+	}
+}
+
 // Actions returns the Action events of step in Seq order.
 func (ix *Index) Actions(step int) []Event { return ix.actions[step] }
 
@@ -484,6 +500,12 @@ func (ix *Index) Stopped(t time.Duration) (at time.Duration, stopped bool) {
 		return 0, false
 	}
 	return ix.stop.At, true
+}
+
+// StopWaitedFor reports whether the stop waited for ref: the CR that a
+// delete last removed from a slot that no create filled again.
+func (ix *Index) StopWaitedFor(ref Ref) bool {
+	return ix.stop != nil && slices.Contains(slices.Collect(maps.Values(ix.deleted)), ref)
 }
 
 // Procs returns every Proc event in Seq order.

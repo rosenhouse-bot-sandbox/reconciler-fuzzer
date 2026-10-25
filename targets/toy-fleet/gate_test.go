@@ -57,7 +57,7 @@ var gate = []gateRow{
 	{plan: "recreate", config: uninstallConfig},
 	// B0 updates no Volume while it deletes them.
 	{plan: "stop-after-delete", config: uninstallConfig, note: "fault 1 (error(500) on verb=update group=storage.thirdparty resource=volumes) picked no request"},
-	{plan: "stop-first", config: uninstallConfig, note: "cluster is not judged: the plan deleted it after the stop"},
+	{plan: "stop-first", config: uninstallConfig, note: "cluster is not judged: the stop did not wait for it"},
 }
 
 func planPath(config, plan string) string {
