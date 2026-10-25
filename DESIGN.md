@@ -245,9 +245,9 @@ judges the step whose fault period started last at or before `t`. After a
 to the CRs the stop waited for (§9).
 
 1. Every live CR satisfies its kind's `ready`, or `halted` after an
-   unknown-outcome controller call on it or on an instance only it owns, or a
-   reference holds it back, as a look at `t` would too, or leaves it unknown
-   (§12), and
+   unknown-outcome controller call on it or on an instance only it owns, or,
+   from `stable` after `endFaults`, a reference holds it back, as a look at
+   `t` would too, or leaves it unknown (§12), and
 2. carries no `deletionTimestamp`.
 3. The controller is up at `t` and has been up for at least `stable`.
 4. The controller made a 2xx request, not ignored and not of unknown
@@ -580,5 +580,5 @@ Each entry changes a check, exception, `System` interface or ignore list.
 80. A live unlisted owner, such as a fixture, keeps what it owns, directly or through the controller's live objects, from rules 2 to 4, so deleting a CR blames none of it (#128). An object the controller made is never an unlisted owner.
 81. `required` binds only the first entry's CRs, so the kinds that own no dependency pass.
 82. A `damage` touches each group under its root. An undamaged touched group may empty while its kind lives under that root, and a damaged one whose owner is gone while a CR made in the step owns its kind and role there. So a damage under a CR that the controller made touches that CR's owner, and the controller may remake that CR.
-83. Converge accepts a CR that is not ready while a reference holds it back, where a `ready` write would fail Honest (#126). A look then must hold it back too, so a controller that misses the object's return does not settle. A look need not follow the controller's own write of the object, since a controller writes the status of the kinds it serves.
+83. Converge accepts a CR that is not ready while a reference holds it back, where a `ready` write would fail Honest (#126). A look then must hold it back too, so a controller that misses the object's return does not settle. A look need not follow the controller's own write of the object, since a controller writes the status of the kinds it serves. The excuse waits `stable` after `endFaults`, so a step that creates a held-back CR does not settle before the controller reacts.
 84. A 2xx kube list that is not `Partial` and lacks an object shows it missing, so a relist after a restart or a dropped watch counts. Kube listeners ask for JSON of Seen kinds, so built-in kinds' lists and watches decode.

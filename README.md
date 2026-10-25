@@ -146,16 +146,54 @@ values: {fixtures: {settings.yaml: [data.theme]}}   # with primaries, only fixtu
   CR's resources, and Restore treats a damage under the CR as a damage under its owner.
 - A plan creates only CRs of listed kinds, and `run` refuses any other create. A create
   without an object makes the first entry's sample.
-- Generated plans draw each create's kind from the list. They do not yet fill a field that
-  names another CR, such as a Database's `clusterRef`. So
-  [targets/toy-fleet](targets/toy-fleet)'s `database/config.yaml` lists only Database, and
-  makes the Cluster it names a fixture.
+- Generated plans draw each create's kind from the list. They fill a field that names another
+  object, such as a Database's `clusterRef`, only when a `references` entry declares it.
 - A fixture may not be a CR. An object whose ownerReferences lead to no CR, but reach a live
   object that the controller did not create, such as a fixture, belongs to that object. They may
   reach it through live objects that the controller made. `owner` and `owns` do not change this.
   Clean skips such an object while its owner lives.
 - A dependency belongs to the nearest CR that owns it, even one that the controller created.
   `dependency.required` binds only CRs of the first entry.
+
+### References
+
+A `references` entry declares a field by which a CR names an object that it does not own, such as
+the Cluster that a Database runs on or the Secret that holds its password:
+
+```yaml
+references:
+  - {from: example.com/v1/Database, to: example.com/v1/Cluster, name: spec.clusterRef}
+  - from: example.com/v1/Database
+    to: v1/Secret
+    name: spec.passwordSecretRef.name
+    ready: has(self.data) && has(self.data.password)   # CEL over the Secret
+    required: true                                    # the default
+    track: 1s
+```
+
+- `from` is a listed kind. `to` is a kube kind, or a fake's collection written as
+  `<system>:<collection>`. `ready` defaults to the `ready` of the `to` kind's entry, model or fake.
+- `name` and `namespace` are field paths in the CR, as in `values.mutate`. `[*]` names a field of
+  each list item, as in `spec.keys[*].secretName`. Without `namespace`, a namespaced object is in
+  the CR's namespace. An empty or absent value names nothing.
+- A reference **holds back** a CR while the controller's last look at the named object showed it
+  not ready, or missing and `required`. Before any look, only a missing `required` object holds
+  the CR back.
+- Honest fails a CR that the controller writes ready while a reference holds it back, or before
+  the controller looked at a live named object. With `track: d`, it fails a CR that stays ready
+  `d` after a look that held it back.
+- From `stable` after the step's faults end, the settle condition does not wait for a CR that a
+  reference holds back, as the controller last saw the object and as the object is now.
+- Generated plans write at each `name` the name of a slot's CR of the `to` kind, or of a fixture
+  of it, so a CR may name an object that does not exist yet. With `required: false`, 1 write in 4
+  names `missing`, which no object has. `changeFixture` may delete a kube fixture of a `to` kind,
+  and `createFixture` makes it again:
+  `{"do": "createFixture", "target": {"resource": "secrets", "name": "admin-password"}}`.
+- The step that deletes every CR deletes those of each `from` kind before those of its `to` kind.
+- `config.Load` refuses a `to` kind whose scope neither `crds` nor its table of core kinds gives.
+
+[targets/toy-fleet](targets/toy-fleet/config.yaml) declares that a Database names a Cluster and a
+Secret, and a User a Database.
 
 ### Other namespaces and cluster scope
 

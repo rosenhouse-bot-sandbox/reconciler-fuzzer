@@ -105,6 +105,12 @@ Look at the clause first:
 `did not stay settled (clause k)` means the condition held once, then
 failed again within `stable`.
 
+From `stable` after the step's faults end, clause 1 skips a CR that a
+reference holds back, both as the controller last saw the named object and
+as the object is now. So a CR that clause 1 names while it names a ready
+object means the controller missed the object's change: check that it
+watches the object's kind.
+
 After a `stop`, only clauses 2, 6 and 7 apply, and clause 2 only in the
 stop's step. It names a CR that was still being deleted when the stop's wait
 for it gave up.
@@ -193,6 +199,20 @@ dependency:
   CR owned none that counts.
 - `stayed ready after seeing its dependency not ready`: the CR stayed
   ready longer than `track`.
+
+A `references` entry's findings take the same summaries. Each line names
+the CR and the object that its field names. The finding takes the object's
+kind:
+
+- `reported ready with no dependency`: the object was missing and
+  `required`. `seen missing` means the controller's last look showed it
+  missing; `not seen` means the controller never looked.
+- `reported ready before seeing its dependency ready`: `seen not ready`
+  means the controller's last look showed the object not ready; `not seen`
+  means the controller never looked at the live object.
+- `stayed ready after seeing its dependency not ready`: the CR stayed
+  ready, naming the object, for `track` after the look at the time the
+  line gives, and each later look by then held it back.
 
 ### Backoff: retried a failing request in a tight loop
 
