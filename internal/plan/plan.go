@@ -23,7 +23,7 @@ type Plan struct {
 
 // Step is one unit of a run. Its fault period lasts Period, or until its
 // last action ends if that is later. Its faults last as long, unless a
-// create's wait for its slot ends them sooner.
+// create's or a stop's wait for a deleted CR ends them sooner.
 type Step struct {
 	Period  Duration `json:"period,omitempty"`
 	Actions []Action `json:"actions,omitempty"`
@@ -47,7 +47,8 @@ const (
 	// Restart stops the controller with SIGTERM and starts it again.
 	Restart Do = "restart"
 	// Kill sends SIGKILL. The controller stays down until the fault period
-	// ends, or until a create's wait for its slot restarts it.
+	// ends, or until a create's or a stop's wait for a deleted CR restarts
+	// it.
 	Kill Do = "kill"
 	// Damage deletes the object Target selects among those the controller
 	// created, or merge-patches it with Patch when set. The harness never
@@ -56,6 +57,12 @@ const (
 	// ChangeFixture merge-patches the fixture Target names with Patch, or
 	// deletes it when Patch is empty.
 	ChangeFixture Do = "changeFixture"
+	// Stop waits until the CRs that deletes removed are gone, as a create's
+	// wait for its slot does, and then stops the controller with SIGTERM for
+	// good. A CR is gone once its name is free or another CR holds it. After
+	// a stop, a plan's only actions are deletes and fixture changes, and the
+	// runner appends no steps.
+	Stop Do = "stop"
 )
 
 // Action is something the harness does once in a step, At after the fault
@@ -96,9 +103,10 @@ type Target struct {
 }
 
 // Fault starts with the fault period and ends with it, or when a create's
-// wait for its slot ends it. A request fault acts on one system's controller
-// listener. A model fault, Stuck or SlowDelete, acts on the stage model of
-// the kind Match names, or on a fake service. Exactly one effect is set.
+// or a stop's wait for a deleted CR ends it. A request fault acts on one
+// system's controller listener. A model fault, Stuck or SlowDelete, acts on
+// the stage model of the kind Match names, or on a fake service. Exactly one
+// effect is set.
 type Fault struct {
 	// System defaults to "kube".
 	System string `json:"system,omitempty"`
@@ -206,6 +214,7 @@ func (p *Plan) Validate() error {
 	// namespace and name, which is sampleName for the sample and empty for a
 	// generated name. A slot an earlier delete emptied maps to emptied.
 	names := map[string]string{}
+	stopped := false
 	for i, step := range p.Steps {
 		if step.Period < 0 {
 			return fmt.Errorf("steps[%d]: period is negative", i)
@@ -214,6 +223,10 @@ func (p *Plan) Validate() error {
 			if err := a.validate(names); err != nil {
 				return fmt.Errorf("steps[%d].actions[%d]: %w", i, j, err)
 			}
+			if stopped && a.Do != Delete && a.Do != ChangeFixture {
+				return fmt.Errorf("steps[%d].actions[%d]: %s after a stop", i, j, a.Do)
+			}
+			stopped = stopped || a.Do == Stop
 		}
 		for k, f := range step.Faults {
 			if err := f.Validate(); err != nil {
@@ -297,7 +310,7 @@ func (a Action) validate(names map[string]string) error {
 		if a.Do == Delete {
 			names[a.Slot] = emptied
 		}
-	case Restart, Kill:
+	case Restart, Kill, Stop:
 		if a.Slot != "" || a.Object != nil || a.Patch != nil {
 			return fmt.Errorf("%s takes no slot, object or patch", a.Do)
 		}

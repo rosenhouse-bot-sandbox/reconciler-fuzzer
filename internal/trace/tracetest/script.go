@@ -91,9 +91,13 @@ func (r *Script) TimeOut() *Script {
 
 // Act records a harness action of the step.
 func (r *Script) Act(do, slot string, ref *trace.Ref) *Script {
-	e := trace.Event{Action: &trace.Action{Step: r.Step, Index: r.index[r.Step], Do: do, Slot: slot, Ref: ref}}
+	return r.act(trace.Action{Do: do, Slot: slot, Ref: ref})
+}
+
+func (r *Script) act(a trace.Action) *Script {
+	a.Step, a.Index = r.Step, r.index[r.Step]
 	r.index[r.Step]++
-	return r.Add(e)
+	return r.Add(trace.Event{Action: &a})
 }
 
 // Create has caller create ref with body, and returns its uid.
@@ -208,6 +212,12 @@ func (r *Script) Restart() *Script {
 	r.n++
 	return r.Add(Exit("signal: terminated", true, ""), Start(r.n)).Act("restart", "", nil).
 		Call(trace.Controller, "list", r.listed, 200)
+}
+
+// Stop has the harness stop the controller for good, after it waited for
+// the CRs whose UIDs waited holds.
+func (r *Script) Stop(waited ...string) *Script {
+	return r.Add(Exit("signal: terminated", true, "")).act(trace.Action{Do: "stop", Waited: waited})
 }
 
 // CR is a body named name whose status.ready is ready.

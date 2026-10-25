@@ -227,3 +227,72 @@ func TestCleanIgnoresIgnoredKinds(t *testing.T) {
 	r.Begin().Restart().EndFaults().Settle()
 	requireNone(t, judgeWith(t, r, check.Clean))
 }
+
+// A stopped run's last step judges the world that the plan leaves, model
+// kinds included, as the restart step does otherwise. Slot a's delete step
+// did not settle, so only the last step judges the Volume a finalizer holds.
+func TestCleanJudgesAStoppedRunsLastStep(t *testing.T) {
+	r := newRun(3)
+	r.Spec.Models = []trace.Model{{Kind: trace.Kind{Group: "storage.thirdparty", Version: "v1", Kind: "Volume", Resource: "volumes"}, Ready: "true"}}
+	volume := tt.Ref("storage.thirdparty/volumes", "ns", "a-vol")
+	r.Begin()
+	uid := r.CreateCR("a", widgetA)
+	r.Create(ctl, volume, tt.OwnedBy(tt.Object("a-vol"), uid, true))
+	r.Ready(widgetA).EndFaults().Settle()
+	held := tt.OwnedBy(tt.Object("a-vol"), uid, true)
+	held["metadata"].(map[string]any)["deletionTimestamp"] = "2026-01-01T00:00:00Z"
+	r.Begin().DeleteCR("a", widgetA).Update(ctl, volume, held).EndFaults().TimeOut()
+	r.Begin().Stop(uid).EndFaults().Settle()
+	requireFinding(t, judgeWith(t, r, check.Clean), "Clean", 2, "left resources behind", "kube/storage.thirdparty/volumes",
+		"volumes.storage.thirdparty ns/a-vol (rule 1, slot a)")
+}
+
+// A CR that lives at a stopped run's end keeps its resources.
+func TestCleanPassesWhatALiveCRKeepsAtAStoppedRunsEnd(t *testing.T) {
+	r := newRun(2)
+	r.Begin()
+	withChild(r, "a", true)
+	r.EndFaults().Settle()
+	r.Begin().Stop().EndFaults().Settle()
+	requireNone(t, judgeWith(t, r, check.Clean))
+}
+
+func TestCleanFailsSharedGrowthAtAStoppedRunsEnd(t *testing.T) {
+	r := newRun(3)
+	r.Begin()
+	r.Create(ctl, tt.Ref("secrets", "ns", "webhook-x1"), tt.Generated("webhook-", "webhook-x1"))
+	child := withChild(r, "a", true)
+	r.EndFaults().Settle()
+	r.Begin().DeleteCR("a", widgetA).EndFaults()
+	collect(r, child).Settle()
+	r.Begin()
+	r.Create(ctl, tt.Ref("secrets", "ns", "webhook-x2"), tt.Generated("webhook-", "webhook-x2"))
+	r.Stop(r.UID(widgetA)).EndFaults().Settle()
+	requireFinding(t, judgeWith(t, r, check.Clean), "Clean", 2, "left resources behind", "kube/secrets", "secrets ns/webhook-x2 (shared)")
+}
+
+// The observer may record a CR's deletion only after the stop, as when the
+// controller strips the CR's finalizer as it shuts down. What it leaves fails.
+func TestCleanFailsWhatACRDeletedBeforeTheStopLeavesWhenItGoesAfter(t *testing.T) {
+	r := newRun(2)
+	r.Begin()
+	withChild(r, "a", true)
+	r.EndFaults().Settle()
+	r.Begin().Update(trace.Harness, widgetA, terminating("a")).Act("delete", "a", &widgetA).Stop(r.UID(widgetA))
+	r.Add(tt.Deleted(widgetA, r.UID(widgetA), "9", terminating("a"))).EndFaults().Settle()
+	requireFinding(t, judgeWith(t, r, check.Clean), "Clean", 1, "left resources behind", "kube/configmaps", "configmaps ns/a-0 (rule 1, slot a)")
+}
+
+// No controller is left to remove the finalizer of a child whose CR the
+// plan deletes after the stop, so the child may stay.
+func TestCleanPassesWhatACRDeletedAfterTheStopLeaves(t *testing.T) {
+	r := newRun(3)
+	r.Begin()
+	child := withChild(r, "a", true)
+	r.EndFaults().Settle()
+	r.Begin().Stop().EndFaults().Settle()
+	held := tt.OwnedBy(tt.Object(child.Name), r.UID(widgetA), true)
+	held["metadata"].(map[string]any)["deletionTimestamp"] = "2026-01-01T00:00:00Z"
+	r.Begin().DeleteCR("a", widgetA).Update(trace.GC, child, held).EndFaults().Settle()
+	requireNone(t, judgeWith(t, r, check.Clean))
+}

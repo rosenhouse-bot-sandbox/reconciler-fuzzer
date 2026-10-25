@@ -48,8 +48,8 @@ type Cluster interface {
 	Create(ctx context.Context, obj map[string]any) (trace.Ref, error)
 	Patch(ctx context.Context, ref trace.Ref, patch []byte) error
 	Delete(ctx context.Context, ref trace.Ref, propagation plan.Propagation) error
-	Gone(ctx context.Context, ref trace.Ref) (bool, error)
-	WaitGone(ctx context.Context, ref trace.Ref) error
+	Gone(ctx context.Context, ref trace.Ref, uid string) (bool, error)
+	WaitGone(ctx context.Context, ref trace.Ref, uid string) error
 }
 
 var (

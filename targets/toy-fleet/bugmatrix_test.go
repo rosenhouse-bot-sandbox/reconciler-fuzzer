@@ -1,9 +1,12 @@
 package main_test
 
 import (
+	"cmp"
 	"flag"
 	"fmt"
 	"os"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -15,14 +18,43 @@ const (
 	section       = "\n## Fleet toy\n"
 )
 
-// renderBugMatrix renders this toy's section, with one B0 row that counts
-// the committed plans.
+// bugs describes each seeded bug of controller/.
+var bugs = map[int]string{
+	0:   "The correct controller.",
+	150: "Strips its finalizers from deleting CRs when it shuts down.",
+	151: "Puts a finalizer on each Volume, and releases a deleted Cluster before its Volumes, whose finalizers it strips only afterwards.",
+	152: "Errors when a dependent kind is not served, as after its CRD is deleted, so the parent's deletion never ends.",
+}
+
+func TestEveryGateBugHasADescription(t *testing.T) {
+	for _, g := range gate {
+		if bugs[g.bug] == "" {
+			t.Errorf("B%d has no description.", g.bug)
+		}
+	}
+}
+
+// renderBugMatrix renders this toy's section: a B0 row that counts the
+// plans of configs, then the gate table.
 func renderBugMatrix(plans []string) string {
-	return section + "\n" +
+	rows := slices.Clone(gate)
+	slices.SortStableFunc(rows, func(a, b gateRow) int {
+		return cmp.Or(cmp.Compare(a.bug, b.bug), strings.Compare(a.name(), b.name()))
+	})
+	var b strings.Builder
+	b.WriteString(section + "\n" +
 		"Each Cluster owns Volumes of a third party's kind, which a model sets ready. " +
 		"A Database names its Cluster, and a User its Database (targets/toy-fleet).\n\n" +
-		"| Bug | Description | Plan | Check | Step |\n|---|---|---|---|---|\n" +
-		fmt.Sprintf("| B0 | The correct controller. | all %d committed plans | none | |\n", len(plans))
+		"| Bug | Description | Plan | Check | Step |\n|---|---|---|---|---|\n")
+	fmt.Fprintf(&b, "| B0 | %s | all %d plans of %s | none | |\n", bugs[0], len(plans), strings.Join(configs, ", "))
+	for _, g := range rows {
+		check, step := checkOf(g.finding), " "+strconv.Itoa(g.step)+" "
+		if check == "" {
+			check, step = "none", " "
+		}
+		fmt.Fprintf(&b, "| B%d | %s | %s | %s |%s|\n", g.bug, bugs[g.bug], g.name(), check, step)
+	}
+	return b.String()
 }
 
 func TestRenderBugMatrix(t *testing.T) {
@@ -30,11 +62,17 @@ func TestRenderBugMatrix(t *testing.T) {
 	for _, want := range []string{
 		"\n## Fleet toy\n",
 		"| Bug | Description | Plan | Check | Step |\n|---|---|---|---|---|\n",
-		"| B0 | The correct controller. | all 2 committed plans | none | |\n",
+		"| B0 | The correct controller. | all 2 plans of config.yaml, database/config.yaml, protect/config.yaml | none | |\n",
+		"| B0 | The correct controller. | uninstall/stop-first | none | |\n",
+		"| B150 | Strips its finalizers from deleting CRs when it shuts down. | database/restart-cluster-delete | Converge | 1 |\n",
+		"| B152 | Errors when a dependent kind is not served, as after its CRD is deleted, so the parent's deletion never ends. | uninstall/crd-first-stop | Converge | 2 |\n",
 	} {
 		if !strings.Contains(md, want) {
 			t.Errorf("Want %q in:\n%s", want, md)
 		}
+	}
+	if b0, b150 := strings.Index(md, "| B0 | The correct controller. | uninstall/recreate |"), strings.Index(md, "| B150 |"); b0 < 0 || b0 > b150 {
+		t.Errorf("Want the B0 rows before the B150 row:\n%s", md)
 	}
 }
 

@@ -1,0 +1,13 @@
+{
+  "steps": [
+    {"actions": [{"do": "create", "slot": "a"}]},
+    {
+      "period": "2s",
+      "faults": [
+        {"match": {"group": "storage.thirdparty", "resource": "volumes"}, "slowDelete": true},
+        {"match": {"verb": "update", "group": "storage.thirdparty", "resource": "volumes"}, "error": {"code": 500}}
+      ],
+      "actions": [{"do": "delete", "slot": "a"}, {"at": "500ms", "do": "stop"}]
+    }
+  ]
+}

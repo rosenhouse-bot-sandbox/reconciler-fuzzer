@@ -480,3 +480,118 @@ func TestClause6NoModelHasWorkPending(t *testing.T) {
 		t.Errorf("unmet = %q", unmet)
 	}
 }
+
+// stopped adds, at t, the exit of the controller that a stop action of
+// step 1 stopped, and that action, which waited for the CRs whose UIDs
+// waited holds.
+func stopped(b *tt.Builder, t time.Duration, waited ...string) *tt.Builder {
+	return b.At(t).Add(tt.Exit("signal: terminated", true, ""), trace.Event{Action: &trace.Action{Step: 1, Do: "stop", Waited: waited}})
+}
+
+func TestAStoppedControllerOwesNoReadyCRAndNoRun(t *testing.T) {
+	b := settledAt3s()
+	b.At(2 * s).Add(tt.Version(widgetB, "ub", "2", ready(false)))
+	stopped(b, 2500*ms)
+	if unmet := check.Settled(b.Index(), 5*s, spec); len(unmet) != 0 {
+		t.Fatalf("unmet = %q, want none after the stop", unmet)
+	}
+}
+
+func TestAControllerOwesReadyCRsUntilItStops(t *testing.T) {
+	b := settledAt3s()
+	b.At(2 * s).Add(tt.Version(widgetB, "ub", "2", ready(false)))
+	stopped(b, 4*s)
+	requireUnmet(t, b, 3*s, "ns/b is not ready")
+}
+
+func TestAStoppedControllerOwesNoLookAtALaterChange(t *testing.T) {
+	b := settledAt3s()
+	stopped(b, 2*s)
+	b.At(2 * s).Add(tt.Phase(2, trace.FaultPeriod)).
+		At(2200 * ms).Add(tt.Action(2, "changeFixture", cm)).
+		At(2300 * ms).Add(tt.EndFaults(2, 10*s, false))
+	if unmet := check.Settled(b.Index(), 3*s, spec); len(unmet) != 0 {
+		t.Fatalf("unmet = %q, want none", unmet)
+	}
+}
+
+func TestAStoppedControllerMustHaveFinalizedTheCRsThePlanDeleted(t *testing.T) {
+	b := settledAt3s()
+	b.At(2*s).Add(tt.Phase(1, trace.FaultPeriod), tt.Version(widgetA, "ua", "2", deleting()),
+		trace.Event{Action: &trace.Action{Step: 1, Do: "delete", Slot: "a", Ref: &widgetA}})
+	stopped(b, 2500*ms, "ua")
+	if unmet := check.Settled(b.Index(), 5*s, spec); !slices.Equal(unmet, []string{"widgets.toy ns/a is being deleted"}) {
+		t.Fatalf("unmet = %q, want only slot a's CR being deleted", unmet)
+	}
+}
+
+// A controller may create a CR again with the name of one the plan deleted.
+func TestAStoppedControllerOwesNothingForACRThatReplacedADeletedOne(t *testing.T) {
+	b := settledAt3s()
+	b.At(2*s).Add(tt.Phase(1, trace.FaultPeriod), tt.Version(widgetA, "ua", "2", deleting()),
+		trace.Event{Action: &trace.Action{Step: 1, Do: "delete", Slot: "a", Ref: &widgetA}}).
+		At(2100*ms).Add(tt.Deleted(widgetA, "ua", "3", deleting()), tt.Version(widgetA, "ua2", "4", ready(true)))
+	stopped(b, 2500*ms, "ua")
+	if unmet := check.Settled(b.Index(), 5*s, spec); len(unmet) != 0 {
+		t.Fatalf("unmet = %q, want none", unmet)
+	}
+}
+
+// The stop waits only for the CRs that delete actions removed, so another
+// deletion, such as a cascade's, may outlast it.
+func TestAStoppedControllerOwesNoFinalizerTheStopDidNotWaitFor(t *testing.T) {
+	b := settledAt3s()
+	b.At(2*s).Add(tt.Phase(1, trace.FaultPeriod), tt.Version(widgetA, "ua", "2", deleting()))
+	stopped(b, 2500*ms)
+	if unmet := check.Settled(b.Index(), 5*s, spec); len(unmet) != 0 {
+		t.Fatalf("unmet = %q, want none", unmet)
+	}
+}
+
+// Slot b's CR takes the name of slot a's CR, which a delete removed before
+// the stop. The stop waited for slot a's CR alone.
+func TestAStoppedControllerOwesNoFinalizerForACRThatTookADeletedOnesName(t *testing.T) {
+	b := settledAt3s()
+	b.At(1500*ms).Add(tt.Deleted(widgetA, "ua", "2", ready(true)), trace.Event{Action: &trace.Action{Do: "delete", Slot: "a", Ref: &widgetA}}).
+		At(1600*ms).Add(tt.Version(widgetA, "ub", "3", ready(true)), trace.Event{Action: &trace.Action{Do: "create", Slot: "b", Ref: &widgetA}}).
+		At(2 * s).Add(tt.Phase(1, trace.FaultPeriod))
+	stopped(b, 2500*ms, "ua")
+	b.At(2600*ms).Add(trace.Event{Action: &trace.Action{Step: 1, Do: "delete", Slot: "b", Ref: &widgetA}}, tt.Version(widgetA, "ub", "4", deleting()))
+	if unmet := check.Settled(b.Index(), 5*s, spec); len(unmet) != 0 {
+		t.Fatalf("unmet = %q, want none", unmet)
+	}
+}
+
+// No controller runs to remove the finalizers of a CR deleted after the
+// stop, so the CR may stay.
+func TestACRDeletedAfterTheStopMayStayDeleting(t *testing.T) {
+	b := settledAt3s()
+	b.At(2 * s).Add(tt.Phase(1, trace.FaultPeriod))
+	stopped(b, 2*s)
+	b.At(2500*ms).Add(trace.Event{Action: &trace.Action{Step: 1, Do: "delete", Slot: "a", Ref: &widgetA}}, tt.Version(widgetA, "ua", "2", deleting()))
+	if unmet := check.Settled(b.Index(), 5*s, spec); len(unmet) != 0 {
+		t.Fatalf("unmet = %q, want none", unmet)
+	}
+}
+
+// Only the stop's step owes clause 2. No controller is left to finalize a
+// CR that the stop's wait gave up on, so later steps settle without it.
+func TestAStepAfterTheStopsStepOwesNoFinalizer(t *testing.T) {
+	b := settledAt3s()
+	b.At(2*s).Add(tt.Phase(1, trace.FaultPeriod), tt.Version(widgetA, "ua", "2", deleting()),
+		trace.Event{Action: &trace.Action{Step: 1, Do: "delete", Slot: "a", Ref: &widgetA}})
+	stopped(b, 2500*ms, "ua")
+	b.At(3 * s).Add(tt.Phase(2, trace.FaultPeriod))
+	if unmet := check.Settled(b.Index(), 5*s, spec); len(unmet) != 0 {
+		t.Fatalf("unmet = %q, want none in the step after the stop's", unmet)
+	}
+}
+
+func TestAStoppedRunWaitsForTheControllersLastWritesAndForModels(t *testing.T) {
+	b := settledAt3s()
+	b.At(2 * s).Add(tt.Call(ctl, "update", cm, 200, "5"))
+	stopped(b, 2100*ms)
+	b.At(2200 * ms).Add(trace.Event{Work: &trace.Work{System: "gc", Pending: true}})
+	requireUnmet(t, b, 3*s, "changed configmaps ns/c")
+	requireUnmet(t, b, 4500*ms, "model gc has work pending")
+}

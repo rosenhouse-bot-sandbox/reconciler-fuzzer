@@ -465,23 +465,27 @@ func (k *Kube) Delete(ctx context.Context, ref trace.Ref, propagation plan.Propa
 	return k.observer.await(ctx, "the deletion of "+describe(ref), func() bool { return k.observer.recordedGone(ref, string(uid)) })
 }
 
-// Gone reports whether ref names no object, finalizers included.
-func (k *Kube) Gone(ctx context.Context, ref trace.Ref) (bool, error) {
+// Gone reports whether ref names no object, finalizers included, or, when
+// uid is set, no object with uid.
+func (k *Kube) Gone(ctx context.Context, ref trace.Ref, uid string) (bool, error) {
 	resource, err := k.resource(ref)
 	if err != nil {
 		return false, err
 	}
-	_, err = resource.Get(ctx, ref.Name, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
+	obj, err := resource.Get(ctx, ref.Name, metav1.GetOptions{})
+	switch {
+	case apierrors.IsNotFound(err):
 		return true, nil
+	case err != nil:
+		return false, err
 	}
-	return false, err
+	return uid != "" && string(obj.GetUID()) != uid, nil
 }
 
-// WaitGone returns once ref names no object, finalizers included.
-func (k *Kube) WaitGone(ctx context.Context, ref trace.Ref) error {
+// WaitGone returns once Gone holds.
+func (k *Kube) WaitGone(ctx context.Context, ref trace.Ref, uid string) error {
 	return wait.PollUntilContextCancel(ctx, 100*time.Millisecond, true, func(ctx context.Context) (bool, error) {
-		return k.Gone(ctx, ref)
+		return k.Gone(ctx, ref, uid)
 	})
 }
 
