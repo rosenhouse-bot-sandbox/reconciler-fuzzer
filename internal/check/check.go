@@ -406,18 +406,15 @@ func held(ix *trace.Index, f trace.Fault, from, to time.Duration) bool {
 		if v == nil || ix.Writer(*v) != trace.Caller(f.Model) {
 			return false
 		}
+		if strings.HasPrefix(f.What, "slowDelete") {
+			return slices.Contains(finalizers(*v), trace.SlowDeleteFinalizer)
+		}
 		var body struct {
-			Metadata struct {
-				Finalizers []string `json:"finalizers"`
-			} `json:"metadata"`
 			Status struct {
 				Conditions []struct{ Type, Reason string } `json:"conditions"`
 			} `json:"status"`
 		}
 		json.Unmarshal(v.Body, &body)
-		if strings.HasPrefix(f.What, "slowDelete") {
-			return slices.Contains(body.Metadata.Finalizers, trace.SlowDeleteFinalizer)
-		}
 		return slices.ContainsFunc(body.Status.Conditions, func(c struct{ Type, Reason string }) bool {
 			return c.Type == "Ready" && c.Reason == trace.StuckReason
 		})

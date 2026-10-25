@@ -11,7 +11,7 @@ import (
 
 const removedForeign = "removed another caller's finalizer"
 
-// Finalizers fails a controller update or patch, without a subresource,
+// Finalizers fails a controller update or patch of an object or its status
 // whose answer lacks a finalizer that another recorded caller added.
 // DESIGN.md §12 defines it. Its findings come in order of their first
 // removal.
@@ -21,7 +21,8 @@ func Finalizers(ix *trace.Index) []Finding {
 	var order []findingKey
 	for _, e := range ix.Calls(trace.Controller, -1, math.MaxInt64) {
 		c := e.Call
-		if c.Verb != "update" && c.Verb != "patch" || c.Subresource != "" || trace.Ignored(*c) || c.ResultFinalizers == nil {
+		if c.Verb != "update" && c.Verb != "patch" || c.Subresource != "" && c.Subresource != "status" ||
+			trace.Ignored(*c) || c.ResultFinalizers == nil {
 			continue
 		}
 		base := replaced(ix, e)
@@ -51,13 +52,15 @@ func Finalizers(ix *trace.Index) []Finding {
 }
 
 // replaced is the version a write replaced, or no version when the trace
-// lacks it. A write that changed its object replaced the version before its
-// answer's. One that did not replaced its answer's version: it changed
-// nothing, or it emptied a deleting object's finalizers, which deletes the
-// object and answers with the request's object at the old version.
+// lacks it. A write made its answer's version when the version is new since
+// its request (Index.Changed) and no earlier answer carried it. It then
+// replaced the version before. Otherwise it replaced its answer's version:
+// it changed nothing, or it emptied a deleting object's finalizers, which
+// deletes the object and answers with the request's object at the old
+// version.
 func replaced(ix *trace.Index, e trace.Event) trace.Version {
 	ref, rv := e.Call.Object(), e.Call.ResultRV
-	if ix.Changed(e) {
+	if first, _ := ix.WriteCall(ref, rv); ix.Changed(e) && first.Seq == e.Seq {
 		v, _ := ix.Previous(ref, rv)
 		return v
 	}

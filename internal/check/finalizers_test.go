@@ -116,22 +116,42 @@ func TestFinalizersPassesAModelThatReleasesTheDeletedObject(t *testing.T) {
 	requireNone(t, check.Finalizers(r.Index()))
 }
 
-func TestFinalizersPassesANoOpWriteAfterAnotherCallerRemovedTheFinalizer(t *testing.T) {
-	for name, removal := range map[string][]trace.Event{
-		"in a recorded call":  {write(gadgetModel, "patch", gadgetA, "m1")},
-		"in no recorded call": nil,
+// A no-op write answers with the version another caller made. A delay fault
+// can hold the write while that caller writes.
+func TestFinalizersPassesANoOpWriteAnsweredWithAnotherCallersRemoval(t *testing.T) {
+	for name, c := range map[string]struct {
+		removal []trace.Event
+		latency time.Duration
+	}{
+		"after a recorded removal":    {[]trace.Event{write(gadgetModel, "patch", gadgetA, "m1")}, 0},
+		"after an unrecorded removal": {nil, 0},
+		"during a recorded removal":   {[]trace.Event{write(gadgetModel, "patch", gadgetA, "m1")}, 2 * tt.Tick},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r, uid := heldGadget()
-			r.Add(append(removal, tt.Version(gadgetA, uid, "m1", held(false)))...)
-			r.Add(write(ctl, "update", gadgetA, "m1"))
+			r.Add(append(c.removal, tt.Version(gadgetA, uid, "m1", held(false)))...)
+			noOp := write(ctl, "update", gadgetA, "m1")
+			noOp.Call.Latency = c.latency
+			r.Add(noOp)
 			requireNone(t, check.Finalizers(r.Index()))
 		})
 	}
 }
 
+// A built-in kind's status write can change its finalizers.
+func TestFinalizersFailsAStatusWriteThatDropsAFinalizer(t *testing.T) {
+	service := tt.Ref("services", "ns", "s")
+	r := newRun(1)
+	r.Begin()
+	uid := r.Create(trace.Harness, service, heldBody("s", false, protect))
+	status := write(ctl, "update", service, "c1")
+	status.Call.Subresource = "status"
+	r.Add(status, tt.Version(service, uid, "c1", heldBody("s", false)))
+	requireFinding(t, check.Finalizers(r.Index()), "Finalizers", 0, removed, "kube/services", "services ns/s: "+protect+", added by harness")
+}
+
 // A scale write answers with a Scale, whose metadata holds no finalizers.
-func TestFinalizersSkipsASubresourceWrite(t *testing.T) {
+func TestFinalizersSkipsAScaleWrite(t *testing.T) {
 	r, uid := heldGadget()
 	scale := write(ctl, "update", gadgetA, "c1")
 	scale.Call.Subresource = "scale"
