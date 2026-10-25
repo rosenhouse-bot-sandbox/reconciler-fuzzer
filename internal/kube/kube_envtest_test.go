@@ -363,7 +363,6 @@ func TestKube(t *testing.T) {
 	})
 
 	t.Run("create fixture makes a deleted fixture again as its file declares it", func(t *testing.T) {
-		t.Skip("enabled by the run package")
 		admin := kubernetes.NewForConfigOrDie(k.admin)
 		configMap, _ := k.Ref(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}, "widget-config")
 		clusterRole, _ := k.Ref(schema.GroupVersionKind{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRole"}, "rf-fixture")

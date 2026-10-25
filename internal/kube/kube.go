@@ -88,6 +88,7 @@ type Kube struct {
 	upstream  *url.URL
 	record    func(trace.Event)
 	kinds     []trace.Ref
+	fixtures  []fixture
 
 	mu        sync.Mutex
 	listeners []*interpose.Listener
@@ -265,11 +266,19 @@ func (k *Kube) start(ctx context.Context, env *system.Env) (system.Endpoints, er
 	}, nil
 }
 
-func (k *Kube) createFixtures(ctx context.Context, fixtures []*unstructured.Unstructured) error {
-	for _, fixture := range fixtures {
-		if _, err := k.Create(ctx, fixture.Object); err != nil {
-			return fmt.Errorf("creating fixture %s %s: %w", fixture.GetKind(), fixture.GetName(), err)
+// fixture is an object a fixture file declares, at the ref Start created it.
+type fixture struct {
+	ref    trace.Ref
+	object map[string]any
+}
+
+func (k *Kube) createFixtures(ctx context.Context, objects []*unstructured.Unstructured) error {
+	for _, object := range objects {
+		ref, err := k.Create(ctx, object.Object)
+		if err != nil {
+			return fmt.Errorf("creating fixture %s %s: %w", object.GetKind(), object.GetName(), err)
 		}
+		k.fixtures = append(k.fixtures, fixture{ref, object.Object})
 	}
 	return nil
 }
@@ -419,7 +428,11 @@ func (k *Kube) Create(ctx context.Context, obj map[string]any) (trace.Ref, error
 // and returns the created object's ref. A ref no fixture file declares is
 // an error.
 func (k *Kube) CreateFixture(ctx context.Context, ref trace.Ref) (trace.Ref, error) {
-	return trace.Ref{}, errors.New("createFixture is not implemented")
+	i := slices.IndexFunc(k.fixtures, func(f fixture) bool { return f.ref == ref })
+	if i < 0 {
+		return trace.Ref{}, fmt.Errorf("no fixture file declares %s", describe(ref))
+	}
+	return k.Create(ctx, k.fixtures[i].object)
 }
 
 func (k *Kube) awaitVersion(ctx context.Context, ref trace.Ref, rv string) error {
