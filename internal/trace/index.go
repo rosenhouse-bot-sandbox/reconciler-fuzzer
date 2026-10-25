@@ -39,6 +39,9 @@ type Index struct {
 	// are not Partial. Neither holds a call of unknown outcome.
 	looks map[Caller]map[Ref][]Event
 	lists map[Caller]map[Ref][]Event
+	// syncs holds by kind each caller's kube watches that are not Partial
+	// and whose initial events ended.
+	syncs map[Caller]map[Ref][]syncedWatch
 	// watches holds each caller's watch calls; watchEnds the time each
 	// stream ended.
 	watches   map[Caller][]Event
@@ -49,6 +52,10 @@ type Index struct {
 	holds     []Hold
 	holdStart map[[2]int]int
 }
+
+// syncedWatch is a watch call whose initial events ended at end, a Synced
+// event.
+type syncedWatch struct{ watch, end Event }
 
 // Hold is one holdWatch fault's span. End is the largest Duration while the
 // hold lasts.
@@ -79,6 +86,7 @@ func NewIndex(events []Event) *Index {
 		opaque:    map[Caller][]Event{},
 		looks:     map[Caller]map[Ref][]Event{},
 		lists:     map[Caller]map[Ref][]Event{},
+		syncs:     map[Caller]map[Ref][]syncedWatch{},
 
 		watches:   map[Caller][]Event{},
 		watchEnds: map[WatchEnd]time.Duration{},
@@ -111,6 +119,8 @@ func (ix *Index) Append(events ...Event) {
 			ix.addAction(e)
 		case e.WatchEnd != nil:
 			ix.watchEnds[*e.WatchEnd] = e.At
+		case e.Synced != nil:
+			ix.addSynced(e)
 		case e.Work != nil:
 			ix.work[e.Work.System] = append(ix.work[e.Work.System], e)
 		case e.Fault != nil && e.Fault.Hold != nil:
@@ -133,6 +143,22 @@ func addBy(m map[Caller]map[Ref][]Event, caller Caller, key Ref, e Event) {
 		m[caller] = map[Ref][]Event{}
 	}
 	m[caller][key] = append(m[caller][key], e)
+}
+
+// addSynced indexes e, a Synced event, unless its watch is not kube's or is
+// Partial.
+func (ix *Index) addSynced(e Event) {
+	s := e.Synced
+	n := slices.IndexFunc(ix.watches[s.Caller], func(w Event) bool { return w.Call.Ref.System == s.System && w.Call.Stream == s.Stream })
+	if n < 0 || s.System != "kube" || ix.watches[s.Caller][n].Call.Partial {
+		return
+	}
+	watch := ix.watches[s.Caller][n]
+	if ix.syncs[s.Caller] == nil {
+		ix.syncs[s.Caller] = map[Ref][]syncedWatch{}
+	}
+	kind := kindOf(watch.Call.Ref)
+	ix.syncs[s.Caller][kind] = append(ix.syncs[s.Caller][kind], syncedWatch{watch, e})
 }
 
 func (ix *Index) addHold(e Event) {
@@ -420,12 +446,16 @@ func (ix *Index) Seen(caller Caller, uid string) []Event { return ix.seen[caller
 
 // Looks returns, in Seq order, the responses that showed caller ref: each
 // of its Seen events of ref that is not opaque, a deleted one showing ref
-// missing, and each of its calls that showed ref missing. Such a call is a
-// get of ref without a subresource that answered 404, or a 2xx kube list,
-// not Partial nor a HEAD, that covers ref, of a kind that a run event
-// reference names as To, with no Seen of ref, opaque or not, outside a
-// watch between its send and its Call event. No call of unknown outcome
-// counts.
+// missing, and each of its events that showed ref missing. Such an event is
+// the Call of a get of ref without a subresource that answered 404, or, for
+// a kind that a run event reference names as To, one of these:
+//   - the Call of a 2xx kube list, not Partial nor a HEAD, that covers ref,
+//     with no Seen of ref, opaque or not, outside a watch between its send
+//     and its Call event;
+//   - the Synced event of a kube watch, not Partial, that covers ref, with
+//     no Seen of ref on its stream, opaque or not, before it.
+//
+// No call of unknown outcome counts.
 func (ix *Index) Looks(caller Caller, ref Ref) []Event {
 	looks := slices.Clone(ix.looks[caller][ref])
 	if !ix.referenced(ref) {
@@ -436,8 +466,22 @@ func (ix *Index) Looks(caller Caller, ref Ref) []Event {
 			looks = append(looks, e)
 		}
 	}
+	for _, s := range ix.syncs[caller][kindOf(ref)] {
+		if s.watch.Call.Ref.Covers(ref) && !ix.sentInitially(caller, ref, s) {
+			looks = append(looks, s.end)
+		}
+	}
 	slices.SortFunc(looks, func(a, b Event) int { return cmp.Compare(a.Seq, b.Seq) })
 	return looks
+}
+
+// sentInitially reports whether s's watch showed caller ref, or an opaque
+// frame may have, before its initial events ended.
+func (ix *Index) sentInitially(caller Caller, ref Ref, s syncedWatch) bool {
+	before := func(e Event) bool {
+		return e.Seen != nil && e.Seen.Stream == s.watch.Call.Stream && e.Seen.Ref.Covers(ref) && e.Seq < s.end.Seq
+	}
+	return slices.ContainsFunc(ix.looks[caller][ref], before) || slices.ContainsFunc(ix.opaque[caller], before)
 }
 
 // kindOf names ref's kind by a ref with no namespace or name.

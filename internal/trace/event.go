@@ -57,6 +57,8 @@ type Event struct {
 	Proc    *Proc    `json:"proc,omitempty"`
 	// WatchEnd records that a watch Call's stream closed.
 	WatchEnd *WatchEnd `json:"watchEnd,omitempty"`
+	// Synced records that a watch Call's stream ended its initial events.
+	Synced *Synced `json:"synced,omitempty"`
 	// Work records that a model started or stopped having work pending.
 	Work *Work `json:"work,omitempty"`
 	// Seen records that a response showed a caller one object version.
@@ -301,6 +303,15 @@ const (
 
 // Unknown says the caller cannot tell whether the request happened.
 func (c Call) Unknown() bool { return c.Injected == DropResponse || c.Injected == KillAfter }
+
+// Synced says the watch Call with Stream on Caller's listener for System
+// sent the k8s.io/initial-events-end bookmark. A watch with
+// sendInitialEvents sends it after an event for each object in its scope.
+type Synced struct {
+	Caller Caller `json:"caller"`
+	System string `json:"system"`
+	Stream uint64 `json:"stream"`
+}
 
 // WatchEnd says the watch Call with Stream on Caller's listener for System
 // closed.

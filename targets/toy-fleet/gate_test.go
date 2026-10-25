@@ -50,6 +50,8 @@ var gate = []gateRow{
 	{plan: "create-together", bug: 123, finding: "Honest: reported ready before seeing its dependency ready", step: 0, detail: "slot b: clusters.toy.reconciler-fuzzer "},
 	{plan: "secret-late", bug: 124, finding: "Honest: reported ready with no dependency", step: 0, detail: "slot b: secrets "},
 	{plan: "secret-recreate", bug: 125, finding: "Honest: stayed ready after seeing its dependency not ready", step: 1, detail: "slot b: secrets "},
+	// The restarted controller's watch shows the Secret missing.
+	{plan: "secret-deleted-while-down", bug: 125, finding: "Honest: stayed ready after seeing its dependency not ready", step: 1, detail: "slot b: secrets "},
 	{plan: "restart-cluster-delete", bug: 150, finding: "Converge: did not settle (clause 1)", step: 1, detail: "db is not ready", config: databaseConfig},
 	// The kill comes after the update that releases the Cluster, so B151
 	// never strips its Volumes' finalizers.

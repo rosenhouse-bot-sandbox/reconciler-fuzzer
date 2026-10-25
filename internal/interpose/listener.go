@@ -609,8 +609,8 @@ func (rec *recorder) readSeen(encoding string) {
 }
 
 // decodeWatch decodes the watch's frames as the listener forwards them, and
-// records a Seen for each ADDED, MODIFIED or DELETED event. A watch of
-// Tables is opaque.
+// records a Seen for each ADDED, MODIFIED or DELETED event, and a Synced for
+// the bookmark that ends the initial events. A watch of Tables is opaque.
 func (rec *recorder) decodeWatch(encoding string) {
 	rec.frames, rec.decoded = &feed{chunks: make(chan []byte), drained: make(chan struct{})}, make(chan struct{})
 	go func() {
@@ -636,6 +636,10 @@ func (rec *recorder) decodeWatch(encoding string) {
 			switch event.Type {
 			case "ADDED", "MODIFIED", "DELETED":
 				rec.recordSeen(event.Object.Metadata, event.Type == "DELETED")
+			case "BOOKMARK":
+				if event.Object.Metadata.Annotations[metav1.InitialEventsAnnotationKey] == "true" {
+					rec.recordSynced()
+				}
 			}
 		}
 	}()
@@ -683,6 +687,12 @@ func (f *feed) write(p []byte, stopped <-chan struct{}) {
 func (rec *recorder) recordOpaque() {
 	if record := rec.listener.o.Record; record != nil {
 		record(trace.Event{Seen: &trace.Seen{Caller: rec.call.Caller, Ref: rec.call.Ref, Stream: rec.call.Stream, Opaque: true}})
+	}
+}
+
+func (rec *recorder) recordSynced() {
+	if record := rec.listener.o.Record; record != nil {
+		record(trace.Event{Synced: &trace.Synced{Caller: rec.call.Caller, System: rec.call.Ref.System, Stream: rec.call.Stream}})
 	}
 }
 

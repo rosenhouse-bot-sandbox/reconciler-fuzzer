@@ -87,3 +87,61 @@ func TestLooks(t *testing.T) {
 		t.Errorf("Looks(harness, pw) = %q, want %q.", got, want)
 	}
 }
+
+func TestLooksCountTheEndOfAWatchsInitialEvents(t *testing.T) {
+	const s = time.Second
+	pw, other := tt.Ref("secrets", "ns", "pw"), tt.Ref("secrets", "ns", "other")
+	var stream uint64
+	watch := func(caller trace.Caller, scope trace.Ref, change func(*trace.Call)) trace.Event {
+		stream++
+		e := tt.Call(caller, "watch", scope, 200, "")
+		e.Call.Watch, e.Call.Stream = true, stream
+		if change != nil {
+			change(e.Call)
+		}
+		return e
+	}
+	frame := func(e trace.Event) trace.Event { e.Seen.Stream = stream; return e }
+	synced := func(caller trace.Caller) trace.Event {
+		return trace.Event{Synced: &trace.Synced{Caller: caller, System: "kube", Stream: stream}}
+	}
+	ctl, secrets := trace.Controller, tt.Ref("secrets", "ns", "")
+	run := trace.Event{Run: &trace.Run{References: []trace.Reference{
+		{From: trace.Kind{Group: "toy", Resource: "databases"}, To: trace.Kind{Version: "v1", Kind: "Secret", Resource: "secrets"}, Namespaced: true, Name: "spec.secret", Ready: "true"},
+	}}}
+	var b tt.Builder
+	b.Add(run).
+		At(1*s).Add(watch(ctl, secrets, nil), frame(tt.Seen(ctl, pw, "u1", "1")), synced(ctl)).
+		At(2*s).Add(watch(ctl, tt.Ref("secrets", "", ""), nil), synced(ctl)).
+		At(3*s).Add(watch(ctl, secrets, func(c *trace.Call) { c.Partial = true }), synced(ctl)).
+		At(4*s).Add(watch(ctl, tt.Ref("secrets", "elsewhere", ""), nil), synced(ctl)).
+		At(5*s).Add(watch(ctl, secrets, nil), trace.Event{Seen: &trace.Seen{Caller: ctl, Ref: secrets, Stream: stream, Opaque: true}}, synced(ctl)).
+		At(6*s).Add(watch(trace.Harness, secrets, nil), synced(trace.Harness)).
+		At(7*s).Add(watch(ctl, tt.Ref("configmaps", "ns", ""), nil), synced(ctl))
+	ix := b.Index()
+	describe := func(looks []trace.Event) []string {
+		var described []string
+		for _, e := range looks {
+			kind := "seen"
+			if e.Synced != nil {
+				kind = "synced"
+			}
+			described = append(described, fmt.Sprintf("%v %s", e.At, kind))
+		}
+		return described
+	}
+	for _, c := range []struct {
+		caller trace.Caller
+		ref    trace.Ref
+		want   []string
+	}{
+		{ctl, pw, []string{"1s seen", "2s synced"}},
+		{ctl, other, []string{"1s synced", "2s synced"}},
+		{trace.Harness, other, []string{"6s synced"}},
+		{ctl, tt.Ref("configmaps", "ns", "other"), nil},
+	} {
+		if got := describe(ix.Looks(c.caller, c.ref)); !slices.Equal(got, c.want) {
+			t.Errorf("Looks(%s, %v) = %q, want %q.", c.caller, c.ref, got, c.want)
+		}
+	}
+}

@@ -171,3 +171,31 @@ func TestAListOrWatchRecordsWhetherItIsPartial(t *testing.T) {
 		}
 	}
 }
+
+func TestAWatchRecordsTheEndOfItsInitialEvents(t *testing.T) {
+	l, recorded := listen(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"type":"ADDED","object":%s}`+"\n", gadgetJSON("g1", "u1", "5"))
+		fmt.Fprintln(w, `{"type":"BOOKMARK","object":{"kind":"Gadget","metadata":{"resourceVersion":"6"}}}`)
+		fmt.Fprintln(w, `{"type":"BOOKMARK","object":{"kind":"Gadget","metadata":{"resourceVersion":"7","annotations":{"k8s.io/initial-events-end":"true"}}}}`)
+		fmt.Fprintf(w, `{"type":"MODIFIED","object":%s}`+"\n", gadgetJSON("g1", "u1", "8"))
+	}), seeingGadgets)
+
+	do(t, l, "GET", gadgetsPath+"?watch=true&sendInitialEvents=true&allowWatchBookmarks=true")
+	l.Close()
+
+	recorded.mu.Lock()
+	defer recorded.mu.Unlock()
+	var got []string
+	for _, e := range recorded.list {
+		switch {
+		case e.Seen != nil:
+			got = append(got, "seen "+e.Seen.RV)
+		case e.Synced != nil:
+			got = append(got, fmt.Sprintf("synced %s %s stream %d", e.Synced.Caller, e.Synced.System, e.Synced.Stream))
+		}
+	}
+	if want := []string{"seen 5", "synced controller kube stream 1", "seen 8"}; !slices.Equal(got, want) {
+		t.Errorf("Recorded %q, want %q.", got, want)
+	}
+}
