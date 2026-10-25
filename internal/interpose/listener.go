@@ -287,12 +287,9 @@ func (l *Listener) sees(ref trace.Ref) bool {
 func askForJSON(header http.Header) {
 	ranges := strings.Split(cmp.Or(header.Get("Accept"), "application/json"), ",")
 	for i, r := range ranges {
-		if m := media(r); m == protobufType || m == cborType {
-			params := ""
-			if k := strings.IndexByte(r, ';'); k >= 0 {
-				params = r[k:]
-			}
-			ranges[i] = "application/json" + params
+		mediaType, _, _ := strings.Cut(r, ";")
+		if m := strings.TrimSpace(mediaType); m == protobufType || m == cborType {
+			ranges[i] = "application/json" + r[len(mediaType):]
 		}
 	}
 	header.Set("Accept", strings.Join(ranges, ","))
@@ -612,7 +609,8 @@ func (rec *recorder) readSeen(encoding string) {
 }
 
 // decodeWatch decodes the watch's frames as the listener forwards them, and
-// records a Seen for each ADDED, MODIFIED or DELETED event.
+// records a Seen for each ADDED, MODIFIED or DELETED event. A watch of
+// Tables is opaque.
 func (rec *recorder) decodeWatch(encoding string) {
 	rec.frames, rec.decoded = &feed{chunks: make(chan []byte), drained: make(chan struct{})}, make(chan struct{})
 	go func() {
@@ -629,6 +627,10 @@ func (rec *recorder) decodeWatch(encoding string) {
 				Object objectMeta `json:"object"`
 			}
 			if err := decoder.Decode(&event); err != nil {
+				return
+			}
+			if table(event.Object.TypeMeta) {
+				rec.recordOpaque()
 				return
 			}
 			switch event.Type {

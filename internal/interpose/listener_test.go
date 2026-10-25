@@ -910,7 +910,7 @@ func TestAWriteOfASeenKindRecordsSeen(t *testing.T) {
 
 func TestAResponseOfASeenKindItCannotDecodeRecordsAnOpaqueSeen(t *testing.T) {
 	big := `{"items":[` + strings.Repeat(gadgetJSON("g1", "u1", "5")+",", interpose.MaxResultBody/80) + gadgetJSON("g1", "u1", "5") + "]}"
-	table := respondOK("application/json", "", `{"apiVersion":"meta.k8s.io/v1","kind":"Table","metadata":{"resourceVersion":"9"},"rows":[]}`)
+	const table = `{"apiVersion":"meta.k8s.io/v1","kind":"Table","metadata":{"resourceVersion":"9"},"rows":[]}`
 	for _, c := range []struct {
 		name, path string
 		handler    http.Handler
@@ -921,8 +921,9 @@ func TestAResponseOfASeenKindItCannotDecodeRecordsAnOpaqueSeen(t *testing.T) {
 		{"a watch in an unknown encoding", gadgetsPath + "?watch=true", respondOK("application/json", "br", "")},
 		{"bad JSON", gadgetsPath + "/g1", respondOK("application/json", "", "{")},
 		{"a big list", gadgetsPath, respondOK("application/json", "", big)},
-		{"a table", gadgetsPath, table},
-		{"a table of one", gadgetsPath + "/g1", table},
+		{"a table", gadgetsPath, respondOK("application/json", "", table)},
+		{"a table of one", gadgetsPath + "/g1", respondOK("application/json", "", table)},
+		{"a watch of tables", gadgetsPath + "?watch=true", respondOK("application/json", "", `{"type":"ADDED","object":`+table+"}\n")},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			l, recorded := listen(t, c.handler, seeingGadgets)

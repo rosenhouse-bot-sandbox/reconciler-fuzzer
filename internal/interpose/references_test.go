@@ -83,7 +83,7 @@ func TestARequestOfASeenKindAsksForJSON(t *testing.T) {
 		{[]string{"application/vnd.kubernetes.protobuf, */*"}, "application/json, */*"},
 		{[]string{"application/vnd.kubernetes.protobuf;" + metadataList}, "application/json;" + metadataList},
 		{[]string{"application/vnd.kubernetes.protobuf;" + metadataList + ",application/json;" + metadataList + ",application/json"}, "application/json;" + metadataList + ",application/json;" + metadataList + ",application/json"},
-		{[]string{"application/cbor;q=1, application/json;q=0.9"}, "application/json;q=1, application/json;q=0.9"},
+		{[]string{"application/json;q=0.9, application/cbor;q=1"}, "application/json;q=0.9,application/json;q=1"},
 		{nil, "application/json"},
 	} {
 		for _, path := range []string{gadgetsPath + "/g1", gadgetsPath, gadgetsPath + "?watch=true"} {
