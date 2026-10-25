@@ -12,11 +12,12 @@ import (
 const (
 	clusterConfig  = "cluster/config.yaml"
 	databaseConfig = "database/config.yaml"
+	protectConfig  = "protect/config.yaml"
 )
 
 // configs are the toy's configs with plans. B0 passes every plan in plans/
 // beside each.
-var configs = []string{"config.yaml", databaseConfig}
+var configs = []string{"config.yaml", databaseConfig, protectConfig}
 
 func planPath(config, plan string) string {
 	return filepath.Join(filepath.Dir(config), "plans", plan+".json")

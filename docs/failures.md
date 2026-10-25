@@ -96,7 +96,7 @@ Look at the clause first:
 | 3 | The controller is down, or restarted within `stable`. | `controller.log`, and any Crash finding. |
 | 4 | The controller made no successful request since it started. | Its startup in `controller.log`, and its RBAC. |
 | 5 | The controller did not look at an object a `damage` or `changeFixture` changed. | Its watches and the kinds it reads. |
-| 6 | A model, such as `gc`, has work pending. | What the model waits on. Churn under clause 7 often keeps it busy. |
+| 6 | A model, such as `gc`, has work pending. | What the model waits on. Churn under clause 7 often keeps it busy. A stage model's `finalizer:` holds each deletion for `finalizer.after`, so lower it, or raise `timeouts.settle`. |
 | 7 | The controller kept changing objects, or went over the `budgets`. | The first changed write the detail names: it shows what the controller fights over. |
 
 `did not stay settled (clause k)` means the condition held once, then
