@@ -56,7 +56,11 @@ const (
 	// ChangeFixture merge-patches the fixture Target names with Patch, or
 	// deletes it when Patch is empty.
 	ChangeFixture Do = "changeFixture"
-	Stop          Do = "stop"
+	// Stop waits until the CRs that deletes removed are gone, as a create's
+	// wait for its slot does, and then stops the controller with SIGTERM for
+	// good. After a stop, a plan may only delete CRs and change fixtures,
+	// and the runner appends no steps.
+	Stop Do = "stop"
 )
 
 // Action is something the harness does once in a step, At after the fault
@@ -207,6 +211,7 @@ func (p *Plan) Validate() error {
 	// namespace and name, which is sampleName for the sample and empty for a
 	// generated name. A slot an earlier delete emptied maps to emptied.
 	names := map[string]string{}
+	stopped := false
 	for i, step := range p.Steps {
 		if step.Period < 0 {
 			return fmt.Errorf("steps[%d]: period is negative", i)
@@ -215,6 +220,10 @@ func (p *Plan) Validate() error {
 			if err := a.validate(names); err != nil {
 				return fmt.Errorf("steps[%d].actions[%d]: %w", i, j, err)
 			}
+			if stopped && a.Do != Delete && a.Do != ChangeFixture {
+				return fmt.Errorf("steps[%d].actions[%d]: %s after a stop", i, j, a.Do)
+			}
+			stopped = stopped || a.Do == Stop
 		}
 		for k, f := range step.Faults {
 			if err := f.Validate(); err != nil {
@@ -298,7 +307,7 @@ func (a Action) validate(names map[string]string) error {
 		if a.Do == Delete {
 			names[a.Slot] = emptied
 		}
-	case Restart, Kill:
+	case Restart, Kill, Stop:
 		if a.Slot != "" || a.Object != nil || a.Patch != nil {
 			return fmt.Errorf("%s takes no slot, object or patch", a.Do)
 		}
