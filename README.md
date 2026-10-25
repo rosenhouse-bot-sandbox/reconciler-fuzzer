@@ -362,9 +362,9 @@ are gone, and then stops the controller for good:
 {"actions": [{"do": "delete", "slot": "a"}, {"do": "stop"}]}
 ```
 
-After a stop, a plan may only delete CRs and change fixtures, and the runner appends no steps.
-Clean judges the plan's last step instead. A CR that the plan deletes after the stop may keep
-its finalizers, and gets a note.
+After a stop, a plan's only actions are deletes and fixture changes, and the runner appends no
+steps. Clean judges the plan's last step instead. A CR that the stop did not wait for, such as
+one the plan deletes after the stop, may keep its finalizers, and gets a note.
 
 ### Examples
 

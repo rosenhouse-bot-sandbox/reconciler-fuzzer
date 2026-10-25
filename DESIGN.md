@@ -186,7 +186,7 @@ An action's `do` is `create`, `update`, `delete` (optionally `Foreground`),
 `restart`, `kill` (the controller stays down until the fault period ends or a
 slot wait restarts it, §9), `stop` (for good), `damage` (of an instance the
 controller created) or `changeFixture` (of a fixture, on any system). After a
-`stop`, a plan may only `delete` and `changeFixture`. `plan.go` documents each.
+`stop`, actions may only `delete` and `changeFixture`. `plan.go` documents each.
 
 A `target` has `system` (default `kube`), `group`, `resource`, `namespace`,
 `name`, `role` and `nth` (default 1). Empty fields match anything.
@@ -229,8 +229,8 @@ is a harness error.
 
 `check.Settled(ix, t, spec)` returns the unmet clauses at `t`, or none. It
 judges the step whose fault period started last at or before `t`. After a
-`stop`, only clauses 2, 6 and 7 apply, and clause 2 only to CRs being deleted
-at the stop.
+`stop`, only clauses 2, 6 and 7 apply, and clause 2 only to the CRs the stop
+waited for (§9).
 
 1. Every live CR satisfies its kind's `ready`, or `halted` after an
    unknown-outcome controller call on it or on an instance only it owns, and
@@ -305,8 +305,8 @@ steps (§17, entry 15).
 settle (clause 7)`. `backoff-bound` labels a finding whose deadline
 `backoffCap` set. `converge.go` suggests missing `models:`. A step whose record
 ends too early gets a note that names that end: its confirm window's end, the
-next step's start, or the trace's last event. So does a CR whose deletion began
-after a `stop` and has not ended by the trace's last event.
+next step's start, or the trace's last event. A CR that a `stop` did not wait
+for, still being deleted at the trace's last event, gets one too.
 
 **Crash.** A controller exit the harness did not cause fails its step.
 

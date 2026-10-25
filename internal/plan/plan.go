@@ -58,8 +58,8 @@ const (
 	ChangeFixture Do = "changeFixture"
 	// Stop waits until the CRs that deletes removed are gone, as a create's
 	// wait for its slot does, and then stops the controller with SIGTERM for
-	// good. After a stop, a plan may only delete CRs and change fixtures,
-	// and the runner appends no steps.
+	// good. After a stop, a plan's only actions are deletes and fixture
+	// changes, and the runner appends no steps.
 	Stop Do = "stop"
 )
 

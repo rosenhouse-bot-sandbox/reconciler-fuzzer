@@ -45,8 +45,8 @@ A `Labels:` line may follow. The block lists the detail lines.
 
 A `# Notes` section follows the findings. A note says what the trace could
 not decide: an action that failed, a fault that picked no request, a
-step the trace ended too early to judge, a CR deleted after a `stop` and
-still being deleted, or an unmapped request. Notes do
+step the trace ended too early to judge, a CR still being deleted that a
+`stop` did not wait for, or an unmapped request. Notes do
 not fail a run. A fault that picked no request tested nothing, so a plan
 with such notes may need a different fault.
 

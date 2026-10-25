@@ -20,11 +20,11 @@ import (
 // live CR owns. It reports each instance once.
 func Clean(ix *trace.Index, s Spec) []Finding {
 	v := newView(ix, s)
-	lastStep, stopped := lastStep(ix)
+	final, stopped := lastStep(ix)
 	reported := map[string]bool{}
 	var findings []Finding
 	for _, step := range v.steps {
-		last := step.Step == lastStep
+		last := step.Step == final
 		if !last && !v.has(step.Step, "delete") {
 			continue
 		}
@@ -51,7 +51,7 @@ func Clean(ix *trace.Index, s Spec) []Finding {
 // stop.
 func lastStep(ix *trace.Index) (step int, stopped bool) {
 	run, _ := ix.Run()
-	if _, stopped := ix.Stopped(math.MaxInt64); stopped {
+	if _, stopped = ix.Stopped(math.MaxInt64); stopped {
 		return run.PlanSteps - 1, true
 	}
 	return run.PlanSteps + 1, false

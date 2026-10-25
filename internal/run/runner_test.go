@@ -900,7 +900,7 @@ func TestExecuteKeepsAStoppedControllerDownWhileThePlanGoesOn(t *testing.T) {
 	}
 }
 
-// lingering makes each deleted CR go lingers after a wait for it starts.
+// lingering makes each wait for a deleted CR end lingers after it starts.
 func lingering(f *fixture, lingers time.Duration) {
 	f.cluster.waitGone = func(ctx context.Context) error {
 		select {
