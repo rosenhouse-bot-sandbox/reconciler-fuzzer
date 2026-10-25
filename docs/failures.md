@@ -201,15 +201,16 @@ limiter, such as controller-runtime's default, rather than a short
 
 ### Finalizers: removed another caller's finalizer
 
-A controller update or patch dropped a finalizer that another caller,
-such as a stage model, put on the object. Each line names the object, the
-finalizer and the caller that added it. Remove only your own finalizer,
-as `controllerutil.RemoveFinalizer` does. A `client.MergeFrom` patch
-replaces the whole list, so it drops a finalizer added after your read.
-Write with `Update`, or patch with
+A controller update or patch dropped a finalizer that a model added. Each
+line names the object, the finalizer, the model and the removing write. A
+stage model adds its `finalizer:` and, during `slowDelete`,
+`reconciler-fuzzer.dev/slow-delete`. The API server adds
+`foregroundDeletion` or `orphan` for a delete with that propagation policy,
+and `gc` owns them. Remove only your own finalizer, as
+`controllerutil.RemoveFinalizer` does. A `client.MergeFrom` patch replaces
+the whole list, so it drops a finalizer added after your read. Write with
+`Update`, or patch with
 `client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})`.
-A sample that carries the controller's own finalizer makes the harness its
-adder.
 
 ## When a run exits 2
 

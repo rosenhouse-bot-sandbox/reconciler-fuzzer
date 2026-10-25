@@ -177,8 +177,9 @@ Fill each key from the project:
   stays done and `Ready`. The model retries the refused write until the fault ends. Add
   `finalizer: {name, after}` when something else puts a finalizer on each object, such as
   Kubernetes' `kubernetes.io/pvc-protection` on a PVC. The model adds `name` to each live
-  object, and removes it `after` past the deletion. Keep `after` under `timeouts.stable`, or
-  a step can settle before the controller reacts to the release.
+  object, and removes it `after` past the deletion. Finalizers then fails a controller write
+  that drops it. Keep `after` under `timeouts.stable`, or a step can settle before the
+  controller reacts to the release.
 - `budgets` and `timeouts`: leave them out at first. Raise `timeouts.settle` for a slow
   controller, or one that waits out `finalizer` holds one by one, and `stable` for one that
   requeues with a delay by design. Ask the user first.
@@ -316,7 +317,6 @@ controller:
 | Honest, `reported ready with no dependency` | The CR can be ready without that kind, or does not own it. | Set `required: false` in the first case. In the second, add `owns` or `owner`, or drop `dependency`. |
 | Clean | The controller keeps resources by design. | Set the entry's `retain`. |
 | Unique, on a fake | The CR owns several resources in one collection by design. | Set the system's `role`. |
-| Finalizers, on the controller's own finalizer `added by harness` | The sample carries that finalizer. | Take it out of the sample. |
 | Converge, with a CR that halted after a create of unknown outcome | The controller stops on purpose and waits for a person. | Set the entry's `halted` to CEL over its halted condition. |
 
 Every other finding is a bug in the controller. Never hide one to make a check pass, and ask
