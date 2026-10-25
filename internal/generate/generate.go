@@ -580,7 +580,7 @@ func (g *Generator) createOf(t *rapid.T, at state, slot string, k *crKind) plan.
 }
 
 // update changes one field of the slot's CR, or restarts the controller
-// when its CRD refused every patch drawn. A drawn field that holds a
+// when its CRD refused every patch drawn. A drawn field at or above a
 // reference's name holds a candidate there.
 func (g *Generator) update(t *rapid.T, at state, slot string) plan.Action {
 	k := g.kindOf(at[slot])
