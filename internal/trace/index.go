@@ -18,6 +18,8 @@ type Index struct {
 	procs  []Event
 	// actions holds the Action events of each step.
 	actions map[int][]Event
+	// stop is the first stop action that did not fail.
+	stop *Event
 	// versions holds each object's Version events by kind: a Ref with no
 	// namespace or name.
 	versions map[Ref]map[Ref][]Event
@@ -100,6 +102,9 @@ func (ix *Index) Append(events ...Event) {
 			ix.procs = append(ix.procs, e)
 		case e.Action != nil:
 			ix.actions[e.Action.Step] = append(ix.actions[e.Action.Step], e)
+			if e.Action.Do == "stop" && e.Action.Error == "" && ix.stop == nil {
+				ix.stop = &e
+			}
 		case e.WatchEnd != nil:
 			ix.watchEnds[*e.WatchEnd] = e.At
 		case e.Work != nil:
@@ -471,6 +476,15 @@ func (ix *Index) Up(t time.Duration) (since time.Duration, up bool) {
 
 // Actions returns the Action events of step in Seq order.
 func (ix *Index) Actions(step int) []Event { return ix.actions[step] }
+
+// Stopped reports whether a stop action stopped the controller for good by
+// t, and when.
+func (ix *Index) Stopped(t time.Duration) (at time.Duration, stopped bool) {
+	if ix.stop == nil || ix.stop.At > t {
+		return 0, false
+	}
+	return ix.stop.At, true
+}
 
 // Procs returns every Proc event in Seq order.
 func (ix *Index) Procs() []Event { return ix.procs }

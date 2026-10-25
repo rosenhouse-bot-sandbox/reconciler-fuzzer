@@ -30,17 +30,59 @@ type unmet struct {
 	text   string
 }
 
+// unmetClauses holds a stopped controller only to clauses 2, 6 and 7, and
+// to clause 2 only for the CRs being deleted at the stop.
 func unmetClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
+	stop, stopped := ix.Stopped(t)
 	var unmets []unmet
 	crs := 0
 	for _, p := range s.Primaries {
 		live := ix.Live(p.Kind.Group, p.Kind.Resource, t)
-		for _, cr := range live {
-			unmets = append(unmets, crClauses(ix, p, cr, t, s)...)
+		if stopped {
+			unmets = append(unmets, unfinalized(ix, p, live, stop)...)
+		} else {
+			for _, cr := range live {
+				unmets = append(unmets, crClauses(ix, p, cr, t, s)...)
+			}
 		}
 		crs += len(live)
 	}
+	if !stopped {
+		unmets = append(unmets, runClauses(ix, t, s)...)
+	}
+	for _, model := range ix.Pending(t) {
+		unmets = append(unmets, unmet{6, "", "model " + model + " has work pending"})
+	}
+	return append(unmets, quietClauses(ix, t, s, max(1, crs))...)
+}
 
+// unfinalized are the CRs of live, of p's kind, that were being deleted at
+// the stop.
+func unfinalized(ix *trace.Index, p Primary, live []trace.Version, stop time.Duration) []unmet {
+	atStop := deletingAt(ix, p, stop)
+	var unmets []unmet
+	for _, cr := range live {
+		if atStop[cr.UID] {
+			unmets = append(unmets, unmet{2, kind(cr.Ref), describe(cr.Ref) + " is being deleted"})
+		}
+	}
+	return unmets
+}
+
+// deletingAt holds the UIDs of the CRs of p's kind being deleted at t.
+func deletingAt(ix *trace.Index, p Primary, t time.Duration) map[string]bool {
+	uids := map[string]bool{}
+	for _, cr := range ix.Live(p.Kind.Group, p.Kind.Resource, t) {
+		if deleting(cr.Body) {
+			uids[cr.UID] = true
+		}
+	}
+	return uids
+}
+
+// runClauses holds the controller to clauses 3 to 5.
+func runClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
+	var unmets []unmet
 	since, up := ix.Up(t)
 	switch {
 	case !up:
@@ -53,11 +95,7 @@ func unmetClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 	}) {
 		unmets = append(unmets, unmet{4, "", fmt.Sprintf("the controller has made no successful request since it started at %v", since)})
 	}
-	unmets = append(unmets, lookClauses(ix, t, s)...)
-	for _, model := range ix.Pending(t) {
-		unmets = append(unmets, unmet{6, "", "model " + model + " has work pending"})
-	}
-	return append(unmets, quietClauses(ix, t, s, max(1, crs))...)
+	return append(unmets, lookClauses(ix, t, s)...)
 }
 
 // lookClauses holds the controller to looking at each object that the

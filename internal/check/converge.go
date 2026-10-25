@@ -49,7 +49,32 @@ func Converge(ix *trace.Index, s Spec) (findings []Finding, notes []string) {
 		f.Details = append(f.Details, unmodelledKinds(ix, f.At, s)...)
 		findings = append(findings, f)
 	}
-	return findings, notes
+	return findings, append(notes, deletedAfterTheStop(ix, s)...)
+}
+
+// deletedAfterTheStop notes each CR whose deletion began after the stop and
+// that is still being deleted when the trace ends. No controller is left to
+// finalize it.
+func deletedAfterTheStop(ix *trace.Index, s Spec) []string {
+	events := ix.Events()
+	if len(events) == 0 {
+		return nil
+	}
+	end := events[len(events)-1].At
+	stop, stopped := ix.Stopped(end)
+	if !stopped {
+		return nil
+	}
+	var notes []string
+	for _, p := range s.Primaries {
+		atStop := deletingAt(ix, p, stop)
+		for _, cr := range ix.Live(p.Kind.Group, p.Kind.Resource, end) {
+			if deleting(cr.Body) && !atStop[cr.UID] {
+				notes = append(notes, describe(cr.Ref)+" is not judged: the plan deleted it after the stop, and it is still being deleted when the trace ends.")
+			}
+		}
+	}
+	return notes
 }
 
 // builtinStatusKinds are built-in kinds whose status another controller

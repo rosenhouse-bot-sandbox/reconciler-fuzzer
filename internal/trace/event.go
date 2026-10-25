@@ -68,8 +68,9 @@ type Run struct {
 	// Primaries are the config's primaries entries, in order. They name
 	// the CR kinds.
 	Primaries []Primary `json:"primaries,omitempty"`
-	// PlanSteps counts the plan's steps. The runner's delete-all step is
-	// step PlanSteps and its restart step PlanSteps+1.
+	// PlanSteps counts the plan's steps. Unless the plan stops the
+	// controller, the runner's delete-all step is step PlanSteps and its
+	// restart step PlanSteps+1.
 	PlanSteps int `json:"planSteps"`
 	// Stable, Reads and Writes are the config values the checks read, so
 	// that judge needs no config.

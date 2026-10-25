@@ -450,3 +450,24 @@ func TestChangedJudgesAFakesWriteWithNoRVByTheObserver(t *testing.T) {
 		}
 	}
 }
+
+func TestStoppedIsTheFirstStopThatDidNotFail(t *testing.T) {
+	var b tt.Builder
+	b.At(1 * s).Add(trace.Event{Action: &trace.Action{Step: 1, Do: "stop", Error: "boom"}}).
+		At(2 * s).Add(trace.Event{Action: &trace.Action{Step: 2, Do: "restart"}}).
+		At(3 * s).Add(trace.Event{Action: &trace.Action{Step: 3, Do: "stop"}}).
+		At(4 * s).Add(trace.Event{Action: &trace.Action{Step: 4, Do: "stop"}})
+	ix := b.Index()
+	for _, c := range []struct {
+		t, at   time.Duration
+		stopped bool
+	}{
+		{2 * s, 0, false},
+		{3 * s, 3 * s, true},
+		{5 * s, 3 * s, true},
+	} {
+		if at, stopped := ix.Stopped(c.t); stopped != c.stopped || at != c.at {
+			t.Errorf("Stopped(%v) = %v, %v; want %v, %v", c.t, at, stopped, c.at, c.stopped)
+		}
+	}
+}
