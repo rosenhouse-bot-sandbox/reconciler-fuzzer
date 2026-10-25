@@ -174,8 +174,9 @@ Fill each key from the project:
   reads. Add `dependency` when a CR's readiness waits on it and the CR owns it: through
   ownerReferences, directly or through owned objects, or by `owns` or `owner`. Honest judges only such
   dependencies, so leave `dependency` off a kind the CR names by a field, such as an
-  issuer or a store, and write a `references` entry instead. A dependency belongs only to the nearest CR that owns it, even one that
-  the controller created. `required: false` allows a CR to be ready with none. `required` binds
+  issuer or a store, and write a `references` entry instead. A dependency belongs only to the
+  nearest CR that owns it, even one that the controller created. `required: false` allows a CR
+  to be ready with none. `required` binds
   only CRs of the first entry, so list first the kind of that nearest CR. A config that does
   not list that kind leaves `dependency` out. Set `track` when the
   controller should notice a dependency going not ready. `status:` adds literal fields to each
@@ -287,7 +288,8 @@ With several kinds, step 0 also creates each other entry's sample, each in a slo
 Delete a CR that others name only after them, since its controller may hold its deletion until
 they go. With a `references` entry to a fixture, add a step that deletes the fixture,
 `{"do": "changeFixture", "target": {"resource": "secrets", "name": "<fixture>"}}`, and a later
-one that makes it again, `{"do": "createFixture", "target": <the same target>}`. With a model, add a step whose fault keeps it not ready, such as
+one that makes it again, `{"do": "createFixture", "target": <the same target>}`. With a model,
+add a step whose fault keeps it not ready, such as
 `{"actions": [...], "period": "3s", "faults": [{"match": {"group": "gadgets.example.com",
 "resource": "gadgets"}, "stuck": true}]}`. With a fake, add a step that drops the response
 to the first create, such as `{"actions": [...], "period": "1s", "faults": [{"system": "cloud",

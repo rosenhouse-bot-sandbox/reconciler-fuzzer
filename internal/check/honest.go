@@ -24,6 +24,9 @@ func Honest(ix *trace.Index, s Spec) []Finding {
 			deps = append(deps, m)
 		}
 	}
+	if len(deps) == 0 && len(s.References) == 0 {
+		return nil
+	}
 	h := &honesty{ix: ix, s: s, w: owner.New(ix, s.Owners), steps: ix.Steps(), deletes: controllerDeletes(ix), found: map[findingKey]*Finding{}}
 	order, crs := crVersions(ix, s)
 	for _, uid := range order {

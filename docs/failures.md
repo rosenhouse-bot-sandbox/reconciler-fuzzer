@@ -106,10 +106,9 @@ Look at the clause first:
 failed again within `stable`.
 
 From `stable` after the step's faults end, clause 1 skips a CR that a
-reference holds back, both as the controller last saw the named object and
-as the object is now. So a CR that clause 1 names while it names a ready
-object means the controller missed the object's change: check that it
-watches the object's kind.
+reference holds back, if the named object as it is now would hold the CR
+back too. So when clause 1 names a CR whose named object is ready, the
+controller missed the object's change, or the reference's `ready` is wrong.
 
 After a `stop`, only clauses 2, 6 and 7 apply, and clause 2 only in the
 stop's step. It names a CR that was still being deleted when the stop's wait

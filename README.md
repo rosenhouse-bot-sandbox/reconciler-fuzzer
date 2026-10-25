@@ -183,7 +183,7 @@ references:
   the controller looked at a live named object. With `track: d`, it fails a CR that stays ready
   `d` after a look that held it back.
 - From `stable` after the step's faults end, the settle condition does not wait for a CR that a
-  reference holds back, as the controller last saw the object and as the object is now.
+  reference holds back, if the object as it is now would hold the CR back too.
 - Generated plans write at each `name` the name of a slot's CR of the `to` kind, or of a fixture
   of it, so a CR may name an object that does not exist yet. With `required: false`, 1 write in 4
   names `missing`, which no object has. `changeFixture` may delete a kube fixture of a `to` kind,
