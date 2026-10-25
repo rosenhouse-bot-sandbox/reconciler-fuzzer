@@ -3,7 +3,9 @@ package controller
 import (
 	"bytes"
 	"context"
+	"errors"
 	"maps"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -416,6 +418,17 @@ func TestADeletingClusterReadiesNoDatabase(t *testing.T) {
 	}
 }
 
+// A deleting Cluster keeps a Ready Database, but not after its Secret goes.
+func TestADeletingClusterKeepsNoDatabaseWithoutItsSecret(t *testing.T) {
+	db := databaseNaming("admin-password")
+	db.Status = readyStatus()
+	f := newFleet(t, deleting(readyCluster(), fleetv1.ClusterFinalizer), db)
+	f.settle(f.databases, "db")
+	if got := f.database().Status; got != pendingStatus("waiting for Secret admin-password") {
+		t.Errorf("On a deleting Cluster, without its Secret, the Database is %+v.", got)
+	}
+}
+
 func TestDatabaseWaitsForASecretWithAPassword(t *testing.T) {
 	f := newFleet(t, readyCluster(), databaseNaming("admin-password"))
 	f.settle(f.databases, "db")
@@ -442,6 +455,25 @@ func TestDatabaseWaitsForASecretWithAPassword(t *testing.T) {
 	f.settle(f.databases, "db")
 	if got := f.database().Status; got != pendingStatus("waiting for Secret admin-password") {
 		t.Errorf("After its Secret went, the Database is %+v.", got)
+	}
+}
+
+func TestAFailedReadLeavesTheDatabaseAsItWas(t *testing.T) {
+	for _, failed := range []client.Object{&fleetv1.Cluster{}, &corev1.Secret{}} {
+		f := newFleet(t, readyCluster(), databaseNaming("admin-password"), passwordSecret(map[string][]byte{"password": []byte("p")}))
+		f.reconcileOnce(f.databases, "db") // It adds its finalizer.
+		f.databases.Client = interceptor.NewClient(f.c, interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if reflect.TypeOf(obj) == reflect.TypeOf(failed) {
+					return apierrors.NewInternalError(errors.New("injected"))
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		})
+		_, err := f.databases.Reconcile(t.Context(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "db"}})
+		if db := f.database(); err == nil || db.Status != (fleetv1.CommonStatus{}) {
+			t.Errorf("When reading its %T fails, the Database reconcile returns %v and writes %+v.", failed, err, db.Status)
+		}
 	}
 }
 

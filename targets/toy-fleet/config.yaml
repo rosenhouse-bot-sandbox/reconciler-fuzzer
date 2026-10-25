@@ -1,8 +1,8 @@
-# This config lists Clusters, Databases and Users, and the references by which
-# a Database names its Cluster and the fixture Secret, and a User its
-# Database. Fuzz cluster/ or database/ instead: a generated plan here can
-# delete a Cluster that a Database names, and the Cluster then waits in
-# deletion, which Converge fails. Paths resolve against this file's directory.
+# This config lists Clusters, Databases and Users. Its references say that a
+# Database names a Cluster and the fixture Secret, and a User a Database.
+# Fuzz cluster/ or database/ instead: a generated plan here can delete a
+# Cluster that a Database names, and the Cluster then waits in deletion,
+# which Converge fails. Paths resolve against this file's directory.
 launch:
   binary: ../../bin/toy-fleet
   args:
