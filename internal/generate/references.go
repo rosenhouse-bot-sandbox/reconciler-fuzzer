@@ -68,7 +68,7 @@ func (g *Generator) readReferences(cfg *config.Config, fixtures []plan.Target) {
 	}
 }
 
-// fixturesOf are those of fixtures of r's to kind, or of its fake's
+// fixturesOf filters fixtures to those of r's to kind, or of its fake's
 // collection.
 func fixturesOf(r config.Reference, fixtures []plan.Target) []plan.Target {
 	gvr, _ := meta.UnsafeGuessKindToResource(r.To)
