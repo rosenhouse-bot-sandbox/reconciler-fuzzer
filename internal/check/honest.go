@@ -134,8 +134,8 @@ func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, d
 func (h *honesty) corrected(p Primary, ready trace.Event, later []trace.Event, n named) bool {
 	due := ready.At + h.s.Stable
 	for _, e := range h.ix.Calls(trace.Controller, ready.At, math.MaxInt64) {
-		if c := e.Call; trace.Mutating(c.Verb) && c.Object() == ready.Call.Object() && e.At-c.Latency <= due && (!succeeded(*c) || c.Unknown()) {
-			due = max(due, e.At+h.s.Stable)
+		if c := e.Call; e.At-c.Latency <= due && trace.Mutating(c.Verb) && c.Object() == ready.Call.Object() && (!succeeded(*c) || c.Unknown()) {
+			due = e.At + h.s.Stable
 		}
 	}
 	return slices.ContainsFunc(later, func(e trace.Event) bool {

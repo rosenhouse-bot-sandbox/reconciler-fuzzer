@@ -166,24 +166,29 @@ func TestHonestPassesAReadyWriteThatTheControllerCorrectsWithinStable(t *testing
 // The CR's next reconcile can read the CR from a cache that lacks the
 // ready write, so that its write conflicts.
 func TestHonestPassesACorrectionThatAFailedWriteOfTheCRDelays(t *testing.T) {
+	dropped := tt.Call(ctl, "update", databaseB, 200, "")
+	dropped.Call.Injected = trace.DropResponse
+	conflict := tt.Call(ctl, "update", databaseB, 409, "")
 	for name, c := range map[string]struct {
-		status   int
-		injected string
-		// sent is how long after the ready write the failed write is sent.
-		sent  time.Duration
-		fails bool
+		call trace.Event
+		// sent is how long after the ready write the call is sent. after
+		// is how long after the call's response the correction is sent.
+		sent, after time.Duration
+		fails       bool
 	}{
-		"a conflict":               {409, "", 0, false},
-		"an unknown outcome":       {200, trace.DropResponse, 0, false},
-		"a success":                {200, "", 0, true},
-		"a conflict sent too late": {409, "", 1500 * ms, true},
+		"a conflict":                         {conflict, 0, 0, false},
+		"an unknown outcome":                 {dropped, 0, 0, false},
+		"a success":                          {tt.Call(ctl, "update", databaseB, 200, ""), 0, 0, true},
+		"a conflict sent too late":           {conflict, 1500 * ms, 0, true},
+		"a conflict, then a late correction": {conflict, 0, 1100 * ms, true},
+		"a failed get":                       {tt.Call(ctl, "get", databaseB, 500, ""), 0, 0, true},
+		"a conflict of another object":       {tt.Call(ctl, "update", databaseC, 409, ""), 0, 0, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := secretRun(secretRef(), secret(true))
 			deletedSeen(r.See(ctl, pw))
-			write := tt.Call(ctl, "update", databaseB, c.status, "")
-			write.Call.Latency, write.Call.Injected = 1*s, c.injected
-			readyB(r).Tick(c.sent+1*s).Add(write).Update(ctl, databaseB, database(false, "pw"))
+			c.call.Call.Latency = 1 * s
+			readyB(r).Tick(c.sent+1*s).Add(c.call).Tick(c.after).Update(ctl, databaseB, database(false, "pw"))
 			if findings := honest(t, r); c.fails {
 				requireFinding(t, findings, "Honest", 0, noDependency, "kube/secrets", "slot b: secrets ns/pw seen missing")
 			} else {
@@ -191,6 +196,21 @@ func TestHonestPassesACorrectionThatAFailedWriteOfTheCRDelays(t *testing.T) {
 			}
 		})
 	}
+}
+
+// With no look, no stale cache explains the ready write.
+func TestHonestFailsACorrectedReadyWriteBeforeAnyLook(t *testing.T) {
+	r := secretRun(secretRef(), secret(true))
+	readyB(r).Update(ctl, databaseB, database(false, "pw"))
+	requireFinding(t, honest(t, r), "Honest", 0, beforeSeeing, "kube/secrets", "slot b: secrets ns/pw not seen")
+}
+
+func TestHonestGivesACorrectionStableAfterTheReadyWriteDespiteAnEarlierFailure(t *testing.T) {
+	r := secretRun(secretRef(), secret(true))
+	deletedSeen(r.See(ctl, pw))
+	r.Call(ctl, "update", databaseB, 409).UpdateInFlight(ctl, databaseB, database(true, "pw"), 500*ms).
+		Tick(1200*ms).Update(ctl, databaseB, database(false, "pw"))
+	requireNone(t, honest(t, r))
 }
 
 func TestHonestJudgesAReadyWriteByWhatTheControllerSawBeforeSendingIt(t *testing.T) {
