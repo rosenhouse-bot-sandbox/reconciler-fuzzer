@@ -528,6 +528,16 @@ func TestAStoppedControllerOwesNoFinalizerTheStopDidNotWaitFor(t *testing.T) {
 	}
 }
 
+func TestAStoppedControllerOwesNoFinalizerForADeleteAfterTheStop(t *testing.T) {
+	b := settledAt3s()
+	b.At(2*s).Add(tt.Phase(1, trace.FaultPeriod), tt.Version(widgetA, "ua", "2", deleting()))
+	stopped(b, 2500*ms)
+	b.At(3 * s).Add(trace.Event{Action: &trace.Action{Step: 1, Do: "delete", Slot: "a", Ref: &widgetA}})
+	if unmet := check.Settled(b.Index(), 5*s, spec); len(unmet) != 0 {
+		t.Fatalf("unmet = %q, want none", unmet)
+	}
+}
+
 // No controller runs to remove the finalizers of a CR deleted after the
 // stop, so the CR may stay.
 func TestACRDeletedAfterTheStopMayStayDeleting(t *testing.T) {
