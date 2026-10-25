@@ -468,25 +468,15 @@ func TestStopIsTheFirstStopThatDidNotFail(t *testing.T) {
 	}
 }
 
-// The stop waits for the CR that a delete last removed from each slot that
-// no create filled again. Another slot's CR may take its name.
-func TestTheStopWaitsForEachSlotsLastDeletedCR(t *testing.T) {
-	widgetC := tt.Ref("toy/widgets", "ns", "c")
+func TestStopWaitedForTheCRsThatTheStopNames(t *testing.T) {
 	var b tt.Builder
-	b.Add(tt.Version(widgetA, "ua", "1", nil), tt.Version(widgetB, "ub", "2", nil), tt.Version(widgetC, "uc", "3", nil)).
-		At(1*s).Add(tt.Deleted(widgetA, "ua", "4", nil), tt.SlotAction(1, "delete", "a", widgetA),
-		tt.Deleted(widgetB, "ub", "5", nil), tt.SlotAction(1, "delete", "b", widgetB),
-		// A delete from an empty slot names no CR.
-		trace.Event{Action: &trace.Action{Step: 1, Do: "delete", Slot: "e"}}).
-		At(2*s).Add(tt.Version(widgetA, "ud", "6", nil), tt.SlotAction(2, "create", "d", widgetA),
-		tt.Version(widgetB, "ub2", "7", nil), tt.SlotAction(2, "create", "b", widgetB))
-	if b.Index().StopWaitedFor("ua") {
-		t.Error("StopWaitedFor(ua) = true before any stop")
+	b.At(1 * s).Add(trace.Event{Action: &trace.Action{Step: 1, Do: "stop", Error: "boom", Waited: []string{"ub"}}})
+	if b.Index().StopWaitedFor("ub") {
+		t.Error("StopWaitedFor(ub) = true for a stop that failed")
 	}
-	b.At(3 * s).Add(trace.Event{Action: &trace.Action{Step: 3, Do: "stop"}}).
-		At(4 * s).Add(tt.SlotAction(4, "delete", "c", widgetC))
+	b.At(2 * s).Add(trace.Event{Action: &trace.Action{Step: 2, Do: "stop", Waited: []string{"ua", "uc"}}})
 	ix := b.Index()
-	for uid, want := range map[string]bool{"ua": true, "ud": false, "ub": false, "ub2": false, "uc": false, "": false} {
+	for uid, want := range map[string]bool{"ua": true, "uc": true, "ub": false, "": false} {
 		if got := ix.StopWaitedFor(uid); got != want {
 			t.Errorf("StopWaitedFor(%q) = %v, want %v", uid, got, want)
 		}

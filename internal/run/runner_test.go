@@ -83,6 +83,9 @@ type fakeCluster struct {
 	waitGone  func(ctx context.Context) error
 	goneErr   error
 	deleteErr error
+	// replaced makes Delete find that another CR, which it records, took
+	// the name, and so remove nothing.
+	replaced bool
 }
 
 func (c *fakeCluster) Create(_ context.Context, obj map[string]any) (trace.Ref, error) {
@@ -108,6 +111,10 @@ func (c *fakeCluster) Delete(_ context.Context, ref trace.Ref, propagation plan.
 		c.add("delete %s", ref.Name)
 	} else {
 		c.add("delete %s %s", ref.Name, propagation)
+	}
+	if c.replaced {
+		c.rec.Record(trace.Event{Version: &trace.Version{Ref: ref, UID: "other", RV: "other"}})
+		return system.ErrGone
 	}
 	return c.deleteErr
 }
@@ -849,6 +856,53 @@ func TestExecuteWaitsForTheNameAtACreateAndForTheDeletedCRAtAStop(t *testing.T) 
 				t.Errorf("cluster calls = %q, want %q", got, want)
 			}
 		})
+	}
+}
+
+// The stop's event names the CRs it waited for: the last that a delete
+// removed from each slot that no create filled again.
+func TestExecuteRecordsTheCRsThatAStopWaitedFor(t *testing.T) {
+	f := newFixture(t, nil)
+	f.cluster.rec = f.rec
+	p := &plan.Plan{Steps: []plan.Step{
+		{Actions: []plan.Action{
+			{Do: plan.Create, Slot: "a", Object: widget("first")},
+			{Do: plan.Create, Slot: "b", Object: widget("second")},
+			{Do: plan.Create, Slot: "c", Object: widget("third")},
+		}},
+		{Actions: []plan.Action{
+			{Do: plan.Delete, Slot: "a"}, {Do: plan.Delete, Slot: "b"}, {Do: plan.Delete, Slot: "c"},
+			{Do: plan.Create, Slot: "b", Object: widget("second")}, {Do: plan.Create, Slot: "d", Object: widget("first")},
+			{Do: plan.Stop},
+		}},
+	}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(f.rec.Events(), func(e trace.Event) bool { return e.Action != nil && e.Action.Do == "stop" })
+	if i < 0 {
+		t.Fatal("no stop event")
+	}
+	if waited := f.rec.Events()[i].Action.Waited; !slices.Equal(waited, []string{"u1", "u3"}) {
+		t.Errorf("the stop waited for %q, want slot a's CR u1 and slot c's CR u3", waited)
+	}
+}
+
+// A delete that finds another CR at the slot's name removes nothing. The
+// stop waits for the slot's CR, not for the other.
+func TestExecuteStopsWithoutWaitingForACRThatTookTheNameBeforeTheDelete(t *testing.T) {
+	f := newFixture(t, nil)
+	f.cluster.rec = f.rec
+	f.cluster.replaced = true
+	p := &plan.Plan{Steps: []plan.Step{
+		{Actions: []plan.Action{{Do: plan.Create, Slot: "a", Object: widget("first")}}},
+		{Actions: []plan.Action{{Do: plan.Delete, Slot: "a"}, {Do: plan.Stop}}},
+	}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"create first", "delete first", "gone first u1"}; !reflect.DeepEqual(f.cluster.all(), want) {
+		t.Errorf("cluster calls = %q, want %q", f.cluster.all(), want)
 	}
 }
 

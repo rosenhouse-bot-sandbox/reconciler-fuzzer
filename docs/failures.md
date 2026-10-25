@@ -147,9 +147,9 @@ owner means garbage collection ignores that invalid ownerReference. A rule
 2 or 3 line usually means a finalizer forgot the resource. A resource that
 should outlive its CR needs its entry's `retain`.
 
-After a `stop`, a line names a resource whose CRs were gone when the
-controller stopped, so an uninstall leaves it behind. A common cause is a
-controller that removes a child's finalizer only after the CR is gone.
+After a `stop`, a line names a resource whose CRs the plan deleted before
+the stop, so an uninstall leaves it behind. A common cause is a controller
+that removes a child's finalizer only after the CR is gone.
 
 ### Restore
 

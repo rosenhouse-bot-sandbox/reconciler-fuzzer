@@ -162,7 +162,7 @@ func TestConvergeFailsAStopStepWhoseDeletedCRStays(t *testing.T) {
 	r.Begin()
 	r.CreateCR("a", widgetA)
 	r.Ready(widgetA).EndFaults().Settle()
-	r.Begin().Update(trace.Harness, widgetA, terminating("a")).Act("delete", "a", &widgetA).Stop().EndFaults().TimeOut()
+	r.Begin().Update(trace.Harness, widgetA, terminating("a")).Act("delete", "a", &widgetA).Stop(r.UID(widgetA)).EndFaults().TimeOut()
 	findings, notes := convergeOf(t, r)
 	requireFinding(t, findings, "Converge", 1, "did not settle (clause 2)", "kube/toy/widgets")
 	if !slices.Equal(findings[0].Details, []string{"widgets.toy ns/a is being deleted"}) {

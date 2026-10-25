@@ -372,9 +372,9 @@ and then stops the controller for good:
 
 The runner appends two steps to a plan without a stop: one deletes every CR, and one restarts
 the controller. After a stop, a plan's only actions are deletes and fixture changes, and the
-runner appends no steps. Clean then judges the plan's last step, and fails a resource whose CRs
-were gone at the stop. A CR that the stop did not wait for, such as one the plan deletes after
-the stop, may keep its finalizers, and gets a note.
+runner appends no steps. Clean then judges the plan's last step. No controller is left to clean
+up after a CR that the plan deletes after the stop, so Clean counts that CR as live. A CR that
+the stop did not wait for, such as that one, may keep its finalizers, and gets a note.
 
 ### Examples
 

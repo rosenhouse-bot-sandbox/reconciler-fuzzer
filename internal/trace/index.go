@@ -20,9 +20,6 @@ type Index struct {
 	actions map[int][]Event
 	// stop is the first stop action that did not fail.
 	stop *Event
-	// deleted holds, until the stop, the UID of the CR that a delete last
-	// removed from each slot that no create has filled since.
-	deleted map[string]string
 	// versions holds each object's Version events by kind: a Ref with no
 	// namespace or name.
 	versions map[Ref]map[Ref][]Event
@@ -69,7 +66,6 @@ func NewIndex(events []Event) *Index {
 		steps:     map[int]*StepSpan{},
 		calls:     map[Caller][]Event{},
 		actions:   map[int][]Event{},
-		deleted:   map[string]string{},
 		versions:  map[Ref]map[Ref][]Event{},
 		firstRV:   map[objectRV]Event{},
 		writeCall: map[objectRV]Event{},
@@ -478,16 +474,7 @@ func (ix *Index) Up(t time.Duration) (since time.Duration, up bool) {
 func (ix *Index) addAction(e Event) {
 	a := e.Action
 	ix.actions[a.Step] = append(ix.actions[a.Step], e)
-	switch {
-	case ix.stop != nil:
-	case a.Do == "create":
-		delete(ix.deleted, a.Slot)
-	case a.Do == "delete" && a.Ref != nil:
-		// A delete returns once the observer has recorded it, so the latest
-		// version is of the CR it removed.
-		v, _ := ix.Latest(*a.Ref)
-		ix.deleted[a.Slot] = v.UID
-	case a.Do == "stop" && a.Error == "":
+	if a.Do == "stop" && a.Error == "" && ix.stop == nil {
 		ix.stop = &e
 	}
 }
@@ -503,18 +490,9 @@ func (ix *Index) Stop(t time.Duration) (Event, bool) {
 	return *ix.stop, true
 }
 
-// StopWaitedFor reports whether the stop waited for the CR with uid: the
-// last that a delete removed from a slot that no create filled again.
+// StopWaitedFor reports whether the stop waited for the CR with uid.
 func (ix *Index) StopWaitedFor(uid string) bool {
-	if ix.stop == nil {
-		return false
-	}
-	for _, deleted := range ix.deleted {
-		if deleted == uid {
-			return true
-		}
-	}
-	return false
+	return ix.stop != nil && slices.Contains(ix.stop.Action.Waited, uid)
 }
 
 // Procs returns every Proc event in Seq order.

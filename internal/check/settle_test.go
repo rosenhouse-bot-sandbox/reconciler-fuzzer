@@ -482,9 +482,10 @@ func TestClause6NoModelHasWorkPending(t *testing.T) {
 }
 
 // stopped adds, at t, the exit of the controller that a stop action of
-// step 1 stopped, and that action.
-func stopped(b *tt.Builder, t time.Duration) *tt.Builder {
-	return b.At(t).Add(tt.Exit("signal: terminated", true, ""), trace.Event{Action: &trace.Action{Step: 1, Do: "stop"}})
+// step 1 stopped, and that action, which waited for the CRs whose UIDs
+// waited holds.
+func stopped(b *tt.Builder, t time.Duration, waited ...string) *tt.Builder {
+	return b.At(t).Add(tt.Exit("signal: terminated", true, ""), trace.Event{Action: &trace.Action{Step: 1, Do: "stop", Waited: waited}})
 }
 
 func TestAStoppedControllerOwesNoReadyCRAndNoRun(t *testing.T) {
@@ -511,7 +512,7 @@ func TestAStoppedControllerMustHaveFinalizedTheCRsThePlanDeleted(t *testing.T) {
 	b := settledAt3s()
 	b.At(2*s).Add(tt.Phase(1, trace.FaultPeriod), tt.Version(widgetA, "ua", "2", deleting()),
 		trace.Event{Action: &trace.Action{Step: 1, Do: "delete", Slot: "a", Ref: &widgetA}})
-	stopped(b, 2500*ms)
+	stopped(b, 2500*ms, "ua")
 	if unmet := check.Settled(b.Index(), 5*s, spec); !slices.Equal(unmet, []string{"widgets.toy ns/a is being deleted"}) {
 		t.Fatalf("unmet = %q, want only slot a's CR being deleted", unmet)
 	}
@@ -523,7 +524,7 @@ func TestAStoppedControllerOwesNothingForACRThatReplacedADeletedOne(t *testing.T
 	b.At(2*s).Add(tt.Phase(1, trace.FaultPeriod), tt.Version(widgetA, "ua", "2", deleting()),
 		trace.Event{Action: &trace.Action{Step: 1, Do: "delete", Slot: "a", Ref: &widgetA}}).
 		At(2100*ms).Add(tt.Deleted(widgetA, "ua", "3", deleting()), tt.Version(widgetA, "ua2", "4", ready(true)))
-	stopped(b, 2500*ms)
+	stopped(b, 2500*ms, "ua")
 	if unmet := check.Settled(b.Index(), 5*s, spec); len(unmet) != 0 {
 		t.Fatalf("unmet = %q, want none", unmet)
 	}
@@ -547,7 +548,7 @@ func TestAStoppedControllerOwesNoFinalizerForACRThatTookADeletedOnesName(t *test
 	b.At(1500*ms).Add(tt.Deleted(widgetA, "ua", "2", ready(true)), trace.Event{Action: &trace.Action{Do: "delete", Slot: "a", Ref: &widgetA}}).
 		At(1600*ms).Add(tt.Version(widgetA, "ub", "3", ready(true)), trace.Event{Action: &trace.Action{Do: "create", Slot: "b", Ref: &widgetA}}).
 		At(2 * s).Add(tt.Phase(1, trace.FaultPeriod))
-	stopped(b, 2500*ms)
+	stopped(b, 2500*ms, "ua")
 	b.At(2600*ms).Add(trace.Event{Action: &trace.Action{Step: 1, Do: "delete", Slot: "b", Ref: &widgetA}}, tt.Version(widgetA, "ub", "4", deleting()))
 	if unmet := check.Settled(b.Index(), 5*s, spec); len(unmet) != 0 {
 		t.Fatalf("unmet = %q, want none", unmet)
@@ -572,7 +573,7 @@ func TestAStepAfterTheStopsStepOwesNoFinalizer(t *testing.T) {
 	b := settledAt3s()
 	b.At(2*s).Add(tt.Phase(1, trace.FaultPeriod), tt.Version(widgetA, "ua", "2", deleting()),
 		trace.Event{Action: &trace.Action{Step: 1, Do: "delete", Slot: "a", Ref: &widgetA}})
-	stopped(b, 2500*ms)
+	stopped(b, 2500*ms, "ua")
 	b.At(3 * s).Add(tt.Phase(2, trace.FaultPeriod))
 	if unmet := check.Settled(b.Index(), 5*s, spec); len(unmet) != 0 {
 		t.Fatalf("unmet = %q, want none in the step after the stop's", unmet)

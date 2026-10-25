@@ -226,6 +226,11 @@ func (s *stepRun) faultPeriod(ctx context.Context) error {
 		}
 		ref, err := s.execution.act(ctx, a, s)
 		event := &trace.Action{Step: s.n, Index: i, Do: string(a.Do), Slot: a.Slot, Ref: ref}
+		if a.Do == plan.Stop {
+			for _, d := range s.awaited() {
+				event.Waited = append(event.Waited, d.uid)
+			}
+		}
 		if err != nil {
 			event.Error = err.Error()
 		}
@@ -276,8 +281,7 @@ func (s *stepRun) outwait(ctx context.Context, ref trace.Ref, uid string, delete
 // its name is free or another CR holds it. Converge judges a CR still
 // there.
 func (s *stepRun) stop(ctx context.Context) error {
-	for _, slot := range slices.Sorted(maps.Keys(s.deleted)) {
-		d := s.deleted[slot]
+	for _, d := range s.awaited() {
 		if _, err := s.outwait(ctx, d.ref, d.uid, d.at); err != nil {
 			return err
 		}
@@ -287,6 +291,16 @@ func (s *stepRun) stop(ctx context.Context) error {
 	}
 	s.stopped = true
 	return s.Process.Stop(ctx)
+}
+
+// awaited is what a stop waits for: the last deletion from each slot that no
+// create filled again, in slot order.
+func (e *execution) awaited() []deletion {
+	var awaited []deletion
+	for _, slot := range slices.Sorted(maps.Keys(e.deleted)) {
+		awaited = append(awaited, e.deleted[slot])
+	}
+	return awaited
 }
 
 // waitGone waits until Gone holds for ref and uid, or until the time until.
@@ -385,16 +399,16 @@ func (e *execution) act(ctx context.Context, a plan.Action, s *stepRun) (*trace.
 		if err != nil {
 			return nil, err
 		}
+		// The create returned once the observer recorded the slot's CR, so
+		// the latest version is of it.
+		e.ix.Append(e.Recorder.EventsSince(e.ix.Len())...)
+		cr, _ := e.ix.Latest(ref)
 		delete(e.live, a.Slot)
 		at := time.Now()
 		if err := e.Cluster.Delete(ctx, ref, a.Propagation); err != nil && !errors.Is(err, system.ErrGone) {
 			return &ref, err
 		}
-		// Delete returns once the observer has recorded it, so the latest
-		// version is of the CR it removed.
-		e.ix.Append(e.Recorder.EventsSince(e.ix.Len())...)
-		removed, _ := e.ix.Latest(ref)
-		e.deleted[a.Slot] = deletion{ref, removed.UID, at}
+		e.deleted[a.Slot] = deletion{ref, cr.UID, at}
 		return &ref, nil
 	case plan.Restart:
 		if err := e.Process.Stop(ctx); err != nil {
