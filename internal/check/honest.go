@@ -83,7 +83,7 @@ func crVersions(ix *trace.Index, s Spec) ([]string, map[string][]trace.Event) {
 // ready. Only a CR of the first entry's kind needs a required dependency.
 // The version fails on an object it names that the controller's sight holds
 // back, or that the controller never looked at while it lived, unless the
-// controller corrected it within stable of its look.
+// controller had looked at the object and corrected the version in time.
 func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, deps []Model) {
 	requires := p.Kind == h.s.Primaries[0].Kind
 	wasReady, wasObserved := false, 0.0
@@ -111,7 +111,7 @@ func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, d
 		}
 		for _, n := range h.s.names(v.Ref, body) {
 			g := h.s.sight(h.ix, n, t0)
-			if g.allowsReady(h.s.References[n.ref].Required) || g.looked && h.corrected(p, versions[i+1:], n, g.at+h.s.Stable) {
+			if g.allowsReady(h.s.References[n.ref].Required) || g.looked && h.corrected(p, call, versions[i+1:], n) {
 				continue
 			}
 			summary := beforeSeeing
@@ -123,14 +123,25 @@ func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, d
 	}
 }
 
-// corrected reports whether the controller sent, by t, a write of one of
-// later, the CR's later versions, that is not ready or does not name n. A
-// reconcile that read the cache before a look may write ready after it.
-func (h *honesty) corrected(p Primary, later []trace.Event, n named, t time.Duration) bool {
+// corrected reports whether the controller sent a write of one of later,
+// the CR's later versions, that is not ready or does not name n, by due.
+// A reconcile that read its cache before a look may write ready after it,
+// and the CR's next reconcile starts only once that write returns. So due
+// is stable after the response of ready, the write that made the CR ready.
+// A write of the CR sent by due that fails, as one from a cache that lacks
+// ready does, or whose outcome is unknown, moves due to stable after its
+// response.
+func (h *honesty) corrected(p Primary, ready trace.Event, later []trace.Event, n named) bool {
+	due := ready.At + h.s.Stable
+	for _, e := range h.ix.Calls(trace.Controller, ready.At, math.MaxInt64) {
+		if c := e.Call; trace.Mutating(c.Verb) && c.Object() == ready.Call.Object() && e.At-c.Latency <= due && (!succeeded(*c) || c.Unknown()) {
+			due = max(due, e.At+h.s.Stable)
+		}
+	}
 	return slices.ContainsFunc(later, func(e trace.Event) bool {
 		v := e.Version
 		call, found := h.ix.WriteCall(v.Ref, v.RV)
-		if !found || call.Call.Caller != trace.Controller || call.At-call.Call.Latency > t {
+		if !found || call.Call.Caller != trace.Controller || call.At-call.Call.Latency > due {
 			return false
 		}
 		body := decode(v.Body)

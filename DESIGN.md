@@ -366,11 +366,11 @@ missing, with `required`, or not `ready`, or, with no look, while the object is
 missing and `required`. An opaque response after the last look leaves it
 **unknown**. Honest fails a `ready` write, as above, of a CR that a known
 reference holds back, or that names a live object the controller has not looked
-at, unless the controller retracts it within `stable` of its look (entry 85):
-`reported ready with no dependency` if missing, else `reported ready before
-seeing its dependency ready`. With `track: d`, a CR fails that stays `ready`,
-naming the object, `d` after a look that held it back: `stayed ready after
-seeing its dependency not ready`. Each finding takes the `to` kind (entry 83).
+at, unless the controller retracts it in time (entry 85): `reported ready with
+no dependency` if missing, else `reported ready before seeing its dependency
+ready`. With `track: d`, a CR fails that stays `ready`, naming the object, `d`
+after a look that held it back: `stayed ready after seeing its dependency not
+ready`. Each finding takes the `to` kind.
 
 **Backoff.** Failing controller calls with one system, verb, object,
 subresource and status form a **run**; a create's object is its `requestName`.
@@ -581,4 +581,4 @@ Each entry changes a check, exception, `System` interface or ignore list.
 82. A `damage` touches each group under its root. An undamaged touched group may empty while its kind lives under that root, and a damaged one whose owner is gone while a CR made in the step owns its kind and role there. So a damage under a CR that the controller made touches that CR's owner, and the controller may remake that CR.
 83. Converge accepts a CR that is not ready while a reference holds it back, where a `ready` write would fail Honest (#126). A look then must hold it back too, so a controller that misses the object's return does not settle. A look need not follow the controller's own write of the object, since a controller writes the status of the kinds it serves. The excuse waits `backoff + stable` after `endFaults`, so a step does not settle before a controller in retry backoff reacts to a held-back CR that it creates or updates.
 84. A 2xx kube list that is not `Partial` and lacks an object shows it missing, as does the `k8s.io/initial-events-end` bookmark of such a watch, since client-go's informers open a watch with `sendInitialEvents` instead of a list. So a restart or a dropped watch counts. Kube listeners ask for JSON of Seen kinds, so built-in kinds' lists and watches decode.
-85. Honest excuses a `ready` write that the controller retracts within `stable` of its look, by writing the CR not `ready` or naming another object, since a reconcile may read its cache before the look reaches the cache.
+85. Honest excuses a `ready` write that the controller retracts, by writing the CR not `ready` or naming another object, within `stable` of the write's response. A reconcile may read its cache before the look reaches the cache, and the CR's next reconcile starts only once that write returns. A failed write of the CR in that time, such as a conflict from a cache that lacks the `ready` write, extends it to `stable` after the failure.

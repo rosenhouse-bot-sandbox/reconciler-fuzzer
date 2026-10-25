@@ -132,24 +132,58 @@ func TestHonestPassesACRReadyWhileWhatItNamesWithoutRequiredIsMissing(t *testing
 }
 
 // A reconcile that read the controller's cache before a watch event came
-// may write ready just after the listener forwarded the event.
+// may write ready just after the listener forwarded the event. The CR's
+// next reconcile starts only once that write returns.
 func TestHonestPassesAReadyWriteThatTheControllerCorrectsWithinStable(t *testing.T) {
 	for name, c := range map[string]struct {
-		writer     trace.Caller
-		after      time.Duration
-		correction map[string]any
-		fails      bool
+		writer       trace.Caller
+		readyLatency time.Duration
+		after        time.Duration
+		correction   map[string]any
+		fails        bool
 	}{
-		"not ready":             {ctl, 0, database(false, "pw"), false},
-		"naming nothing":        {ctl, 0, database(true, ""), false},
-		"not ready too late":    {ctl, 2 * s, database(false, "pw"), true},
-		"ready again":           {ctl, 0, database(true, "pw"), true},
-		"not ready, by another": {trace.Harness, 0, database(false, "pw"), true},
+		"not ready":                             {ctl, 0, 0, database(false, "pw"), false},
+		"naming nothing":                        {ctl, 0, 0, database(true, ""), false},
+		"not ready too late":                    {ctl, 0, 2 * s, database(false, "pw"), true},
+		"ready again":                           {ctl, 0, 0, database(true, "pw"), true},
+		"not ready, by another":                 {trace.Harness, 0, 0, database(false, "pw"), true},
+		"not ready once a slow write returns":   {ctl, 1 * s, 1 * s, database(false, "pw"), false},
+		"not ready too late after a slow write": {ctl, 1 * s, 2 * s, database(false, "pw"), true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := secretRun(secretRef(), secret(true))
 			deletedSeen(r.See(ctl, pw))
-			readyB(r).Tick(c.after).Update(c.writer, databaseB, c.correction)
+			r.UpdateInFlight(ctl, databaseB, database(true, "pw"), c.readyLatency).Tick(c.after).Update(c.writer, databaseB, c.correction)
+			if findings := honest(t, r); c.fails {
+				requireFinding(t, findings, "Honest", 0, noDependency, "kube/secrets", "slot b: secrets ns/pw seen missing")
+			} else {
+				requireNone(t, findings)
+			}
+		})
+	}
+}
+
+// The CR's next reconcile can read the CR from a cache that lacks the
+// ready write, so that its write conflicts.
+func TestHonestPassesACorrectionThatAFailedWriteOfTheCRDelays(t *testing.T) {
+	for name, c := range map[string]struct {
+		status   int
+		injected string
+		// sent is how long after the ready write the failed write is sent.
+		sent  time.Duration
+		fails bool
+	}{
+		"a conflict":               {409, "", 0, false},
+		"an unknown outcome":       {200, trace.DropResponse, 0, false},
+		"a success":                {200, "", 0, true},
+		"a conflict sent too late": {409, "", 1500 * ms, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := secretRun(secretRef(), secret(true))
+			deletedSeen(r.See(ctl, pw))
+			write := tt.Call(ctl, "update", databaseB, c.status, "")
+			write.Call.Latency, write.Call.Injected = 1*s, c.injected
+			readyB(r).Tick(c.sent+1*s).Add(write).Update(ctl, databaseB, database(false, "pw"))
 			if findings := honest(t, r); c.fails {
 				requireFinding(t, findings, "Honest", 0, noDependency, "kube/secrets", "slot b: secrets ns/pw seen missing")
 			} else {
