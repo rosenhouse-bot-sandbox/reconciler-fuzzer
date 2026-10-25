@@ -4,8 +4,9 @@ import (
 	"slices"
 	"strings"
 
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
+	gvk "k8s.io/apimachinery/pkg/runtime/schema"
 	"pgregory.net/rapid"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
@@ -36,7 +37,7 @@ const missing = "missing"
 
 // readReferences gives each listed kind the references from it, and lists
 // the kube fixtures of the to kinds other than Namespaces as referenced.
-func (g *Generator) readReferences(cfg *config.Config) error {
+func (g *Generator) readReferences(cfg *config.Config, fixtures []plan.Target) {
 	for _, r := range cfg.References {
 		ref := &reference{required: r.Required}
 		for _, part := range strings.Split(r.Name, ".") {
@@ -52,10 +53,7 @@ func (g *Generator) readReferences(cfg *config.Config) error {
 				ref.slotNames = append(ref.slotNames, ref.to.base(slot).GetName())
 			}
 		} else {
-			var err error
-			if ref.fixtures, err = fixturesOf(cfg, r); err != nil {
-				return err
-			}
+			ref.fixtures = fixturesOf(r, fixtures)
 			for _, target := range ref.fixtures {
 				// envtest runs no namespace controller, so a deleted
 				// Namespace would never go.
@@ -68,41 +66,18 @@ func (g *Generator) readReferences(cfg *config.Config) error {
 		from := g.kinds[slices.IndexFunc(g.kinds, func(k *crKind) bool { return k.groupKind == r.From.GroupKind() })]
 		from.references = append(from.references, ref)
 	}
-	return nil
 }
 
-// fixturesOf are the fixtures of r's to kind, or of its fake's collection.
-func fixturesOf(cfg *config.Config, r config.Reference) ([]plan.Target, error) {
-	var targets []plan.Target
-	if r.System == "" {
-		documents, err := config.ReadManifests(cfg.Fixtures)
-		if err != nil {
-			return nil, err
-		}
-		for _, document := range documents {
-			if (&unstructured.Unstructured{Object: document}).GroupVersionKind().GroupKind() == r.To.GroupKind() {
-				targets = append(targets, kubeFixture(document))
-			}
-		}
-		return targets, nil
+// fixturesOf are those of fixtures of r's to kind, or of its fake's
+// collection.
+func fixturesOf(r config.Reference, fixtures []plan.Target) []plan.Target {
+	gvr, _ := meta.UnsafeGuessKindToResource(r.To)
+	if r.System != "" {
+		gvr = gvk.GroupVersionResource{Resource: r.Collection}
 	}
-	for _, s := range cfg.Systems {
-		if s.Name != r.System {
-			continue
-		}
-		for _, path := range s.Fixtures {
-			entries, err := config.ReadSystemFixtures(path)
-			if err != nil {
-				return nil, err
-			}
-			for _, entry := range entries {
-				if entry.Resource == r.Collection {
-					targets = append(targets, plan.Target{System: s.Name, Resource: entry.Resource, Name: entry.Name})
-				}
-			}
-		}
-	}
-	return targets, nil
+	return slices.DeleteFunc(slices.Clone(fixtures), func(f plan.Target) bool {
+		return f.System != r.System || f.Group != gvr.Group || f.Resource != gvr.Resource
+	})
 }
 
 // under is what follows path, a field path of r's kind, in r's path, and

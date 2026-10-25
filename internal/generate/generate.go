@@ -117,12 +117,11 @@ func build(cfg *config.Config) (*Generator, error) {
 			}
 		}
 	}
-	if err := g.readFixtures(cfg); err != nil {
+	fixtures, err := g.readFixtures(cfg)
+	if err != nil {
 		return nil, err
 	}
-	if err := g.readReferences(cfg); err != nil {
-		return nil, err
-	}
+	g.readReferences(cfg, fixtures)
 	if err := g.readRBAC(cfg.Launch.RBAC); err != nil {
 		return nil, err
 	}
@@ -253,18 +252,22 @@ func (g *Generator) addResource(gr gvk.GroupResource) {
 	}
 }
 
-func (g *Generator) readFixtures(cfg *config.Config) error {
+// readFixtures reads the fixtures whose strings changeFixture may set, and
+// returns the target of each kube and system fixture.
+func (g *Generator) readFixtures(cfg *config.Config) ([]plan.Target, error) {
+	var targets []plan.Target
 	for _, path := range cfg.Fixtures {
 		documents, err := config.ReadManifests([]string{path})
 		if err != nil {
-			return err
+			return nil, err
 		}
 		paths := cfg.FixtureValues[path]
 		if len(paths) > 0 && len(documents) != 1 {
-			return fmt.Errorf("values.fixtures %s: the file holds %d objects, want 1", path, len(documents))
+			return nil, fmt.Errorf("values.fixtures %s: the file holds %d objects, want 1", path, len(documents))
 		}
 		for _, document := range documents {
 			target := kubeFixture(document)
+			targets = append(targets, target)
 			g.addResource(gvk.GroupResource{Group: target.Group, Resource: target.Resource})
 			if len(paths) == 0 {
 				continue
@@ -278,16 +281,18 @@ func (g *Generator) readFixtures(cfg *config.Config) error {
 	}
 	for _, s := range cfg.Systems {
 		for _, path := range s.Fixtures {
-			paths := cfg.FixtureValues[path]
-			if len(paths) == 0 {
-				continue
-			}
 			entries, err := config.ReadSystemFixtures(path)
 			if err != nil {
-				return err
+				return nil, err
 			}
+			paths := cfg.FixtureValues[path]
 			for _, entry := range entries {
-				f := fixture{target: plan.Target{System: s.Name, Resource: entry.Resource, Name: entry.Name}}
+				target := plan.Target{System: s.Name, Resource: entry.Resource, Name: entry.Name}
+				targets = append(targets, target)
+				if len(paths) == 0 {
+					continue
+				}
+				f := fixture{target: target}
 				for _, dotted := range paths {
 					f.paths = append(f.paths, strings.Split(dotted, "."))
 				}
@@ -295,7 +300,7 @@ func (g *Generator) readFixtures(cfg *config.Config) error {
 			}
 		}
 	}
-	return nil
+	return targets, nil
 }
 
 // kubeFixture is the target of a fixture's object.
