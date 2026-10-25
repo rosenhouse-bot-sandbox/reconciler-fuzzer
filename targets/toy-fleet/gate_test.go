@@ -48,12 +48,16 @@ func (g gateRow) planPath() string { return planPath(g.configPath(), g.plan) }
 // finding means the bug must pass the plan.
 var gate = []gateRow{
 	{plan: "restart-cluster-delete", bug: 150, finding: "Converge: did not settle (clause 1)", step: 1, detail: "db is not ready", config: databaseConfig},
+	// The update error keeps B151's Volumes held until the stop.
 	{plan: "stop-after-delete", bug: 151, finding: "Clean: left resources behind", step: 1, detail: "/cluster-vol-0 (rule 1, slot a)", config: uninstallConfig},
 	{plan: "crd-first", bug: 152, finding: "Converge: did not settle (clause 2)", step: 2, detail: "cluster is being deleted", config: uninstallConfig},
+	// B0 crashes there too: the toy cannot start without the Database CRD.
+	{plan: "crd-first", bug: 152, finding: "Crash: the controller exited", step: 4, detail: `no matches for kind "Database"`, config: uninstallConfig},
 	// The create waits for the name, the slowDelete for the create, and the
 	// plan ends at its create.
 	{plan: "recreate", config: uninstallConfig},
-	{plan: "stop-after-delete", config: uninstallConfig},
+	// B0 updates no Volume while it deletes them.
+	{plan: "stop-after-delete", config: uninstallConfig, note: "fault 1 (error(500) on verb=update group=storage.thirdparty resource=volumes) picked no request"},
 	{plan: "stop-first", config: uninstallConfig, note: "cluster is not judged: the plan deleted it after the stop"},
 }
 

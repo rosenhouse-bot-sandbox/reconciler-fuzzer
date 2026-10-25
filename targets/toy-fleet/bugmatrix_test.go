@@ -1,9 +1,12 @@
 package main_test
 
 import (
+	"cmp"
 	"flag"
 	"fmt"
 	"os"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -15,14 +18,35 @@ const (
 	section       = "\n## Fleet toy\n"
 )
 
-// renderBugMatrix renders this toy's section, with one B0 row that counts
-// the committed plans.
+// bugs describes each seeded bug of controller/.
+var bugs = map[int]string{
+	0:   "The correct controller.",
+	150: "Strips its finalizers from deleting CRs when it shuts down.",
+	151: "Puts a finalizer on each Volume, and releases a deleted Cluster before its Volumes, whose finalizers it strips only afterwards.",
+	152: "Errors when a dependent kind is not served, as after its CRD is deleted, so the parent's deletion never ends.",
+}
+
+// renderBugMatrix renders this toy's section: a B0 row that counts the
+// committed plans, then the gate table.
 func renderBugMatrix(plans []string) string {
-	return section + "\n" +
+	rows := slices.Clone(gate)
+	slices.SortStableFunc(rows, func(a, b gateRow) int {
+		return cmp.Or(cmp.Compare(a.bug, b.bug), strings.Compare(a.name(), b.name()))
+	})
+	var b strings.Builder
+	b.WriteString(section + "\n" +
 		"Each Cluster owns Volumes of a third party's kind, which a model sets ready. " +
 		"A Database names its Cluster, and a User its Database (targets/toy-fleet).\n\n" +
-		"| Bug | Description | Plan | Check | Step |\n|---|---|---|---|---|\n" +
-		fmt.Sprintf("| B0 | The correct controller. | all %d committed plans | none | |\n", len(plans))
+		"| Bug | Description | Plan | Check | Step |\n|---|---|---|---|---|\n")
+	fmt.Fprintf(&b, "| B0 | %s | all %d committed plans | none | |\n", bugs[0], len(plans))
+	for _, g := range rows {
+		check, step := checkOf(g.finding), " "+strconv.Itoa(g.step)+" "
+		if check == "" {
+			check, step = "none", " "
+		}
+		fmt.Fprintf(&b, "| B%d | %s | %s | %s |%s|\n", g.bug, bugs[g.bug], g.name(), check, step)
+	}
+	return b.String()
 }
 
 func TestRenderBugMatrix(t *testing.T) {
