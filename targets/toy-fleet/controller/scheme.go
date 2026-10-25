@@ -15,7 +15,7 @@ import (
 	storagev1 "github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/targets/toy-fleet/thirdparty/storage/v1"
 )
 
-// Field indexes that map a Cluster or a Secret to the Databases that name
+// These field indexes map a Cluster or a Secret to the Databases that name
 // it, and a Database to its Users.
 const (
 	clusterRefField        = "spec.clusterRef"
@@ -84,9 +84,4 @@ func (r reconciler) writeStatus(ctx context.Context, obj client.Object, old, sta
 		return nil
 	}
 	return r.Status().Update(ctx, obj)
-}
-
-// reportsReady says whether status, o's, reports Ready for o's generation.
-func reportsReady(o client.Object, status fleetv1.CommonStatus) bool {
-	return status.Phase == fleetv1.Ready && status.ObservedGeneration == o.GetGeneration()
 }

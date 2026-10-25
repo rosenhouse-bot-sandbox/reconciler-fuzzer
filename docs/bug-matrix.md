@@ -65,7 +65,7 @@ Each Cluster owns Volumes of a third party's kind, which a model sets ready. A D
 
 | Bug | Description | Plan | Check | Step |
 |---|---|---|---|---|
-| B0 | The correct controller. | all 16 committed plans | none | |
+| B0 | The correct controller. | all 17 committed plans | none | |
 | B123 | Readies a Database on a Cluster that is not Ready. | create-together | Honest | 0 |
-| B124 | Readies a Database before its Secret exists. | secret-late | Honest | 0 |
+| B124 | Readies a Database without checking its Secret. | secret-late | Honest | 0 |
 | B125 | Keeps a Ready Database ready after its Secret goes. | secret-recreate | Honest | 1 |

@@ -79,7 +79,7 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		db.Status.Message = secretWait
 	case !cluster.DeletionTimestamp.IsZero() && old.Phase == fleetv1.Ready:
 		db.Status = old // A deleting Cluster keeps its Ready Databases as they are.
-	case !reportsReady(cluster, cluster.Status.CommonStatus) && r.Bug != B123:
+	case !cluster.Status.ReadyAt(cluster.Generation) && r.Bug != B123:
 		db.Status.Message = fmt.Sprintf("waiting for Cluster %s to be Ready", cluster.Name)
 	default:
 		if err := r.syncConfigMap(ctx, db); err != nil {

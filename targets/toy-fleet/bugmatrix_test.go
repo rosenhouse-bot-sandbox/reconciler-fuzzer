@@ -19,7 +19,7 @@ const (
 var bugs = map[int]string{
 	0:   "The correct controller.",
 	123: "Readies a Database on a Cluster that is not Ready.",
-	124: "Readies a Database before its Secret exists.",
+	124: "Readies a Database without checking its Secret.",
 	125: "Keeps a Ready Database ready after its Secret goes.",
 }
 

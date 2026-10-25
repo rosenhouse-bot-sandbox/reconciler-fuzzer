@@ -390,10 +390,12 @@ func TestDatabaseWaitsForItsClusterAndHoldsDeletionForUsers(t *testing.T) {
 func TestDatabaseWaitsForItsClusterToReportItsGenerationReady(t *testing.T) {
 	cluster := readyCluster()
 	cluster.Generation = 2
-	f := newFleet(t, cluster, databaseObj())
+	db := databaseObj()
+	db.Status = readyStatus()
+	f := newFleet(t, cluster, db)
 	f.settle(f.databases, "db")
 	if got := f.database().Status; got != pendingStatus("waiting for Cluster cluster to be Ready") {
-		t.Errorf("On a Cluster that reports an older generation Ready, the Database is %+v.", got)
+		t.Errorf("On a Cluster that reports an older generation Ready, the Ready Database is %+v.", got)
 	}
 }
 

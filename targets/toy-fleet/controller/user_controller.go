@@ -59,7 +59,7 @@ func (r *UserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		user.Status.Message = fmt.Sprintf("waiting for Database %s", user.Spec.DatabaseRef)
 	case err != nil:
 		return ctrl.Result{}, err
-	case !reportsReady(db, db.Status):
+	case !db.Status.ReadyAt(db.Generation):
 		user.Status.Message = fmt.Sprintf("waiting for Database %s to be Ready", db.Name)
 	default:
 		if err := r.syncSecret(ctx, user); err != nil {
