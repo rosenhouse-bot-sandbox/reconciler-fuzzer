@@ -33,11 +33,11 @@ func (f *fleet) sortedVolumes() []string {
 	return slices.Sorted(slices.Values(f.volumes()))
 }
 
-func TestVersion2NamesItsVolumesFinalizerAndPhaseAnew(t *testing.T) {
+func TestVersion2RenamesItsFinalizerAndPhaseButNotItsVolumes(t *testing.T) {
 	t.Skip("enabled by the toy-fleet package")
 	f := newFleet(t, clusterObj()).as(2, 0)
 	f.settle(f.clusters, "cluster")
-	if got := f.sortedVolumes(); !slices.Equal(got, []string{"cluster-data-0 small", "cluster-data-1 small"}) {
+	if got := f.sortedVolumes(); !slices.Equal(got, []string{"cluster-vol-0 small", "cluster-vol-1 small"}) {
 		t.Errorf("Version 2 made the Volumes %q.", got)
 	}
 	if c := f.cluster(); c.Status.Phase != fleetv1.Creating || !slices.Equal(c.Finalizers, []string{fleetv1.ClusterFinalizerV2}) {

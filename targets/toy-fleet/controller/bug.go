@@ -23,8 +23,8 @@ const (
 	// B140 never removes the version 1 finalizer, so the Cluster's delete
 	// hangs.
 	B140 Bug = 140
-	// B141 sees only Volumes with version 2 names, so it makes new ones and
-	// leaves the version 1 ones.
+	// B141 names its Volumes <cluster>-data-<i> and sees only those, so it
+	// makes new ones and leaves the version 1 ones.
 	B141 Bug = 141
 	// B142 leaves the Cluster in the version 1 phase Provisioning.
 	B142 Bug = 142
