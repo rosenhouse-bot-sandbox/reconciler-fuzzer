@@ -363,16 +363,18 @@ its kind, such as one with a misspelt resource.
 
 ### Uninstalling
 
-A `stop` action checks what an uninstall leaves behind. It waits until the CRs the plan deleted
-are gone, and then stops the controller for good:
+A `stop` action lets a plan test an uninstall. It waits until the CRs the plan deleted are gone,
+and then stops the controller for good:
 
 ```json
 {"actions": [{"do": "delete", "slot": "a"}, {"do": "stop"}]}
 ```
 
-After a stop, a plan's only actions are deletes and fixture changes, and the runner appends no
-steps. Clean judges the plan's last step instead. A CR that the stop did not wait for, such as
-one the plan deletes after the stop, may keep its finalizers, and gets a note.
+The runner appends two steps to a plan without a stop: one deletes every CR, and one restarts
+the controller. After a stop, a plan's only actions are deletes and fixture changes, and the
+runner appends no steps. Clean then judges the plan's last step, and fails a resource whose CRs
+were gone at the stop. A CR that the stop did not wait for, such as one the plan deletes after
+the stop, may keep its finalizers, and gets a note.
 
 ### Examples
 

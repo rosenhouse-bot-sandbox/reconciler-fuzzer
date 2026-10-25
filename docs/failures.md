@@ -103,8 +103,9 @@ Look at the clause first:
 `did not stay settled (clause k)` means the condition held once, then
 failed again within `stable`.
 
-After a `stop`, only clauses 2, 6 and 7 apply. Clause 2 then names a CR that
-was still being deleted when the stop's wait for it gave up.
+After a `stop`, only clauses 2, 6 and 7 apply, and clause 2 only in the
+stop's step. It names a CR that was still being deleted when the stop's wait
+for it gave up.
 
 The `backoff-bound` label means `timeouts.backoffCap` set the deadline,
 because the step's faults lasted longer. A controller whose retry backoff
@@ -145,6 +146,10 @@ resource. A rule 1 line on a cluster-scoped resource with a namespaced
 owner means garbage collection ignores that invalid ownerReference. A rule
 2 or 3 line usually means a finalizer forgot the resource. A resource that
 should outlive its CR needs its entry's `retain`.
+
+After a `stop`, a line names a resource whose CRs were gone when the
+controller stopped, so an uninstall leaves it behind. A common cause is a
+controller that removes a child's finalizer only after the CR is gone.
 
 ### Restore
 

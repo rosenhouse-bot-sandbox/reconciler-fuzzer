@@ -284,9 +284,9 @@ Vault fixture, add a step that writes a new version, `{"do": "changeFixture", "t
 {"system": "vault", "resource": "secret", "name": "token"}, "patch": {"value": "new"}}`. A step
 that deletes and creates slot `a` with `"faults": [{"match": {"resource": "secrets"},
 "holdWatch": true}]` tests how the controller acts on a stale cache. A last step
-`{"actions": [{"do": "delete", "slot": "a"}, {"do": "stop"}]}` checks what an uninstall leaves
-behind. A report note that the
-`holdWatch` held no watch means the controller watches no such kind, or the match is wrong.
+`{"actions": [{"do": "delete", "slot": "a"}, {"do": "stop"}]}` tests an uninstall. A report
+note that the `holdWatch` held no watch means the controller watches no such kind, or the match
+is wrong.
 A note that a `stuck` fault held no object means no object matched, or the API server refused
 each stuck write. `trace.jsonl` records a refused write as a model call with status 422. The
 API server refuses every stuck write to a done Job. Otherwise, check `stuckStatus:` against the

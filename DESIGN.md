@@ -140,12 +140,11 @@ name, and `update` otherwise.
 `kube.Start` starts envtest, the run namespace, the controller's identity, both
 listeners and the observer, and creates the fixtures. Fixtures expand
 `${systems.<fake>.<key>}`. `Vars` holds `kubeconfig`, `namespace` and `url`.
-Harness actions return once the observer has recorded their effect. The
-observer list-watches cluster-wide each installed CRD, each served kind the
-config or a fixture names, and each served kind `launch.rbac` names that is not
-ignored (§10). These are the run event's `kinds`. It then watches any kind a
-listener records a call on, and records one `version` per
-(ref, resourceVersion).
+Harness actions return once the observer has recorded their effect. The observer
+list-watches cluster-wide each installed CRD, each served kind the config or a
+fixture names, and each served kind `launch.rbac` names that is not ignored
+(§10). These are the run event's `kinds`. It then watches any kind a listener
+records a call on, and records one `version` per (ref, resourceVersion).
 
 ## 7. Models and fake services
 
@@ -215,24 +214,24 @@ restarts the controller (§17, entry 4).
 
 **Deadline.** `endFaults + settle + min(faults, backoffCap) + maxPoll`.
 `endFaults` is the end of the fault period. `faults` runs from the step's start
-until then, or until a create's slot wait ends the faults sooner. `maxPoll` is
-the longest poll interval of the systems the step's faults and `damage` and
-`changeFixture` actions name, and of every fake when the step changes a CR. The
-runner gives a model fault to the first model or fake that `Takes` it; none is a
-harness error. A create into an emptied slot waits until its previous CR no
-longer exists. Once `period` has passed, the wait ends the step's faults and
-restarts a killed controller. It gives up `deadline - endFaults` after the later
-of the faults' end and the slot's delete, and the plan ends after the step. A
-`stop` waits the same way for each CR that a `delete` removed, then sends
-SIGTERM even if one stays. Any other action error, except an unmatched target,
-is a harness error.
+until then, or until a create's or a stop's wait ends the faults sooner.
+`maxPoll` is the longest poll interval of the systems the step's faults and
+`damage` and `changeFixture` actions name, and of every fake when the step
+changes a CR. The runner gives a model fault to the first model or fake that
+`Takes` it; none is a harness error. A create into an emptied slot waits until
+its previous CR no longer exists. Once `period` has passed, the wait ends the
+step's faults and restarts a killed controller. It gives up
+`deadline - endFaults` after the later of the faults' end and the slot's delete,
+and the plan ends after the step. A `stop` waits the same way until each CR
+instance that a `delete` removed is gone, then sends SIGTERM even if one stays.
+Any other action error, except an unmatched target, is a harness error.
 
 ## 10. Settle condition
 
 `check.Settled(ix, t, spec)` returns the unmet clauses at `t`, or none. It
 judges the step whose fault period started last at or before `t`. After a
-`stop`, only clauses 2, 6 and 7 apply, and clause 2 only to the CRs the stop
-waited for (§9).
+`stop`, only clauses 2, 6 and 7 apply, and clause 2 only in the stop's step,
+to the CRs the stop waited for (§9).
 
 1. Every live CR satisfies its kind's `ready`, or `halted` after an
    unknown-outcome controller call on it or on an instance only it owns, and
@@ -316,9 +315,10 @@ for, still being deleted at the trace's last event, gets one too.
 resource fails when its rule 1 to 3 CR is gone, or its rule-4 set is non-empty
 and every CR in it is gone. At the end of step `planSteps + 1`, every unshared
 controller resource fails. After a `stop`, the plan's last step is the run's
-last, and fails one whose CRs are gone. Its CRs' `retain` allows a resource.
-Shared resources are judged only for growth since the first `create`, and those
-of an unlisted owner not at all. Summary: `left resources behind`.
+last, and a step that ends after the stop fails a resource when its CRs were
+gone at the stop. Its CRs' `retain` allows a resource. Shared resources are
+judged only for growth since the first `create`, and those of an unlisted owner
+not at all. Summary: `left resources behind`.
 
 **Restore.** It judges a settled step with no `create`, `update`, `delete` or
 `changeFixture` action after a settled step, comparing the controller's
@@ -425,16 +425,15 @@ in-process, rejects invalid ones. `Plan(seed)` draws 3 to 8 steps of 1 to 4
 actions and at most one fault each. A create draws its kind uniformly from
 `primaries`, and each CR takes its kind's `values`. Step 0 creates slot `a`.
 About 30% of steps hold one `restart`, `kill` or `damage`, so Restore has steps
-to judge. A kube fault draws its request from what `launch.rbac` grants,
-creates weighted most (§17, entry 20). 2 of 7 kube fault draws (of 9 with
-`models:`, 2 of which are `stuck` or `slowDelete`) hold a kind `launch.rbac`
-lets the controller watch, the listed and `owns` kinds weighted most, with the
-traffic `holdTraffic` documents. With fakes, half of the fault draws and of the
-`damage` draws name a fake: a request fault by verb alone, or a model fault on
-a `crud` fake, and a target by system alone. A read-only fake takes no damage
-and only read faults. `changeFixture` draws kube and system fixtures alike.
-`damage` only deletes. `generate.go` documents the weights, bursts and fault
-periods.
+to judge. A kube fault draws its request from what `launch.rbac` grants, creates
+weighted most (§17, entry 20). 2 of 7 kube fault draws (of 9 with `models:`, 2
+of which are `stuck` or `slowDelete`) hold a kind `launch.rbac` lets the
+controller watch, the listed and `owns` kinds weighted most, with the traffic
+`holdTraffic` documents. With fakes, half of the fault draws and of the `damage`
+draws name a fake: a request fault by verb alone, or a model fault on a `crud`
+fake, and a target by system alone. A read-only fake takes no damage and only
+read faults. `changeFixture` draws kube and system fixtures alike. `damage` only
+deletes. `generate.go` documents the weights, bursts and fault periods.
 
 **Hunt.** `hunt.Hunt` runs each seed, keeps runs with a new signature, replays
 each 5 times and shrinks it (`shrink.go`), trying at most 16 candidates.
