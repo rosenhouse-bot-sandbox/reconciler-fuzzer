@@ -497,6 +497,13 @@ func TestAStoppedControllerOwesNoReadyCRAndNoRun(t *testing.T) {
 	}
 }
 
+func TestAControllerOwesReadyCRsUntilItStops(t *testing.T) {
+	b := settledAt3s()
+	b.At(2 * s).Add(tt.Version(widgetB, "ub", "2", ready(false)))
+	stopped(b, 4*s)
+	requireUnmet(t, b, 3*s, "ns/b is not ready")
+}
+
 func TestAStoppedControllerOwesNoLookAtALaterChange(t *testing.T) {
 	b := settledAt3s()
 	stopped(b, 2*s)

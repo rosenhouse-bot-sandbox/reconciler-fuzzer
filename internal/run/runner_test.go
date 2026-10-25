@@ -1096,9 +1096,11 @@ func TestExecuteEndsTheFaultsAndRestartsAKilledControllerWhileAStopWaits(t *test
 }
 
 // A stop whose deleted CR stays stops the controller anyway, once the
-// allowance has passed, and Converge judges the CR.
+// allowance has passed. It names the CR as waited for, so Converge judges
+// the CR.
 func TestExecuteStopsWhenADeletedCRStays(t *testing.T) {
 	f := newFixture(t, nil)
+	f.cluster.rec = f.rec
 	f.cluster.waitGone = func(ctx context.Context) error {
 		<-ctx.Done()
 		return ctx.Err()
@@ -1115,6 +1117,9 @@ func TestExecuteStopsWhenADeletedCRStays(t *testing.T) {
 	stopped, found := findAction(events, 1, 1)
 	if !found || stopped.Action.Error != "" {
 		t.Fatalf("stop = %+v, want a stop without error", stopped.Action)
+	}
+	if want := []string{"u1"}; !slices.Equal(stopped.Action.Waited, want) {
+		t.Errorf("the stop waited for %q, want %q, the CR that stayed", stopped.Action.Waited, want)
 	}
 	allowance, _ := Deadline(0, 0, 0, timeouts)
 	if gaveUp := stopped.At - deleted.At; gaveUp < allowance-20*time.Millisecond || gaveUp > allowance+100*time.Millisecond {

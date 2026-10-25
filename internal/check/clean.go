@@ -15,10 +15,10 @@ import (
 )
 
 // Clean fails a settled step after which a resource the controller created
-// for a deleted CR survives, and the run's last step when any resource the
-// controller created survives. After a stop, a CR deleted after the stop
-// counts as live, since no controller is left to clean up after it. It
-// reports each instance once.
+// for a deleted CR survives. Without a stop, it also fails the run's last
+// step when any resource the controller created survives. After a stop, a
+// CR deleted after the stop counts as live, since no controller is left to
+// clean up after it. It reports each instance once.
 func Clean(ix *trace.Index, s Spec) []Finding {
 	v := newView(ix, s)
 	run, _ := ix.Run()

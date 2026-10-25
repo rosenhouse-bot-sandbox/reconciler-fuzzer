@@ -311,12 +311,12 @@ for, still being deleted at the trace's last event, gets one too.
 
 **Crash.** A controller exit the harness did not cause fails its step.
 
-**Clean.** At the end of a settled step with a `delete` action, a controller
-resource fails when its rule 1 to 3 CR is gone, or its rule-4 set is non-empty
-and every CR in it is gone. At the end of step `planSteps + 1`, every unshared
-controller resource fails. After a `stop`, the plan's last step is the run's
-last, and a CR deleted after the stop counts as live. Its CRs' `retain` allows a
-resource. Shared resources are judged only for growth since the first `create`,
+**Clean.** At the end of a settled step with a `delete` action, or of the plan's
+last step after a `stop`, a controller resource fails when its rule 1 to 3 CR is
+gone, or its rule-4 set is non-empty and every CR in it is gone. A CR deleted
+after the stop counts as live. At the end of step `planSteps + 1`, every
+unshared controller resource fails. Its CRs' `retain` allows a resource. Shared
+resources are judged only at the run's end, for growth since the first `create`,
 and those of an unlisted owner not at all. Summary: `left resources behind`.
 
 **Restore.** It judges a settled step with no `create`, `update`, `delete` or
