@@ -214,11 +214,7 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 		vars[s.Name], controllerListeners[s.Name], actors[s.Name] = fakeEndpoints.Vars, fakeEndpoints.Controller, f
 		targets, fakes = append(targets, f), append(fakes, f)
 	}
-	watch, seen := modelKinds(cfg.Models)
-	k := kube.New(kube.Options{
-		CRDs: cfg.CRDs, RBAC: cfg.Launch.RBAC, Fixtures: cfg.Fixtures, Vars: flatten(vars), Warm: samples,
-		Watch: slices.Concat(primaryKinds(cfg.Primaries), watch), Seen: seen,
-	})
+	k := kube.New(kubeOptions(cfg, flatten(vars), samples))
 	endpoints, err := k.Start(ctx, env)
 	if err != nil {
 		return err
@@ -308,6 +304,19 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 	return runner.Execute(ctx, p)
 }
 
+// kubeOptions configure the kube system, which expands vars in the
+// fixtures and warms up with samples. Its observer watches the listed,
+// owned, modelled and referenced kinds from the start. Its controller
+// listener records Seen events of the dependency and referenced kinds.
+func kubeOptions(cfg *config.Config, vars map[string]string, samples []map[string]any) kube.Options {
+	watch, seen := modelKinds(cfg.Models)
+	referenced := referenceKinds(cfg.References)
+	return kube.Options{
+		CRDs: cfg.CRDs, RBAC: cfg.Launch.RBAC, Fixtures: cfg.Fixtures, Vars: vars, Warm: samples,
+		Watch: slices.Concat(primaryKinds(cfg.Primaries), watch, referenced), Seen: slices.Concat(seen, referenced),
+	}
+}
+
 // fakeOptions configure the fake of s, with its fixtures and token. It sees
 // every object when s is a dependency or a reference names it.
 func fakeOptions(s config.System, references []config.Reference) (fake.Options, error) {
@@ -315,7 +324,8 @@ func fakeOptions(s config.System, references []config.Reference) (fake.Options, 
 	if err != nil {
 		return fake.Options{}, err
 	}
-	o := fake.Options{Name: s.Name, Command: s.Process.Command, Dir: s.Process.Dir, API: api, SeenAll: s.Dependency != nil, ModelFaults: s.Map().ModelFaults}
+	referenced := slices.ContainsFunc(references, func(r config.Reference) bool { return r.System == s.Name })
+	o := fake.Options{Name: s.Name, Command: s.Process.Command, Dir: s.Process.Dir, API: api, SeenAll: s.Dependency != nil || referenced, ModelFaults: s.Map().ModelFaults}
 	if s.Token != "" {
 		o.Vars = map[string]string{"token": s.Token}
 	}
@@ -365,10 +375,15 @@ func runEvent(cfg *config.Config, k *kube.Kube, planSteps int) (trace.Event, err
 	if err != nil {
 		return trace.Event{}, err
 	}
-	owners, primaries, err := owner.Sources(cfg, func(gvk schema.GroupVersionKind) (string, bool, error) {
+	resource := func(gvk schema.GroupVersionKind) (string, bool, error) {
 		ref, err := k.Ref(gvk, "")
 		return ref.Resource, ref.Namespace != "", err
-	})
+	}
+	owners, primaries, err := owner.Sources(cfg, resource)
+	if err != nil {
+		return trace.Event{}, err
+	}
+	references, err := owner.References(cfg, resource)
 	if err != nil {
 		return trace.Event{}, err
 	}
@@ -376,7 +391,7 @@ func runEvent(cfg *config.Config, k *kube.Kube, planSteps int) (trace.Event, err
 		Namespace: k.Namespace(), Primaries: primaries, PlanSteps: planSteps,
 		Stable: cfg.Timeouts.Stable, Reads: cfg.Budgets.Reads, Writes: cfg.Budgets.Writes,
 		Models: models, StatusKinds: k.StatusKinds(), Kinds: k.Kinds(),
-		Owners: owners, Systems: owner.Systems(cfg), Properties: owner.Properties(cfg),
+		Owners: owners, Systems: owner.Systems(cfg), Properties: owner.Properties(cfg), References: references,
 	}}, nil
 }
 
@@ -392,10 +407,17 @@ func modelKinds(models []config.Model) (watch, seen []schema.GroupVersionKind) {
 	return watch, seen
 }
 
-// referenceKinds returns the kube kinds that references name as To, which
-// the observer watches and the controller listener records Seen events for.
+// referenceKinds returns the kube kinds that references name as To, once
+// each, in config order. The observer watches them, and the controller
+// listener records Seen events of them.
 func referenceKinds(references []config.Reference) []schema.GroupVersionKind {
-	return nil
+	var kinds []schema.GroupVersionKind
+	for _, r := range references {
+		if r.System == "" && !slices.Contains(kinds, r.To) {
+			kinds = append(kinds, r.To)
+		}
+	}
+	return kinds
 }
 
 // traceModels describes the models for the run event. ref maps a kind to

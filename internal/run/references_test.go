@@ -29,7 +29,6 @@ func recreatePassword() *plan.Plan {
 }
 
 func TestExecuteCreatesADeletedFixtureAgain(t *testing.T) {
-	t.Skip("enabled by the run package")
 	f := newFixture(t, nil)
 	selecting(f, map[string]trace.Ref{"secrets": passwordSecret})
 	if err := f.runner.Execute(context.Background(), recreatePassword()); err != nil {
@@ -50,7 +49,6 @@ func TestExecuteCreatesADeletedFixtureAgain(t *testing.T) {
 }
 
 func TestExecuteWaitsForADeletedFixtureToGoBeforeCreatingIt(t *testing.T) {
-	t.Skip("enabled by the run package")
 	f := newFixture(t, nil)
 	selecting(f, map[string]trace.Ref{"secrets": passwordSecret})
 	f.cluster.waitGone = func(context.Context) error { return nil }
@@ -63,7 +61,6 @@ func TestExecuteWaitsForADeletedFixtureToGoBeforeCreatingIt(t *testing.T) {
 }
 
 func TestExecuteEndsThePlanWhenADeletedFixtureStays(t *testing.T) {
-	t.Skip("enabled by the run package")
 	f := newFixture(t, nil)
 	selecting(f, map[string]trace.Ref{"secrets": passwordSecret})
 	f.cluster.waitGone = func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }
@@ -81,7 +78,6 @@ func TestExecuteEndsThePlanWhenADeletedFixtureStays(t *testing.T) {
 }
 
 func TestExecuteNotesACreateFixtureWhoseChangeFixtureDeletedNothing(t *testing.T) {
-	t.Skip("enabled by the run package")
 	for name, c := range map[string]struct {
 		found     map[string]trace.Ref
 		deleteErr error
@@ -106,7 +102,6 @@ func TestExecuteNotesACreateFixtureWhoseChangeFixtureDeletedNothing(t *testing.T
 }
 
 func TestExecuteDeletesEachReferencingKindBeforeTheKindItNames(t *testing.T) {
-	t.Skip("enabled by the run package")
 	f := newFixture(t, nil)
 	toy := func(kind string) schema.GroupVersionKind {
 		return schema.GroupVersionKind{Group: "toy", Version: "v1", Kind: kind}
@@ -131,7 +126,6 @@ func TestExecuteDeletesEachReferencingKindBeforeTheKindItNames(t *testing.T) {
 }
 
 func TestReferenceKindsAreTheKubeKindsReferencesName(t *testing.T) {
-	t.Skip("enabled by the run package")
 	secretKind := schema.GroupVersionKind{Version: "v1", Kind: "Secret"}
 	references := []config.Reference{
 		{From: sprocketKind, To: gadgetKind, Name: "spec.gadget"},
@@ -144,12 +138,28 @@ func TestReferenceKindsAreTheKubeKindsReferencesName(t *testing.T) {
 }
 
 func TestFakeOptionsSeeAllOfAFakeAReferenceNames(t *testing.T) {
-	t.Skip("enabled by the run package")
 	s := config.System{Name: "cloud", API: "crud", Process: &config.Process{Command: []string{"/bin/crudfake"}}}
 	for system, want := range map[string]bool{"cloud": true, "other": false} {
 		o, err := fakeOptions(s, []config.Reference{{From: gadgetKind, System: system, Collection: "buckets", Name: "spec.bucket"}})
 		if err != nil || o.SeenAll != want {
 			t.Errorf("fakeOptions with a reference to %s = %+v, %v; want SeenAll %v", system, o, err, want)
 		}
+	}
+}
+
+func TestKubeOptionsWatchAndSeeEachReferencedKind(t *testing.T) {
+	widgetKind := schema.GroupVersionKind{Group: "toy.reconciler-fuzzer", Version: "v1", Kind: "Widget"}
+	secretKind := schema.GroupVersionKind{Version: "v1", Kind: "Secret"}
+	cfg := &config.Config{
+		Primaries:  []config.Primary{{Kind: widgetKind}},
+		Models:     testModels,
+		References: []config.Reference{{From: widgetKind, To: secretKind, Name: "spec.secret"}},
+	}
+	o := kubeOptions(cfg, nil, nil)
+	if want := []schema.GroupVersionKind{widgetKind, gadgetKind, sprocketKind, secretKind}; !reflect.DeepEqual(o.Watch, want) {
+		t.Errorf("Watch = %v, want %v", o.Watch, want)
+	}
+	if want := []schema.GroupVersionKind{gadgetKind, secretKind}; !reflect.DeepEqual(o.Seen, want) {
+		t.Errorf("Seen = %v, want %v", o.Seen, want)
 	}
 }
