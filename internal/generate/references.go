@@ -35,7 +35,7 @@ const each = "[*]"
 const missing = "missing"
 
 // readReferences gives each listed kind the references from it, and lists
-// the kube fixtures of the to kinds as referenced.
+// the kube fixtures of the to kinds other than Namespaces as referenced.
 func (g *Generator) readReferences(cfg *config.Config) error {
 	for _, r := range cfg.References {
 		ref := &reference{required: r.Required}
@@ -57,7 +57,10 @@ func (g *Generator) readReferences(cfg *config.Config) error {
 				return err
 			}
 			for _, target := range ref.fixtures {
-				if target.System == "" && !slices.Contains(g.referenced, target) {
+				// envtest runs no namespace controller, so a deleted
+				// Namespace would never go.
+				namespace := target.Group == "" && target.Resource == "namespaces"
+				if target.System == "" && !namespace && !slices.Contains(g.referenced, target) {
 					g.referenced = append(g.referenced, target)
 				}
 			}

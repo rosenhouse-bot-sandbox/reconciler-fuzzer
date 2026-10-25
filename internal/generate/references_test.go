@@ -2,13 +2,17 @@ package generate
 
 import (
 	"maps"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/runtime"
+	gvk "k8s.io/apimachinery/pkg/runtime/schema"
 	"pgregory.net/rapid"
 
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 )
 
@@ -284,6 +288,31 @@ func TestReferencedFixturesAreTheKubeFixturesOfToKinds(t *testing.T) {
 	want := []plan.Target{{Resource: "secrets", Name: "admin-password"}, {Resource: "secrets", Name: "other-password"}, {Resource: "configmaps", Name: "admin-password"}}
 	if !reflect.DeepEqual(g.referenced, want) {
 		t.Errorf("referenced = %+v, want %+v, each once.", g.referenced, want)
+	}
+}
+
+// TestANamespaceIsACandidateThatNoPlanDeletes adds references to a
+// Namespace fixture and to a fixture of another group's Namespace kind.
+// envtest runs no namespace controller, so a deleted Namespace would never
+// go.
+func TestANamespaceIsACandidateThatNoPlanDeletes(t *testing.T) {
+	cfg := loadConfig(t, linksConfig)
+	for _, c := range []struct{ apiVersion, name string }{{"v1", "spec.namespace"}, {"example.com/v1", "spec.otherNamespace"}} {
+		fixture := filepath.Join(t.TempDir(), "namespace.yaml")
+		if err := os.WriteFile(fixture, []byte("{apiVersion: "+c.apiVersion+", kind: Namespace, metadata: {name: team}}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cfg.Fixtures = append(cfg.Fixtures, fixture)
+		cfg.References = append(cfg.References, config.Reference{From: cfg.Primaries[1].Kind, To: gvk.FromAPIVersionAndKind(c.apiVersion, "Namespace"), Name: c.name, Ready: "true", Required: true})
+	}
+	g := newGenerator(t, cfg)
+	link := g.kinds[1]
+	if fixtures := link.references[len(link.references)-2].fixtures; !reflect.DeepEqual(fixtures, []plan.Target{{Resource: "namespaces", Name: "team"}}) {
+		t.Errorf("The Namespace reference's fixtures = %+v, want the Namespace team.", fixtures)
+	}
+	want := []plan.Target{{Resource: "secrets", Name: "admin-password"}, {Resource: "secrets", Name: "other-password"}, {Resource: "configmaps", Name: "admin-password"}, {Group: "example.com", Resource: "namespaces", Name: "team"}}
+	if !reflect.DeepEqual(g.referenced, want) {
+		t.Errorf("referenced = %+v, want %+v, without the Namespace.", g.referenced, want)
 	}
 }
 

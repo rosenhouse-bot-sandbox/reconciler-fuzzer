@@ -53,8 +53,8 @@ const (
 	// created, or merge-patches it with Patch when set. The harness never
 	// undoes it.
 	Damage Do = "damage"
-	// ChangeFixture merge-patches the fixture Target names with Patch, or
-	// deletes it when Patch is empty.
+	// ChangeFixture merge-patches the fixture Target names with Patch when
+	// set, and deletes it otherwise.
 	ChangeFixture Do = "changeFixture"
 	// CreateFixture creates again, as its file declares it, the kube
 	// fixture that an earlier changeFixture of an equal Target deleted. It

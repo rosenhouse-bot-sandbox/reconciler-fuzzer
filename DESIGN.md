@@ -481,9 +481,9 @@ A create, or an update that draws a `mutate` path at or above a reference's
 holds: the name of any slot's CR of a listed `to` kind, or of a fixture of
 another, live half the time when one is. With `required: false`, 1 in 4
 writes `missing`, a name no object has. `namespace` values stay as drawn.
-`changeFixture` also deletes a live kube fixture of a `to` kind, and
-`createFixture` makes it again. Plans of a config without references are as
-before.
+`changeFixture` also deletes a live kube fixture of a `to` kind other than a
+Namespace, and `createFixture` makes it again. Plans of a config without
+references are as before.
 
 **Hunt.** `hunt.Hunt` runs each seed, keeps runs with a new signature, replays
 each 5 times and shrinks it (`shrink.go`), trying at most 16 candidates.
