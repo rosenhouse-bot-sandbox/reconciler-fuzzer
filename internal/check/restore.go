@@ -2,7 +2,6 @@ package check
 
 import (
 	"encoding/json"
-	"fmt"
 	"maps"
 	"reflect"
 	"slices"
@@ -15,6 +14,8 @@ import (
 
 // Restore fails a settled step without a create, update, delete or fixture
 // change whose controller resources differ from the previous settled step's.
+// A damage touches each group under its root, so a damage under a CR that the
+// controller made touches that CR's owner too.
 func Restore(ix *trace.Index, s Spec) []Finding {
 	v := newView(ix, s)
 	var findings []Finding
@@ -25,16 +26,29 @@ func Restore(ix *trace.Index, s Spec) []Finding {
 		from, to := v.steps[n-1].ConfirmEnd, step.ConfirmEnd
 		damaged, touched := v.damaged(step.Step, from)
 		before, after := v.groups(from), v.groups(to)
-		kinds := map[group]bool{}
-		for g := range after {
-			kinds[group{kind: g.kind, owner: g.owner}] = true
+		// kinds holds each kind under a root, and remade each kind and role
+		// under a root that a CR made since from owns.
+		kinds, remade := map[group]bool{}, map[group]bool{}
+		for g, instances := range after {
+			kinds[group{kind: g.kind, root: g.root}] = true
+			if v.madeSince(v.w.Owner(instances[0], to), from) {
+				remade[group{kind: g.kind, root: g.root, role: g.role}] = true
+			}
 		}
 		missing, replaced, changed := map[string][]string{}, map[string][]string{}, map[string][]string{}
 		for _, g := range slices.Collect(maps.Keys(merge(before, after))) {
 			was, is := before[g], after[g]
 			k := kind(g.kind)
-			if touched(g.owner) {
-				if len(was) > 0 && len(is) == 0 && (damaged[g] || !kinds[group{kind: g.kind, owner: g.owner}]) {
+			if touched(g.root) {
+				// A damaged group must be live again while its owner lives. Once
+				// its owner is gone, a CR made since from must own its kind and
+				// role under its root. A touched group that empties must leave
+				// its kind there.
+				restored := kinds[group{kind: g.kind, root: g.root}]
+				if o, hit := damaged[g]; hit {
+					restored = !v.lives(o, to) && remade[group{kind: g.kind, root: g.root, role: g.role}]
+				}
+				if len(was) > 0 && len(is) == 0 && !restored {
 					missing[k] = append(missing[k], v.describeAll(was[:1], from)...)
 				}
 				continue
@@ -42,7 +56,7 @@ func Restore(ix *trace.Index, s Spec) []Finding {
 			for _, i := range was {
 				if j := slices.IndexFunc(is, func(j owner.Instance) bool { return j.UID == i.UID }); j < 0 {
 					replaced[k] = append(replaced[k], v.describeAll([]owner.Instance{i}, from)...)
-				} else if paths := differ(v.w.Body(i, from), v.w.Body(is[j], to), v.s.modelled(i.Ref), v.s.Ignore[i.Ref.System]); len(paths) > 0 {
+				} else if paths := differ(v.w.Body(i, from), v.w.Body(is[j], to), v.s.modelled(i.Ref), v.s.Ignore[i.Ref.System], v.s.periodicPaths(i.Ref)); len(paths) > 0 {
 					changed[k] = append(changed[k], v.describeAll([]owner.Instance{i}, from)[0]+": "+strings.Join(paths, ", "))
 				}
 			}
@@ -60,24 +74,36 @@ func Restore(ix *trace.Index, s Spec) []Finding {
 }
 
 // damaged returns the groups, at t, of the instances step's damage actions
-// changed, and whether an owner key shares an owner or a CR with one.
-func (v *view) damaged(step int, t time.Duration) (map[group]bool, func(key string) bool) {
-	groups, keys, crs := map[group]bool{}, map[string]bool{}, map[string]bool{}
+// changed, with their owners, and whether a root key shares a root or a CR
+// with one of theirs. It takes each damaged ref's instance at t, because the
+// controller can recreate a deleted instance before the action's event.
+func (v *view) damaged(step int, t time.Duration) (map[group]owner.Owner, func(root string) bool) {
+	groups, keys, crs := map[group]owner.Owner{}, map[string]bool{}, map[string]bool{}
 	for _, e := range v.ix.Actions(step) {
 		if e.Action.Do != "damage" || e.Action.Ref == nil || e.Action.Error != "" {
 			continue
 		}
-		if i, found := v.w.Latest(*e.Action.Ref, e.At); found {
-			o := v.w.Owner(i, t)
-			groups[v.groupOf(i, t)], keys[o.Key()] = true, true
-			for _, cr := range o.CRs {
+		if i, found := v.w.Latest(*e.Action.Ref, t); found {
+			g := v.groupOf(i, t)
+			groups[g], keys[g.root] = v.w.Owner(i, t), true
+			for _, cr := range v.roots[g.root].CRs {
 				crs[cr] = true
 			}
 		}
 	}
-	return groups, func(key string) bool {
-		return keys[key] || slices.ContainsFunc(v.owners[key].CRs, func(uid string) bool { return crs[uid] })
+	return groups, func(root string) bool {
+		return keys[root] || slices.ContainsFunc(v.roots[root].CRs, func(uid string) bool { return crs[uid] })
 	}
+}
+
+// lives reports whether o names no CR, or a CR live at t.
+func (v *view) lives(o owner.Owner, t time.Duration) bool { return len(o.CRs) == 0 || !v.allGone(o, t) }
+
+// madeSince reports whether o names a CR created after t.
+func (v *view) madeSince(o owner.Owner, t time.Duration) bool {
+	uid, _ := o.Named()
+	cr, _ := v.w.Instance(uid)
+	return cr.Created > t
 }
 
 func merge[K comparable, V any](a, b map[K]V) map[K]V {
@@ -95,19 +121,16 @@ func sorted(details map[string][]string) map[string][]string {
 
 // differ lists the top-level fields, and metadata's fields, in which two
 // bodies differ, ignoring what every write changes, status when a model
-// writes it, and the top-level fields ignore lists.
-func differ(a, b json.RawMessage, modelled bool, ignore []string) []string {
+// writes it, the top-level fields ignore lists, and changes only under
+// periodic paths.
+func differ(a, b json.RawMessage, modelled bool, ignore, periodic []string) []string {
 	var was, is map[string]any
 	if json.Unmarshal(a, &was) != nil || json.Unmarshal(b, &is) != nil {
 		return []string{"(body)"}
 	}
 	var paths []string
 	for _, side := range []map[string]any{was, is} {
-		if metadata, _ := side["metadata"].(map[string]any); metadata != nil {
-			delete(metadata, "resourceVersion")
-			delete(metadata, "managedFields")
-			delete(metadata, "generation")
-		}
+		dropWriteFields(side)
 		if modelled {
 			delete(side, "status")
 		}
@@ -117,20 +140,33 @@ func differ(a, b json.RawMessage, modelled bool, ignore []string) []string {
 	}
 	for _, key := range slices.Sorted(maps.Keys(merge(was, is))) {
 		x, y := was[key], is[key]
-		if reflect.DeepEqual(x, y) {
-			continue
-		}
 		mx, okx := x.(map[string]any)
 		my, oky := y.(map[string]any)
-		if key != "metadata" || !okx || !oky {
-			paths = append(paths, key)
-			continue
-		}
-		for _, sub := range slices.Sorted(maps.Keys(merge(mx, my))) {
-			if !reflect.DeepEqual(mx[sub], my[sub]) {
-				paths = append(paths, fmt.Sprintf("metadata.%s", sub))
+		switch {
+		case key == "metadata" && okx && oky:
+			for _, sub := range slices.Sorted(maps.Keys(merge(mx, my))) {
+				if path := "metadata." + sub; differsOutside(periodic, path, mx[sub], my[sub]) {
+					paths = append(paths, path)
+				}
 			}
+		case differsOutside(periodic, key, x, y):
+			paths = append(paths, key)
 		}
 	}
 	return paths
+}
+
+// differsOutside reports whether x and y, at path, differ outside periodic
+// paths.
+func differsOutside(periodic []string, path string, x, y any) bool {
+	return !reflect.DeepEqual(x, y) && !onlyUnder(leafDiff(path, x, y, nil), periodic)
+}
+
+// dropWriteFields deletes the metadata fields that every write changes.
+func dropWriteFields(body map[string]any) {
+	if metadata, _ := body["metadata"].(map[string]any); metadata != nil {
+		delete(metadata, "resourceVersion")
+		delete(metadata, "managedFields")
+		delete(metadata, "generation")
+	}
 }

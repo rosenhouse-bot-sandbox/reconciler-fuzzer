@@ -78,6 +78,8 @@ func TestConvergeNamesNoKind(t *testing.T) {
 	get := tt.Call(ctl, "get", gadgetA, 200, "")
 	withStatus := tt.Version(gadgetA, "u-a", "1", map[string]any{"status": map[string]any{"phase": "Up"}})
 	deployment := tt.Ref("apps/deployments", "ns", "d")
+	listed := sp
+	listed.Primaries = append(slices.Clone(sp.Primaries), check.Primary{Kind: sp.StatusKinds[0], Ready: sp.Primaries[0].Ready})
 	for name, c := range map[string]struct {
 		s      check.Spec
 		events []trace.Event
@@ -86,6 +88,7 @@ func TestConvergeNamesNoKind(t *testing.T) {
 		"its status written":        {sp, []trace.Event{bare(gadgetA), get, statusWrite}},
 		"no status kind":            {sp, []trace.Event{bare(cm), tt.Call(ctl, "get", cm, 200, "")}},
 		"the primary":               {sp, []trace.Event{tt.Call(ctl, "get", widgetA, 200, "")}},
+		"a CR of another kind":      {listed, []trace.Event{bare(gadgetA), get}},
 		"not read":                  {sp, []trace.Event{bare(gadgetA), tt.Call(trace.Harness, "get", gadgetA, 200, "")}},
 		"no instance":               {sp, []trace.Event{get}},
 		"an instance with a status": {sp, []trace.Event{withStatus, get}},

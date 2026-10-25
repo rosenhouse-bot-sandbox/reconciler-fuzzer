@@ -274,7 +274,7 @@ func TestJudgeReportsACrash(t *testing.T) {
 func cleanTrace(t *testing.T, ready string) string {
 	var b tracetest.Builder
 	run := tracetest.Run(group, "widgets")
-	run.Run.Ready, run.Run.Stable, run.Run.Reads, run.Run.Writes = ready, 2*time.Second, 2, 4
+	run.Run.Primaries[0].Ready, run.Run.Stable, run.Run.Reads, run.Run.Writes = ready, 2*time.Second, 2, 4
 	updated := tracetest.Call(trace.Controller, "update", widget, 200, "2")
 	b.Add(run, tracetest.Start(1), tracetest.Phase(0, trace.FaultPeriod)).
 		At(100*time.Millisecond).Add(tracetest.Call(trace.Harness, "create", widget, 201, "1"), tracetest.Version(widget, "u1", "1", map[string]any{"spec": map[string]any{"count": 1}})).

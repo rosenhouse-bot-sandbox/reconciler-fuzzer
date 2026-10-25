@@ -1,7 +1,6 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -128,17 +127,16 @@ func (p *PropertyProgram) Bind(f FirstWrittenUnder) (func(crs []any, world map[s
 	}, nil
 }
 
-func periodic(d declaration) (*Periodic, error) {
-	declared := d.Primary.Periodic
+func periodic(entryKey string, declared *declaredPeriodic) (*Periodic, error) {
 	if declared == nil {
 		return nil, nil
 	}
 	every, err := time.ParseDuration(declared.Every)
 	if err != nil || every <= 0 {
-		return nil, fmt.Errorf("primary.periodic.every %q: want a positive duration", declared.Every)
+		return nil, fmt.Errorf("%s.periodic.every %q: want a positive duration", entryKey, declared.Every)
 	}
 	if len(declared.Paths) == 0 {
-		return nil, errors.New("primary.periodic.paths is required")
+		return nil, fmt.Errorf("%s.periodic.paths is required", entryKey)
 	}
 	return &Periodic{Every: every, Paths: declared.Paths}, nil
 }

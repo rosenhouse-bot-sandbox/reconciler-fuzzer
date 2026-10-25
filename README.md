@@ -121,9 +121,45 @@ timeouts: {settle: 30s, stable: 3s}
   across a plan's CRs, `mutate` names the fields updates change, and `fixtures` names the
   fixture strings `changeFixture` sets.
 
+### Several kinds
+
+A controller that serves several CRD kinds lists each under `primaries`. `primary` is shorthand
+for a list of one. An entry takes `primary`'s keys, and its own `overlay`, `distinct` and
+`mutate` under `values`:
+
+```yaml
+primaries:
+  - kind: example.com/v1/Cluster
+    sample: cluster.yaml
+    ready: &ready >-
+      has(self.status) && has(self.status.observedGeneration)
+      && self.status.observedGeneration == self.metadata.generation
+    values: {mutate: [spec.size]}
+  - {kind: example.com/v1/Database, sample: database.yaml, ready: *ready}
+fixtures: [settings.yaml]
+values: {fixtures: {settings.yaml: [data.theme]}}   # with primaries, only fixtures
+```
+
+- Every check judges the CRs of each listed kind by their own entry, and the settle condition
+  waits for each. A CR that the controller creates is also judged as its owner's resource, so
+  Clean fails it when it outlives that owner. A `damage` in the owner's slot can target the
+  CR's resources, and Restore treats a damage under the CR as a damage under its owner.
+- A plan creates only CRs of listed kinds, and `run` refuses any other create. A create
+  without an object makes the first entry's sample.
+- Generated plans draw each create's kind from the list. They do not yet fill a field that
+  names another CR, such as a Database's `clusterRef`. So
+  [targets/toy-fleet](targets/toy-fleet)'s `database/config.yaml` lists only Database, and
+  makes the Cluster it names a fixture.
+- A fixture may not be a CR. An object whose ownerReferences lead to no CR, but reach a live
+  object that the controller did not create, such as a fixture, belongs to that object. They may
+  reach it through live objects that the controller made. `owner` and `owns` do not change this.
+  Clean skips such an object while its owner lives.
+- A dependency belongs to the nearest CR that owns it, even one that the controller created.
+  `dependency.required` binds only CRs of the first entry.
+
 ### Other namespaces and cluster scope
 
-The primary, its children and fixtures may be cluster-scoped or in any namespace. The harness
+CRs, their children and fixtures may be cluster-scoped or in any namespace. The harness
 watches the whole cluster. A fixture with `metadata.namespace` stays in that namespace, which the
 harness creates; one without it goes in the run namespace.
 
@@ -132,7 +168,7 @@ chain names that CR. A child with none, such as one in another namespace or a cl
 child of a namespaced CR, needs one of these:
 
 ```yaml
-primary:
+primary:                                   # or a primaries entry
   owns:                                    # a field of the CR names the child
     - {kind: rbac.authorization.k8s.io/v1/ClusterRole, name: "self.metadata.name + '-reader'"}
     - {kind: v1/Secret, name: self.spec.secretName, namespace: "'shared'"}
@@ -145,8 +181,11 @@ systems:
   A cluster-scoped kind takes no `namespace`.
 - `owner` takes CEL over the child. It yields the CR's UID, `namespace/name` or name. A bare name
   prefers a CR in the child's namespace, and names no CR when it matches CRs in two other namespaces.
-- Without either, Clean blames such a child on every CR that lived when it was created, so it
-  fails only once all of them are gone.
+  A name that CRs of two kinds share names no CR.
+- Without either, Clean blames such a child on every CR that lived when it was created, except
+  those that the controller created. It fails only once all of them are gone. A child made while
+  none lived is shared, and fails only if the run ends with more shared children of its kind and
+  role than the first create saw.
 
 ### Objects another controller sets ready
 
@@ -227,8 +266,8 @@ collections:
 - A plan faults the fake with `"system": "cloud"`: any request fault, such as
   `{"system": "cloud", "match": {"verb": "create", "resource": "buckets"}, "nth": 1, "dropResponse": true}`,
   and `stuck` or `slowDelete`. `damage` takes `"target": {"system": "cloud"}`.
-- `primary.halted` is CEL over the CR. It counts a CR as done after a request of unknown outcome,
-  for a controller that stops on purpose. [targets/toy-bucket/halted](targets/toy-bucket/halted/config.yaml)
+- An entry's `halted` is CEL over its CR. It counts a CR as done after a request of unknown
+  outcome, for a controller that stops on purpose. [targets/toy-bucket/halted](targets/toy-bucket/halted/config.yaml)
   uses it.
 - Any program can be a fake. The harness runs it in the config's directory and sets
   `RECONCILER_FUZZER_ADDR`, where it serves its API and the fake contract: `GET /_fake/resources`
@@ -287,20 +326,20 @@ properties:
 ```
 
 A kind the harness watches from the start maps to an empty list while no object of it exists.
-These include each installed CRD and each kind that `primary`, `models` or a fixture names.
+These include each installed CRD, each listed kind, and each kind that `models` or a fixture names.
 They also include each kind that a `launch.rbac` rule names without `*`, except Events, Leases
 and the other kinds the checks ignore. The harness skips a kind that the server does not list
 and watch in the named group. The `run` event of `trace.jsonl` lists these kinds in `kinds`. A
-fake collection that `primary.owns` names also maps to an empty list. Any other kind or
+fake collection that an entry's `owns` names also maps to an empty list. Any other kind or
 collection has a key only if the trace holds an object of it.
 
 `firstWrittenUnder(object, path)` names the CR that owned the object when its value at `path`
 first appeared, across deletes and recreates. cert-manager's `fresh-key` property uses it. A
 failing property's details say which instance and CR such a value came from.
 
-A controller that refreshes on a timer writes its CR each period. `primary.periodic: {every:
-2s, paths: [status.refreshTime]}` lets those writes pass the settle condition. `[*]` names a
-field of every list item, as in `status.conditions[*].lastTransitionTime`.
+A controller that refreshes on a timer writes its CR each period. In the CR's entry,
+`periodic: {every: 2s, paths: [status.refreshTime]}` lets those writes pass the settle
+condition. `[*]` names a field of every list item, as in `status.conditions[*].lastTransitionTime`.
 
 ### Holding watch events
 
@@ -316,8 +355,8 @@ cluster. The settle condition counts a held watch as looking only once the hold 
 The create waits until the deleted CR no longer exists. Once `period` has passed, the wait
 ends the hold, so that the controller can finish the delete.
 
-Generated plans draw it for kinds `launch.rbac` lets the controller watch, the primary and
-`primary.owns` kinds most, in a step that deletes a CR and creates it again unchanged. About 1
+Generated plans draw it for kinds `launch.rbac` lets the controller watch, the listed and
+`owns` kinds most, in a step that deletes a CR and creates it again unchanged. About 1
 cert-manager seed in 11 holds Secrets this way, so a 20-seed `make hunt-cert-manager` usually,
 but not always, finds #63. A report notes a `holdWatch` while the controller had no watch of
 its kind, such as one with a misspelt resource.
@@ -398,11 +437,11 @@ The README also uses these:
 | Term | Meaning |
 | --- | --- |
 | Target | The controller under test, with its config. |
-| CR | A custom resource. The config's `primary.kind` names the CRs a plan changes. |
+| CR | An object of a kind that the config's `primaries` lists. A plan creates only CRs. |
 | Fixture | An object the harness creates before step 0, such as a ConfigMap the controller reads. |
 | envtest | A kube-apiserver and etcd with no other controllers, from controller-runtime. |
 | Seed | A number that fixes a generated plan, not its timing. |
-| Sample | The CR in `primary.sample`. Generated CRs start from it. |
+| Sample | The CR in an entry's `sample`. Generated CRs of its kind start from it. |
 | `ready` | CEL over a CR that is true once the controller has acted on its spec. |
 | `stable` | How long the controller must stay quiet for a step to settle. |
 | `crudfake` | The harness's JSON server, a fake service for a REST JSON API. |

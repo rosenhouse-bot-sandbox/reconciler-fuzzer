@@ -1,0 +1,6 @@
+apiVersion: toy.reconciler-fuzzer/v1
+kind: User
+metadata:
+  name: alice
+spec:
+  databaseRef: db

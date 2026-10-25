@@ -3,8 +3,11 @@
 package config
 
 import (
+	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -15,6 +18,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation"
+	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/yaml"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
@@ -23,22 +27,25 @@ import (
 // Config is a loaded target config. Every path is absolute, resolved against
 // the config file's directory.
 type Config struct {
-	Launch     Launch
-	CRDs       []string
-	Primary    Primary
-	Fixtures   []string
-	Values     Values
-	Models     []Model
-	Systems    []System
-	Budgets    Budgets
-	Timeouts   Timeouts
-	Properties []Property
-
-	ready, retain, halted func(self map[string]any) (bool, error)
+	Launch Launch
+	CRDs   []string
+	// Primaries are the CR kinds the controller serves, in config order. A
+	// primary key loads as the one entry.
+	Primaries []Primary
+	Fixtures  []string
+	// FixtureValues maps a fixture file, as an absolute path, to the string
+	// paths changeFixture may set. The file is a fixtures entry or a
+	// system's.
+	FixtureValues map[string][]string
+	Models        []Model
+	Systems       []System
+	Budgets       Budgets
+	Timeouts      Timeouts
+	Properties    []Property
 }
 
-// Values say how the generator draws CRs and fixture changes. Paths are
-// dotted, such as spec.count.
+// Values say how the generator draws CRs of one kind. Paths are dotted,
+// such as spec.count.
 type Values struct {
 	// Overlay maps a path to schema keywords that narrow the CRD's.
 	Overlay map[string]map[string]any
@@ -46,10 +53,6 @@ type Values struct {
 	Distinct []string
 	// Mutate paths are the ones updates change.
 	Mutate []string
-	// Fixtures maps a fixture file, as an absolute path, to the string
-	// paths changeFixture may set. The file is a fixtures entry or a
-	// system's.
-	Fixtures map[string][]string
 }
 
 // Launch says how to run the controller. Args and Env may hold
@@ -65,7 +68,8 @@ type Launch struct {
 	RBAC []string
 }
 
-// Primary describes the CR kind the harness creates, changes and deletes.
+// Primary describes one CR kind the controller serves, which the harness
+// creates, changes and deletes.
 type Primary struct {
 	// Kind is written group/version/Kind, or version/Kind for the core group.
 	Kind   schema.GroupVersionKind
@@ -83,6 +87,10 @@ type Primary struct {
 	Halted string
 	// Periodic is nil when unset.
 	Periodic *Periodic
+	// Values say how the generator draws CRs of Kind.
+	Values Values
+
+	ready, retain, halted func(self map[string]any) (bool, error)
 }
 
 // Periodic declares the CR writes a controller makes on a timer, such as a
@@ -95,8 +103,8 @@ type Periodic struct {
 	Paths []string
 }
 
-// Owns is one primary.owns entry. Name and Namespace are CEL over self, the
-// CR, and yield strings.
+// Owns is one owns entry of a Primary. Name and Namespace are CEL over self,
+// the CR, and yield strings.
 type Owns struct {
 	// System and Collection name a fake's resources, written
 	// <system>:<collection>; Kind is then empty.
@@ -206,8 +214,7 @@ type Model struct {
 	After               time.Duration
 	// Finalizer is nil unless the model holds each object's deletion.
 	Finalizer *Finalizer
-	// Dependency is nil unless the kind is a readiness dependency of the
-	// primary.
+	// Dependency is nil unless the kind is a readiness dependency.
 	Dependency *Dependency
 }
 
@@ -219,10 +226,11 @@ type Finalizer struct {
 	After time.Duration
 }
 
-// Dependency marks a model kind as one the primary's readiness depends on.
+// Dependency marks a model kind or a fake as a readiness dependency of the
+// CRs that own its objects.
 type Dependency struct {
-	// Required demands at least one owned dependency when a CR becomes
-	// Ready. It defaults to true.
+	// Required fails a CR of the first Primaries entry that becomes Ready
+	// while it owns none of the dependency's objects. It defaults to true.
 	Required bool
 	// Track, when set, fails a CR that stays Ready longer than Track after
 	// the controller read a not-ready dependency.
@@ -258,25 +266,11 @@ type declaration struct {
 		Env    map[string]string `json:"env"`
 		RBAC   []string          `json:"rbac"`
 	} `json:"launch"`
-	CRDs    []string `json:"crds"`
-	Primary struct {
-		Kind     string `json:"kind"`
-		Sample   string `json:"sample"`
-		Ready    string `json:"ready"`
-		Retain   string `json:"retain"`
-		Halted   string `json:"halted"`
-		Periodic *struct {
-			Every string   `json:"every"`
-			Paths []string `json:"paths"`
-		} `json:"periodic"`
-		Owns []struct {
-			Kind      string `json:"kind"`
-			Name      string `json:"name"`
-			Namespace string `json:"namespace"`
-		} `json:"owns"`
-	} `json:"primary"`
-	Fixtures []string `json:"fixtures"`
-	Models   []struct {
+	CRDs      []string         `json:"crds"`
+	Primary   *declaredPrimary `json:"primary"`
+	Primaries []declaredEntry  `json:"primaries"`
+	Fixtures  []string         `json:"fixtures"`
+	Models    []struct {
 		Kind        string              `json:"kind"`
 		Stages      string              `json:"stages"`
 		Status      map[string]any      `json:"status"`
@@ -285,11 +279,10 @@ type declaration struct {
 		Finalizer   *declaredFinalizer  `json:"finalizer"`
 		Dependency  *declaredDependency `json:"dependency"`
 	} `json:"models"`
+	// Values holds primary's overlay, distinct and mutate beside fixtures.
 	Values struct {
-		Overlay  map[string]map[string]any `json:"overlay"`
-		Distinct []string                  `json:"distinct"`
-		Mutate   []string                  `json:"mutate"`
-		Fixtures map[string][]string       `json:"fixtures"`
+		declaredValues
+		Fixtures map[string][]string `json:"fixtures"`
 	} `json:"values"`
 	Systems []struct {
 		Name    string `json:"name"`
@@ -323,6 +316,41 @@ type declaration struct {
 	} `json:"properties"`
 }
 
+// declaredPrimary is the primary key, which takes no values: they sit at
+// the top level.
+type declaredPrimary struct {
+	Kind     string            `json:"kind"`
+	Sample   string            `json:"sample"`
+	Ready    string            `json:"ready"`
+	Retain   string            `json:"retain"`
+	Halted   string            `json:"halted"`
+	Periodic *declaredPeriodic `json:"periodic"`
+	Owns     []declaredOwns    `json:"owns"`
+}
+
+type declaredPeriodic struct {
+	Every string   `json:"every"`
+	Paths []string `json:"paths"`
+}
+
+type declaredOwns struct {
+	Kind      string `json:"kind"`
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+}
+
+// declaredEntry is one primaries entry.
+type declaredEntry struct {
+	declaredPrimary
+	Values declaredValues `json:"values"`
+}
+
+type declaredValues struct {
+	Overlay  map[string]map[string]any `json:"overlay"`
+	Distinct []string                  `json:"distinct"`
+	Mutate   []string                  `json:"mutate"`
+}
+
 type declaredDependency struct {
 	Required *bool  `json:"required"`
 	Track    string `json:"track"`
@@ -334,7 +362,8 @@ type declaredFinalizer struct {
 }
 
 // Load reads the file strictly: an unknown key is an error that names its
-// line. It compiles Ready and checks that every path exists.
+// line. It compiles each entry's expressions, checks that every path exists
+// and refuses a kube fixture of a listed kind.
 func Load(path string) (*Config, error) {
 	c, err := load(path)
 	if err != nil {
@@ -382,47 +411,6 @@ func load(path string) (*Config, error) {
 		return nil, err
 	}
 
-	if d.Primary.Kind == "" {
-		return nil, errors.New("primary.kind is required")
-	}
-	if c.Primary.Kind, err = parseGVK(d.Primary.Kind); err != nil {
-		return nil, fmt.Errorf("primary.kind %q: %w", d.Primary.Kind, err)
-	}
-	if d.Primary.Sample == "" {
-		return nil, errors.New("primary.sample is required")
-	}
-	samples, err := existing(dir, "primary.sample", []string{d.Primary.Sample})
-	if err != nil {
-		return nil, err
-	}
-	c.Primary.Sample = samples[0]
-	if d.Primary.Ready == "" {
-		return nil, errors.New("primary.ready is required")
-	}
-	c.Primary.Ready = d.Primary.Ready
-	if c.ready, err = CompileReady(d.Primary.Ready); err != nil {
-		return nil, fmt.Errorf("primary.ready: %w", err)
-	}
-	if c.Primary.Retain = d.Primary.Retain; c.Primary.Retain != "" {
-		if c.retain, err = CompileReady(c.Primary.Retain); err != nil {
-			return nil, fmt.Errorf("primary.retain: %w", err)
-		}
-	}
-
-	if c.Primary.Halted = d.Primary.Halted; c.Primary.Halted != "" {
-		if c.halted, err = CompileReady(c.Primary.Halted); err != nil {
-			return nil, fmt.Errorf("primary.halted: %w", err)
-		}
-	}
-
-	if c.Primary.Periodic, err = periodic(d); err != nil {
-		return nil, err
-	}
-
-	if c.Models, err = models(d, c.Primary.Kind); err != nil {
-		return nil, err
-	}
-
 	c.Budgets = DefaultBudgets
 	for _, b := range []struct {
 		key      string
@@ -467,28 +455,161 @@ func load(path string) (*Config, error) {
 	if c.Systems, err = systems(d, dir, c.Timeouts.Stable); err != nil {
 		return nil, err
 	}
+	if c.Primaries, err = primaries(d, dir, c.Fakes()); err != nil {
+		return nil, err
+	}
+	if c.Models, err = models(d, c.ListedKinds()); err != nil {
+		return nil, err
+	}
+	if err := refuseListedFixtures(d.Fixtures, c.Fixtures, c.ListedKinds()); err != nil {
+		return nil, err
+	}
 	fixtures := slices.Clone(c.Fixtures)
 	for _, s := range c.Systems {
 		fixtures = append(fixtures, s.Fixtures...)
 	}
-	c.Values = Values{Overlay: d.Values.Overlay, Distinct: d.Values.Distinct, Mutate: d.Values.Mutate, Fixtures: map[string][]string{}}
+	c.FixtureValues = map[string][]string{}
 	for file, paths := range d.Values.Fixtures {
 		path := resolve(dir, file)
 		if !slices.Contains(fixtures, path) {
 			return nil, fmt.Errorf("values.fixtures %s: no fixtures key lists this file", file)
 		}
-		c.Values.Fixtures[path] = paths
+		c.FixtureValues[path] = paths
 	}
 	if c.Properties, err = properties(d); err != nil {
-		return nil, err
-	}
-	if c.Primary.Owns, err = owns(d, c.Fakes()); err != nil {
 		return nil, err
 	}
 	if err := c.checkLaunchVars(); err != nil {
 		return nil, err
 	}
 	return c, nil
+}
+
+// primaries loads the primaries entries, or primary as the one entry with
+// the top-level values.
+func primaries(d declaration, dir string, fakes []System) ([]Primary, error) {
+	entries, key := d.Primaries, func(i int) string { return fmt.Sprintf("primaries[%d]", i) }
+	switch {
+	case d.Primary != nil && d.Primaries != nil:
+		return nil, errors.New("primary and primaries: set one, not both")
+	case d.Primary != nil:
+		entries = []declaredEntry{{declaredPrimary: *d.Primary, Values: d.Values.declaredValues}}
+		key = func(int) string { return "primary" }
+	case len(d.Primaries) == 0:
+		return nil, errors.New("primaries or primary is required")
+	default:
+		for _, v := range []struct {
+			key string
+			set bool
+		}{
+			{"overlay", d.Values.Overlay != nil}, {"distinct", d.Values.Distinct != nil}, {"mutate", d.Values.Mutate != nil},
+		} {
+			if v.set {
+				return nil, fmt.Errorf("values.%s: with primaries, each entry takes its own values", v.key)
+			}
+		}
+	}
+	var listed []Primary
+	for i, declared := range entries {
+		p, err := primary(key(i), declared, dir, fakes)
+		if err != nil {
+			return nil, err
+		}
+		if j := slices.IndexFunc(listed, func(other Primary) bool { return other.Kind.GroupKind() == p.Kind.GroupKind() }); j >= 0 {
+			return nil, fmt.Errorf("%s.kind %s: %s has this group and kind", key(i), declared.Kind, key(j))
+		}
+		listed = append(listed, p)
+	}
+	return listed, nil
+}
+
+// primary loads one entry. key names it in errors.
+func primary(key string, declared declaredEntry, dir string, fakes []System) (Primary, error) {
+	if declared.Kind == "" {
+		return Primary{}, fmt.Errorf("%s.kind is required", key)
+	}
+	kind, err := parseGVK(declared.Kind)
+	if err != nil {
+		return Primary{}, fmt.Errorf("%s.kind %q: %w", key, declared.Kind, err)
+	}
+	p := Primary{Kind: kind, Ready: declared.Ready, Retain: declared.Retain, Halted: declared.Halted, Values: Values(declared.Values)}
+	if declared.Sample == "" {
+		return Primary{}, fmt.Errorf("%s.sample is required", key)
+	}
+	samples, err := existing(dir, key+".sample", []string{declared.Sample})
+	if err != nil {
+		return Primary{}, err
+	}
+	p.Sample = samples[0]
+	if p.Ready == "" {
+		return Primary{}, fmt.Errorf("%s.ready is required", key)
+	}
+	if p.ready, err = CompileReady(p.Ready); err != nil {
+		return Primary{}, fmt.Errorf("%s.ready: %w", key, err)
+	}
+	if p.Retain != "" {
+		if p.retain, err = CompileReady(p.Retain); err != nil {
+			return Primary{}, fmt.Errorf("%s.retain: %w", key, err)
+		}
+	}
+	if p.Halted != "" {
+		if p.halted, err = CompileReady(p.Halted); err != nil {
+			return Primary{}, fmt.Errorf("%s.halted: %w", key, err)
+		}
+	}
+	if p.Periodic, err = periodic(key, declared.Periodic); err != nil {
+		return Primary{}, err
+	}
+	if p.Owns, err = owns(key, declared.Owns, fakes); err != nil {
+		return Primary{}, err
+	}
+	return p, nil
+}
+
+// fixtureKey matches a ${key} within one line, as kube expands it in a
+// fixture before it parses the file.
+var fixtureKey = regexp.MustCompile(`\$\{[^}\n]*\}`)
+
+// refuseListedFixtures refuses a kube fixture of a listed kind. declared
+// are the fixtures as the config names them, and paths the files.
+func refuseListedFixtures(declared, paths []string, listed []schema.GroupKind) error {
+	for i, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("fixtures %s: %w", declared[i], err)
+		}
+		data = fixtureKey.ReplaceAllLiteral(data, []byte("key"))
+		reader := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(data)))
+		for {
+			document, err := reader.Read()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				return fmt.Errorf("fixtures %s: %w", declared[i], err)
+			}
+			var header struct {
+				APIVersion string `json:"apiVersion"`
+				Kind       string `json:"kind"`
+			}
+			if err := yaml.Unmarshal(document, &header); err != nil {
+				return fmt.Errorf("fixtures %s: %w", declared[i], err)
+			}
+			if kind := schema.FromAPIVersionAndKind(header.APIVersion, header.Kind).GroupKind(); slices.Contains(listed, kind) {
+				return fmt.Errorf("fixtures %s: the file holds a %s CR; create CRs in a plan", declared[i], header.Kind)
+			}
+		}
+	}
+	return nil
+}
+
+// ListedKinds are the group and kind of each Primaries entry, in order.
+func (c *Config) ListedKinds() []schema.GroupKind {
+	var kinds []schema.GroupKind
+	for _, p := range c.Primaries {
+		kinds = append(kinds, p.Kind.GroupKind())
+	}
+	return kinds
 }
 
 // launchVars are the keys each system's Endpoints.Vars holds. A fake with
@@ -556,9 +677,12 @@ func keys(s string) []string {
 	}
 }
 
-func models(d declaration, primary schema.GroupVersionKind) ([]Model, error) {
+func models(d declaration, listed []schema.GroupKind) ([]Model, error) {
 	var models []Model
-	seen := map[schema.GroupKind]bool{primary.GroupKind(): true}
+	seen := map[schema.GroupKind]bool{}
+	for _, kind := range listed {
+		seen[kind] = true
+	}
 	for i, declared := range d.Models {
 		key := fmt.Sprintf("models[%d]", i)
 		if declared.Kind == "" {
@@ -569,7 +693,7 @@ func models(d declaration, primary schema.GroupVersionKind) ([]Model, error) {
 			return nil, fmt.Errorf("%s.kind %q: %w", key, declared.Kind, err)
 		}
 		if seen[kind.GroupKind()] {
-			return nil, fmt.Errorf("%s.kind %s: the primary or another model has this kind", key, declared.Kind)
+			return nil, fmt.Errorf("%s.kind %s: a primary or another model has this kind", key, declared.Kind)
 		}
 		seen[kind.GroupKind()] = true
 		m := Model{Kind: kind, Stage: ReadyCondition, Status: declared.Status, StuckStatus: declared.StuckStatus}
@@ -635,10 +759,10 @@ func dependency(key string, declared *declaredDependency) (*Dependency, error) {
 	return dep, nil
 }
 
-func owns(d declaration, fakes []System) ([]Owns, error) {
+func owns(entryKey string, entries []declaredOwns, fakes []System) ([]Owns, error) {
 	var owns []Owns
-	for i, declared := range d.Primary.Owns {
-		key := fmt.Sprintf("primary.owns[%d]", i)
+	for i, declared := range entries {
+		key := fmt.Sprintf("%s.owns[%d]", entryKey, i)
 		if declared.Kind == "" {
 			return nil, fmt.Errorf("%s.kind is required", key)
 		}
@@ -816,29 +940,54 @@ func parseGVK(declared string) (schema.GroupVersionKind, error) {
 	return gvk, nil
 }
 
-// Ready evaluates Primary.Ready over obj, a CR's body.
-func (c *Config) Ready(obj map[string]any) (bool, error) {
-	if c.ready == nil {
+// Ready evaluates the Ready of cr's entry over cr, a CR's body. Ready,
+// Retain and Halted take the entry of cr's group and kind. With one entry,
+// that entry judges any body. A body of no listed kind is an error.
+func (c *Config) Ready(cr map[string]any) (bool, error) {
+	p, err := c.entry(cr)
+	if err != nil {
+		return false, err
+	}
+	if p.ready == nil {
 		return false, errors.New("ready is not compiled; load the config with Load")
 	}
-	return c.ready(obj)
+	return p.ready(cr)
 }
 
-// Retain evaluates Primary.Retain over cr, a deleted CR's body. It is false
-// when Retain is empty.
+// Retain evaluates the Retain of cr's entry over cr, a deleted CR's body.
+// It is false when Retain is empty.
 func (c *Config) Retain(cr map[string]any) (bool, error) {
-	if c.retain == nil {
-		return false, nil
+	p, err := c.entry(cr)
+	if err != nil || p.retain == nil {
+		return false, err
 	}
-	return c.retain(cr)
+	return p.retain(cr)
 }
 
-// Halted evaluates Primary.Halted over cr. It is false when Halted is empty.
+// Halted evaluates the Halted of cr's entry over cr. It is false when
+// Halted is empty.
 func (c *Config) Halted(cr map[string]any) (bool, error) {
-	if c.halted == nil {
-		return false, nil
+	p, err := c.entry(cr)
+	if err != nil || p.halted == nil {
+		return false, err
 	}
-	return c.halted(cr)
+	return p.halted(cr)
+}
+
+// entry is the Primaries entry of cr's group and kind, or the only entry.
+func (c *Config) entry(cr map[string]any) (Primary, error) {
+	if len(c.Primaries) == 1 {
+		return c.Primaries[0], nil
+	}
+	apiVersion, _ := cr["apiVersion"].(string)
+	kind, _ := cr["kind"].(string)
+	gk := schema.FromAPIVersionAndKind(apiVersion, kind).GroupKind()
+	for _, p := range c.Primaries {
+		if p.Kind.GroupKind() == gk {
+			return p, nil
+		}
+	}
+	return Primary{}, fmt.Errorf("primaries lists no kind %q of apiVersion %q", kind, apiVersion)
 }
 
 // Expand replaces each ${key} in s with vars[key]. An unknown key is an

@@ -65,18 +65,17 @@ type Event struct {
 // Run describes the run. Fixture events precede it.
 type Run struct {
 	Namespace string `json:"namespace"`
-	// Primary names the CR kind; its Name is empty.
-	Primary Ref `json:"primary"`
+	// Primaries are the config's primaries entries, in order. They name
+	// the CR kinds.
+	Primaries []Primary `json:"primaries,omitempty"`
 	// PlanSteps counts the plan's steps. The runner's delete-all step is
 	// step PlanSteps and its restart step PlanSteps+1.
 	PlanSteps int `json:"planSteps"`
-	// Ready, Stable, Reads and Writes are the config values the checks
-	// read, so that judge needs no config.
-	Ready  string        `json:"ready,omitempty"`
+	// Stable, Reads and Writes are the config values the checks read, so
+	// that judge needs no config.
 	Stable time.Duration `json:"stable,omitempty"`
 	Reads  int           `json:"reads,omitempty"`
 	Writes int           `json:"writes,omitempty"`
-	Retain string        `json:"retain,omitempty"`
 	// Models lists the config's stage models.
 	Models []Model `json:"models,omitempty"`
 	// StatusKinds lists the installed CRDs with a status subresource.
@@ -87,15 +86,21 @@ type Run struct {
 	Kinds []Ref `json:"kinds,omitempty"`
 	// Owners maps a system's name to its owner CEL, owning-CR rule 2.
 	Owners map[string]string `json:"owners,omitempty"`
-	// Owns lists the primary's owns entries, owning-CR rule 3.
-	Owns []Owns `json:"owns,omitempty"`
-	// Halted is the config's primary.halted CEL, or empty.
-	Halted string `json:"halted,omitempty"`
 	// Systems lists the fake services.
 	Systems []System `json:"systems,omitempty"`
 	// Properties are the config's properties.
 	Properties []Property `json:"properties,omitempty"`
-	// Periodic is the primary's periodic, or nil.
+}
+
+// Primary is one primaries entry as the checks need it. Ready, Retain and
+// Halted are CEL over self, a CR of Kind; Retain and Halted are empty when
+// unset. Owns are its owning-CR rule 3, and Periodic is nil when unset.
+type Primary struct {
+	Kind     Kind      `json:"kind"`
+	Ready    string    `json:"ready"`
+	Retain   string    `json:"retain,omitempty"`
+	Halted   string    `json:"halted,omitempty"`
+	Owns     []Owns    `json:"owns,omitempty"`
 	Periodic *Periodic `json:"periodic,omitempty"`
 }
 
@@ -126,9 +131,9 @@ type System struct {
 	Dependency *Dependency   `json:"dependency,omitempty"`
 }
 
-// Owns is one primary.owns entry with its kind's resource. Name and
-// Namespace are CEL over the CR. System is empty for kube; a fake's Kind
-// holds only its collection as Resource.
+// Owns is one owns entry with its kind's resource. Name and Namespace are
+// CEL over the CR. System is empty for kube; a fake's Kind holds only its
+// collection as Resource.
 type Owns struct {
 	System    string `json:"system,omitempty"`
 	Kind      Kind   `json:"kind"`
@@ -144,13 +149,17 @@ type Kind struct {
 	Resource string `json:"resource"`
 }
 
+// OfKind reports whether r names a kube object of kind k.
+func (r Ref) OfKind(k Kind) bool {
+	return r.System == "kube" && r.Group == k.Group && r.Resource == k.Resource
+}
+
 // Model is one stage model as the checks need it.
 type Model struct {
 	Kind Kind `json:"kind"`
 	// Ready is CEL over self, an object of the kind.
 	Ready string `json:"ready"`
-	// Dependency is set when the kind is a readiness dependency of the
-	// primary.
+	// Dependency is set when the kind is a readiness dependency of a CR.
 	Dependency *Dependency `json:"dependency,omitempty"`
 }
 

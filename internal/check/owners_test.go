@@ -30,7 +30,7 @@ func labeledBy(name, owner string) map[string]any {
 // another namespace labeled with a's namespace/name, and leaves both.
 func leakAfterDeletingA() *tt.Script {
 	r := newRun(2)
-	r.Spec.Owners, r.Spec.Owns = ownerLabel, roleOwnsEntry
+	r.Spec.Owners, r.Spec.Primaries[0].Owns = ownerLabel, roleOwnsEntry
 	r.Begin()
 	r.CreateCR("a", widgetA)
 	r.CreateCR("b", widgetB)
@@ -74,7 +74,7 @@ func TestSpecForWithoutAConfigCompilesTheRunEventsOwners(t *testing.T) {
 	requireOwner(t, ix, spec, r.UID(clusterRoleA), 3, r.UID(widgetA))
 	requireOwner(t, ix, spec, r.UID(elsewhereA), 2, r.UID(widgetA))
 
-	r.Spec.Owns = []trace.Owns{{Kind: clusterRoles, Name: "self.("}}
+	r.Spec.Primaries[0].Owns = []trace.Owns{{Kind: clusterRoles, Name: "self.("}}
 	if _, err := check.SpecFor(nil, r.Index()); err == nil {
 		t.Fatal("SpecFor accepts owns that do not compile")
 	}
@@ -86,7 +86,7 @@ func TestSpecForTakesOwnersFromTheConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.Systems = []config.System{{Name: "kube", Owner: "self.metadata.labels.owner"}}
-	c.Primary.Owns = []config.Owns{
+	c.Primaries[0].Owns = []config.Owns{
 		{Kind: schema.GroupVersionKind{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRole"}, Name: "self.metadata.name + '-role'"},
 		{Kind: schema.GroupVersionKind{Group: "toy.reconciler-fuzzer", Version: "v1", Kind: "Gadget"}, Name: "self.metadata.name", Namespace: "'other'"},
 	}
@@ -96,7 +96,7 @@ func TestSpecForTakesOwnersFromTheConfig(t *testing.T) {
 	widget := tt.Ref("toy.reconciler-fuzzer/widgets", "ns", "a")
 	run := tt.Run("toy.reconciler-fuzzer", "widgets")
 	run.Run.Owners = map[string]string{"kube": "self.nothing"}
-	run.Run.Owns = []trace.Owns{{Kind: recorded, Name: "'unused'"}}
+	run.Run.Primaries[0].Owns = []trace.Owns{{Kind: recorded, Name: "'unused'"}}
 	var tl tt.Timeline
 	tl.At(0, run).
 		At(1*s, tt.Version(widget, "ua", "1", tt.Object("a"))).
@@ -146,7 +146,7 @@ var namedDependencies = map[string]namedDependency{
 // namedRun creates slot a's CR and its Gadget, which the model makes ready.
 func namedRun(tc namedDependency, dep trace.Dependency) *tt.Script {
 	r := newRun(1)
-	r.Spec.Owners, r.Spec.Owns = tc.owners, tc.owns
+	r.Spec.Owners, r.Spec.Primaries[0].Owns = tc.owners, tc.owns
 	r.Spec.Models = []trace.Model{{Kind: trace.Kind{Group: "toy", Version: "v1", Kind: "Gadget", Resource: "gadgets"},
 		Ready: config.ReadyConditionCEL, Dependency: &dep}}
 	r.Begin()
@@ -213,7 +213,7 @@ func TestBackoffRunDoesNotBreakOnAnotherCRsGenerationByRule2(t *testing.T) {
 
 func TestRestoreKeepsAGroupWhoseResourceChangesRule(t *testing.T) {
 	r := newRun(2)
-	r.Spec.Owns = []trace.Owns{{Kind: trace.Kind{Version: "v1", Kind: "ConfigMap", Resource: "configmaps"}, Name: "self.metadata.name + '-0'"}}
+	r.Spec.Primaries[0].Owns = []trace.Owns{{Kind: trace.Kind{Version: "v1", Kind: "ConfigMap", Resource: "configmaps"}, Name: "self.metadata.name + '-0'"}}
 	r.Begin()
 	withChild(r, "a", false)
 	r.EndFaults().Settle()

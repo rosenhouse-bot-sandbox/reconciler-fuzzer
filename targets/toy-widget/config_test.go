@@ -77,11 +77,11 @@ func TestTheTenantConfigOwnsItsClusterScopedChildrenByName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (schema.GroupVersionKind{Group: "toy.reconciler-fuzzer", Version: "v1", Kind: "Tenant"}); c.Primary.Kind != want {
-		t.Errorf("The primary is %v, want %v.", c.Primary.Kind, want)
+	if want := (schema.GroupVersionKind{Group: "toy.reconciler-fuzzer", Version: "v1", Kind: "Tenant"}); c.Primaries[0].Kind != want {
+		t.Errorf("The primary is %v, want %v.", c.Primaries[0].Kind, want)
 	}
 	var owned []string
-	for _, owns := range c.Primary.Owns {
+	for _, owns := range c.Primaries[0].Owns {
 		owned = append(owned, owns.Kind.Kind+" "+owns.Name)
 	}
 	if want := []string{"ClusterRole 'tenant-' + self.metadata.name", "Namespace 'tenant-' + self.metadata.name"}; !slices.Equal(owned, want) {

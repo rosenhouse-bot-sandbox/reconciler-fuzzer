@@ -53,16 +53,17 @@ func (v *view) allGone(o owner.Owner, t time.Duration) bool {
 	})
 }
 
-// retained reports whether primary.retain holds over the last body of every
-// CR o names.
+// retained reports whether, for every CR o names, its kind's retain holds
+// over its last body.
 func (v *view) retained(o owner.Owner, t time.Duration) bool {
-	return v.s.Retain != nil && len(o.CRs) > 0 && !slices.ContainsFunc(o.CRs, func(uid string) bool {
+	return len(o.CRs) > 0 && !slices.ContainsFunc(o.CRs, func(uid string) bool {
 		cr, _ := v.w.Instance(uid)
+		p, _ := v.s.primary(cr.Ref)
 		var body map[string]any
-		if json.Unmarshal(v.w.Body(cr, t), &body) != nil {
+		if p.Retain == nil || json.Unmarshal(v.w.Body(cr, t), &body) != nil {
 			return true
 		}
-		keep, err := v.s.Retain(body)
+		keep, err := p.Retain(body)
 		return err != nil || !keep
 	})
 }
@@ -104,12 +105,12 @@ type view struct {
 	w  *owner.World
 	// steps are the settled steps, in order.
 	steps []trace.StepSpan
-	// owners maps each group's owner key to its owner.
-	owners map[string]owner.Owner
+	// roots maps each group's root key to its root.
+	roots map[string]owner.Owner
 }
 
 func newView(ix *trace.Index, s Spec) *view {
-	v := &view{ix: ix, s: s, w: owner.New(ix, s.Owners), owners: map[string]owner.Owner{}}
+	v := &view{ix: ix, s: s, w: owner.New(ix, s.Owners), roots: map[string]owner.Owner{}}
 	for _, step := range ix.Steps() {
 		if v.settled(step) {
 			v.steps = append(v.steps, step)
@@ -135,19 +136,21 @@ func (v *view) has(step int, do ...string) bool {
 }
 
 // resources are the instances the controller created that live at t,
-// except CRs and the kinds of trace.Ignored.
+// except the kinds of trace.Ignored.
 func (v *view) resources(t time.Duration) []owner.Instance {
 	return slices.DeleteFunc(v.w.Instances(t), func(i owner.Instance) bool {
-		return i.Creator != trace.Controller || v.w.Primary(i) || trace.Ignored(trace.Call{Ref: i.Ref})
+		return i.Creator != trace.Controller || trace.Ignored(trace.Call{Ref: i.Ref})
 	})
 }
 
-// group is what Restore and Unique compare: a kind, a namespace, an owning
-// CR and a role.
+// group is what Clean, Restore and Unique compare: a kind, a namespace, an
+// owner, its root and a role.
 type group struct {
 	kind  trace.Ref
 	owner string
-	role  string
+	// root is the key of the owner's root, which survives a remade CR.
+	root string
+	role string
 }
 
 // groups returns the controller's resources at t by group, each in
@@ -168,24 +171,35 @@ func (v *view) groupOf(i owner.Instance, t time.Duration) group {
 	k := i.Ref
 	k.Name = ""
 	o := v.w.Owner(i, t)
-	v.owners[o.Key()] = o
-	return group{kind: k, owner: o.Key(), role: i.Role}
+	root := v.w.Root(o, t)
+	v.roots[root.Key()] = root
+	return group{kind: k, owner: o.Key(), root: root.Key(), role: i.Role}
 }
 
-// describe names an instance, its owning rule and its CRs' slots.
+// describe names an instance, its owning rule and its CRs, or its unlisted
+// owner.
 func (v *view) describe(i owner.Instance, o owner.Owner) string {
+	if o.Unlisted != "" {
+		unlisted, _ := v.w.Instance(o.Unlisted)
+		return fmt.Sprintf("%s (rule 1, unlisted owner %s)", describe(i.Ref), describe(unlisted.Ref))
+	}
 	if o.Shared() {
 		return describe(i.Ref) + " (shared)"
 	}
-	slots := make([]string, len(o.CRs))
+	crs := make([]string, len(o.CRs))
 	for n, uid := range o.CRs {
-		slots[n] = cmp.Or(v.w.Slot(uid), "uid "+uid)
+		crs[n] = crName(v.w, uid)
 	}
-	noun := "slot"
-	if len(slots) > 1 {
-		noun = "slots"
+	return fmt.Sprintf("%s (rule %d, %s)", describe(i.Ref), o.Rule, strings.Join(crs, ", "))
+}
+
+// crName names the CR with uid by its slot, or else by its kind and name.
+func crName(w *owner.World, uid string) string {
+	if slot := w.Slot(uid); slot != "" {
+		return "slot " + slot
 	}
-	return fmt.Sprintf("%s (rule %d, %s %s)", describe(i.Ref), o.Rule, noun, strings.Join(slots, ", "))
+	cr, _ := w.Instance(uid)
+	return "CR " + describe(cr.Ref)
 }
 
 func (v *view) describeAll(instances []owner.Instance, t time.Duration) []string {

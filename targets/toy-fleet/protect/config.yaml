@@ -1,6 +1,6 @@
-# This config is ../config.yaml with a Volume model that holds each Volume's
-# deletion for 1s with its own finalizer, as a storage controller does. Paths
-# resolve against this file's directory.
+# This config is ../cluster/config.yaml with a Volume model that holds each
+# Volume's deletion for 1s with its own finalizer, as a storage controller
+# does. Paths resolve against this file's directory.
 launch:
   binary: ../../../bin/toy-fleet
   args:

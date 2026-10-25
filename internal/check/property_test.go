@@ -30,7 +30,7 @@ func keySecret(key string) map[string]any {
 // harness creates a again, and the controller writes a-tls with key and an
 // ownerReference to the new a.
 func secretWriteBack(key string, owns bool) *tt.Script {
-	r := tt.NewScript(cert, 2, 1*s)
+	r := tt.NewScript(certificates, 2, 1*s)
 	r.BodyUIDs = true
 	r.Spec.Properties = []trace.Property{{Name: "fresh-key", Expr: freshKey, When: "step"}}
 	r.Begin()
@@ -38,7 +38,7 @@ func secretWriteBack(key string, owns bool) *tt.Script {
 	r.Act("create", "a", &cert)
 	first := keySecret("K")
 	if owns {
-		r.Spec.Owns = []trace.Owns{{Kind: trace.Kind{Version: "v1", Kind: "Secret", Resource: "secrets"}, Name: "self.spec.secretName"}}
+		r.Spec.Primaries[0].Owns = []trace.Owns{{Kind: trace.Kind{Version: "v1", Kind: "Secret", Resource: "secrets"}, Name: "self.spec.secretName"}}
 	} else {
 		first = owned(first, r, cert)
 	}
@@ -157,7 +157,7 @@ func TestADeclaredKindWithNoInstanceIsEmpty(t *testing.T) {
 func TestAnOwnedKindWithNoInstanceIsEmpty(t *testing.T) {
 	r := newRun(0)
 	r.Spec.Systems = []trace.System{{Name: "cloud", API: "crud"}}
-	r.Spec.Owns = []trace.Owns{
+	r.Spec.Primaries[0].Owns = []trace.Owns{
 		{Kind: trace.Kind{Group: grants.Group, Version: "v1", Kind: "Grant", Resource: grants.Resource}, Name: "self.metadata.name"},
 		{System: "cloud", Kind: trace.Kind{Resource: "buckets"}, Name: "self.metadata.name"},
 	}
@@ -206,7 +206,7 @@ func TestFirstWrittenUnderAMissingValueIsEmpty(t *testing.T) {
 }
 
 func TestFirstWrittenUnderARule4OwnerIsEmpty(t *testing.T) {
-	r := tt.NewScript(cert, 0, 1*s)
+	r := tt.NewScript(certificates, 0, 1*s)
 	r.BodyUIDs = true
 	r.Spec.Properties = []trace.Property{{Name: "unowned", Expr: `world.kube.secrets.all(s, firstWrittenUnder(s, ["data"]) == "")`, When: "step"}}
 	r.Begin()
@@ -223,11 +223,11 @@ func TestSpecForTakesPropertiesAndPeriodic(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.Properties = []config.Property{{Name: "c", Expr: "size(crs) == 0", When: config.Always}}
-	c.Primary.Periodic = &config.Periodic{Every: s, Paths: []string{"status.at"}}
+	c.Primaries[0].Periodic = &config.Periodic{Every: s, Paths: []string{"status.at"}}
 	run := tt.Run("toy.reconciler-fuzzer", "widgets")
-	run.Run.Ready, run.Run.Stable, run.Run.Reads, run.Run.Writes = "true", s, 1, 1
+	run.Run.Primaries[0].Ready, run.Run.Stable, run.Run.Reads, run.Run.Writes = "true", s, 1, 1
 	run.Run.Properties = []trace.Property{{Name: "r", Expr: "true", When: "step"}}
-	run.Run.Periodic = &trace.Periodic{Every: 2 * s, Paths: []string{"status.r"}}
+	run.Run.Primaries[0].Periodic = &trace.Periodic{Every: 2 * s, Paths: []string{"status.r"}}
 	var b tt.Builder
 	ix := b.Add(run).Index()
 	fromConfig, err := check.SpecFor(c, ix)
@@ -235,16 +235,16 @@ func TestSpecForTakesPropertiesAndPeriodic(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(fromConfig.Properties) != 1 || fromConfig.Properties[0].Name != "c" || !fromConfig.Properties[0].Always ||
-		fromConfig.Periodic == nil || fromConfig.Periodic.Every != s || !slices.Equal(fromConfig.Periodic.Paths, []string{"status.at"}) {
-		t.Errorf("spec from the config = %+v, %+v", fromConfig.Properties, fromConfig.Periodic)
+		fromConfig.Primaries[0].Periodic == nil || fromConfig.Primaries[0].Periodic.Every != s || !slices.Equal(fromConfig.Primaries[0].Periodic.Paths, []string{"status.at"}) {
+		t.Errorf("spec from the config = %+v, %+v", fromConfig.Properties, fromConfig.Primaries[0].Periodic)
 	}
 	fromRun, err := check.SpecFor(nil, ix)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(fromRun.Properties) != 1 || fromRun.Properties[0].Name != "r" || fromRun.Properties[0].Always ||
-		fromRun.Periodic == nil || fromRun.Periodic.Every != 2*s {
-		t.Errorf("spec from the run = %+v, %+v", fromRun.Properties, fromRun.Periodic)
+		fromRun.Primaries[0].Periodic == nil || fromRun.Primaries[0].Periodic.Every != 2*s {
+		t.Errorf("spec from the run = %+v, %+v", fromRun.Properties, fromRun.Primaries[0].Periodic)
 	}
 	run.Run.Properties[0].Expr = "crs.("
 	b = tt.Builder{}
@@ -257,7 +257,7 @@ func TestSpecForTakesPropertiesAndPeriodic(t *testing.T) {
 // deleted a, which the gc has not collected, with an ownerReference to the
 // new a.
 func rePoint() *tt.Script {
-	r := tt.NewScript(cert, 2, 1*s)
+	r := tt.NewScript(certificates, 2, 1*s)
 	r.BodyUIDs = true
 	r.Spec.Properties = []trace.Property{{Name: "fresh-key", Expr: freshKey, When: "step"}}
 	r.Begin()
