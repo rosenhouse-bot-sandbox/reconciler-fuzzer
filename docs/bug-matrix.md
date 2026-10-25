@@ -61,8 +61,11 @@ Each Bucket owns one bucket in the `crudfake` system `cloud` (targets/toy-bucket
 
 ## Fleet toy
 
-Each Cluster owns Volumes of a third party's kind, which a model sets ready. A Database names its Cluster, and a User its Database (targets/toy-fleet).
+Each Cluster owns Volumes of a third party's kind, which a model sets ready. A Database names its Cluster and maybe a Secret, and a User its Database (targets/toy-fleet).
 
 | Bug | Description | Plan | Check | Step |
 |---|---|---|---|---|
-| B0 | The correct controller. | all 12 committed plans | none | |
+| B0 | The correct controller. | all 16 committed plans | none | |
+| B123 | Readies a Database on a Cluster that is not Ready. | create-together | Honest | 0 |
+| B124 | Readies a Database before its Secret exists. | secret-late | Honest | 0 |
+| B125 | Keeps a Ready Database ready after its Secret goes. | secret-recreate | Honest | 1 |

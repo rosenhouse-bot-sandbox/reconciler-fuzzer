@@ -15,14 +15,35 @@ const (
 	section       = "\n## Fleet toy\n"
 )
 
-// renderBugMatrix renders this toy's section, with one B0 row that counts
-// the committed plans.
+// bugs describes each seeded bug of controller/.
+var bugs = map[int]string{
+	0:   "The correct controller.",
+	123: "Readies a Database on a Cluster that is not Ready.",
+	124: "Readies a Database before its Secret exists.",
+	125: "Keeps a Ready Database ready after its Secret goes.",
+}
+
+func TestEveryReferenceRowBugHasADescription(t *testing.T) {
+	for _, r := range referenceRows {
+		if bugs[r.bug] == "" {
+			t.Errorf("B%d has no description.", r.bug)
+		}
+	}
+}
+
+// renderBugMatrix renders this toy's section: a B0 row that counts the
+// committed plans, then a row for each of referenceRows.
 func renderBugMatrix(plans []string) string {
-	return section + "\n" +
+	var b strings.Builder
+	b.WriteString(section + "\n" +
 		"Each Cluster owns Volumes of a third party's kind, which a model sets ready. " +
-		"A Database names its Cluster, and a User its Database (targets/toy-fleet).\n\n" +
-		"| Bug | Description | Plan | Check | Step |\n|---|---|---|---|---|\n" +
-		fmt.Sprintf("| B0 | The correct controller. | all %d committed plans | none | |\n", len(plans))
+		"A Database names its Cluster and maybe a Secret, and a User its Database (targets/toy-fleet).\n\n" +
+		"| Bug | Description | Plan | Check | Step |\n|---|---|---|---|---|\n")
+	fmt.Fprintf(&b, "| B0 | %s | all %d committed plans | none | |\n", bugs[0], len(plans))
+	for _, r := range referenceRows {
+		fmt.Fprintf(&b, "| B%d | %s | %s | Honest | %d |\n", r.bug, bugs[r.bug], r.plan, r.step)
+	}
+	return b.String()
 }
 
 func TestRenderBugMatrix(t *testing.T) {
@@ -31,6 +52,7 @@ func TestRenderBugMatrix(t *testing.T) {
 		"\n## Fleet toy\n",
 		"| Bug | Description | Plan | Check | Step |\n|---|---|---|---|---|\n",
 		"| B0 | The correct controller. | all 2 committed plans | none | |\n",
+		"| B125 | Keeps a Ready Database ready after its Secret goes. | secret-recreate | Honest | 1 |\n",
 	} {
 		if !strings.Contains(md, want) {
 			t.Errorf("Want %q in:\n%s", want, md)

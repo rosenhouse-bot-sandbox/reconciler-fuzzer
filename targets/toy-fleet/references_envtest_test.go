@@ -12,22 +12,7 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/run"
 )
 
-// referenceRows list, for plans beside config.yaml, the bug each must catch
-// and the one finding it gives: an Honest finding on the kind a reference
-// names, at step, with a detail that starts with detail.
-var referenceRows = []struct {
-	plan                  string
-	bug                   int
-	summary, kind, detail string
-	step                  int
-}{
-	{"create-together", 123, "reported ready before seeing its dependency ready", "kube/toy.reconciler-fuzzer/clusters", "slot b: clusters.toy.reconciler-fuzzer ", 0},
-	{"secret-late", 124, "reported ready with no dependency", "kube/secrets", "slot b: secrets ", 0},
-	{"secret-recreate", 125, "stayed ready after seeing its dependency not ready", "kube/secrets", "slot b: secrets ", 1},
-}
-
 func TestReferencesJudgeTheOrderAcrossKinds(t *testing.T) {
-	t.Skip("enabled by the toy-fleet package")
 	for _, row := range referenceRows {
 		t.Run(fmt.Sprintf("%s catches B%d", row.plan, row.bug), func(t *testing.T) {
 			t.Parallel()
