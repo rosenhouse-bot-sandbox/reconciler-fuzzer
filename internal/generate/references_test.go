@@ -1,7 +1,6 @@
 package generate
 
 import (
-	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -28,17 +27,17 @@ var clusterNames = []string{"cluster", "cluster-b", "cluster-c"}
 // it.
 func replay(t *testing.T, p *plan.Plan, visit func(a plan.Action, at state)) {
 	t.Helper()
-	at := state{}
+	at := newState()
 	for _, step := range p.Steps {
 		for _, a := range step.Actions {
 			visit(a, at)
 			switch a.Do {
 			case plan.Create:
-				at[a.Slot] = decode(t, a.Object)
+				at.slots[a.Slot] = decode(t, a.Object)
 			case plan.Update:
-				at[a.Slot] = mergePatch(at[a.Slot], decode(t, a.Patch))
+				at.slots[a.Slot] = mergePatch(at.slots[a.Slot], decode(t, a.Patch))
 			case plan.Delete:
-				at[a.Slot] = nil
+				at.slots[a.Slot] = nil
 			}
 		}
 	}
@@ -58,8 +57,8 @@ func clusterRef(cr map[string]any) string {
 func liveClusters(at state) []string {
 	var names []string
 	for _, slot := range at.live() {
-		if kindName(at[slot]) == "Cluster" {
-			names = append(names, at[slot]["metadata"].(map[string]any)["name"].(string))
+		if kindName(at.slots[slot]) == "Cluster" {
+			names = append(names, at.slots[slot]["metadata"].(map[string]any)["name"].(string))
 		}
 	}
 	return names
@@ -73,7 +72,7 @@ func TestCreatesAndUpdatesWriteEachReferenceWithACandidate(t *testing.T) {
 			switch {
 			case a.Do == plan.Create && kindName(decode(t, a.Object)) == "Database":
 				spec, _ = decode(t, a.Object)["spec"].(map[string]any)
-			case a.Do == plan.Update && kindName(at[a.Slot]) == "Database":
+			case a.Do == plan.Update && kindName(at.slots[a.Slot]) == "Database":
 				spec, _ = decode(t, a.Patch)["spec"].(map[string]any)
 			default:
 				return
@@ -139,10 +138,10 @@ func TestDeletesComeInBothOrders(t *testing.T) {
 			if a.Do != plan.Delete {
 				return
 			}
-			switch cr := at[a.Slot]; kindName(cr) {
+			switch cr := at.slots[a.Slot]; kindName(cr) {
 			case "Cluster":
 				name := cr["metadata"].(map[string]any)["name"]
-				if slices.ContainsFunc(at.live(), func(slot string) bool { return clusterRef(at[slot]) == name }) {
+				if slices.ContainsFunc(at.live(), func(slot string) bool { return clusterRef(at.slots[slot]) == name }) {
 					toFirst++
 				}
 			case "Database":
@@ -168,7 +167,7 @@ func written(t *testing.T, a plan.Action, at state) (string, map[string]any) {
 		kind = kindName(object)
 	case plan.Update:
 		object = decode(t, a.Patch)
-		kind = kindName(at[a.Slot])
+		kind = kindName(at.slots[a.Slot])
 	}
 	spec, _ := object["spec"].(map[string]any)
 	return kind, spec
@@ -180,12 +179,12 @@ func written(t *testing.T, a plan.Action, at state) (string, map[string]any) {
 func TestAWriteNamesALiveCandidateHalfTheTime(t *testing.T) {
 	g := newGenerator(t, loadConfig(t, referencesConfig))
 	cluster, database := g.kinds[0], g.kinds[1]
-	at := state{"a": database.base("a").Object, "b": cluster.base("b").Object}
+	at := holding(map[string]map[string]any{"a": database.base("a").Object, "b": cluster.base("b").Object})
 	writes, live := map[plan.Do]int{}, map[plan.Do]int{}
 	var secretWrites, missingWrites int
 	for seed := range 600 {
 		for _, a := range example(t, seed, func(rt *rapid.T) []plan.Action {
-			return []plan.Action{g.createOf(rt, maps.Clone(at), "c", database), g.update(rt, maps.Clone(at), "a")}
+			return []plan.Action{g.createOf(rt, at.clone(), "c", database), g.update(rt, at.clone(), "a")}
 		}) {
 			_, spec := written(t, a, at)
 			if ref, set := spec["clusterRef"]; set {
@@ -270,10 +269,11 @@ func TestWritesNameEachListItemAFakeAndAFixture(t *testing.T) {
 // either Secret, so 3 in 4 name it.
 func TestAWriteNamesALiveFixtureHalfTheTime(t *testing.T) {
 	g := newGenerator(t, loadConfig(t, linksConfig))
-	at := state{gone(plan.Target{Resource: "secrets", Name: "admin-password"}): nil}
+	at := newState()
+	at.deleted[plan.Target{Resource: "secrets", Name: "admin-password"}] = true
 	live := 0
 	for seed := range 200 {
-		create := example(t, seed, func(rt *rapid.T) plan.Action { return g.createOf(rt, maps.Clone(at), "a", g.kinds[1]) })
+		create := example(t, seed, func(rt *rapid.T) plan.Action { return g.createOf(rt, at.clone(), "a", g.kinds[1]) })
 		if _, spec := written(t, create, at); spec["secretName"] == "other-password" {
 			live++
 		}

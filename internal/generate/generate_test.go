@@ -3,6 +3,7 @@ package generate
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -60,6 +61,17 @@ func drawPlans(t *testing.T, g *Generator, n int) []*plan.Plan {
 		drawn = append(drawn, p)
 	}
 	return drawn
+}
+
+// holding is a state whose slots hold slots and that deleted no fixture.
+func holding(slots map[string]map[string]any) state {
+	at := newState()
+	maps.Copy(at.slots, slots)
+	return at
+}
+
+func (s state) clone() state {
+	return state{slots: maps.Clone(s.slots), deleted: maps.Clone(s.deleted)}
 }
 
 // example is draw's value for seed. rapid's Example, and so Plan, hides a

@@ -157,7 +157,7 @@ func (g *Generator) candidate(t *rapid.T, at state, r *reference) (string, bool)
 func (g *Generator) candidates(at state, r *reference) (names, live []string) {
 	if r.to != nil {
 		for i, slot := range slots {
-			if cr := at[slot]; cr != nil && g.kindOf(cr) == r.to {
+			if cr := at.slots[slot]; cr != nil && g.kindOf(cr) == r.to {
 				live = append(live, r.slotNames[i])
 			}
 		}
@@ -165,7 +165,7 @@ func (g *Generator) candidates(at state, r *reference) (names, live []string) {
 	}
 	for _, target := range r.fixtures {
 		names = append(names, target.Name)
-		if !at.deleted(target) {
+		if !at.deleted[target] {
 			live = append(live, target.Name)
 		}
 	}
@@ -177,12 +177,12 @@ func (g *Generator) candidates(at state, r *reference) (names, live []string) {
 func (g *Generator) fixtureChanges(at state) []fixture {
 	var changes []fixture
 	for _, f := range g.fixtures {
-		if !at.deleted(f.target) {
+		if !at.deleted[f.target] {
 			changes = append(changes, f)
 		}
 	}
 	for _, target := range g.referenced {
-		if !at.deleted(target) {
+		if !at.deleted[target] {
 			changes = append(changes, fixture{target: target})
 		}
 	}
@@ -191,7 +191,7 @@ func (g *Generator) fixtureChanges(at state) []fixture {
 
 // deletedFixtures are the referenced fixtures that the plan deleted.
 func (g *Generator) deletedFixtures(at state) []plan.Target {
-	return slices.DeleteFunc(slices.Clone(g.referenced), func(target plan.Target) bool { return !at.deleted(target) })
+	return slices.DeleteFunc(slices.Clone(g.referenced), func(target plan.Target) bool { return !at.deleted[target] })
 }
 
 // changeFixture sets a drawn word at one of f's paths, or deletes the
@@ -199,7 +199,7 @@ func (g *Generator) deletedFixtures(at state) []plan.Target {
 func changeFixture(t *rapid.T, at state, f fixture) plan.Action {
 	target := f.target
 	if len(f.paths) == 0 {
-		at[gone(target)] = nil
+		at.deleted[target] = true
 		return plan.Action{Do: plan.ChangeFixture, Target: &target}
 	}
 	return plan.Action{Do: plan.ChangeFixture, Target: &target, Patch: marshal(nest(sampled(t, f.paths, "path"), fixtureWords.Draw(t, "word")))}

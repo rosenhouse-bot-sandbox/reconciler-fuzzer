@@ -386,28 +386,24 @@ func (g *Generator) Plan(seed uint64) (p *plan.Plan, err error) {
 	return p, nil
 }
 
-// state is what the plan so far leaves each slot holding: its CR as last
-// written, or nil once deleted. A fixture that the plan deleted maps, by its
-// gone key, to nil until a createFixture makes it again.
-type state map[string]map[string]any
-
-// gone is the state key of a deleted fixture. No slot has it.
-func gone(target plan.Target) string {
-	return "\x00deleted " + target.System + "/" + target.Group + "/" + target.Resource + "/" + target.Namespace + "/" + target.Name
+// state is what the plan so far leaves each slot holding, its CR as last
+// written or nil once deleted, and the referenced fixtures it deleted and
+// did not create again.
+type state struct {
+	slots   map[string]map[string]any
+	deleted map[plan.Target]bool
 }
 
-// deleted says whether the plan deleted the fixture at target.
-func (s state) deleted(target plan.Target) bool {
-	_, deleted := s[gone(target)]
-	return deleted
+func newState() state {
+	return state{slots: map[string]map[string]any{}, deleted: map[plan.Target]bool{}}
 }
 
 func (s state) live() []string {
-	return slices.DeleteFunc(slices.Clone(slots), func(slot string) bool { return s[slot] == nil })
+	return slices.DeleteFunc(slices.Clone(slots), func(slot string) bool { return s.slots[slot] == nil })
 }
 
 func (s state) free() []string {
-	return slices.DeleteFunc(slices.Clone(slots), func(slot string) bool { return s[slot] != nil })
+	return slices.DeleteFunc(slices.Clone(slots), func(slot string) bool { return s.slots[slot] != nil })
 }
 
 // kindOf is the listed kind of a CR the plan holds, by its apiVersion and
@@ -419,16 +415,16 @@ func (g *Generator) kindOf(cr map[string]any) *crKind {
 
 // updatable are the live slots whose kind has fields to change.
 func (g *Generator) updatable(at state) []string {
-	return slices.DeleteFunc(at.live(), func(slot string) bool { return len(g.kindOf(at[slot]).fields) == 0 })
+	return slices.DeleteFunc(at.live(), func(slot string) bool { return len(g.kindOf(at.slots[slot]).fields) == 0 })
 }
 
 // ofResource are the slots in from whose CR is of the resource gr.
 func (g *Generator) ofResource(at state, from []string, gr gvk.GroupResource) []string {
-	return slices.DeleteFunc(slices.Clone(from), func(slot string) bool { return g.kindOf(at[slot]).resource != gr })
+	return slices.DeleteFunc(slices.Clone(from), func(slot string) bool { return g.kindOf(at.slots[slot]).resource != gr })
 }
 
 func (g *Generator) plan(t *rapid.T) *plan.Plan {
-	at := state{}
+	at := newState()
 	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{g.create(t, at, "a")}}}}
 	for range 2 + uniform(t, 6, "steps") {
 		p.Steps = append(p.Steps, g.step(t, at))
@@ -486,7 +482,7 @@ func (g *Generator) step(t *rapid.T, at state) plan.Step {
 // within 50 ms.
 func (g *Generator) burst(t *rapid.T, at state) []plan.Action {
 	slot := sampled(t, at.live(), "slot")
-	k := g.kindOf(at[slot])
+	k := g.kindOf(at.slots[slot])
 	if len(k.fields) > 0 && rapid.Bool().Draw(t, "updates") {
 		return within50ms(t, []plan.Action{g.update(t, at, slot), g.update(t, at, slot)})
 	}
@@ -510,9 +506,9 @@ func (g *Generator) holdTraffic(t *rapid.T, at state, f plan.Fault) []plan.Actio
 		return []plan.Action{g.create(t, at, sampled(t, free, "slot"))}
 	}
 	slot := sampled(t, live, "slot")
-	cr := at[slot]
+	cr := at.slots[slot]
 	deleted := g.delete(t, at, slot)
-	at[slot] = cr
+	at.slots[slot] = cr
 	return within50ms(t, []plan.Action{deleted, {Do: plan.Create, Slot: slot, Object: marshal(cr)}})
 }
 
@@ -560,7 +556,7 @@ func (g *Generator) action(t *rapid.T, at state) plan.Action {
 		return changeFixture(t, at, sampled(t, changes, "fixture"))
 	case plan.CreateFixture:
 		target := sampled(t, deleted, "fixture")
-		delete(at, gone(target))
+		delete(at.deleted, target)
 		return plan.Action{Do: do, Target: &target}
 	default:
 		return plan.Action{Do: do}
@@ -581,7 +577,7 @@ func (g *Generator) createOf(t *rapid.T, at state, slot string, k *crKind) plan.
 			cr = written
 		}
 	}
-	at[slot] = cr
+	at.slots[slot] = cr
 	return plan.Action{Do: plan.Create, Slot: slot, Object: marshal(cr)}
 }
 
@@ -589,7 +585,7 @@ func (g *Generator) createOf(t *rapid.T, at state, slot string, k *crKind) plan.
 // when its CRD refused every patch drawn. A drawn field at or above a
 // reference's name holds a candidate there.
 func (g *Generator) update(t *rapid.T, at state, slot string) plan.Action {
-	k := g.kindOf(at[slot])
+	k := g.kindOf(at.slots[slot])
 	for range updateDraws {
 		mutable := sampled(t, k.fields, "field")
 		value, present := mutable.draw(t)
@@ -600,9 +596,9 @@ func (g *Generator) update(t *rapid.T, at state, slot string) plan.Action {
 		}
 		// A merge patch removes the field where the draw left it absent.
 		patch := nest(mutable.path, value)
-		patched := mergePatch(runtime.DeepCopyJSON(at[slot]), patch)
-		if k.rules.refusal(patched, at[slot]) == nil {
-			at[slot] = patched
+		patched := mergePatch(runtime.DeepCopyJSON(at.slots[slot]), patch)
+		if k.rules.refusal(patched, at.slots[slot]) == nil {
+			at.slots[slot] = patched
 			return plan.Action{Do: plan.Update, Slot: slot, Patch: marshal(patch)}
 		}
 	}
@@ -611,7 +607,7 @@ func (g *Generator) update(t *rapid.T, at state, slot string) plan.Action {
 
 // delete deletes the slot's CR, with Foreground propagation 1 time in 4.
 func (g *Generator) delete(t *rapid.T, at state, slot string) plan.Action {
-	at[slot] = nil
+	at.slots[slot] = nil
 	a := plan.Action{Do: plan.Delete, Slot: slot}
 	if uniform(t, 4, "propagation") == 0 {
 		a.Propagation = plan.Foreground
