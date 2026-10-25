@@ -145,12 +145,11 @@ func addBy(m map[Caller]map[Ref][]Event, caller Caller, key Ref, e Event) {
 	m[caller][key] = append(m[caller][key], e)
 }
 
-// addSynced indexes e, a Synced event, unless its watch is not kube's or is
-// Partial.
+// addSynced indexes e, a Synced event, unless its watch is Partial.
 func (ix *Index) addSynced(e Event) {
 	s := e.Synced
 	n := slices.IndexFunc(ix.watches[s.Caller], func(w Event) bool { return w.Call.Ref.System == s.System && w.Call.Stream == s.Stream })
-	if n < 0 || s.System != "kube" || ix.watches[s.Caller][n].Call.Partial {
+	if n < 0 || ix.watches[s.Caller][n].Call.Partial {
 		return
 	}
 	watch := ix.watches[s.Caller][n]

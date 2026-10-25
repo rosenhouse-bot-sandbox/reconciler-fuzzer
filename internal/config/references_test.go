@@ -120,6 +120,7 @@ func TestReferencesRefusals(t *testing.T) {
 		"a built-in kind without its group":          {"{from: toy/v1/Database, to: v1/Deployment, name: spec.d, ready: \"true\"}", "did you mean apps/v1/Deployment?"},
 		"a kind of two groups in lower case":         {"{from: toy/v1/Database, to: v1/event, name: spec.e, ready: \"true\"}", "did you mean events.k8s.io/v1/Event or v1/Event?"},
 		"a CRD's kind in lower case":                 {"{from: toy/v1/Database, to: toy/v1/tenant, name: spec.t, ready: \"true\"}", "did you mean toy/v1/Tenant?"},
+		"a CRD's kind at a version it lacks":         {"{from: toy/v1/Database, to: toy/v2/tenant, name: spec.t, ready: \"true\"}", "did you mean toy/v1/Tenant?"},
 		"a to of an unknown system":                  {"{from: toy/v1/Database, to: \"nope:buckets\", name: spec.b, ready: \"true\"}", "references[0].to"},
 		"a malformed collection":                     {"{from: toy/v1/Database, to: \"cloud:Buckets\", name: spec.b}", "references[0].to"},
 		"an object the from entry owns":              {"{from: toy/v1/Cluster, to: v1/ConfigMap, name: spec.config, ready: \"true\"}", "references[0].name spec.config: the from entry owns the v1/ConfigMap it names"},
@@ -216,6 +217,9 @@ const databaseSchema = `
                 names: {type: array, items: {type: string}}
                 extra: {type: object, x-kubernetes-preserve-unknown-fields: true, properties: {known: {type: string}}}
                 labels: {type: object, additionalProperties: {type: string}}
+                refs: {type: object, additionalProperties: {type: object, properties: {name: {type: string}}}}
+                pruned: {type: object}
+                open: {type: object, additionalProperties: true}
 `
 
 func TestAReferencePathMustBeAStringTheFromSchemaDescribes(t *testing.T) {
@@ -224,6 +228,8 @@ func TestAReferencePathMustBeAStringTheFromSchemaDescribes(t *testing.T) {
 		{"spec.keys[*].name", "spec.keys[*].namespace", ""},
 		{"spec.extra.secret", "", ""},
 		{"spec.labels.secret", "", ""},
+		{"spec.refs.db.name", "", ""},
+		{"spec.open.any.name", "", ""},
 		{"metadata.name", "metadata.namespace", ""},
 		{"spec.clusterRf", "", "references[0].name spec.clusterRf: the from kind's schema describes no spec.clusterRf"},
 		{"spec.cluster.ref", "", "references[0].name spec.cluster.ref: the from kind's schema describes no spec.cluster"},
@@ -233,6 +239,9 @@ func TestAReferencePathMustBeAStringTheFromSchemaDescribes(t *testing.T) {
 		{"spec.clusterRef[*].name", "", "references[0].name spec.clusterRef[*].name: the from kind's schema gives spec.clusterRef type string, not array"},
 		{"spec.names[*].name", "", "references[0].name spec.names[*].name: the from kind's schema gives spec.names[*] type string, not object"},
 		{"spec.clusterRef", "spec.namespce", "references[0].namespace spec.namespce: the from kind's schema describes no spec.namespce"},
+		{"spec.labels.secret.name", "", "references[0].name spec.labels.secret.name: the from kind's schema gives spec.labels.secret type string, not object"},
+		{"spec.refs.db.nam", "", "references[0].name spec.refs.db.nam: the from kind's schema describes no spec.refs.db.nam"},
+		{"spec.pruned.name", "", "references[0].name spec.pruned.name: the from kind's schema describes no spec.pruned.name"},
 	} {
 		reference := fmt.Sprintf("{from: toy/v1/Database, to: v1/Secret, name: %q, ready: \"true\"", c.name)
 		if c.namespace != "" {

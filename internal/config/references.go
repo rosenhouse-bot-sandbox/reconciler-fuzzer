@@ -178,21 +178,22 @@ func checkNamespace(key string, r Reference, name []pathSegment, crds map[schema
 }
 
 // stringField refuses a path that root, an openAPIV3Schema, describes as
-// no string: it names a field that an object's properties leave out, or a
-// field of another type. A list needs [*], and [*] needs a list. Where the
-// schema says too little, as under metadata, which the API server defines,
-// any path passes.
+// no string: it names a field that the API server prunes, or a field of
+// another type. A list needs [*], and [*] needs a list. Without a schema,
+// under metadata, which the API server defines, and where the schema keeps
+// unknown fields, any path passes.
 func stringField(root map[string]any, path []pathSegment) error {
 	at := root
 	for i, s := range path {
+		if at == nil || i == 0 && s.field == "metadata" || at["x-kubernetes-preserve-unknown-fields"] == true || at["additionalProperties"] == true {
+			return nil
+		}
 		properties, _ := at["properties"].(map[string]any)
 		next, described := properties[s.field].(map[string]any)
-		switch {
-		case i == 0 && s.field == "metadata":
-			return nil
-		case !described && (len(properties) == 0 || at["x-kubernetes-preserve-unknown-fields"] == true):
-			return nil
-		case !described:
+		if !described {
+			next, described = at["additionalProperties"].(map[string]any)
+		}
+		if !described {
 			return fmt.Errorf("the from kind's schema describes no %s", dotted(path[:i+1]))
 		}
 		want := "object"
@@ -340,7 +341,8 @@ func scopeOf(kind schema.GroupKind, crds map[schema.GroupKind]crd) (namespaced, 
 }
 
 // unknownKind says that no CRD and no built-in kind is kind, and suggests
-// those whose kind differs from kind's only in case.
+// those whose kind differs from kind's only in case, a CRD at each version
+// it lists.
 func unknownKind(kind schema.GroupVersionKind, crds map[schema.GroupKind]crd) string {
 	var near []string
 	for known, b := range builtins {
@@ -348,9 +350,12 @@ func unknownKind(kind schema.GroupVersionKind, crds map[schema.GroupKind]crd) st
 			near = append(near, b.spelling)
 		}
 	}
-	for known := range crds {
-		if strings.EqualFold(known.Kind, kind.Kind) {
-			near = append(near, known.WithVersion(kind.Version).GroupVersion().String()+"/"+known.Kind)
+	for known, c := range crds {
+		if !strings.EqualFold(known.Kind, kind.Kind) {
+			continue
+		}
+		for version := range c.schemas {
+			near = append(near, known.WithVersion(version).GroupVersion().String()+"/"+known.Kind)
 		}
 	}
 	why := "no CRD in crds and no built-in kind has this group and kind"
@@ -399,7 +404,7 @@ func readCRDs(paths []string) (map[schema.GroupKind]crd, error) {
 }
 
 // pathSegment is one dotted part of a field path. each says that the field
-// holds a list, and that the path goes on in each item.
+// holds a list, and that the path continues in each item.
 type pathSegment struct {
 	field string
 	each  bool
