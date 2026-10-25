@@ -83,10 +83,10 @@ plain HTTP to it. If it cannot, tell the user.
 A config lists every CRD kind the controller serves, one `primaries` entry each. A CR may name
 an object that it does not own, such as a Database's Cluster or the Secret that holds its
 password. Declare each such field in `references` (step 4). If the controller holds a named
-object's deletion until the CRs that name it go, a generated plan that deletes the object fails
-Converge clause 2. Hunt seeds (step 9) for such a controller with configs that list one side
-alone and make each object it names a fixture. Hand-written plans can use the config that lists
-every kind.
+object's deletion until the CRs that name it are deleted, a generated plan that deletes the
+object fails Converge clause 2. Hunt seeds (step 9) for such a controller with configs that list
+one side alone and make each object it names a fixture. Hand-written plans can use the config
+that lists every kind.
 
 ## 3. Choose a directory
 
@@ -286,7 +286,7 @@ Write `plans/create.json`. It creates the sample, updates it, and deletes it:
 
 With several kinds, step 0 also creates each other entry's sample, each in a slot of its own.
 Delete a CR that others name only after them, since its controller may hold its deletion until
-they go. With a `references` entry to a fixture, add a step that deletes the fixture,
+they are deleted. With a `references` entry to a fixture, add a step that deletes the fixture,
 `{"do": "changeFixture", "target": {"resource": "secrets", "name": "<fixture>"}}`, and a later
 one that makes it again, `{"do": "createFixture", "target": <the same target>}`. With a model,
 add a step whose fault keeps it not ready, such as

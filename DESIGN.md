@@ -222,20 +222,20 @@ refuses a plan that creates an object of an unlisted kind (`ValidateKinds`).
 before its `to` kind (`Config.DeleteOrder`), and step `planSteps + 1`, which
 restarts the controller (§17, entry 4).
 
-**Deadline.** `endFaults + settle + min(faults, backoffCap) + maxPoll`.
-`endFaults` is the end of the fault period. `faults` runs from the step's start
-until then, or until a wait for a name or a stop's wait ends the faults sooner.
-`maxPoll` is the longest poll interval of the systems the step's faults and
-`damage`, `changeFixture` and `createFixture` actions name, and of every fake
-when the step changes a CR. A create into an emptied slot, or a
-`createFixture`, waits until no object holds the name it needs. Once `period`
-has passed, the wait ends the step's faults and restarts a killed controller.
-It gives up `deadline - endFaults` after the later of the faults' end and the
-delete, and the plan ends after the step. A `stop` waits the same way until
-each CR that a `delete` removed is gone, then sends SIGTERM even if one stays.
-A model fault that nothing `Takes` is a harness error, as is any other action
-error except an unmatched target or a `createFixture` whose `changeFixture`
-deleted nothing.
+**Deadline.** `endFaults + settle + backoff + maxPoll`, where `backoff` is
+`min(faults, backoffCap)`, which the `endFaults` phase records. `endFaults` is
+the end of the fault period. `faults` runs from the step's start until then, or
+until a wait for a name or a stop's wait ends the faults sooner. `maxPoll` is
+the longest poll interval of the systems the step's faults and `damage`,
+`changeFixture` and `createFixture` actions name, and of every fake when the
+step changes a CR. A create into an emptied slot, or a `createFixture`, waits
+until no object holds the name it needs. Once `period` has passed, the wait ends
+the step's faults and restarts a killed controller. It gives up `deadline -
+endFaults` after the later of the faults' end and the delete, and the plan ends
+after the step. A `stop` waits the same way until each CR that a `delete`
+removed is gone, then sends SIGTERM even if one stays. A model fault that
+nothing `Takes` is a harness error, as is any other action error except an
+unmatched target or a `createFixture` whose `changeFixture` deleted nothing.
 
 ## 10. Settle condition
 
@@ -246,8 +246,8 @@ to the CRs the stop waited for (§9).
 
 1. Every live CR satisfies its kind's `ready`, or `halted` after an
    unknown-outcome controller call on it or on an instance only it owns, or,
-   from `stable` after `endFaults`, a reference holds it back, as a look at
-   `t` would too, or leaves it unknown (§12), and
+   from `backoff + stable` after `endFaults`, a reference holds it back, as a
+   look at `t` would too, or leaves it unknown (§12), and
 2. carries no `deletionTimestamp`.
 3. The controller is up at `t` and has been up for at least `stable`.
 4. The controller made a 2xx request, not ignored and not of unknown
@@ -359,17 +359,18 @@ dependency not ready`.
 A CR **names** the `to` object of each value at its kind's references' `name`,
 in the namespace at `namespace` or else the CR's own if `to` is namespaced. A
 cluster-scoped CR without a `namespace` value names no namespaced object. The
-controller's **looks** at it are its seens of it and its calls that showed it
-missing (`Index.Looks`). A reference **holds back** the CR at `t` while the
-last look by `t` shows the object missing, with `required`, or not `ready`, or,
-with no look, while the object is missing and `required`. An opaque response
-after the last look leaves it **unknown**. Honest fails a `ready` write, as
-above, of a CR that a known reference holds back, or that names a live object
-the controller has not looked at: `reported ready with no dependency` if
-missing, else `reported ready before seeing its dependency ready`. With
-`track: d`, a CR fails that stays `ready`, naming the object, `d` after a look
-that held it back, as for dependencies: `stayed ready after seeing its
-dependency not ready`. Each finding takes the `to` kind (entry 83).
+controller's **looks** at it are its seens of it, and its calls and ends of a
+watch's initial events that showed it missing (`Index.Looks`). A reference
+**holds back** the CR at `t` while the last look by `t` shows the object
+missing, with `required`, or not `ready`, or, with no look, while the object is
+missing and `required`. An opaque response after the last look leaves it
+**unknown**. Honest fails a `ready` write, as above, of a CR that a known
+reference holds back, or that names a live object the controller has not looked
+at, unless the controller retracts it within `stable` of its look (entry 85):
+`reported ready with no dependency` if missing, else `reported ready before
+seeing its dependency ready`. With `track: d`, a CR fails that stays `ready`,
+naming the object, `d` after a look that held it back: `stayed ready after
+seeing its dependency not ready`. Each finding takes the `to` kind (entry 83).
 
 **Backoff.** Failing controller calls with one system, verb, object,
 subresource and status form a **run**; a create's object is its `requestName`.
@@ -448,15 +449,13 @@ controller only reads the fake. `values.fixtures` may name a system's fixtures
 file, whose entries' body paths `changeFixture` sets.
 
 A reference's `to` is a kube kind or `<system>:<collection>`, and its `ready`
-defaults to that of a listed kind, a model or a fake. `name` and `namespace`
-are field paths as in `values.mutate`; `[*]` names a field of each list item.
-An empty or absent value names nothing. `config.Load` reads each kind's scope
-from `crds` and a table of core kinds. It refuses a `from` that `primaries`
-does not list, a `from` or `to` at another version than the config declares,
-a `to` of unknown scope, without `ready` or that the `from` entry `owns`, a
-`name` in the `from` entry's `values.distinct`, a `namespace` that does not
-read with `[*]` exactly the lists it shares with `name`, and a namespaced `to`
-of a cluster-scoped `from` without `namespace` (`references.go`).
+defaults to that of a listed kind, a model or a fake. `name` and `namespace` are
+field paths as in `values.mutate`; `[*]` names a field of each list item. An
+empty or absent value names nothing. `config.Load` reads each kind's scope from
+`crds` and a table of the kinds Kubernetes serves without a CRD. The `from`
+CRD's schema must describe each path as a string. A `name` that an `owns` entry
+of the `from` entry reads is refused, since the CR owns that object.
+`references.go` holds the other refusals.
 
 ## 14. Generation, replay and shrinking
 
@@ -559,7 +558,7 @@ Each entry changes a check, exception, `System` interface or ignore list.
 43. Backoff allows 409s on a kind a `holdWatch` holds, as #114 defines.
 44. Converge names an unmodelled kind only with an instance that has no status.
 47. Honest skips a deleting dependency, and counts a gone one last seen live, and one the controller saw before the observer did.
-48. A restart, exit or failed CR write excuses `track`.
+48. A restart, exit, or failed or delayed CR write excuses `track`.
 52. A `delete` may be `Foreground` (B29). `Orphan` would fail Clean.
 64. `holdWatch` holds whole streams of one kind and delivers them in order, so it reorders nothing (#63).
 65. An API map reads response headers and may show partial objects, for S3.
@@ -580,5 +579,6 @@ Each entry changes a check, exception, `System` interface or ignore list.
 80. A live unlisted owner, such as a fixture, keeps what it owns, directly or through the controller's live objects, from rules 2 to 4, so deleting a CR blames none of it (#128). An object the controller made is never an unlisted owner.
 81. `required` binds only the first entry's CRs, so the kinds that own no dependency pass.
 82. A `damage` touches each group under its root. An undamaged touched group may empty while its kind lives under that root, and a damaged one whose owner is gone while a CR made in the step owns its kind and role there. So a damage under a CR that the controller made touches that CR's owner, and the controller may remake that CR.
-83. Converge accepts a CR that is not ready while a reference holds it back, where a `ready` write would fail Honest (#126). A look then must hold it back too, so a controller that misses the object's return does not settle. A look need not follow the controller's own write of the object, since a controller writes the status of the kinds it serves. The excuse waits `stable` after `endFaults`, so a step that creates a held-back CR does not settle before the controller reacts.
-84. A 2xx kube list that is not `Partial` and lacks an object shows it missing, so a relist after a restart or a dropped watch counts. Kube listeners ask for JSON of Seen kinds, so built-in kinds' lists and watches decode.
+83. Converge accepts a CR that is not ready while a reference holds it back, where a `ready` write would fail Honest (#126). A look then must hold it back too, so a controller that misses the object's return does not settle. A look need not follow the controller's own write of the object, since a controller writes the status of the kinds it serves. The excuse waits `backoff + stable` after `endFaults`, so a step does not settle before a controller in retry backoff reacts to a held-back CR that it creates or updates.
+84. A 2xx kube list that is not `Partial` and lacks an object shows it missing, as does the `k8s.io/initial-events-end` bookmark of such a watch, since client-go's informers open a watch with `sendInitialEvents` instead of a list. So a restart or a dropped watch counts. Kube listeners ask for JSON of Seen kinds, so built-in kinds' lists and watches decode.
+85. Honest excuses a `ready` write that the controller retracts within `stable` of its look, by writing the CR not `ready` or naming another object, since a reconcile may read its cache before the look reaches the cache.

@@ -422,7 +422,7 @@ func TestADeletingClusterReadiesNoDatabase(t *testing.T) {
 	}
 }
 
-// A deleting Cluster keeps a Ready Database, but not after its Secret goes.
+// A deleting Cluster keeps a Ready Database, but not after its Secret is deleted.
 func TestADeletingClusterKeepsNoDatabaseWithoutItsSecret(t *testing.T) {
 	db := databaseNaming("admin-password")
 	db.Status = readyStatus()

@@ -12,7 +12,7 @@ const (
 	B123 Bug = 123
 	// B124 readies a Database without checking its Secret.
 	B124 Bug = 124
-	// B125 keeps a Ready Database ready after its Secret goes.
+	// B125 keeps a Ready Database ready after its Secret is deleted.
 	B125 Bug = 125
 )
 

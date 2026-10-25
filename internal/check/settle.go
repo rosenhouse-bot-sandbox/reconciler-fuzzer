@@ -177,7 +177,7 @@ func crClauses(ix *trace.Index, p Primary, cr trace.Version, t time.Duration, s 
 	if ready, err := p.Ready(body); err != nil {
 		return []unmet{{1, k, fmt.Sprintf("%s: ready: %v", name, err)}}
 	} else if !ready && !halted(ix, p, cr, body, t, s) && !s.heldBack(ix, cr.Ref, body, t) {
-		return []unmet{{1, k, name + " is not ready"}}
+		return []unmet{{1, k, name + " is not ready" + s.describeLooks(ix, cr.Ref, body, t)}}
 	}
 	return nil
 }

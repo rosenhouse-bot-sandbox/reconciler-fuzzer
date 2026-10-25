@@ -2,6 +2,8 @@ package check
 
 import (
 	"cmp"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
@@ -122,6 +124,27 @@ func (s Spec) showing(n named, body map[string]any) state {
 		return state{missing: true}
 	}
 	return state{ready: satisfies(s.References[n.ref].Ready, body)}
+}
+
+// describeLooks says what the controller last saw by t of each object that
+// body, a version of the CR at cr, names.
+func (s Spec) describeLooks(ix *trace.Index, cr trace.Ref, body map[string]any, t time.Duration) string {
+	var seen strings.Builder
+	for _, n := range s.names(cr, body) {
+		g := s.sight(ix, n, t)
+		shown := "ready"
+		switch {
+		case !g.looked:
+			fmt.Fprintf(&seen, "; the controller never saw %s", describe(n.object))
+			continue
+		case g.missing:
+			shown = "missing"
+		case !g.ready:
+			shown = "not ready"
+		}
+		fmt.Fprintf(&seen, "; the controller last saw %s %s at %v", describe(n.object), shown, g.at)
+	}
+	return seen.String()
 }
 
 // heldBack reports whether a reference holds back the CR at cr, whose body

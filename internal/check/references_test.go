@@ -360,7 +360,7 @@ func TestHonestWithTrackPassesACRThatReactsInTime(t *testing.T) {
 		ref    trace.Reference
 		change func(r *tt.Script)
 	}{
-		"the CR goes not ready in time": {tracked, func(r *tt.Script) {
+		"the CR turns not ready in time": {tracked, func(r *tt.Script) {
 			notReadySeen(r)
 			r.Tick(400*ms).Update(ctl, databaseB, database(false, "pw"))
 		}},
@@ -384,7 +384,7 @@ func TestHonestWithTrackPassesACRThatReactsInTime(t *testing.T) {
 			notReadySeen(r)
 			r.Add(opaque(tt.Ref("secrets", "ns", ""), 0))
 		}},
-		"what goes is not required": {optional, deletedSeen},
+		"what is deleted is not required": {optional, deletedSeen},
 		"the CR is deleted in time": {tracked, func(r *tt.Script) {
 			notReadySeen(r)
 			r.Tick(400*ms).Delete(trace.Harness, databaseB)
@@ -484,7 +484,7 @@ func TestSettleExcusesACRNotReadyWhileAReferenceHoldsItBack(t *testing.T) {
 		c.look(r)
 		r.EndFaults()
 		unmet := settledAt(t, r, r.Now+5*s)
-		if waits := slices.Contains(unmet, "databases.toy ns/b is not ready"); waits == c.excused {
+		if waits := waitsForB(unmet); waits == c.excused {
 			t.Errorf("%s: unmet = %q, want the Database excused: %v.", name, unmet, c.excused)
 		}
 	}
@@ -495,15 +495,54 @@ func TestSettleExcusesACRNotReadyWhileAReferenceHoldsItBack(t *testing.T) {
 // before then.
 func TestSettleExcusesAHeldBackCROnlyStableAfterTheBackoff(t *testing.T) {
 	r := secretRun(secretRef(), nil).Tick(5 * s)
-	if !slices.Contains(settledAt(t, r, r.Now), "databases.toy ns/b is not ready") {
+	if !waitsForB(settledAt(t, r, r.Now)) {
 		t.Error("The Database is excused before the faults end.")
 	}
 	const backoff = 4 * s
 	r.Add(trace.Event{Phase: &trace.Phase{Step: r.Step, Name: trace.EndFaults, Deadline: r.Now + 30*s, Backoff: backoff}})
 	excuse := r.Now - tt.Tick + backoff + r.Spec.Stable
 	for at, excused := range map[time.Duration]bool{excuse - time.Millisecond: false, excuse: true} {
-		if waits := slices.Contains(settledAt(t, r, at), "databases.toy ns/b is not ready"); waits == excused {
+		if waits := waitsForB(settledAt(t, r, at)); waits == excused {
 			t.Errorf("At %v, the Database is excused: %v, want %v.", at, !waits, excused)
+		}
+	}
+}
+
+// waitsForB reports whether unmet holds that Database b is not ready.
+func waitsForB(unmet []string) bool {
+	return slices.ContainsFunc(unmet, func(u string) bool { return strings.HasPrefix(u, "databases.toy ns/b is not ready") })
+}
+
+func TestClause1SaysWhatTheControllerLastSawOfWhatTheCRNames(t *testing.T) {
+	optional := secretRef()
+	optional.Required = false
+	for name, c := range map[string]struct {
+		ref    trace.Reference
+		secret map[string]any
+		look   func(r *tt.Script)
+		// shown is what the look showed, or empty for no look.
+		shown string
+	}{
+		"seen ready": {secretRef(), secret(true), func(r *tt.Script) { r.See(ctl, pw) }, "ready"},
+		"seen ready, then made not ready": {secretRef(), secret(true), func(r *tt.Script) {
+			r.See(ctl, pw).Update(trace.Harness, pw, secret(false))
+		}, "ready"},
+		"seen missing without required": {optional, nil, func(r *tt.Script) { r.Call(ctl, "get", pw, 404) }, "missing"},
+		"seen not ready, then made ready": {secretRef(), secret(false), func(r *tt.Script) {
+			r.See(ctl, pw).Update(trace.Harness, pw, secret(true))
+		}, "not ready"},
+		"never seen": {secretRef(), secret(true), func(*tt.Script) {}, ""},
+	} {
+		r := secretRun(c.ref, c.secret)
+		look := r.Now
+		c.look(r)
+		r.EndFaults()
+		want := "databases.toy ns/b is not ready; the controller never saw secrets ns/pw"
+		if c.shown != "" {
+			want = fmt.Sprintf("databases.toy ns/b is not ready; the controller last saw secrets ns/pw %s at %v", c.shown, look)
+		}
+		if unmet := settledAt(t, r, r.Now+5*s); !slices.Contains(unmet, want) {
+			t.Errorf("%s: unmet = %q, want %q.", name, unmet, want)
 		}
 	}
 }

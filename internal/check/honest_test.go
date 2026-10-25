@@ -175,7 +175,7 @@ func TestHonestWithTrackFailsACRThatStaysReady(t *testing.T) {
 
 func TestHonestWithTrackPasses(t *testing.T) {
 	for name, then := range map[string]func(r *tt.Script){
-		"the CR goes not ready in time": func(r *tt.Script) {
+		"the CR turns not ready in time": func(r *tt.Script) {
 			r.Tick(400*ms).Update(ctl, widgetA, tt.CR("a", false))
 		},
 		"the controller sees it ready in time": func(r *tt.Script) {

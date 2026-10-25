@@ -23,7 +23,7 @@ var bugs = map[int]string{
 	0:   "The correct controller.",
 	123: "Readies a Database on a Cluster that is not Ready.",
 	124: "Readies a Database without checking its Secret.",
-	125: "Keeps a Ready Database ready after its Secret goes.",
+	125: "Keeps a Ready Database ready after its Secret is deleted.",
 	150: "Strips its finalizers from deleting CRs when it shuts down.",
 	151: "Puts a finalizer on each Volume, and releases a deleted Cluster before its Volumes, whose finalizers it strips only afterwards.",
 	152: "Errors when a dependent kind is not served, as after its CRD is deleted, so the parent's deletion never ends.",
@@ -67,7 +67,7 @@ func TestRenderBugMatrix(t *testing.T) {
 		"| Bug | Description | Plan | Check | Step |\n|---|---|---|---|---|\n",
 		"| B0 | The correct controller. | all 2 plans of config.yaml, database/config.yaml, protect/config.yaml | none | |\n",
 		"| B0 | The correct controller. | uninstall/stop-first | none | |\n",
-		"| B125 | Keeps a Ready Database ready after its Secret goes. | secret-recreate | Honest | 1 |\n",
+		"| B125 | Keeps a Ready Database ready after its Secret is deleted. | secret-recreate | Honest | 1 |\n",
 		"| B150 | Strips its finalizers from deleting CRs when it shuts down. | database/restart-cluster-delete | Converge | 1 |\n",
 		"| B152 | Errors when a dependent kind is not served, as after its CRD is deleted, so the parent's deletion never ends. | uninstall/crd-first-stop | Converge | 2 |\n",
 	} {
