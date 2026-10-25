@@ -6,8 +6,11 @@ import "fmt"
 // controller. The fleet's bugs start at B100, past the other toys' bugs.
 type Bug int
 
+// B116 removes every finalizer from a deleting Volume.
+const B116 Bug = 116
+
 // bugs holds every seeded bug ID.
-var bugs = map[Bug]bool{}
+var bugs = map[Bug]bool{B116: true}
 
 // ParseBug converts a --bug value into a Bug.
 func ParseBug(id int) (Bug, error) {

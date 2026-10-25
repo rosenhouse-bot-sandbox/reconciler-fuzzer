@@ -47,9 +47,11 @@ func newClient(t *testing.T, objects ...client.Object) client.WithWatch {
 		WithObjects(objects...).Build()
 }
 
-func newFleet(t *testing.T, objects ...client.Object) *fleet {
+func newFleet(t *testing.T, objects ...client.Object) *fleet { return newBuggyFleet(t, 0, objects...) }
+
+func newBuggyFleet(t *testing.T, bug Bug, objects ...client.Object) *fleet {
 	c := newClient(t, objects...)
-	base := reconciler{Client: c, APIReader: c, Scheme: c.Scheme()}
+	base := reconciler{Client: c, APIReader: c, Scheme: c.Scheme(), Bug: bug}
 	return &fleet{t, c, &ClusterReconciler{base}, &DatabaseReconciler{base}, &UserReconciler{base}}
 }
 
@@ -301,6 +303,28 @@ func TestClusterDeletesEachVolumeOnce(t *testing.T) {
 	}
 }
 
+func TestB116StripsTheFinalizersOfVolumesOnlyWhileTheClusterIsDeleted(t *testing.T) {
+	for bug, wantStripped := range map[Bug]bool{0: false, B116: true} {
+		f := newBuggyFleet(t, bug, clusterObj())
+		f.settle(f.clusters, "cluster")
+		f.holdVolumes()
+		c := f.cluster()
+		c.Spec.Volumes = 1
+		if err := f.c.Update(t.Context(), c); err != nil {
+			t.Fatal(err)
+		}
+		f.settle(f.clusters, "cluster")
+		if n := len(f.listVolumes()); n != 2 {
+			t.Errorf("B%d: after a scale-down, %d Volumes remain; want 2, one of them held.", bug, n)
+		}
+		f.delete(f.cluster())
+		f.settle(f.clusters, "cluster")
+		if n := len(f.listVolumes()); (n == 0) != wantStripped {
+			t.Errorf("B%d: the deleted Cluster leaves %d held Volumes; want them gone %v.", bug, n, wantStripped)
+		}
+	}
+}
+
 func TestDatabaseWaitsForItsClusterAndHoldsDeletionForUsers(t *testing.T) {
 	elsewhere := &fleetv1.User{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "bob"}, Spec: fleetv1.UserSpec{DatabaseRef: "other"}}
 	f := newFleet(t, databaseObj(), userObj(), elsewhere)
@@ -475,8 +499,10 @@ func TestReconcileOfAMissingCRSucceeds(t *testing.T) {
 }
 
 func TestParseBugAcceptsOnlyKnownBugs(t *testing.T) {
-	if b, err := ParseBug(0); b != 0 || err != nil {
-		t.Errorf("ParseBug(0) = %v, %v", b, err)
+	for _, id := range []int{0, 116} {
+		if b, err := ParseBug(id); int(b) != id || err != nil {
+			t.Errorf("ParseBug(%d) = %v, %v", id, b, err)
+		}
 	}
 	if _, err := ParseBug(100); err == nil {
 		t.Error("ParseBug(100) succeeded, want an error.")
