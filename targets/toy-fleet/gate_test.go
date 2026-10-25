@@ -48,11 +48,14 @@ func (g gateRow) planPath() string { return planPath(g.configPath(), g.plan) }
 // finding means the bug must pass the plan.
 var gate = []gateRow{
 	{plan: "restart-cluster-delete", bug: 150, finding: "Converge: did not settle (clause 1)", step: 1, detail: "db is not ready", config: databaseConfig},
+	// The kill comes after the update that releases the Cluster, so B151
+	// never strips its Volumes' finalizers.
+	{plan: "kill-recreate", bug: 151, finding: "Converge: did not settle (clause 1)", step: 1, detail: "cluster is not ready", config: uninstallConfig},
 	// The update error keeps B151's Volumes held until the stop.
 	{plan: "stop-after-delete", bug: 151, finding: "Clean: left resources behind", step: 1, detail: "/cluster-vol-0 (rule 1, slot a)", config: uninstallConfig},
-	{plan: "crd-first", bug: 152, finding: "Converge: did not settle (clause 2)", step: 2, detail: "cluster is being deleted", config: uninstallConfig},
-	// B0 crashes there too: the toy cannot start without the Database CRD.
-	{plan: "crd-first", bug: 152, finding: "Crash: the controller exited", step: 4, detail: `no matches for kind "Database"`, config: uninstallConfig},
+	{plan: "crd-first-stop", bug: 152, finding: "Converge: did not settle (clause 2)", step: 2, detail: "cluster is being deleted", config: uninstallConfig},
+	{plan: "crd-first-stop", config: uninstallConfig},
+	{plan: "kill-recreate", config: uninstallConfig},
 	// The create waits for the name, the slowDelete for the create, and the
 	// plan ends at its create.
 	{plan: "recreate", config: uninstallConfig},
@@ -126,6 +129,26 @@ func checksOf(report string) []string {
 		checks = append(checks, checkOf(section))
 	}
 	return checks
+}
+
+// A config outside configs has no run of every plan under B0, so each of
+// its plans needs a gate row.
+func TestEveryPlanOfAGateConfigHasARow(t *testing.T) {
+	for _, g := range gate {
+		config := g.configPath()
+		if slices.Contains(configs, config) {
+			continue
+		}
+		names, err := plans(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range names {
+			if !slices.ContainsFunc(gate, func(r gateRow) bool { return r.configPath() == config && r.plan == name }) {
+				t.Errorf("%s has no gate row.", filepath.Join(filepath.Dir(config), name))
+			}
+		}
+	}
 }
 
 func TestByRunGroupsRowsOfOneRun(t *testing.T) {

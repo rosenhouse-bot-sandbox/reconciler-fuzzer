@@ -87,8 +87,11 @@ func TestDatabaseDeletionEndsWhenUsersAreNotServed(t *testing.T) {
 
 func TestShutdownStripsDeletingCRsFinalizersOnlyUnderB150(t *testing.T) {
 	for bug, wantStripped := range map[Bug]bool{0: false, B150: true} {
-		f := newBuggyFleet(t, bug, clusterObj(), databaseObj(), userObj())
+		live := clusterObj()
+		live.Name = "live"
+		f := newBuggyFleet(t, bug, clusterObj(), live, databaseObj(), userObj())
 		f.settle(f.clusters, "cluster")
+		f.settle(f.clusters, "live")
 		f.settle(f.databases, "db")
 		db := &fleetv1.Database{}
 		if err := f.get("db", db); err != nil {
@@ -103,6 +106,9 @@ func TestShutdownStripsDeletingCRsFinalizersOnlyUnderB150(t *testing.T) {
 			if err := f.get(name, obj); apierrors.IsNotFound(err) != wantStripped {
 				t.Errorf("B%d: after shutdown, the deleted %T, which a dependent holds, gives %v; want gone %v.", bug, obj, err, wantStripped)
 			}
+		}
+		if err := f.get("live", live); err != nil || !slices.Contains(live.Finalizers, fleetv1.ClusterFinalizer) {
+			t.Errorf("B%d: after shutdown, the live Cluster has finalizers %v, %v; want %s.", bug, live.Finalizers, err, fleetv1.ClusterFinalizer)
 		}
 	}
 }

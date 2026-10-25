@@ -161,9 +161,9 @@ type startedFault struct {
 	model string
 }
 
-// stepRun is step n while it runs. Its faults stop once: when a create still
-// waits for its slot after Period has passed, or else when the fault period
-// ends.
+// stepRun is step n while it runs. Its faults stop once: when a create or a
+// stop still waits for a deleted CR after Period has passed, or else when
+// the fault period ends.
 type stepRun struct {
 	*execution
 	n             int

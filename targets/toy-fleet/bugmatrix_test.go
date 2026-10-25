@@ -26,6 +26,14 @@ var bugs = map[int]string{
 	152: "Errors when a dependent kind is not served, as after its CRD is deleted, so the parent's deletion never ends.",
 }
 
+func TestEveryGateBugHasADescription(t *testing.T) {
+	for _, g := range gate {
+		if bugs[g.bug] == "" {
+			t.Errorf("B%d has no description.", g.bug)
+		}
+	}
+}
+
 // renderBugMatrix renders this toy's section: a B0 row that counts the
 // plans of configs, then the gate table.
 func renderBugMatrix(plans []string) string {
@@ -38,7 +46,7 @@ func renderBugMatrix(plans []string) string {
 		"Each Cluster owns Volumes of a third party's kind, which a model sets ready. " +
 		"A Database names its Cluster, and a User its Database (targets/toy-fleet).\n\n" +
 		"| Bug | Description | Plan | Check | Step |\n|---|---|---|---|---|\n")
-	fmt.Fprintf(&b, "| B0 | %s | all %d plans of %s | none | |\n", bugs[0], len(plans), strings.Join(configs, " and "))
+	fmt.Fprintf(&b, "| B0 | %s | all %d plans of %s | none | |\n", bugs[0], len(plans), strings.Join(configs, ", "))
 	for _, g := range rows {
 		check, step := checkOf(g.finding), " "+strconv.Itoa(g.step)+" "
 		if check == "" {
@@ -54,10 +62,10 @@ func TestRenderBugMatrix(t *testing.T) {
 	for _, want := range []string{
 		"\n## Fleet toy\n",
 		"| Bug | Description | Plan | Check | Step |\n|---|---|---|---|---|\n",
-		"| B0 | The correct controller. | all 2 plans of config.yaml and database/config.yaml | none | |\n",
+		"| B0 | The correct controller. | all 2 plans of config.yaml, database/config.yaml, protect/config.yaml | none | |\n",
 		"| B0 | The correct controller. | uninstall/stop-first | none | |\n",
 		"| B150 | Strips its finalizers from deleting CRs when it shuts down. | database/restart-cluster-delete | Converge | 1 |\n",
-		"| B152 | Errors when a dependent kind is not served, as after its CRD is deleted, so the parent's deletion never ends. | uninstall/crd-first | Converge | 2 |\n",
+		"| B152 | Errors when a dependent kind is not served, as after its CRD is deleted, so the parent's deletion never ends. | uninstall/crd-first-stop | Converge | 2 |\n",
 	} {
 		if !strings.Contains(md, want) {
 			t.Errorf("Want %q in:\n%s", want, md)
