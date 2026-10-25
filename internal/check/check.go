@@ -146,7 +146,8 @@ type Model struct {
 
 // SpecFor builds a Spec from c, or from the trace's Run event when c is nil.
 // The status kinds always come from the Run event, and c must list the Run
-// event's kinds.
+// event's kinds. Each To kind of c's references must be one the Run event's
+// references name, since the listeners record seens of no other kind.
 func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 	run, ok := ix.Run()
 	if !ok {

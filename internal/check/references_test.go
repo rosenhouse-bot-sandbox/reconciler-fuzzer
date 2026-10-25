@@ -166,6 +166,30 @@ func TestHonestJudgesWhatEachValueNames(t *testing.T) {
 	requireFinding(t, honest(t, r), "Honest", 0, noDependency, "kube/secrets", "slot b: secrets elsewhere/pw not seen")
 }
 
+func TestHonestJudgesAClusterScopedCRsReferenceByItsNamespaceValue(t *testing.T) {
+	t.Skip("enabled by the judge package")
+	tenants := trace.Kind{Group: "toy", Version: "v1", Kind: "Tenant", Resource: "tenants"}
+	tenantB := tt.Ref("toy/tenants", "", "b")
+	for _, namespace := range []string{"", "ns"} {
+		r := fleetRun(1, tenants)
+		r.Spec.References = []trace.Reference{{From: tenants, To: secrets, Namespaced: true,
+			Name: "spec.secretRef.name", Namespace: "spec.secretRef.namespace", Ready: "true", Required: true}}
+		r.Begin()
+		tenant := func(ready bool) map[string]any {
+			body := tt.CR("b", ready)
+			body["spec"] = map[string]any{"secretRef": map[string]any{"name": "pw", "namespace": namespace}}
+			return body
+		}
+		r.Create(trace.Harness, tenantB, tenant(false))
+		r.Act("create", "b", &tenantB).Update(ctl, tenantB, tenant(true))
+		if namespace == "" {
+			requireNone(t, honest(t, r))
+		} else {
+			requireFinding(t, honest(t, r), "Honest", 0, noDependency, "kube/secrets", "slot b: secrets ns/pw not seen")
+		}
+	}
+}
+
 func TestHonestJudgesAReferenceToAListedKindByItsReady(t *testing.T) {
 	t.Skip("enabled by the judge package")
 	for name, c := range map[string]struct {
@@ -285,9 +309,23 @@ func TestSettleExcusesACRNotReadyWhileAReferenceHoldsItBack(t *testing.T) {
 		look    func(r *tt.Script)
 		excused bool
 	}{
-		"missing and never seen":        {secretRef(), nil, func(*tt.Script) {}, true},
-		"seen missing":                  {secretRef(), nil, func(r *tt.Script) { r.Call(ctl, "get", pw, 404) }, true},
-		"seen not ready":                {secretRef(), secret(false), func(r *tt.Script) { r.See(ctl, pw) }, true},
+		"missing and never seen": {secretRef(), nil, func(*tt.Script) {}, true},
+		"seen missing":           {secretRef(), nil, func(r *tt.Script) { r.Call(ctl, "get", pw, 404) }, true},
+		"seen not ready":         {secretRef(), secret(false), func(r *tt.Script) { r.See(ctl, pw) }, true},
+		"seen missing, then created not ready": {secretRef(), nil, func(r *tt.Script) {
+			r.Call(ctl, "get", pw, 404).Create(trace.Harness, pw, secret(false))
+		}, true},
+		"seen not ready, then changed": {secretRef(), secret(false), func(r *tt.Script) {
+			changed := secret(false)
+			changed["type"] = "Opaque"
+			r.See(ctl, pw).Update(trace.Harness, pw, changed)
+		}, true},
+		"seen missing, then created ready": {secretRef(), nil, func(r *tt.Script) {
+			r.Call(ctl, "get", pw, 404).Create(trace.Harness, pw, secret(true))
+		}, false},
+		"seen not ready, then made ready": {secretRef(), secret(false), func(r *tt.Script) {
+			r.See(ctl, pw).Update(trace.Harness, pw, secret(true))
+		}, false},
 		"read opaquely":                 {secretRef(), secret(true), func(r *tt.Script) { r.Add(opaque(tt.Ref("secrets", "ns", ""), 0)) }, true},
 		"seen ready":                    {secretRef(), secret(true), func(r *tt.Script) { r.See(ctl, pw) }, false},
 		"live and never seen":           {secretRef(), secret(true), func(*tt.Script) {}, false},
@@ -387,7 +425,7 @@ func TestSpecForTakesReferencesFromTheConfig(t *testing.T) {
 		t.Error("Ready is the run event's, want the config's.")
 	}
 	c.References[0].To = schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
-	if _, err := check.SpecFor(c, ix); err == nil || !strings.Contains(err.Error(), "configmaps") {
-		t.Errorf("SpecFor = %v, want an error that names configmaps, whose seens the trace did not record.", err)
+	if _, err := check.SpecFor(c, ix); err == nil || !strings.Contains(err.Error(), "ConfigMap") {
+		t.Errorf("SpecFor = %v, want an error that names ConfigMap, whose seens the trace did not record.", err)
 	}
 }

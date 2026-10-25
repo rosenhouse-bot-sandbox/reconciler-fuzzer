@@ -120,8 +120,9 @@ of every kind with `SeenAll`, that a 2xx response shows its caller. These are
 the dependency kinds and the references' `to` kinds. An undecodable response
 records an `opaque` seen of its ref. A kube listener drops protobuf from such
 a request's `Accept`, since controller-runtime asks for built-in kinds in
-protobuf, whose lists and watch frames it cannot decode. It also records
-whether a list or watch has a label or field selector (`Call.Selector`). A
+protobuf, whose lists and watch frames it cannot decode. It marks a list or
+watch that may leave objects out (`Call.Partial`): one with a label or field
+selector, or with a `continue` token in its request or decoded answer. A
 response of unknown outcome shows nothing. `Shown` hears every object any
 response carries, unknown outcomes included.
 
@@ -244,7 +245,8 @@ judges the step whose fault period started last at or before `t`.
 
 1. Every live CR satisfies its kind's `ready`, or `halted` after an
    unknown-outcome controller call on it or on an instance only it owns, or a
-   reference holds it back or leaves it unknown (§12), and
+   reference holds it back, as a look at `t` would too, or leaves it unknown
+   (§12), and
 2. carries no `deletionTimestamp`.
 3. The controller is up at `t` and has been up for at least `stable`.
 4. The controller made a 2xx request, not ignored and not of unknown
@@ -351,20 +353,20 @@ dependency` (entry 81). With `track: d`, a CR fails that stays `ready` `d` after
 the controller saw a dependency not ready: `stayed ready after seeing its
 dependency not ready`.
 
-A CR **names** the `to` object of each value at its kind's references'
-`name`, in the namespace at `namespace` or else the CR's own if `to` is
-namespaced. The controller's **looks** at it are its seens of it and its
-calls that showed it missing (`Index.Looks`). A reference **holds back** the
-CR at `t` while the last look by `t` shows the object missing, with
-`required`, or not `ready`, or, with no look, while the object is missing and
-`required`. An opaque response after the last look leaves it **unknown**.
-Honest fails a `ready` write, as above, of a CR that a known reference holds
-back, or that names a live object the controller has not looked at:
-`reported ready with no dependency` if missing, else `reported ready before
-seeing its dependency ready`. With `track: d`, a CR fails that stays `ready`,
-naming the object, `d` after a look that held it back, as for dependencies:
-`stayed ready after seeing its dependency not ready`. Each finding takes the
-`to` kind (entry 83).
+A CR **names** the `to` object of each value at its kind's references' `name`,
+in the namespace at `namespace` or else the CR's own if `to` is namespaced. A
+cluster-scoped CR without a `namespace` value names no namespaced object. The
+controller's **looks** at it are its seens of it and its calls that showed it
+missing (`Index.Looks`). A reference **holds back** the CR at `t` while the
+last look by `t` shows the object missing, with `required`, or not `ready`, or,
+with no look, while the object is missing and `required`. An opaque response
+after the last look leaves it **unknown**. Honest fails a `ready` write, as
+above, of a CR that a known reference holds back, or that names a live object
+the controller has not looked at: `reported ready with no dependency` if
+missing, else `reported ready before seeing its dependency ready`. With
+`track: d`, a CR fails that stays `ready`, naming the object, `d` after a look
+that held it back, as for dependencies: `stayed ready after seeing its
+dependency not ready`. Each finding takes the `to` kind (entry 83).
 
 **Backoff.** Failing controller calls with one system, verb, object,
 subresource and status form a **run**; a create's object is its `requestName`.
@@ -474,12 +476,14 @@ and only read faults. `changeFixture` draws kube and system fixtures alike.
 lasts 0.5 s to `2 × stable`, plus the longest `track` for a model fault.
 `generate.go` documents the weights.
 
-A create, or an update that sets a reference's `name`, writes each value with
-a **candidate**: the name of any slot's CR of a listed `to` kind, or of a
-fixture of another, live half the time when one is. With `required: false`, 1
-in 4 writes `missing`, a name no object has. `changeFixture` also deletes a
-live kube fixture of a `to` kind, and `createFixture` makes it again. Plans
-of a config without references are as before.
+A create, or an update that draws a `mutate` path at or above a reference's
+`name`, writes a **candidate** at the `name` under each parent the drawn value
+holds: the name of any slot's CR of a listed `to` kind, or of a fixture of
+another, live half the time when one is. With `required: false`, 1 in 4
+writes `missing`, a name no object has. `namespace` values stay as drawn.
+`changeFixture` also deletes a live kube fixture of a `to` kind, and
+`createFixture` makes it again. Plans of a config without references are as
+before.
 
 **Hunt.** `hunt.Hunt` runs each seed, keeps runs with a new signature, replays
 each 5 times and shrinks it (`shrink.go`), trying at most 16 candidates.
@@ -573,5 +577,5 @@ Each entry changes a check, exception, `System` interface or ignore list.
 80. A live unlisted owner, such as a fixture, keeps what it owns, directly or through the controller's live objects, from rules 2 to 4, so deleting a CR blames none of it (#128). An object the controller made is never an unlisted owner.
 81. `required` binds only the first entry's CRs, so the kinds that own no dependency pass.
 82. A `damage` touches each group under its root. An undamaged touched group may empty while its kind lives under that root, and a damaged one whose owner is gone while a CR made in the step owns its kind and role there. So a damage under a CR that the controller made touches that CR's owner, and the controller may remake that CR.
-83. Converge accepts a CR that is not ready while a reference holds it back, where a `ready` write would fail Honest (#126). A look need not follow the controller's own write of the object, since a controller writes the status of the kinds it serves.
-84. A 2xx kube list without a selector that lacks an object shows it missing, so a relist after a restart or a dropped watch counts. Kube listeners ask for JSON of Seen kinds, so built-in kinds' lists and watches decode.
+83. Converge accepts a CR that is not ready while a reference holds it back, where a `ready` write would fail Honest (#126). A look then must hold it back too, so a controller that misses the object's return does not settle. A look need not follow the controller's own write of the object, since a controller writes the status of the kinds it serves.
+84. A 2xx kube list that is not `Partial` and lacks an object shows it missing, so a relist after a restart or a dropped watch counts. Kube listeners ask for JSON of Seen kinds, so built-in kinds' lists and watches decode.

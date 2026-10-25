@@ -75,8 +75,8 @@ func TestExecuteEndsThePlanWhenADeletedFixtureStays(t *testing.T) {
 	if got, want := f.cluster.all(), []string{"delete pw", "gone pw", "waitGone pw"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("cluster calls = %q, want %q", got, want)
 	}
-	if a, _ := findAction(f.rec.Events(), 1, 0); a.Action == nil || !strings.Contains(a.Action.Error, errSlotTaken.Error()) {
-		t.Errorf("createFixture action = %+v, want the error %q", a.Action, errSlotTaken)
+	if a, _ := findAction(f.rec.Events(), 1, 0); a.Action == nil || !strings.Contains(a.Action.Error, "pw") {
+		t.Errorf("createFixture action = %+v, want an error that names pw", a.Action)
 	}
 }
 

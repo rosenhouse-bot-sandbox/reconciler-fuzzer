@@ -385,10 +385,10 @@ func (ix *Index) Seen(caller Caller, uid string) []Event { return ix.seen[caller
 // Looks returns, in Seq order, the responses that showed caller ref: each
 // of its Seen events of ref that is not opaque, a deleted one showing ref
 // missing, and each of its calls that showed ref missing. Such a call is a
-// get of ref that answered 404, or a 2xx kube list without a selector that
-// covers ref, of a kind that a run event reference names as To, with no
-// Seen of ref outside a watch between its send and its Call event. No call
-// of unknown outcome counts.
+// get of ref that answered 404, or a 2xx kube list, not Partial, that covers
+// ref, of a kind that a run event reference names as To, with no Seen of
+// ref, opaque or not, outside a watch between its send and its Call event.
+// No call of unknown outcome counts.
 func (ix *Index) Looks(caller Caller, ref Ref) []Event {
 	return nil
 }

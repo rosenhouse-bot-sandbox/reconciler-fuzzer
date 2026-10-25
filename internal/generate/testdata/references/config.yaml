@@ -1,5 +1,5 @@
-# Clusters and Databases from toy-fleet, with the references of a Database.
-# Nothing launches this target.
+# This config lists toy-fleet's Clusters and Databases and a Database's
+# references. Nothing launches this target.
 launch:
   binary: none
   rbac: [../../../../targets/toy-fleet/rbac/role.yaml]

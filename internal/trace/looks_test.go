@@ -40,7 +40,7 @@ func TestLooks(t *testing.T) {
 		At(3*time.Second).Add(list(secrets, nil)).
 		At(3950*ms).Add(tt.Seen(trace.Controller, pw, "u1", "1")).
 		At(4*time.Second).Add(list(secrets, nil)).
-		At(5*time.Second).Add(list(secrets, func(c *trace.Call) { c.Selector = true }),
+		At(5*time.Second).Add(list(secrets, func(c *trace.Call) { c.Partial = true }),
 		list(tt.Ref("configmaps", "ns", ""), nil), list(tt.Ref("secrets", "elsewhere", ""), nil),
 		list(secrets, func(c *trace.Call) { c.Injected = trace.DropResponse }),
 		call(trace.Controller, "get", pw, 404, func(c *trace.Call) { c.Injected = trace.KillAfter }),
@@ -50,6 +50,8 @@ func TestLooks(t *testing.T) {
 		At(6*time.Second).Add(list(secrets, nil)).
 		At(7*time.Second).Add(watched(deleted(tt.Seen(trace.Controller, pw, "u1", "2"))), trace.Event{Seen: &trace.Seen{Caller: trace.Controller, Ref: secrets, Opaque: true}}).
 		At(8*time.Second).Add(list(tt.Ref("secrets", "", ""), nil)).
+		At(8550*ms).Add(trace.Event{Seen: &trace.Seen{Caller: trace.Controller, Ref: secrets, Opaque: true}}).
+		At(8600*ms).Add(list(secrets, nil)).
 		At(9*time.Second).Add(call(trace.Controller, "get", bucket, 404, nil), list(trace.Ref{System: "cloud", Resource: "buckets"}, nil))
 	ix := b.Index()
 	describe := func(looks []trace.Event) []string {

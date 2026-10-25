@@ -274,8 +274,10 @@ type Call struct {
 	Stream uint64 `json:"stream,omitempty"`
 	// Unmapped says the system's API map could not place the request.
 	Unmapped bool `json:"unmapped,omitempty"`
-	// Selector says a kube list or watch had a label or field selector.
-	Selector bool `json:"selector,omitempty"`
+	// Partial says a kube list or watch may leave objects out: it has a
+	// label or field selector, or a continue token in its request or in
+	// the list it answered with.
+	Partial bool `json:"partial,omitempty"`
 }
 
 // Unknown outcome effects: the server committed the request, and the caller

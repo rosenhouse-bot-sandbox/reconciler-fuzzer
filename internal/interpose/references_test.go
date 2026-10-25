@@ -108,13 +108,15 @@ func TestARequestOfAnotherKindKeepsItsAccept(t *testing.T) {
 	}
 }
 
-func TestAListOrWatchRecordsWhetherItHasASelector(t *testing.T) {
+func TestAListOrWatchRecordsWhetherItIsPartial(t *testing.T) {
 	t.Skip("enabled by the run package")
 	for path, want := range map[string]bool{
 		gadgetsPath:                                       false,
 		gadgetsPath + "?labelSelector=app%3Dx":            true,
 		gadgetsPath + "?fieldSelector=metadata.name%3Dg1": true,
 		gadgetsPath + "?labelSelector=&fieldSelector=":    false,
+		gadgetsPath + "?limit=500":                        false,
+		gadgetsPath + "?limit=500&continue=next":          true,
 		gadgetsPath + "?watch=true":                       false,
 		gadgetsPath + "?watch=true&labelSelector=app%3Dx": true,
 	} {
@@ -122,8 +124,18 @@ func TestAListOrWatchRecordsWhetherItHasASelector(t *testing.T) {
 
 		do(t, l, "GET", path)
 
-		if got := recorded.waitCalls(t, 1)[0].Selector; got != want {
-			t.Errorf("GET %s records Selector %v, want %v.", path, got, want)
+		if got := recorded.waitCalls(t, 1)[0].Partial; got != want {
+			t.Errorf("GET %s records Partial %v, want %v.", path, got, want)
+		}
+	}
+	for page, want := range map[string]bool{`"continue":"next"`: true, `"continue":""`: false} {
+		body := `{"kind":"GadgetList","metadata":{` + page + `},"items":[` + gadgetJSON("g1", "u1", "5") + `]}`
+		l, recorded := listen(t, respondOK("application/json", "", body), seeingGadgets)
+
+		do(t, l, "GET", gadgetsPath+"?limit=1")
+
+		if got := recorded.waitCalls(t, 1)[0].Partial; got != want {
+			t.Errorf("A list that answers with %s records Partial %v, want %v.", page, got, want)
 		}
 	}
 }

@@ -118,7 +118,7 @@ func TestReferencesRefusals(t *testing.T) {
 		"a namespace list without a name": {"{from: toy/v1/Database, to: v1/Secret, name: spec.s, namespace: \"spec.keys[*].namespace\", ready: \"true\"}", "references[0].namespace"},
 		"a track of zero":                 {"{from: toy/v1/Database, to: toy/v1/Cluster, name: spec.clusterRef, track: 0s}", "references[0].track"},
 		"a second entry of one name":      {"{from: toy/v1/Database, to: toy/v1/Cluster, name: spec.clusterRef}\n  - {from: toy/v1/Database, to: toy/v1/User, name: spec.clusterRef}", "references[1].name"},
-		"onDelete, which step 3 adds":     {"{from: toy/v1/Database, to: toy/v1/Cluster, name: spec.clusterRef, onDelete: block}", "references[0].onDelete is not a key; references[0] takes from, to, name, namespace, ready, required and track"},
+		"an unknown key":                  {"{from: toy/v1/Database, to: toy/v1/Cluster, name: spec.clusterRef, onDelete: block}", "references[0].onDelete is not a key; references[0] takes from, to, name, namespace, ready, required and track"},
 	} {
 		_, err := config.Load(writeReferences(t, "references:\n  - "+c.references+"\n"))
 		if err == nil || !strings.Contains(err.Error(), c.want) {
