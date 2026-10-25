@@ -18,8 +18,7 @@ const (
 	uninstallConfig = "uninstall/config.yaml"
 )
 
-// configs are the toy's configs with plans. B0 passes every plan in plans/
-// beside each.
+// configs are the configs whose every plan B0 passes with no notes.
 var configs = []string{"config.yaml", databaseConfig}
 
 type gateRow struct {

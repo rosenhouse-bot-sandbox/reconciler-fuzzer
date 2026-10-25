@@ -65,7 +65,7 @@ Each Cluster owns Volumes of a third party's kind, which a model sets ready. A D
 
 | Bug | Description | Plan | Check | Step |
 |---|---|---|---|---|
-| B0 | The correct controller. | all 13 committed plans | none | |
+| B0 | The correct controller. | all 13 plans of config.yaml and database/config.yaml | none | |
 | B0 | The correct controller. | uninstall/recreate | none | |
 | B0 | The correct controller. | uninstall/stop-after-delete | none | |
 | B0 | The correct controller. | uninstall/stop-first | none | |

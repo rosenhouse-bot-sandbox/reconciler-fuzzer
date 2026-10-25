@@ -353,6 +353,19 @@ cert-manager seed in 11 holds Secrets this way, so a 20-seed `make hunt-cert-man
 but not always, finds #63. A report notes a `holdWatch` while the controller had no watch of
 its kind, such as one with a misspelt resource.
 
+### Uninstalling
+
+A `stop` action checks what an uninstall leaves behind. It waits until the CRs the plan deleted
+are gone, and then stops the controller for good:
+
+```json
+{"actions": [{"do": "delete", "slot": "a"}, {"do": "stop"}]}
+```
+
+After a stop, a plan may only delete CRs and change fixtures, and the runner appends no steps.
+Clean judges the plan's last step instead. A CR that the plan deletes after the stop may keep
+its finalizers, and gets a note.
+
 ### Examples
 
 Each example builds its controller from a pinned upstream tag. Its plans and seeds give no

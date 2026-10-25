@@ -39,13 +39,14 @@ configmaps rf-da5dd4dd/widget-0 (rule 1, slot a)
 
 The heading is the check and its summary. The first line names the step,
 counting from 0, and the time since the run started. `Before step 0` means
-during startup. The runner appends two steps to every plan:
-`Step N (delete all)` and `Step N+1 (restart)`.
+during startup. The runner appends two steps to every plan without a
+`stop`: `Step N (delete all)` and `Step N+1 (restart)`.
 A `Labels:` line may follow. The block lists the detail lines.
 
 A `# Notes` section follows the findings. A note says what the trace could
 not decide: an action that failed, a fault that picked no request, a
-step the trace ended too early to judge, or an unmapped request. Notes do
+step the trace ended too early to judge, a CR deleted after a `stop` and
+still being deleted, or an unmapped request. Notes do
 not fail a run. A fault that picked no request tested nothing, so a plan
 with such notes may need a different fault.
 
@@ -101,6 +102,9 @@ Look at the clause first:
 
 `did not stay settled (clause k)` means the condition held once, then
 failed again within `stable`.
+
+After a `stop`, only clauses 2, 6 and 7 apply. Clause 2 then names a CR that
+was still being deleted when the stop's wait for it gave up.
 
 The `backoff-bound` label means `timeouts.backoffCap` set the deadline,
 because the step's faults lasted longer. A controller whose retry backoff

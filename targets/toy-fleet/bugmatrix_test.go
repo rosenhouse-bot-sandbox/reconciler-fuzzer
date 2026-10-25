@@ -27,7 +27,7 @@ var bugs = map[int]string{
 }
 
 // renderBugMatrix renders this toy's section: a B0 row that counts the
-// committed plans, then the gate table.
+// plans of configs, then the gate table.
 func renderBugMatrix(plans []string) string {
 	rows := slices.Clone(gate)
 	slices.SortStableFunc(rows, func(a, b gateRow) int {
@@ -38,7 +38,7 @@ func renderBugMatrix(plans []string) string {
 		"Each Cluster owns Volumes of a third party's kind, which a model sets ready. " +
 		"A Database names its Cluster, and a User its Database (targets/toy-fleet).\n\n" +
 		"| Bug | Description | Plan | Check | Step |\n|---|---|---|---|---|\n")
-	fmt.Fprintf(&b, "| B0 | %s | all %d committed plans | none | |\n", bugs[0], len(plans))
+	fmt.Fprintf(&b, "| B0 | %s | all %d plans of %s | none | |\n", bugs[0], len(plans), strings.Join(configs, " and "))
 	for _, g := range rows {
 		check, step := checkOf(g.finding), " "+strconv.Itoa(g.step)+" "
 		if check == "" {
@@ -54,7 +54,7 @@ func TestRenderBugMatrix(t *testing.T) {
 	for _, want := range []string{
 		"\n## Fleet toy\n",
 		"| Bug | Description | Plan | Check | Step |\n|---|---|---|---|---|\n",
-		"| B0 | The correct controller. | all 2 committed plans | none | |\n",
+		"| B0 | The correct controller. | all 2 plans of config.yaml and database/config.yaml | none | |\n",
 		"| B0 | The correct controller. | uninstall/stop-first | none | |\n",
 		"| B150 | Strips its finalizers from deleting CRs when it shuts down. | database/restart-cluster-delete | Converge | 1 |\n",
 		"| B152 | Errors when a dependent kind is not served, as after its CRD is deleted, so the parent's deletion never ends. | uninstall/crd-first | Converge | 2 |\n",
