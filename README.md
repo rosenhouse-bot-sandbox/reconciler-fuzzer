@@ -188,11 +188,12 @@ references:
   a CR while the controller's last look at the named object showed it not ready, or missing and
   `required`. Before any look, only a missing `required` object holds the CR back.
 - Honest fails a CR that the controller writes ready while a reference holds it back, or before
-  the controller looked at a live named object. It passes the write if the controller writes the
-  CR not ready, or naming another object, within `stable` of the write's response, since a
-  reconcile may read its cache before the look reaches the cache. A failed write of the CR in that
-  time, such as a conflict, extends it to `stable` after the failure. With `track: d`, Honest
-  fails a CR that stays ready `d` after a look that held it back.
+  the controller looked at a live named object. It passes a write sent within 2×`stable` of a look
+  if the controller writes the CR not ready, or naming another object, within `stable` of the
+  write's response, since a reconcile may read its cache before the look reaches the cache. A
+  failed or unknown-outcome write of the CR in that time, such as a conflict, extends it to
+  `stable` after its response, and a controller exit to `stable` after the next start. With
+  `track: d`, Honest fails a CR that stays ready `d` after a look that held it back.
 - The settle condition does not wait for a CR that a reference holds back, if the object as it is
   now would hold the CR back too. This starts once `stable`, and the time the step's faults
   lasted, at most `timeouts.backoffCap`, have passed since the faults ended. So a controller in

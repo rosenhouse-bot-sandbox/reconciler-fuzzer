@@ -143,10 +143,10 @@ func (h *honesty) corrected(p Primary, ready trace.Event, later []trace.Event, n
 // correctionDue is when the controller must correct ready. A reconcile that
 // read its cache before a look may write ready after it, and the CR's next
 // reconcile starts only once that write returns. So the controller has
-// stable from the latest of ready's response, the response of each write of
-// the CR sent in time that failed, as one from a cache that lacks ready
-// does, or had an unknown outcome, and its first start after each exit in
-// time.
+// stable after the latest of ready's response, the response of each write
+// of the CR sent by then that failed, as one from a cache that lacks ready
+// does, or had an unknown outcome, and its first start after each exit by
+// then.
 func (h *honesty) correctionDue(ready trace.Event) time.Duration {
 	latest := ready.At
 	for {
@@ -156,12 +156,10 @@ func (h *honesty) correctionDue(ready trace.Event) time.Duration {
 				latest = max(latest, e.At)
 			}
 		}
-		exited := false
-		for _, e := range h.ix.Procs() {
-			if e.Proc.Event == trace.Exit && e.At <= due {
-				exited = true
-			} else if e.Proc.Event == trace.Start && exited {
-				latest, exited = max(latest, e.At), false
+		procs := h.ix.Procs()
+		for i := 1; i < len(procs); i++ {
+			if exit := procs[i-1]; exit.Proc.Event == trace.Exit && exit.At <= due {
+				latest = max(latest, procs[i].At)
 			}
 		}
 		if latest+h.s.Stable == due {
