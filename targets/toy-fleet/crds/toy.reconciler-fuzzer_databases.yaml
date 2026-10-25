@@ -21,7 +21,9 @@ spec:
     name: v1
     schema:
       openAPIV3Schema:
-        description: Database is ready once its Cluster is. It owns a ConfigMap.
+        description: |-
+          Database is ready once its Cluster is, and once the Secret it may name
+          holds a password. It owns a ConfigMap.
         properties:
           apiVersion:
             description: |-

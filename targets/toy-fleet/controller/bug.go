@@ -6,8 +6,18 @@ import "fmt"
 // controller. The fleet's bugs start at B100, past the other toys' bugs.
 type Bug int
 
+// Seeded bugs in what a Database waits for.
+const (
+	// B123 readies a Database on a Cluster that is not Ready.
+	B123 Bug = 123
+	// B124 readies a Database before its Secret exists.
+	B124 Bug = 124
+	// B125 keeps a Ready Database ready after its Secret goes.
+	B125 Bug = 125
+)
+
 // bugs holds every seeded bug ID.
-var bugs = map[Bug]bool{}
+var bugs = map[Bug]bool{B123: true, B124: true, B125: true}
 
 // ParseBug converts a --bug value into a Bug.
 func ParseBug(id int) (Bug, error) {

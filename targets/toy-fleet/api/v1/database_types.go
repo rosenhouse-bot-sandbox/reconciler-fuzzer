@@ -24,7 +24,8 @@ type DatabaseSpec struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 
-// Database is ready once its Cluster is. It owns a ConfigMap.
+// Database is ready once its Cluster is, and once the Secret it may name
+// holds a password. It owns a ConfigMap.
 type Database struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
