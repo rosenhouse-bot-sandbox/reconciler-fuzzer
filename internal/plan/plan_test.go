@@ -104,20 +104,30 @@ func TestValidate(t *testing.T) {
 		steps []Step
 		want  string
 	}{
-		"unknown do":              {[]Step{{Actions: []Action{{Do: "explode"}}}}, "steps[0].actions[0]: unknown do"},
-		"create without slot":     {[]Step{{Actions: []Action{{Do: Create}}}}, "steps[0].actions[0]: create needs a slot"},
-		"update before create":    {[]Step{{Actions: []Action{{Do: Update, Slot: "a", Patch: json.RawMessage(`{}`)}}}}, "steps[0].actions[0]: update names slot \"a\""},
-		"update without patch":    {[]Step{{Actions: []Action{create}}, {Actions: []Action{{Do: Update, Slot: "a"}}}}, "steps[1].actions[0]: update needs a JSON object patch"},
-		"update array patch":      {[]Step{{Actions: []Action{create, {Do: Update, Slot: "a", Patch: json.RawMessage(`[1]`)}}}}, "steps[0].actions[1]: update needs a JSON object patch"},
-		"update null patch":       {[]Step{{Actions: []Action{create, {Do: Update, Slot: "a", Patch: json.RawMessage(`null`)}}}}, "steps[0].actions[1]: update needs a JSON object patch"},
-		"update other slot":       {[]Step{{Actions: []Action{create, {Do: Update, Slot: "b", Patch: json.RawMessage(`{}`)}}}}, "steps[0].actions[1]: update names slot \"b\""},
-		"delete before create":    {[]Step{{Actions: []Action{{Do: Delete, Slot: "a"}}}}, "steps[0].actions[0]: delete names slot \"a\""},
-		"delete without slot":     {[]Step{{Actions: []Action{create, {Do: Delete}}}}, "steps[0].actions[1]: delete names slot \"\""},
-		"update after delete":     {[]Step{{Actions: []Action{create}}, {Actions: []Action{{Do: Delete, Slot: "a"}, {Do: Update, Slot: "a", Patch: json.RawMessage(`{}`)}}}}, "steps[1].actions[1]: update names slot \"a\", which an earlier delete emptied"},
-		"delete twice":            {[]Step{{Actions: []Action{create, {Do: Delete, Slot: "a"}, {Do: Delete, Slot: "a"}}}}, "steps[0].actions[2]: delete names slot \"a\", which an earlier delete emptied"},
-		"restart with slot":       {[]Step{{Actions: []Action{{Do: Restart, Slot: "a"}}}}, "steps[0].actions[0]: restart takes no slot, object or patch"},
-		"kill with object":        {[]Step{{Actions: []Action{{Do: Kill, Object: json.RawMessage(`{}`)}}}}, "steps[0].actions[0]: kill takes no slot, object or patch"},
-		"restart with patch":      {[]Step{{Actions: []Action{{Do: Restart, Patch: json.RawMessage(`{}`)}}}}, "steps[0].actions[0]: restart takes no slot, object or patch"},
+		"unknown do":           {[]Step{{Actions: []Action{{Do: "explode"}}}}, "steps[0].actions[0]: unknown do"},
+		"create without slot":  {[]Step{{Actions: []Action{{Do: Create}}}}, "steps[0].actions[0]: create needs a slot"},
+		"update before create": {[]Step{{Actions: []Action{{Do: Update, Slot: "a", Patch: json.RawMessage(`{}`)}}}}, "steps[0].actions[0]: update names slot \"a\""},
+		"update without patch": {[]Step{{Actions: []Action{create}}, {Actions: []Action{{Do: Update, Slot: "a"}}}}, "steps[1].actions[0]: update needs a JSON object patch"},
+		"update array patch":   {[]Step{{Actions: []Action{create, {Do: Update, Slot: "a", Patch: json.RawMessage(`[1]`)}}}}, "steps[0].actions[1]: update needs a JSON object patch"},
+		"update null patch":    {[]Step{{Actions: []Action{create, {Do: Update, Slot: "a", Patch: json.RawMessage(`null`)}}}}, "steps[0].actions[1]: update needs a JSON object patch"},
+		"update other slot":    {[]Step{{Actions: []Action{create, {Do: Update, Slot: "b", Patch: json.RawMessage(`{}`)}}}}, "steps[0].actions[1]: update names slot \"b\""},
+		"delete before create": {[]Step{{Actions: []Action{{Do: Delete, Slot: "a"}}}}, "steps[0].actions[0]: delete names slot \"a\""},
+		"delete without slot":  {[]Step{{Actions: []Action{create, {Do: Delete}}}}, "steps[0].actions[1]: delete names slot \"\""},
+		"update after delete":  {[]Step{{Actions: []Action{create}}, {Actions: []Action{{Do: Delete, Slot: "a"}, {Do: Update, Slot: "a", Patch: json.RawMessage(`{}`)}}}}, "steps[1].actions[1]: update names slot \"a\", which an earlier delete emptied"},
+		"delete twice":         {[]Step{{Actions: []Action{create, {Do: Delete, Slot: "a"}, {Do: Delete, Slot: "a"}}}}, "steps[0].actions[2]: delete names slot \"a\", which an earlier delete emptied"},
+		"restart with slot":    {[]Step{{Actions: []Action{{Do: Restart, Slot: "a"}}}}, "steps[0].actions[0]: restart takes no slot, object or patch"},
+		"kill with object":     {[]Step{{Actions: []Action{{Do: Kill, Object: json.RawMessage(`{}`)}}}}, "steps[0].actions[0]: kill takes no slot, object or patch"},
+		"restart with patch":   {[]Step{{Actions: []Action{{Do: Restart, Patch: json.RawMessage(`{}`)}}}}, "steps[0].actions[0]: restart takes no slot, object or patch"},
+		"stop with slot":       {[]Step{{Actions: []Action{create, {Do: Stop, Slot: "a"}}}}, "steps[0].actions[1]: stop takes no slot, object or patch"},
+		"stop with target":     {[]Step{{Actions: []Action{{Do: Stop, Target: cms}}}}, "steps[0].actions[0]: stop takes no target"},
+		"restart after a stop": {[]Step{{Actions: []Action{{Do: Stop}}}, {Actions: []Action{{Do: Restart}}}}, "steps[1].actions[0]: restart after a stop"},
+		"kill after a stop":    {[]Step{{Actions: []Action{{Do: Stop}, {Do: Kill}}}}, "steps[0].actions[1]: kill after a stop"},
+		"stop after a stop":    {[]Step{{Actions: []Action{{Do: Stop}}}, {Actions: []Action{{Do: Stop}}}}, "steps[1].actions[0]: stop after a stop"},
+		"create after a stop":  {[]Step{{Actions: []Action{{Do: Stop}, create}}}, "steps[0].actions[1]: create after a stop"},
+		"update after a stop":  {[]Step{{Actions: []Action{create, {Do: Stop}}}, {Actions: []Action{{Do: Update, Slot: "a", Patch: json.RawMessage(`{}`)}}}}, "steps[1].actions[0]: update after a stop"},
+		"damage after a stop":  {[]Step{{Actions: []Action{{Do: Stop}, {Do: Damage, Target: cms}}}}, "steps[0].actions[1]: damage after a stop"},
+		"kill after a stop and a delete": {[]Step{{Actions: []Action{create, {Do: Stop}}}, {Actions: []Action{{Do: Delete, Slot: "a"}, {Do: Kill}}}},
+			"steps[1].actions[1]: kill after a stop"},
 		"negative at":             {[]Step{{Actions: []Action{{Do: Kill, At: -1}}}}, "steps[0].actions[0]: at is negative"},
 		"negative period":         {[]Step{{}, {Period: -1}}, "steps[1]: period is negative"},
 		"fault with no effect":    {[]Step{{Faults: []Fault{{}}}}, "steps[0].faults[0]: a fault sets 0 of error, delay, drop, dropResponse, killAfter, stuck, slowDelete and holdWatch"},
@@ -211,9 +221,19 @@ func TestValidateAccepts(t *testing.T) {
 		{Faults: []Fault{{HoldWatch: true, Match: gadgets}, {HoldWatch: true, System: "kube", Match: Match{Resource: "secrets"}}},
 			Actions: []Action{{Do: ChangeFixture, Target: &Target{System: "vault", Name: "secret/app"}, Patch: json.RawMessage(`{"data":{"k":"v"}}`)},
 				{Do: ChangeFixture, Target: &Target{System: "cloud", Resource: "buckets", Name: "b"}}}},
+		{Actions: []Action{{Do: Stop}, {Do: Delete, Slot: "c"}}},
+		{Faults: []Fault{{SlowDelete: true, Match: gadgets}}, Actions: []Action{{Do: Delete, Slot: "d"}, {Do: ChangeFixture, Target: fixture}}},
 	}}
 	if err := p.Validate(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// An uninstall stops the controller for good after its CRs are gone.
+func TestLoadAcceptsStop(t *testing.T) {
+	p, err := Load(write(t, `{"steps": [{"actions": [{"do": "create", "slot": "a"}]}, {"actions": [{"do": "delete", "slot": "a"}]}, {"actions": [{"do": "stop"}]}]}`))
+	if err != nil || p.Steps[2].Actions[0].Do != "stop" {
+		t.Fatalf("Load = %+v, %v; want a stop action", p, err)
 	}
 }
 

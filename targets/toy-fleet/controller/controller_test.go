@@ -499,7 +499,7 @@ func TestReconcileOfAMissingCRSucceeds(t *testing.T) {
 }
 
 func TestParseBugAcceptsOnlyKnownBugs(t *testing.T) {
-	for _, id := range []int{0, 116} {
+	for _, id := range []int{0, 116, 150, 151, 152} {
 		if b, err := ParseBug(id); int(b) != id || err != nil {
 			t.Errorf("ParseBug(%d) = %v, %v", id, b, err)
 		}

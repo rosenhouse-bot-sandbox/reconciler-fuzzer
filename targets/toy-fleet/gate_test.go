@@ -13,9 +13,10 @@ import (
 )
 
 const (
-	clusterConfig  = "cluster/config.yaml"
-	databaseConfig = "database/config.yaml"
-	protectConfig  = "protect/config.yaml"
+	clusterConfig   = "cluster/config.yaml"
+	databaseConfig  = "database/config.yaml"
+	protectConfig   = "protect/config.yaml"
+	uninstallConfig = "uninstall/config.yaml"
 )
 
 // configs are the configs whose every plan B0 passes with no notes.
@@ -48,6 +49,21 @@ func (g gateRow) planPath() string { return planPath(g.configPath(), g.plan) }
 var gate = []gateRow{
 	{plan: "slow-delete", bug: 116, finding: "Finalizers: removed another caller's finalizer", step: 1, detail: "cluster-vol-0: reconciler-fuzzer.dev/slow-delete"},
 	{plan: "b0", bug: 116, finding: "Finalizers: removed another caller's finalizer", step: 2, detail: "cluster-vol-0: storage.thirdparty/protect", config: protectConfig},
+	{plan: "restart-cluster-delete", bug: 150, finding: "Converge: did not settle (clause 1)", step: 1, detail: "db is not ready", config: databaseConfig},
+	// The kill comes after the update that releases the Cluster, so B151
+	// never strips its Volumes' finalizers.
+	{plan: "kill-recreate", bug: 151, finding: "Converge: did not settle (clause 1)", step: 1, detail: "cluster is not ready", config: uninstallConfig},
+	// The update error keeps B151's Volumes held until the stop.
+	{plan: "stop-after-delete", bug: 151, finding: "Clean: left resources behind", step: 1, detail: "/cluster-vol-0 (rule 1, slot a)", config: uninstallConfig},
+	{plan: "crd-first-stop", bug: 152, finding: "Converge: did not settle (clause 2)", step: 2, detail: "cluster is being deleted", config: uninstallConfig},
+	{plan: "crd-first-stop", config: uninstallConfig},
+	{plan: "kill-recreate", config: uninstallConfig},
+	// The create waits for the name, the slowDelete for the create, and the
+	// plan ends at its create.
+	{plan: "recreate", config: uninstallConfig},
+	// B0 updates no Volume while it deletes them.
+	{plan: "stop-after-delete", config: uninstallConfig, note: "fault 1 (error(500) on verb=update group=storage.thirdparty resource=volumes) picked no request"},
+	{plan: "stop-first", config: uninstallConfig, note: "cluster is not judged: the stop did not wait for it"},
 }
 
 func planPath(config, plan string) string {

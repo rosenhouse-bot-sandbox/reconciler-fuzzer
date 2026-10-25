@@ -405,8 +405,34 @@ func TestWaitGoneReturnsAnErrorOtherThanNotFound(t *testing.T) {
 	k := &Kube{mapper: newStaticMapper(), harness: harness}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := k.WaitGone(ctx, trace.Ref{Resource: "configmaps", Namespace: "ns", Name: "c"}); !apierrors.IsForbidden(err) {
+	if err := k.WaitGone(ctx, trace.Ref{Resource: "configmaps", Namespace: "ns", Name: "c"}, ""); !apierrors.IsForbidden(err) {
 		t.Fatalf("WaitGone = %v, want the Forbidden error", err)
+	}
+}
+
+// A CR is gone once its name is free or another CR holds it, as kubectl
+// wait --for=delete judges a CR that kubectl delete removed.
+func TestGoneCountsAnObjectWithAnotherUIDAsGone(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"c","namespace":"ns","uid":"u2"}}`))
+	}))
+	defer server.Close()
+	harness, err := dynamic.NewForConfig(&rest.Config{Host: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := &Kube{mapper: newStaticMapper(), harness: harness}
+	ref := trace.Ref{Resource: "configmaps", Namespace: "ns", Name: "c"}
+	for uid, want := range map[string]bool{"": false, "u2": false, "u1": true} {
+		if gone, err := k.Gone(t.Context(), ref, uid); gone != want || err != nil {
+			t.Errorf("Gone(c, %q) = %v, %v; want %v", uid, gone, err, want)
+		}
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if err := k.WaitGone(ctx, ref, "u1"); err != nil {
+		t.Errorf("WaitGone(c, u1) = %v, want nil", err)
 	}
 }
 

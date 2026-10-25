@@ -450,3 +450,35 @@ func TestChangedJudgesAFakesWriteWithNoRVByTheObserver(t *testing.T) {
 		}
 	}
 }
+
+func TestStopIsTheFirstStopThatDidNotFail(t *testing.T) {
+	var b tt.Builder
+	b.At(1 * s).Add(trace.Event{Action: &trace.Action{Step: 1, Do: "stop", Error: "boom"}}).
+		At(2 * s).Add(trace.Event{Action: &trace.Action{Step: 2, Do: "restart"}}).
+		At(3 * s).Add(trace.Event{Action: &trace.Action{Step: 3, Do: "stop"}}).
+		At(4 * s).Add(trace.Event{Action: &trace.Action{Step: 4, Do: "stop"}})
+	ix := b.Index()
+	if _, stopped := ix.Stop(2 * s); stopped {
+		t.Error("Stop(2s) found a stop before the first that did not fail")
+	}
+	for _, at := range []time.Duration{3 * s, 5 * s} {
+		if stop, stopped := ix.Stop(at); !stopped || stop.At != 3*s || stop.Action.Step != 3 {
+			t.Errorf("Stop(%v) = %+v, %v; want step 3's stop at 3s", at, stop, stopped)
+		}
+	}
+}
+
+func TestStopWaitedForTheCRsThatTheStopNames(t *testing.T) {
+	var b tt.Builder
+	b.At(1 * s).Add(trace.Event{Action: &trace.Action{Step: 1, Do: "stop", Error: "boom", Waited: []string{"ub"}}})
+	if b.Index().StopWaitedFor("ub") {
+		t.Error("StopWaitedFor(ub) = true for a stop that failed")
+	}
+	b.At(2 * s).Add(trace.Event{Action: &trace.Action{Step: 2, Do: "stop", Waited: []string{"ua", "uc"}}})
+	ix := b.Index()
+	for uid, want := range map[string]bool{"ua": true, "uc": true, "ub": false, "": false} {
+		if got := ix.StopWaitedFor(uid); got != want {
+			t.Errorf("StopWaitedFor(%q) = %v, want %v", uid, got, want)
+		}
+	}
+}

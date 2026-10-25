@@ -83,7 +83,7 @@ func TestModelsAgainstEnvtest(t *testing.T) {
 		t.Helper()
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		if err := k.WaitGone(ctx, ref); err != nil {
+		if err := k.WaitGone(ctx, ref, ""); err != nil {
 			t.Fatalf("%s/%s is not gone: %v", ref.Resource, ref.Name, err)
 		}
 	}
@@ -271,7 +271,7 @@ func TestAStageHoldsAGadgetsDeletionWithItsFinalizer(t *testing.T) {
 	if err := k.Delete(ctx, ref, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := k.WaitGone(ctx, ref); err != nil {
+	if err := k.WaitGone(ctx, ref, ""); err != nil {
 		t.Fatalf("The gadget is not gone: %v", err)
 	}
 	if elapsed := time.Since(deleted); elapsed < hold || elapsed > hold+time.Second {

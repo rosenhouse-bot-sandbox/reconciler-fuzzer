@@ -1,0 +1,10 @@
+{
+  "steps": [
+    {"actions": [{"do": "create", "slot": "a"}]},
+    {
+      "period": "2s",
+      "faults": [{"match": {"verb": "update", "group": "toy.reconciler-fuzzer", "resource": "clusters"}, "nth": 2, "killAfter": true}],
+      "actions": [{"do": "delete", "slot": "a"}, {"at": "1s", "do": "create", "slot": "a"}]
+    }
+  ]
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -14,15 +15,22 @@ import (
 )
 
 // Clean fails a settled step after which a resource the controller created
-// for a deleted CR survives, and the run's last step when any resource the
-// controller created survives. It reports each instance once.
+// for a deleted CR survives. Without a stop, it also fails the run's last
+// step when any resource the controller created survives. After a stop, a
+// CR deleted after the stop counts as live, since no controller is left to
+// clean up after it. It reports each instance once.
 func Clean(ix *trace.Index, s Spec) []Finding {
 	v := newView(ix, s)
 	run, _ := ix.Run()
+	final, stopAt := run.PlanSteps+1, time.Duration(math.MaxInt64)
+	stop, stopped := ix.Stop(math.MaxInt64)
+	if stopped {
+		final, stopAt = run.PlanSteps-1, stop.At
+	}
 	reported := map[string]bool{}
 	var findings []Finding
 	for _, step := range v.steps {
-		last := step.Step == run.PlanSteps+1
+		last := step.Step == final
 		if !last && !v.has(step.Step, "delete") {
 			continue
 		}
@@ -30,7 +38,7 @@ func Clean(ix *trace.Index, s Spec) []Finding {
 		left := map[string][]string{}
 		for _, i := range v.resources(end) {
 			o := v.w.Owner(i, end)
-			if !reported[i.UID] && !o.Shared() && !v.retained(o, end) && (last || v.allGone(o, end)) {
+			if !reported[i.UID] && !o.Shared() && !v.retained(o, end) && (last && !stopped || v.allGone(o, end) && v.allDeleted(o, stopAt)) {
 				reported[i.UID] = true
 				left[kind(i.Ref)] = append(left[kind(i.Ref)], v.describe(i, o))
 			}
@@ -50,6 +58,14 @@ func (v *view) allGone(o owner.Owner, t time.Duration) bool {
 	return !slices.ContainsFunc(o.CRs, func(uid string) bool {
 		cr, found := v.w.Instance(uid)
 		return found && cr.Live(t)
+	})
+}
+
+// allDeleted reports whether every CR o names is gone or being deleted at t.
+func (v *view) allDeleted(o owner.Owner, t time.Duration) bool {
+	return !slices.ContainsFunc(o.CRs, func(uid string) bool {
+		cr, found := v.w.Instance(uid)
+		return found && cr.Live(t) && !deleting(v.w.Body(cr, t))
 	})
 }
 
