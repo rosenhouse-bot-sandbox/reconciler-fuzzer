@@ -132,6 +132,18 @@ func TestReferencesRefusals(t *testing.T) {
 	}
 }
 
+// TestAFromKindOfUnknownScopeNeedsNoNamespace loads a reference from
+// Database, whose CRD crds lacks, to a namespaced kind.
+func TestAFromKindOfUnknownScopeNeedsNoNamespace(t *testing.T) {
+	path := writeReferences(t, "references: [{from: toy/v1/Database, to: v1/Secret, name: spec.s, ready: \"true\"}]\n")
+	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "crd.yaml"), []byte(crd("Cluster", "Namespaced")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err != nil {
+		t.Errorf("Load = %v, want no namespace needed for a from kind that crds do not describe.", err)
+	}
+}
+
 func TestAConfigWithoutReferencesNeedsNoCRDs(t *testing.T) {
 	path := writeConfig(t, minimal(t))
 	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "crd.yaml"), []byte("{not: [yaml"), 0o644); err != nil {

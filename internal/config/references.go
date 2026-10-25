@@ -145,11 +145,11 @@ func (c *Config) reference(key string, d declaredReference, scopes map[schema.Gr
 
 // checkNamespace refuses a namespace path that is malformed, that reads
 // list items name does not, or that the to kind has no use for. Without a
-// namespace path, it refuses a namespaced to of a cluster-scoped from. Each
-// error reads as if it followed the namespace key.
+// namespace path, it refuses a namespaced to of a from that the CRDs say is
+// cluster-scoped. Each error reads as if it followed the namespace key.
 func checkNamespace(r Reference, name []pathSegment, scopes map[schema.GroupKind]bool) error {
 	if r.Namespace == "" {
-		if fromNamespaced, _ := scopeOf(r.From.GroupKind(), scopes); r.Namespaced && !fromNamespaced {
+		if fromNamespaced, known := scopeOf(r.From.GroupKind(), scopes); r.Namespaced && known && !fromNamespaced {
 			return errors.New(" is required: the from kind is cluster-scoped and the to kind namespaced")
 		}
 		return nil
