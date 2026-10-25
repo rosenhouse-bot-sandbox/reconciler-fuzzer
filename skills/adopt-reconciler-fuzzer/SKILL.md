@@ -316,7 +316,7 @@ controller:
 | Honest, `reported ready with no dependency` | The CR can be ready without that kind, or does not own it. | Set `required: false` in the first case. In the second, add `owns` or `owner`, or drop `dependency`. |
 | Clean | The controller keeps resources by design. | Set the entry's `retain`. |
 | Unique, on a fake | The CR owns several resources in one collection by design. | Set the system's `role`. |
-| Finalizers, `added by harness` | The sample carries the controller's own finalizer. | Take the finalizer out of the sample. |
+| Finalizers, on the controller's own finalizer `added by harness` | The sample carries that finalizer. | Take it out of the sample. |
 | Converge, with a CR that halted after a create of unknown outcome | The controller stops on purpose and waits for a person. | Set the entry's `halted` to CEL over its halted condition. |
 
 Every other finding is a bug in the controller. Never hide one to make a check pass, and ask

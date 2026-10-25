@@ -204,8 +204,12 @@ limiter, such as controller-runtime's default, rather than a short
 A controller update or patch dropped a finalizer that another caller,
 such as a stage model, put on the object. Each line names the object, the
 finalizer and the caller that added it. Remove only your own finalizer,
-as `controllerutil.RemoveFinalizer` does. A sample that carries the
-controller's own finalizer makes the harness its adder.
+as `controllerutil.RemoveFinalizer` does. A `client.MergeFrom` patch
+replaces the whole list, so it drops a finalizer added after your read.
+Write with `Update`, or patch with
+`client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})`.
+A sample that carries the controller's own finalizer makes the harness its
+adder.
 
 ## When a run exits 2
 

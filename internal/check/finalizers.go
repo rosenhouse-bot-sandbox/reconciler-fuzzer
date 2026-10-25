@@ -11,16 +11,17 @@ import (
 
 const removedForeign = "removed another caller's finalizer"
 
-// Finalizers fails a controller update or patch whose answer lacks a
-// finalizer that another recorded caller added. DESIGN.md §12 defines it.
-// Its findings come in order of their first removal.
+// Finalizers fails a controller update or patch, without a subresource,
+// whose answer lacks a finalizer that another recorded caller added.
+// DESIGN.md §12 defines it. Its findings come in order of their first
+// removal.
 func Finalizers(ix *trace.Index) []Finding {
 	steps := ix.Steps()
 	found := map[findingKey]*Finding{}
 	var order []findingKey
 	for _, e := range ix.Calls(trace.Controller, -1, math.MaxInt64) {
 		c := e.Call
-		if c.Verb != "update" && c.Verb != "patch" || trace.Ignored(*c) || c.ResultFinalizers == nil {
+		if c.Verb != "update" && c.Verb != "patch" || c.Subresource != "" || trace.Ignored(*c) || c.ResultFinalizers == nil {
 			continue
 		}
 		base := replaced(ix, e)
@@ -50,13 +51,13 @@ func Finalizers(ix *trace.Index) []Finding {
 }
 
 // replaced is the version a write replaced, or no version when the trace
-// lacks it. A write that made its answer's version replaced the one before
-// it. A write answered with an older version changed nothing, or emptied a
-// deleting object's finalizers, which deletes the object and answers with
-// the request's object at the old version.
+// lacks it. A write that changed its object replaced the version before its
+// answer's. One that did not replaced its answer's version: it changed
+// nothing, or it emptied a deleting object's finalizers, which deletes the
+// object and answers with the request's object at the old version.
 func replaced(ix *trace.Index, e trace.Event) trace.Version {
 	ref, rv := e.Call.Object(), e.Call.ResultRV
-	if first, _ := ix.WriteCall(ref, rv); first.Seq == e.Seq {
+	if ix.Changed(e) {
 		v, _ := ix.Previous(ref, rv)
 		return v
 	}
@@ -68,8 +69,8 @@ func replaced(ix *trace.Index, e trace.Event) trace.Version {
 // all hold f.
 func firstHolder(ix *trace.Index, v trace.Version, f string) trace.Caller {
 	for {
-		previous, found := ix.Previous(v.Ref, v.RV)
-		if !found || !slices.Contains(finalizers(previous), f) {
+		previous, _ := ix.Previous(v.Ref, v.RV)
+		if !slices.Contains(finalizers(previous), f) {
 			return ix.Writer(v)
 		}
 		v = previous

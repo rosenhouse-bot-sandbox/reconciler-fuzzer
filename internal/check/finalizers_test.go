@@ -12,6 +12,7 @@ import (
 
 const (
 	protect = "storage.example/protect"
+	own     = "toy/cleanup"
 	removed = "removed another caller's finalizer"
 )
 
@@ -38,22 +39,22 @@ func write(caller trace.Caller, verb string, ref trace.Ref, rv string, finalizer
 }
 
 // heldGadget starts step 0, in which the controller creates slot a's
-// Gadget and adder puts protect on it at resourceVersion "10".
-func heldGadget(adder trace.Caller) (*tt.Script, string) {
+// Gadget and its model puts protect on it at resourceVersion "10".
+func heldGadget() (*tt.Script, string) {
 	r := newRun(1)
 	r.Begin()
 	uid := r.Create(ctl, gadgetA, held(false))
-	r.Add(write(adder, "patch", gadgetA, "10", protect), tt.Version(gadgetA, uid, "10", held(false, protect)))
+	r.Add(write(gadgetModel, "patch", gadgetA, "10", protect), tt.Version(gadgetA, uid, "10", held(false, protect)))
 	return r, uid
 }
 
 // release has the controller delete slot a's Gadget, which protect holds,
-// and writer write it with finalizers. The API server deletes it instead:
+// and writer write it with no finalizers. The API server deletes it instead:
 // its answer carries the last resourceVersion, and its deleted version the
 // last body.
-func release(r *tt.Script, uid string, writer trace.Caller, finalizers ...string) {
+func release(r *tt.Script, uid string, writer trace.Caller) {
 	r.Add(write(ctl, "delete", gadgetA, "d1", protect), tt.Version(gadgetA, uid, "d1", held(true, protect)))
-	r.Add(write(writer, "update", gadgetA, "d1", finalizers...), tt.Deleted(gadgetA, uid, "d2", held(true, protect)))
+	r.Add(write(writer, "update", gadgetA, "d1"), tt.Deleted(gadgetA, uid, "d2", held(true, protect)))
 }
 
 func TestFinalizersFailsAControllerWriteThatDropsAModelsFinalizer(t *testing.T) {
@@ -69,7 +70,7 @@ func TestFinalizersFailsAControllerWriteThatDropsAModelsFinalizer(t *testing.T) 
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			r, uid := heldGadget(gadgetModel)
+			r, uid := heldGadget()
 			drop(r, uid)
 			ix := r.Index()
 			requireFinding(t, check.Finalizers(ix), "Finalizers", 0, removed, "kube/toy/gadgets",
@@ -86,7 +87,6 @@ func TestFinalizersFailsAControllerWriteThatDropsAModelsFinalizer(t *testing.T) 
 }
 
 func TestFinalizersPassesAControllerThatRemovesItsOwnFinalizer(t *testing.T) {
-	const own = "toy/cleanup"
 	for name, remove := range map[string]func(r *tt.Script, uid string){
 		"with an update": func(r *tt.Script, uid string) {
 			r.Add(write(ctl, "update", gadgetA, "c2"), tt.Version(gadgetA, uid, "c2", held(false)))
@@ -101,7 +101,7 @@ func TestFinalizersPassesAControllerThatRemovesItsOwnFinalizer(t *testing.T) {
 			r.Begin()
 			uid := r.Create(ctl, gadgetA, held(false))
 			r.Add(write(ctl, "update", gadgetA, "c1", own), tt.Version(gadgetA, uid, "c1", held(false, own)))
-			// The model's status write keeps the controller's finalizer.
+			// The model's patch keeps the controller's finalizer, so the model is not its adder.
 			r.Add(write(gadgetModel, "patch", gadgetA, "m1", own), tt.Version(gadgetA, uid, "m1", held(false, own)))
 			remove(r, uid)
 			requireNone(t, check.Finalizers(r.Index()))
@@ -111,29 +111,45 @@ func TestFinalizersPassesAControllerThatRemovesItsOwnFinalizer(t *testing.T) {
 
 // The API server deletes an object once its last finalizer goes.
 func TestFinalizersPassesAModelThatReleasesTheDeletedObject(t *testing.T) {
-	r, uid := heldGadget(gadgetModel)
+	r, uid := heldGadget()
 	release(r, uid, gadgetModel)
 	requireNone(t, check.Finalizers(r.Index()))
 }
 
-func TestFinalizersPassesANoOpWriteAfterAnotherCallerRemovedItsFinalizer(t *testing.T) {
-	r, uid := heldGadget(gadgetModel)
-	r.Add(write(gadgetModel, "patch", gadgetA, "m1"), tt.Version(gadgetA, uid, "m1", held(false)))
-	r.Add(write(ctl, "update", gadgetA, "m1"))
+func TestFinalizersPassesANoOpWriteAfterAnotherCallerRemovedTheFinalizer(t *testing.T) {
+	for name, removal := range map[string][]trace.Event{
+		"in a recorded call":  {write(gadgetModel, "patch", gadgetA, "m1")},
+		"in no recorded call": nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, uid := heldGadget()
+			r.Add(append(removal, tt.Version(gadgetA, uid, "m1", held(false)))...)
+			r.Add(write(ctl, "update", gadgetA, "m1"))
+			requireNone(t, check.Finalizers(r.Index()))
+		})
+	}
+}
+
+// A scale write answers with a Scale, whose metadata holds no finalizers.
+func TestFinalizersSkipsASubresourceWrite(t *testing.T) {
+	r, uid := heldGadget()
+	scale := write(ctl, "update", gadgetA, "c1")
+	scale.Call.Subresource = "scale"
+	r.Add(scale, tt.Version(gadgetA, uid, "c1", held(false, protect)))
 	requireNone(t, check.Finalizers(r.Index()))
 }
 
 // A delete's propagation policy decides the orphan finalizer.
 func TestFinalizersPassesADeleteThatDropsAFinalizer(t *testing.T) {
-	r, uid := heldGadget(gadgetModel)
+	r, uid := heldGadget()
 	r.Add(write(trace.Harness, "delete", gadgetA, "d1", protect, "orphan"), tt.Version(gadgetA, uid, "d1", held(true, protect, "orphan")))
 	r.Add(write(ctl, "delete", gadgetA, "d2", protect), tt.Version(gadgetA, uid, "d2", held(true, protect)))
 	requireNone(t, check.Finalizers(r.Index()))
 }
 
-// A trace from before the listeners recorded a write's finalizers.
+// Older traces record no finalizers in calls.
 func TestFinalizersSkipsAWriteWithoutRecordedFinalizers(t *testing.T) {
-	r, uid := heldGadget(gadgetModel)
+	r, uid := heldGadget()
 	r.Add(tt.Call(ctl, "update", gadgetA, 200, "c1"), tt.Version(gadgetA, uid, "c1", held(false)))
 	requireNone(t, check.Finalizers(r.Index()))
 }
@@ -168,8 +184,7 @@ func TestFinalizersNamesTheCallerThatLastAddedTheFinalizer(t *testing.T) {
 }
 
 func TestFinalizersPassesAControllerThatKeepsAnotherCallersFinalizer(t *testing.T) {
-	const own = "toy/cleanup"
-	r, uid := heldGadget(gadgetModel)
+	r, uid := heldGadget()
 	r.Add(write(ctl, "update", gadgetA, "c1", protect, own), tt.Version(gadgetA, uid, "c1", held(false, protect, own)))
 	r.Add(write(ctl, "update", gadgetA, "c2", protect), tt.Version(gadgetA, uid, "c2", held(false, protect)))
 	requireNone(t, check.Finalizers(r.Index()))

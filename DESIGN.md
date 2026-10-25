@@ -349,11 +349,11 @@ new generation breaks it. With `n` CRs live, it fails when each gap between
 calls `5n + 1` to `10n + 1` is under 100 ms: `retried a failing request in a
 tight loop`. It skips 409s on a held kind until `stable / 4` after the hold.
 
-**Finalizers.** A controller `update` or `patch` fails when its answer drops a
-finalizer, of the version it replaced, that another recorded caller added:
-`removed another caller's finalizer`. The adder wrote the earliest of the
-unbroken run of versions up to that one that hold it. A write answered with an
-older version replaced that one (entry 85).
+**Finalizers.** A controller `update` or `patch`, without a subresource, fails
+when its answer lacks a finalizer that the version it replaced holds and that
+another recorded caller added: `removed another caller's finalizer`. The adder
+wrote the first of the unbroken run of versions that hold it. A write that made
+no new version (`Index.Changed`) replaced its answer's version (entry 85).
 
 **Property.** A `step` property is judged at each settled step's end, and an
 `always` one at each `version` event. Its CEL sees `crs`, the live CRs' bodies,
@@ -526,4 +526,4 @@ Each entry changes a check, exception, `System` interface or ignore list.
 80. A live unlisted owner, such as a fixture, keeps what it owns, directly or through the controller's live objects, from rules 2 to 4, so deleting a CR blames none of it (#128). An object the controller made is never an unlisted owner.
 81. `required` binds only the first entry's CRs, so the kinds that own no dependency pass.
 82. A `damage` touches each group under its root. An undamaged touched group may empty while its kind lives under that root, and a damaged one whose owner is gone while a CR made in the step owns its kind and role there. So a damage under a CR that the controller made touches that CR's owner, and the controller may remake that CR.
-85. A kube write's call records its answer's finalizers, since a write that empties a deleting object's finalizers deletes it, so no version lacks them (#133).
+85. A kube write's call records its answer's finalizers, for Finalizers (#133). An update that empties a deleting object's finalizers deletes it, and its deleted version keeps them.

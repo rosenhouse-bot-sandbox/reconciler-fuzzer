@@ -1,6 +1,7 @@
 # ACK s3-controller
 
-This example runs the ACK s3-controller, unpatched, against moto's S3. The
+This example runs the ACK s3-controller, unpatched, against moto's S3.
+MinIO's downloads are blocked, and ACK needs no more than moto. The
 Makefile pins the controller's module, its commit and its go.sum hash. It
 builds `cmd/controller` with `go install`, which checks the module against
 the sumdb. `crds/` holds the module's Bucket CRD and the common
