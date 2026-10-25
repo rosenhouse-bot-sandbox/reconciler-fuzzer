@@ -57,10 +57,11 @@ func (st state) describe() string {
 }
 
 // sight is what the controller knows of a named object: the state its last
-// look showed, or, if it never looked, the object's state.
+// look, at at, showed, or, if it never looked, the object's state.
 type sight struct {
 	state
 	looked bool
+	at     time.Duration
 	// unknown says an opaque response may have shown the object since.
 	unknown bool
 }
@@ -69,6 +70,13 @@ type sight struct {
 // Without a look, only a missing required object does.
 func (g sight) holds(required bool) bool {
 	return g.state.holds(required) && (g.looked || g.missing)
+}
+
+// allowsReady reports whether a CR that names the object may report ready:
+// an opaque response may have shown the object, or the sight does not hold
+// the CR back and the controller looked at the object or it is missing.
+func (g sight) allowsReady(required bool) bool {
+	return g.unknown || (g.looked || g.missing) && !g.holds(required)
 }
 
 func (g sight) describe() string {
@@ -84,7 +92,7 @@ func (s Spec) sight(ix *trace.Index, n named, t time.Duration) sight {
 	if !looked {
 		return sight{state: s.world(ix, n, t), unknown: ix.Opaque(trace.Controller, n.object, -1, t)}
 	}
-	return sight{state: s.shown(ix, n, look), looked: true, unknown: ix.Opaque(trace.Controller, n.object, look.At, t)}
+	return sight{state: s.shown(ix, n, look), looked: true, at: look.At, unknown: ix.Opaque(trace.Controller, n.object, look.At, t)}
 }
 
 // shown is what look, one of the controller's looks at n, showed. The

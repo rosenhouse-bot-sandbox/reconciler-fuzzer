@@ -82,11 +82,12 @@ func crVersions(ix *trace.Index, s Spec) ([]string, map[string][]trace.Event) {
 // controller wrote that becomes ready, or raises observedGeneration while
 // ready. Only a CR of the first entry's kind needs a required dependency.
 // The version fails on an object it names that the controller's sight holds
-// back, or that the controller never looked at while it lived.
+// back, or that the controller never looked at while it lived, unless the
+// controller corrected it within stable of its look.
 func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, deps []Model) {
 	requires := p.Kind == h.s.Primaries[0].Kind
 	wasReady, wasObserved := false, 0.0
-	for _, e := range versions {
+	for i, e := range versions {
 		v := e.Version
 		body := decode(v.Body)
 		isReady, observed := satisfies(p.Ready, body), observedGeneration(body)
@@ -110,7 +111,7 @@ func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, d
 		}
 		for _, n := range h.s.names(v.Ref, body) {
 			g := h.s.sight(h.ix, n, t0)
-			if g.unknown || (g.looked || g.missing) && !g.holds(h.s.References[n.ref].Required) {
+			if g.allowsReady(h.s.References[n.ref].Required) || g.looked && h.corrected(p, versions[i+1:], n, g.at+h.s.Stable) {
 				continue
 			}
 			summary := beforeSeeing
@@ -120,6 +121,21 @@ func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, d
 			h.add(t0, summary, kind(n.object), fmt.Sprintf("%s: %s %s", crName(h.w, uid), describe(n.object), g.describe()))
 		}
 	}
+}
+
+// corrected reports whether the controller sent, by t, a write of one of
+// later, the CR's later versions, that is not ready or does not name n. A
+// reconcile that read the cache before a look may write ready after it.
+func (h *honesty) corrected(p Primary, later []trace.Event, n named, t time.Duration) bool {
+	return slices.ContainsFunc(later, func(e trace.Event) bool {
+		v := e.Version
+		call, found := h.ix.WriteCall(v.Ref, v.RV)
+		if !found || call.Call.Caller != trace.Controller || call.At-call.Call.Latency > t {
+			return false
+		}
+		body := decode(v.Body)
+		return !p.ready(body) || !slices.Contains(h.s.names(v.Ref, body), n)
+	})
 }
 
 const (

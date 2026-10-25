@@ -5,3 +5,4 @@ metadata:
 spec:
   clusterRef: cluster
   engine: postgres
+  passwordSecretRef: {name: admin-password}

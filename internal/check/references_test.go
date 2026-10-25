@@ -131,6 +131,34 @@ func TestHonestPassesACRReadyWhileWhatItNamesWithoutRequiredIsMissing(t *testing
 	requireFinding(t, honest(t, r), "Honest", 0, beforeSeeing, "kube/secrets", "slot b: secrets ns/pw not seen")
 }
 
+// A reconcile that read the controller's cache before a watch event came
+// may write ready just after the listener forwarded the event.
+func TestHonestPassesAReadyWriteThatTheControllerCorrectsWithinStable(t *testing.T) {
+	for name, c := range map[string]struct {
+		writer     trace.Caller
+		after      time.Duration
+		correction map[string]any
+		fails      bool
+	}{
+		"not ready":             {ctl, 0, database(false, "pw"), false},
+		"naming nothing":        {ctl, 0, database(true, ""), false},
+		"not ready too late":    {ctl, 2 * s, database(false, "pw"), true},
+		"ready again":           {ctl, 0, database(true, "pw"), true},
+		"not ready, by another": {trace.Harness, 0, database(false, "pw"), true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := secretRun(secretRef(), secret(true))
+			deletedSeen(r.See(ctl, pw))
+			readyB(r).Tick(c.after).Update(c.writer, databaseB, c.correction)
+			if findings := honest(t, r); c.fails {
+				requireFinding(t, findings, "Honest", 0, noDependency, "kube/secrets", "slot b: secrets ns/pw seen missing")
+			} else {
+				requireNone(t, findings)
+			}
+		})
+	}
+}
+
 func TestHonestJudgesAReadyWriteByWhatTheControllerSawBeforeSendingIt(t *testing.T) {
 	r := secretRun(secretRef(), secret(true))
 	r.UpdateInFlight(ctl, databaseB, database(true, "pw"), 50*ms).See(ctl, pw)
