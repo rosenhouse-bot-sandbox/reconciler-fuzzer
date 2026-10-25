@@ -6,23 +6,23 @@ import (
 	"math"
 	"slices"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 )
 
 const removedForeign = "removed another caller's finalizer"
 
-// Finalizers fails a controller update or patch of an object or its status
-// whose answer lacks a finalizer that another recorded caller added.
-// DESIGN.md §12 defines it. Its findings come in order of their first
-// removal.
-func Finalizers(ix *trace.Index) []Finding {
+// Finalizers fails a controller write whose answer lacks a finalizer that
+// another caller added. DESIGN.md §12 defines it. Its findings come in order
+// of their first removal.
+func Finalizers(ix *trace.Index, s Spec) []Finding {
 	steps := ix.Steps()
 	found := map[findingKey]*Finding{}
 	var order []findingKey
 	for _, e := range ix.Calls(trace.Controller, -1, math.MaxInt64) {
 		c := e.Call
-		if c.Verb != "update" && c.Verb != "patch" || c.Subresource != "" && c.Subresource != "status" ||
-			trace.Ignored(*c) || c.ResultFinalizers == nil {
+		if !judgedWrite(*c, s) {
 			continue
 		}
 		base := replaced(ix, e)
@@ -30,8 +30,10 @@ func Finalizers(ix *trace.Index) []Finding {
 			if slices.Contains(*c.ResultFinalizers, f) {
 				continue
 			}
-			adder := firstHolder(ix, base, f)
-			if adder == trace.Controller || adder == trace.Cluster {
+			// A sample, a fixture or a plan may give the harness the
+			// controller's own finalizer.
+			by := adder(ix, base, f)
+			if by == trace.Controller || by == trace.Harness || by == trace.Cluster {
 				continue
 			}
 			key := findingKey{stepAt(steps, e.At), removedForeign, kind(base.Ref)}
@@ -39,7 +41,11 @@ func Finalizers(ix *trace.Index) []Finding {
 				found[key] = &Finding{Check: "Finalizers", Step: key.step, At: e.At, Summary: removedForeign, Kind: key.kind}
 				order = append(order, key)
 			}
-			if detail := fmt.Sprintf("%s: %s, added by %s", describe(base.Ref), f, adder); !slices.Contains(found[key].Details, detail) {
+			removal := c.Verb
+			if c.Subresource != "" {
+				removal = c.Subresource + " " + c.Verb
+			}
+			if detail := fmt.Sprintf("%s: %s, added by %s, removed by %s", describe(base.Ref), f, by, removal); !slices.Contains(found[key].Details, detail) {
 				found[key].Details = append(found[key].Details, detail)
 			}
 		}
@@ -51,16 +57,28 @@ func Finalizers(ix *trace.Index) []Finding {
 	return findings
 }
 
+// judgedWrite says whether Finalizers judges c: an update or patch, whose
+// answer's finalizers the listener recorded, of an object or of a built-in
+// kind's status. A CRD's status write keeps the object's metadata, and a
+// Scale answer holds no finalizers.
+func judgedWrite(c trace.Call, s Spec) bool {
+	switch {
+	case c.Verb != "update" && c.Verb != "patch", c.ResultFinalizers == nil, trace.Ignored(c):
+		return false
+	case c.Subresource == "status":
+		return !slices.ContainsFunc(s.StatusKinds, c.Ref.OfKind)
+	}
+	return c.Subresource == ""
+}
+
 // replaced is the version a write replaced, or no version when the trace
-// lacks it. A write made its answer's version when the version is new since
-// its request (Index.Changed) and no earlier answer carried it. It then
-// replaced the version before. Otherwise it replaced its answer's version:
-// it changed nothing, or it emptied a deleting object's finalizers, which
-// deletes the object and answers with the request's object at the old
-// version.
+// lacks it. A write that made its answer's version replaced the one before.
+// Any other write replaced its answer's version: it changed nothing, or it
+// emptied a deleting object's finalizers, which deletes the object and
+// answers with the request's object at the old version.
 func replaced(ix *trace.Index, e trace.Event) trace.Version {
 	ref, rv := e.Call.Object(), e.Call.ResultRV
-	if first, _ := ix.WriteCall(ref, rv); ix.Changed(e) && first.Seq == e.Seq {
+	if ix.Changed(e) && slices.Equal(makers(ix, ref, rv), []trace.Caller{e.Call.Caller}) {
 		v, _ := ix.Previous(ref, rv)
 		return v
 	}
@@ -68,16 +86,46 @@ func replaced(ix *trace.Index, e trace.Event) trace.Version {
 	return v
 }
 
-// firstHolder is the writer of the first of the versions, up to v, that
-// all hold f.
-func firstHolder(ix *trace.Index, v trace.Version, f string) trace.Caller {
+// makers are the callers whose answers carry ref's version rv while it was
+// new to their requests (Index.Changed). Listeners record answers as they
+// end, in no fixed order, so callers whose writes overlap may all be
+// makers.
+func makers(ix *trace.Index, ref trace.Ref, rv string) []trace.Caller {
+	var callers []trace.Caller
+	for _, a := range ix.Answers(ref, rv) {
+		if ix.Changed(a) && !slices.Contains(callers, a.Call.Caller) {
+			callers = append(callers, a.Call.Caller)
+		}
+	}
+	return callers
+}
+
+// adder is who added f, which v holds. The API server adds the garbage
+// collector's finalizers for a delete's propagation policy. Any other
+// finalizer's adder made the first of the versions, up to v, that all hold
+// f: the controller or else the harness when either may have, or else the
+// first maker, or Cluster when no recorded write made it.
+func adder(ix *trace.Index, v trace.Version, f string) trace.Caller {
+	if f == metav1.FinalizerDeleteDependents || f == metav1.FinalizerOrphanDependents {
+		return trace.GC
+	}
 	for {
 		previous, _ := ix.Previous(v.Ref, v.RV)
 		if !slices.Contains(finalizers(previous), f) {
-			return ix.Writer(v)
+			break
 		}
 		v = previous
 	}
+	callers := makers(ix, v.Ref, v.RV)
+	switch {
+	case slices.Contains(callers, trace.Controller):
+		return trace.Controller
+	case slices.Contains(callers, trace.Harness):
+		return trace.Harness
+	case len(callers) == 0:
+		return trace.Cluster
+	}
+	return callers[0]
 }
 
 func finalizers(v trace.Version) []string {

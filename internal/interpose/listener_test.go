@@ -254,7 +254,8 @@ func TestACreateRecordsTheResultingObject(t *testing.T) {
 }
 
 func TestAProtobufCreateRecordsTheResultingObject(t *testing.T) {
-	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "cm-x7k2p", UID: "u-1", ResourceVersion: "42"}, Data: map[string]string{"k": "v"}}
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "cm-x7k2p", UID: "u-1", ResourceVersion: "42", Finalizers: []string{"a"}},
+		Data: map[string]string{"k": "v"}}
 	raw, err := cm.Marshal()
 	if err != nil {
 		t.Fatal(err)
@@ -270,6 +271,9 @@ func TestAProtobufCreateRecordsTheResultingObject(t *testing.T) {
 	got := recorded.waitCalls(t, 1)[0]
 	if got.ResultName != "cm-x7k2p" || got.ResultUID != "u-1" || got.ResultRV != "42" {
 		t.Errorf("Recorded name %q, uid %q, rv %q, want cm-x7k2p, u-1, 42.", got.ResultName, got.ResultUID, got.ResultRV)
+	}
+	if got.ResultFinalizers == nil || !slices.Equal(*got.ResultFinalizers, []string{"a"}) {
+		t.Errorf("Recorded finalizers %v, want [a].", got.ResultFinalizers)
 	}
 }
 
