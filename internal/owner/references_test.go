@@ -14,7 +14,6 @@ import (
 )
 
 func TestReferencesDescribeEachEntry(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	secretKind := schema.GroupVersionKind{Version: "v1", Kind: "Secret"}
 	c := &config.Config{References: []config.Reference{
 		{From: databaseKind, To: widgetKind, Namespaced: true, Name: "spec.widget", Ready: "self.ok", Required: true},
@@ -34,7 +33,12 @@ func TestReferencesDescribeEachEntry(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("References =\n%+v\nwant\n%+v", got, want)
 	}
-	if _, err := owner.References(c, resolver(map[string]string{"Widget": "widgetries", "Database": "databases"})); err == nil || !strings.Contains(err.Error(), "Secret") {
-		t.Errorf("References = %v, want an error that names the Secret kind it cannot map.", err)
+	for missing, resources := range map[string]map[string]string{
+		"Secret":   {"Widget": "widgetries", "Database": "databases"},
+		"Database": {"Widget": "widgetries", "Secret": "secrets"},
+	} {
+		if _, err := owner.References(c, resolver(resources)); err == nil || !strings.Contains(err.Error(), missing) {
+			t.Errorf("References = %v, want an error that names the %s kind it cannot map.", err, missing)
+		}
 	}
 }
