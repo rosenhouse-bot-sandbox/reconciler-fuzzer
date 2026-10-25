@@ -1,7 +1,7 @@
 # reconciler-fuzzer design
 
 Issue #114 holds the proposal and its reasons. This document states what the
-code does. It stays under 590 lines. Where the code documents a rule, this
+code does. It stays under 585 lines. Where the code documents a rule, this
 document names it.
 
 ## 1. Terms
@@ -120,9 +120,10 @@ of every kind with `SeenAll`, that a 2xx response shows its caller. These are
 the dependency kinds and the references' `to` kinds. An undecodable response
 records an `opaque` seen of its ref. A kube listener drops protobuf from such
 a request's `Accept`, since controller-runtime asks for built-in kinds in
-protobuf, whose lists and watch frames it cannot decode. A response of unknown
-outcome shows nothing. `Shown` hears every object any response carries, unknown
-outcomes included.
+protobuf, whose lists and watch frames it cannot decode. It also records
+whether a list or watch has a label or field selector (`Call.Selector`). A
+response of unknown outcome shows nothing. `Shown` hears every object any
+response carries, unknown outcomes included.
 
 **The `crud` map** reads `GET /<c>` as `list`, `POST /<c>` as `create`
 (`requestName` is the body's `name`), and `GET`, `PUT`, `PATCH` and `DELETE
@@ -196,8 +197,7 @@ An action's `do` is `create`, `update`, `delete` (optionally `Foreground`),
 `restart`, `kill` (the controller stays down until the fault period ends or a
 slot wait restarts it, §9), `damage` (of an instance the controller created),
 `changeFixture` (of a fixture, on any system) or `createFixture` (of a kube
-fixture that an earlier `changeFixture` of an equal target deleted, as its file
-declares it). `plan.go` documents each.
+fixture that an earlier `changeFixture` deleted). `plan.go` documents each.
 
 A `target` has `system` (default `kube`), `group`, `resource`, `namespace`,
 `name`, `role` and `nth` (default 1). Empty fields match anything.
@@ -228,15 +228,14 @@ each slot's live CR, each reference's `from` kind before its `to` kind
 until then, or until a create's slot wait ends the faults sooner. `maxPoll` is
 the longest poll interval of the systems the step's faults and `damage`,
 `changeFixture` and `createFixture` actions name, and of every fake when the
-step changes a CR. The
-runner gives a model fault to the first model or fake that `Takes` it; none is a
-harness error. A create into an emptied slot, and a `createFixture`, waits until
-the object its name last held no longer exists. Once `period` has passed, the
-wait ends the step's faults and restarts a killed controller. It gives up
-`deadline - endFaults` after the later of the faults' end and the delete, and
-the plan ends after the step. Any other action error, except an unmatched
-target or a `createFixture` whose `changeFixture` deleted nothing, is a harness
-error.
+step changes a CR. The runner gives a model fault to the first model or fake
+that `Takes` it; none is a harness error. A create into an emptied slot, or a
+`createFixture`, waits until the object its name last held no longer exists.
+Once `period` has passed, the wait ends the step's faults and restarts a
+killed controller. It gives up `deadline - endFaults` after the later of the
+faults' end and the delete, and the plan ends after the step. Any other
+action error, except an unmatched target or a `createFixture` whose
+`changeFixture` deleted nothing, is a harness error.
 
 ## 10. Settle condition
 
@@ -251,11 +250,10 @@ judges the step whose fault period started last at or before `t`.
 4. The controller made a 2xx request, not ignored and not of unknown
    outcome, that it sent since its last start.
 5. For each object the step's `damage`, `changeFixture` and `createFixture`
-   actions changed,
-   the controller looked at it after the change: a 2xx or 404 request,
-   not of unknown outcome, that covers it (`Ref.Covers`), or a watch that
-   covers it, opened before the change and open at `t`. The clause also
-   needs `stable` since each change, and lapses at `endFaults + 1.5 ×` the
+   actions changed, the controller looked at it after the change: a 2xx or
+   404 request, not of unknown outcome, that covers it (`Ref.Covers`), or a
+   watch that covers it, opened before the change and open at `t`. The clause
+   also needs `stable` since each change, and lapses at `endFaults + 1.5 ×` the
    longest poll of the changed objects' systems. Without a watch across
    the change, it needs `stable` since the first request that looked; a
    held watch, `stable` since its `holdWatch` ended.
@@ -329,15 +327,15 @@ controller resource fails. Its CRs' `retain` allows a resource. Shared resources
 are judged only for growth since the first `create`, and those of an unlisted
 owner not at all. Summary: `left resources behind`.
 
-**Restore.** It judges a settled step with no `create`, `update`, `delete` or
-`changeFixture` action after a settled step, comparing the controller's
-resources at the two ends by group, without volatile fields (entries 21 and 40,
-the map's, and a CR kind's `periodic.paths`). Where no `damage` touched the
-root, each instance must stay, with no new one and an equal body:
-`replaced resources`, `changed resources`. Where one did, each group's kind
-must stay under the root. A damaged group must be live again while its owner
-lives, or else a CR made in the step must own its kind and role there:
-`did not restore damaged resources` (entries 22 and 82).
+**Restore.** It judges a settled step with no `create`, `update`, `delete`,
+`changeFixture` or `createFixture` action after a settled step, comparing the
+controller's resources at the two ends by group, without volatile fields
+(entries 21 and 40, the map's, and a CR kind's `periodic.paths`). Where no
+`damage` touched the root, each instance must stay, with no new one and an
+equal body: `replaced resources`, `changed resources`. Where one did, each
+group's kind must stay under the root. A damaged group must be live again
+while its owner lives, or else a CR made in the step must own its kind and
+role there: `did not restore damaged resources` (entries 22 and 82).
 
 **Unique.** At each settled step's end, a group holds at most one live
 controller instance. Summary: `duplicate resources`.
@@ -352,6 +350,21 @@ ready before seeing its dependency ready`. With `required`, a CR of the first
 dependency` (entry 81). With `track: d`, a CR fails that stays `ready` `d` after
 the controller saw a dependency not ready: `stayed ready after seeing its
 dependency not ready`.
+
+A CR **names** the `to` object of each value at its kind's references'
+`name`, in the namespace at `namespace` or else the CR's own if `to` is
+namespaced. The controller's **looks** at it are its seens of it and its
+calls that showed it missing (`Index.Looks`). A reference **holds back** the
+CR at `t` while the last look by `t` shows the object missing, with
+`required`, or not `ready`, or, with no look, while the object is missing and
+`required`. An opaque response after the last look leaves it **unknown**.
+Honest fails a `ready` write, as above, of a CR that a known reference holds
+back, or that names a live object the controller has not looked at:
+`reported ready with no dependency` if missing, else `reported ready before
+seeing its dependency ready`. With `track: d`, a CR fails that stays `ready`,
+naming the object, `d` after a look that held it back, as for dependencies:
+`stayed ready after seeing its dependency not ready`. Each finding takes the
+`to` kind (entry 83).
 
 **Backoff.** Failing controller calls with one system, verb, object,
 subresource and status form a **run**; a create's object is its `requestName`.
@@ -396,6 +409,9 @@ primaries:                                  # every kind the controller serves
     periodic: {every: 1h, paths: [status.refreshTime]}           # optional: clause 7 allows these writes
     values: {overlay: {spec.region: {enum: [eu, us]}}, mutate: [spec.region]}
   - {kind: toy.reconciler-fuzzer/v1/Policy, sample: policy.yaml, ready: has(self.status)}
+references:                                 # fields by which a CR names what it does not own
+  - {from: toy.reconciler-fuzzer/v1/Bucket, to: v1/Secret, name: "spec.keys[*].secretName",
+     ready: has(self.data.key), required: false, track: 2s}   # required defaults to true
 values: {fixtures: {kv.yaml: [value]}}              # with primaries, only fixtures
 models: [{kind: toy.reconciler-fuzzer/v1/Gadget, after: 200ms, dependency: {track: 1s}}]
 systems:
@@ -426,6 +442,15 @@ the file's directory. `vault` needs a `token`. `access: read` says the
 controller only reads the fake. `values.fixtures` may name a system's fixtures
 file, whose entries' body paths `changeFixture` sets.
 
+A reference's `to` is a kube kind or `<system>:<collection>`, and its `ready`
+defaults to that of a listed kind, a model or a fake. `name` and `namespace`
+are field paths as in `values.mutate`; `[*]` names a field of each list item.
+An empty or absent value names nothing. `config.Load` reads each kind's scope
+from `crds` and a table of core kinds. It refuses a `from` that `primaries`
+does not list, a `to` of unknown scope, without `ready` or that the `from`
+entry `owns`, and a namespaced `to` of a cluster-scoped `from` without
+`namespace` (`references.go`).
+
 ## 14. Generation, replay and shrinking
 
 `generate.New(cfg)` reads each listed kind's CRD schema with its overlay, its
@@ -448,6 +473,13 @@ and only read faults. `changeFixture` draws kube and system fixtures alike.
 `damage` only deletes. About 1 in 4 CR deletes is `Foreground`. A fault period
 lasts 0.5 s to `2 × stable`, plus the longest `track` for a model fault.
 `generate.go` documents the weights.
+
+A create, or an update that sets a reference's `name`, writes each value with
+a **candidate**: the name of any slot's CR of a listed `to` kind, or of a
+fixture of another, live half the time when one is. With `required: false`, 1
+in 4 writes `missing`, which names nothing. `changeFixture` also deletes a
+live kube fixture of a `to` kind, and `createFixture` makes it again. Plans
+of a config without references are as before.
 
 **Hunt.** `hunt.Hunt` runs each seed, keeps runs with a new signature, replays
 each 5 times and shrinks it (`shrink.go`), trying at most 16 candidates.
@@ -474,10 +506,12 @@ nightly call. A toy is a directory in `targets/` with a `main.go`. `build`,
 and `tenant/` and `grant/` cross scopes. In `targets/toy-bucket`, each Bucket CR
 owns one bucket in the `crudfake` system `cloud`; its bugs start at B30, and
 `halted/` runs `--halt` under `primary.halted`. In `targets/toy-fleet`, a
-Cluster owns modelled third-party Volumes, a Database names a Cluster, and a
-User a Database. Its bugs start at B100. `config.yaml` lists all three kinds.
-The generated test fuzzes `cluster/`, which lists Clusters alone, and
-`database/`, which lists Databases on a fixture Cluster.
+Cluster owns modelled third-party Volumes, a Database names a Cluster and
+maybe a Secret, and a User a Database. Its bugs start at B100. `config.yaml`
+lists all three kinds and their references. The generated test fuzzes
+`cluster/`, which lists Clusters alone, and `database/`, which lists
+Databases on a fixture Cluster. Under `config.yaml`, a Cluster's deletion
+waits for the Databases that name it, which fails clause 2.
 
 Each config's `plans/` holds its gated bugs' and B0's plans. A toy's
 `gate_envtest_test.go` runs `gate_test.go`'s bug rows and B0, and its
@@ -539,3 +573,5 @@ Each entry changes a check, exception, `System` interface or ignore list.
 80. A live unlisted owner, such as a fixture, keeps what it owns, directly or through the controller's live objects, from rules 2 to 4, so deleting a CR blames none of it (#128). An object the controller made is never an unlisted owner.
 81. `required` binds only the first entry's CRs, so the kinds that own no dependency pass.
 82. A `damage` touches each group under its root. An undamaged touched group may empty while its kind lives under that root, and a damaged one whose owner is gone while a CR made in the step owns its kind and role there. So a damage under a CR that the controller made touches that CR's owner, and the controller may remake that CR.
+83. Converge accepts a CR that is not ready while a reference holds it back, where a `ready` write would fail Honest (#126). A look need not follow the controller's own write of the object, since a controller writes the status of the kinds it serves.
+84. A 2xx kube list without a selector that lacks an object shows it missing, so a relist after a restart or a dropped watch counts. Kube listeners ask for JSON of Seen kinds, so built-in kinds' lists and watches decode.

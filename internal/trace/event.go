@@ -274,6 +274,8 @@ type Call struct {
 	Stream uint64 `json:"stream,omitempty"`
 	// Unmapped says the system's API map could not place the request.
 	Unmapped bool `json:"unmapped,omitempty"`
+	// Selector says a kube list or watch had a label or field selector.
+	Selector bool `json:"selector,omitempty"`
 }
 
 // Unknown outcome effects: the server committed the request, and the caller
