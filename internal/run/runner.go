@@ -171,9 +171,7 @@ type stepRun struct {
 	start         time.Time
 	started       []startedFault
 	faultsStopped time.Time
-	// waited holds the UIDs of the deleted CRs that the step's stop waited
-	// for.
-	waited []string
+	waited        []string
 }
 
 // periodEnd is when Period has passed. The fault period may last longer.
