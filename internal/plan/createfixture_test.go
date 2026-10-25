@@ -25,6 +25,7 @@ func TestValidateCreateFixture(t *testing.T) {
 		"a fake":                  {[]Step{{Actions: []Action{{Do: CreateFixture, Target: &Target{System: "cloud", Resource: "buckets", Name: "b"}}}}}, "createFixture acts only on kube"},
 		"a slot":                  {[]Step{{Actions: []Action{deleted, {Do: CreateFixture, Slot: "a", Target: secret}}}}, "createFixture takes no slot, object or patch"},
 		"a patch":                 {[]Step{{Actions: []Action{deleted, {Do: CreateFixture, Target: secret, Patch: json.RawMessage(`{}`)}}}}, "createFixture takes no slot, object or patch"},
+		"an object":               {[]Step{{Actions: []Action{deleted, {Do: CreateFixture, Target: secret, Object: json.RawMessage(`{}`)}}}}, "createFixture takes no slot, object or patch"},
 		"a propagation":           {[]Step{{Actions: []Action{deleted, {Do: CreateFixture, Target: secret, Propagation: Foreground}}}}, "createFixture takes no propagation"},
 	} {
 		if err := (&Plan{Steps: c.steps}).Validate(); err == nil || !strings.Contains(err.Error(), c.want) {
