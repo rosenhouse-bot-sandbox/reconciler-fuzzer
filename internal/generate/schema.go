@@ -11,6 +11,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	gvk "k8s.io/apimachinery/pkg/runtime/schema"
 	"pgregory.net/rapid"
+
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
 )
 
 // schema is the part of a CRD's OpenAPI v3 schema the generator reads. What
@@ -84,7 +86,7 @@ func overlaid(root map[string]any, overlays map[string]map[string]any) (*schema,
 
 // primaryCRD finds kind's openAPIV3Schema and plural among crds.
 func primaryCRD(crds []string, kind gvk.GroupVersionKind) (map[string]any, string, error) {
-	documents, err := readManifests(crds)
+	documents, err := config.ReadManifests(crds)
 	if err != nil {
 		return nil, "", fmt.Errorf("reading the CRDs: %w", err)
 	}

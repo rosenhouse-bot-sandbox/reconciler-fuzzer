@@ -71,7 +71,6 @@ func toyKind(group, kind string) schema.GroupVersionKind {
 }
 
 func TestReferencesLoad(t *testing.T) {
-	t.Skip("enabled by the config package")
 	c, err := config.Load(writeReferences(t, `references:
   - {from: toy/v1/Database, to: toy/v1/Cluster, name: spec.clusterRef}
   - {from: toy/v1/Database, to: v1/Secret, name: spec.passwordSecretRef.name, ready: has(self.data.password), required: false, track: 2s}
@@ -97,12 +96,16 @@ func TestReferencesLoad(t *testing.T) {
 }
 
 func TestReferencesRefusals(t *testing.T) {
-	t.Skip("enabled by the config package")
 	for name, c := range map[string]struct{ references, want string }{
+		"no from":                         {"{to: v1/Secret, name: spec.s, ready: \"true\"}", "references[0].from is required"},
+		"a malformed from":                {"{from: Database, to: v1/Secret, name: spec.s, ready: \"true\"}", "references[0].from"},
 		"an unlisted from":                {"{from: toy/v1/Gadget, to: v1/Secret, name: spec.s, ready: \"true\"}", "references[0].from"},
+		"no to":                           {"{from: toy/v1/Database, name: spec.s, ready: \"true\"}", "references[0].to is required"},
 		"a malformed to":                  {"{from: toy/v1/Database, to: Secret, name: spec.s, ready: \"true\"}", "references[0].to"},
 		"a to of unknown scope":           {"{from: toy/v1/Database, to: example.com/v1/Widget, name: spec.w, ready: \"true\"}", "references[0].to"},
+		"a core kind's name in a group":   {"{from: toy/v1/Database, to: example.com/v1/Secret, name: spec.s, ready: \"true\"}", "references[0].to"},
 		"a to of an unknown system":       {"{from: toy/v1/Database, to: \"nope:buckets\", name: spec.b, ready: \"true\"}", "references[0].to"},
+		"a malformed collection":          {"{from: toy/v1/Database, to: \"cloud:Buckets\", name: spec.b}", "references[0].to"},
 		"a to the from entry owns":        {"{from: toy/v1/Cluster, to: v1/ConfigMap, name: spec.config, ready: \"true\"}", "references[0].to"},
 		"an unlisted to without ready":    {"{from: toy/v1/Database, to: v1/Secret, name: spec.s}", "references[0].ready"},
 		"a fake to without ready":         {"{from: toy/v1/Database, to: \"other:buckets\", name: spec.b}", "references[0].ready"},
@@ -116,6 +119,8 @@ func TestReferencesRefusals(t *testing.T) {
 		"a cluster-scoped from":           {"{from: toy/v1/Tenant, to: v1/Secret, name: spec.s, ready: \"true\"}", "references[0].namespace"},
 		"a namespace of another list":     {"{from: toy/v1/Database, to: v1/Secret, name: \"spec.keys[*].name\", namespace: \"spec.other[*].namespace\", ready: \"true\"}", "references[0].namespace"},
 		"a namespace list without a name": {"{from: toy/v1/Database, to: v1/Secret, name: spec.s, namespace: \"spec.keys[*].namespace\", ready: \"true\"}", "references[0].namespace"},
+		"a namespace list below the name": {"{from: toy/v1/Database, to: v1/Secret, name: spec.s, namespace: \"spec.a.keys[*].namespace\", ready: \"true\"}", "references[0].namespace"},
+		"a namespace with an empty field": {"{from: toy/v1/Database, to: v1/Secret, name: spec.s, namespace: spec..ns, ready: \"true\"}", "references[0].namespace"},
 		"a track of zero":                 {"{from: toy/v1/Database, to: toy/v1/Cluster, name: spec.clusterRef, track: 0s}", "references[0].track"},
 		"a second entry of one name":      {"{from: toy/v1/Database, to: toy/v1/Cluster, name: spec.clusterRef}\n  - {from: toy/v1/Database, to: toy/v1/User, name: spec.clusterRef}", "references[1].name"},
 		"an unknown key":                  {"{from: toy/v1/Database, to: toy/v1/Cluster, name: spec.clusterRef, onDelete: block}", "references[0].onDelete is not a key; references[0] takes from, to, name, namespace, ready, required and track"},
@@ -138,7 +143,6 @@ func TestAConfigWithoutReferencesNeedsNoCRDs(t *testing.T) {
 }
 
 func TestReferencedNames(t *testing.T) {
-	t.Skip("enabled by the config package")
 	obj := map[string]any{"spec": map[string]any{
 		"clusterRef": "c1",
 		"empty":      "",
@@ -180,7 +184,6 @@ func TestReferencedNames(t *testing.T) {
 }
 
 func TestDeleteOrderPutsEachFromKindBeforeItsToKinds(t *testing.T) {
-	t.Skip("enabled by the config package")
 	gk := func(kind string) schema.GroupKind { return schema.GroupKind{Group: "toy", Kind: kind} }
 	for name, c := range map[string]struct {
 		references string

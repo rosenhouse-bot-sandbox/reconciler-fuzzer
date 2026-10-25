@@ -1,4 +1,4 @@
-package generate
+package config
 
 import (
 	"bufio"
@@ -14,9 +14,9 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// readManifests decodes every document of the files, or of the YAML and
+// ReadManifests decodes every document of the files, or of the YAML and
 // JSON files in the directories, that paths name.
-func readManifests(paths []string) ([]map[string]any, error) {
+func ReadManifests(paths []string) ([]map[string]any, error) {
 	var documents []map[string]any
 	for _, path := range paths {
 		files := []string{path}

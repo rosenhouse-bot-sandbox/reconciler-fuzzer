@@ -245,7 +245,7 @@ func (g *Generator) addResource(gr gvk.GroupResource) {
 
 func (g *Generator) readFixtures(cfg *config.Config) error {
 	for _, path := range cfg.Fixtures {
-		documents, err := readDocuments(path)
+		documents, err := config.ReadManifests([]string{path})
 		if err != nil {
 			return err
 		}
@@ -292,7 +292,7 @@ func (g *Generator) readFixtures(cfg *config.Config) error {
 // readRBAC adds the resources the rules name, without wildcards and
 // subresources, and records the verbs each rule grants.
 func (g *Generator) readRBAC(paths []string) error {
-	documents, err := readManifests(paths)
+	documents, err := config.ReadManifests(paths)
 	if err != nil {
 		return fmt.Errorf("launch.rbac: %w", err)
 	}
@@ -331,7 +331,7 @@ func (g *Generator) readModels(cfg *config.Config) error {
 	if len(cfg.Models) == 0 {
 		return nil
 	}
-	crds, err := readManifests(cfg.CRDs)
+	crds, err := config.ReadManifests(cfg.CRDs)
 	if err != nil {
 		return fmt.Errorf("reading the CRDs: %w", err)
 	}
