@@ -301,17 +301,24 @@ func (h *honesty) seenDeleting(seen trace.Event) bool {
 	return found && deleting(v.Body)
 }
 
-// excused reports whether, in (from, to], the controller started or exited,
-// or a write of its to the CR failed or had an unknown outcome. Either can
-// keep an honest controller from reporting a dependency's change.
+// excused reports whether the controller started or exited in (from, to],
+// or a write of the CR by the controller failed or had an unknown outcome in
+// (from, to] or was in flight at to. Each can keep an honest controller from
+// reporting a dependency's change.
 func (h *honesty) excused(uid string, from, to time.Duration) bool {
 	if slices.ContainsFunc(h.ix.Procs(), func(e trace.Event) bool { return e.At > from && e.At <= to }) {
 		return true
 	}
 	cr, found := h.w.Instance(uid)
-	return found && slices.ContainsFunc(h.ix.Calls(trace.Controller, from, to), func(e trace.Event) bool {
+	return found && slices.ContainsFunc(h.ix.Calls(trace.Controller, from, math.MaxInt64), func(e trace.Event) bool {
 		c := e.Call
-		return trace.Mutating(c.Verb) && c.Object() == cr.Ref && (c.Status < 200 || c.Status > 299 || c.Unknown())
+		if !trace.Mutating(c.Verb) || c.Object() != cr.Ref {
+			return false
+		}
+		if e.At > to {
+			return e.At-c.Latency <= to
+		}
+		return c.Status < 200 || c.Status > 299 || c.Unknown()
 	})
 }
 

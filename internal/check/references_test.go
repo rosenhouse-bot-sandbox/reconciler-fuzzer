@@ -372,6 +372,10 @@ func TestHonestWithTrackPassesACRThatReactsInTime(t *testing.T) {
 			notReadySeen(r)
 			r.Tick(400*ms).Update(trace.Harness, databaseB, database(true, ""))
 		}},
+		"a not ready write of the CR is in flight in time": {tracked, func(r *tt.Script) {
+			notReadySeen(r)
+			r.Tick(400*ms).UpdateInFlight(ctl, databaseB, database(false, "pw"), 2*s)
+		}},
 		"the controller restarts in time": {tracked, func(r *tt.Script) {
 			notReadySeen(r)
 			r.Tick(400 * ms).Restart()

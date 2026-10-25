@@ -443,6 +443,9 @@ func TestHonestWithTrackExcuses(t *testing.T) {
 		"a kill":                   func(r *tt.Script) { r.Add(tt.Exit("signal: killed", true, "")) },
 		"a restart":                func(r *tt.Script) { r.Add(tt.Exit("signal: killed", true, ""), tt.Start(2)) },
 		"a failed write of the CR": func(r *tt.Script) { r.Add(failed) },
+		"a write of the CR in flight at the deadline": func(r *tt.Script) {
+			r.Tick(400*ms).UpdateInFlight(ctl, widgetA, tt.CR("a", false), 2*s)
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := degrade(true)
