@@ -533,8 +533,22 @@ func TestAStoppedControllerOwesNothingForACRThatReplacedADeletedOne(t *testing.T
 // deletion, such as a cascade's, may outlast it.
 func TestAStoppedControllerOwesNoFinalizerTheStopDidNotWaitFor(t *testing.T) {
 	b := settledAt3s()
-	b.At(2 * s).Add(tt.Version(widgetA, "ua", "2", deleting()))
+	b.At(2*s).Add(tt.Phase(1, trace.FaultPeriod), tt.Version(widgetA, "ua", "2", deleting()))
 	stopped(b, 2500*ms)
+	if unmet := check.Settled(b.Index(), 5*s, spec); len(unmet) != 0 {
+		t.Fatalf("unmet = %q, want none", unmet)
+	}
+}
+
+// Slot b's CR takes the name of slot a's CR, which a delete removed before
+// the stop. The stop waited for slot a's CR alone.
+func TestAStoppedControllerOwesNoFinalizerForACRThatTookADeletedOnesName(t *testing.T) {
+	b := settledAt3s()
+	b.At(1500*ms).Add(tt.Deleted(widgetA, "ua", "2", ready(true)), trace.Event{Action: &trace.Action{Do: "delete", Slot: "a", Ref: &widgetA}}).
+		At(1600*ms).Add(tt.Version(widgetA, "ub", "3", ready(true)), trace.Event{Action: &trace.Action{Do: "create", Slot: "b", Ref: &widgetA}}).
+		At(2 * s).Add(tt.Phase(1, trace.FaultPeriod))
+	stopped(b, 2500*ms)
+	b.At(2600*ms).Add(trace.Event{Action: &trace.Action{Step: 1, Do: "delete", Slot: "b", Ref: &widgetA}}, tt.Version(widgetA, "ub", "4", deleting()))
 	if unmet := check.Settled(b.Index(), 5*s, spec); len(unmet) != 0 {
 		t.Fatalf("unmet = %q, want none", unmet)
 	}
@@ -544,10 +558,24 @@ func TestAStoppedControllerOwesNoFinalizerTheStopDidNotWaitFor(t *testing.T) {
 // stop, so the CR may stay.
 func TestACRDeletedAfterTheStopMayStayDeleting(t *testing.T) {
 	b := settledAt3s()
+	b.At(2 * s).Add(tt.Phase(1, trace.FaultPeriod))
 	stopped(b, 2*s)
 	b.At(2500*ms).Add(trace.Event{Action: &trace.Action{Step: 1, Do: "delete", Slot: "a", Ref: &widgetA}}, tt.Version(widgetA, "ua", "2", deleting()))
 	if unmet := check.Settled(b.Index(), 5*s, spec); len(unmet) != 0 {
 		t.Fatalf("unmet = %q, want none", unmet)
+	}
+}
+
+// Only the stop's step owes clause 2. No controller is left to finalize a
+// CR that the stop's wait gave up on, so later steps settle without it.
+func TestAStepAfterTheStopsStepOwesNoFinalizer(t *testing.T) {
+	b := settledAt3s()
+	b.At(2*s).Add(tt.Phase(1, trace.FaultPeriod), tt.Version(widgetA, "ua", "2", deleting()),
+		trace.Event{Action: &trace.Action{Step: 1, Do: "delete", Slot: "a", Ref: &widgetA}})
+	stopped(b, 2500*ms)
+	b.At(3 * s).Add(tt.Phase(2, trace.FaultPeriod))
+	if unmet := check.Settled(b.Index(), 5*s, spec); len(unmet) != 0 {
+		t.Fatalf("unmet = %q, want none in the step after the stop's", unmet)
 	}
 }
 

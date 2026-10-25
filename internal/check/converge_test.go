@@ -189,3 +189,17 @@ func TestConvergeNotesADeletionTheStopDidNotWaitFor(t *testing.T) {
 		t.Errorf("notes = %q, want %q", notes, want)
 	}
 }
+
+// Only a stopped run notes a CR that is still being deleted at its end.
+func TestConvergeNotesNoDeletionOfARunWithoutAStop(t *testing.T) {
+	r := newRun(2)
+	r.Begin()
+	r.CreateCR("a", widgetA)
+	r.Ready(widgetA).EndFaults().Settle()
+	r.Begin().Update(trace.Harness, widgetA, terminating("a")).Act("delete", "a", &widgetA).EndFaults().TimeOut()
+	findings, notes := convergeOf(t, r)
+	requireFinding(t, findings, "Converge", 1, "did not settle (clause 2)", "kube/toy/widgets")
+	if len(notes) != 0 {
+		t.Errorf("notes = %q, want none", notes)
+	}
+}

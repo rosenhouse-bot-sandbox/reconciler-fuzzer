@@ -16,11 +16,17 @@ import (
 
 // Clean fails a settled step after which a resource the controller created
 // for a deleted CR survives, and the run's last step when any resource the
-// controller created survives. After a stop, the last step spares what a
-// live CR owns. It reports each instance once.
+// controller created survives. After a stop, a resource fails only when its
+// CRs were gone when the controller stopped, since no controller is left to
+// clean up after the others. It reports each instance once.
 func Clean(ix *trace.Index, s Spec) []Finding {
 	v := newView(ix, s)
-	final, stopped := lastStep(ix)
+	run, _ := ix.Run()
+	final, stopAt := run.PlanSteps+1, time.Duration(math.MaxInt64)
+	stop, stopped := ix.Stop(math.MaxInt64)
+	if stopped {
+		final, stopAt = run.PlanSteps-1, stop.At
+	}
 	reported := map[string]bool{}
 	var findings []Finding
 	for _, step := range v.steps {
@@ -32,7 +38,7 @@ func Clean(ix *trace.Index, s Spec) []Finding {
 		left := map[string][]string{}
 		for _, i := range v.resources(end) {
 			o := v.w.Owner(i, end)
-			if !reported[i.UID] && !o.Shared() && !v.retained(o, end) && (last && !stopped || v.allGone(o, end)) {
+			if !reported[i.UID] && !o.Shared() && !v.retained(o, end) && (last && !stopped || v.allGone(o, min(end, stopAt))) {
 				reported[i.UID] = true
 				left[kind(i.Ref)] = append(left[kind(i.Ref)], v.describe(i, o))
 			}
@@ -45,16 +51,6 @@ func Clean(ix *trace.Index, s Spec) []Finding {
 		findings = append(findings, byKind("Clean", step.Step, end, "left resources behind", sorted(left))...)
 	}
 	return findings
-}
-
-// lastStep is the run's restart step, or the plan's last step after a
-// stop.
-func lastStep(ix *trace.Index) (step int, stopped bool) {
-	run, _ := ix.Run()
-	if _, stopped = ix.Stopped(math.MaxInt64); stopped {
-		return run.PlanSteps - 1, true
-	}
-	return run.PlanSteps + 1, false
 }
 
 // allGone reports whether every CR o names is gone at t.

@@ -2,6 +2,7 @@ package check
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"time"
 
@@ -55,18 +56,13 @@ func Converge(ix *trace.Index, s Spec) (findings []Finding, notes []string) {
 // unwaitedDeletions notes each CR still being deleted when the trace ends
 // that the stop did not wait for. No controller is left to finalize it.
 func unwaitedDeletions(ix *trace.Index, s Spec) []string {
-	events := ix.Events()
-	if len(events) == 0 {
-		return nil
-	}
-	end := events[len(events)-1].At
-	if _, stopped := ix.Stopped(end); !stopped {
+	if _, stopped := ix.Stop(math.MaxInt64); !stopped {
 		return nil
 	}
 	var notes []string
 	for _, p := range s.Primaries {
-		for _, cr := range ix.Live(p.Kind.Group, p.Kind.Resource, end) {
-			if deleting(cr.Body) && !ix.StopWaitedFor(cr.Ref) {
+		for _, cr := range ix.Live(p.Kind.Group, p.Kind.Resource, math.MaxInt64) {
+			if deleting(cr.Body) && !ix.StopWaitedFor(cr.UID) {
 				notes = append(notes, describe(cr.Ref)+" is not judged: the stop did not wait for it, and it is still being deleted when the trace ends.")
 			}
 		}

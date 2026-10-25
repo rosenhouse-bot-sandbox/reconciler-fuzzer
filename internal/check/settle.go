@@ -31,19 +31,21 @@ type unmet struct {
 }
 
 // unmetClauses holds a stopped controller only to clauses 2, 6 and 7, and
-// to clause 2 only for the CRs that the stop waited for.
+// to clause 2 only in the stop's step, for the CRs that the stop waited for.
 func unmetClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
-	_, stopped := ix.Stopped(t)
+	stop, stopped := ix.Stop(t)
+	step, _ := latestStep(ix, t)
 	var unmets []unmet
 	crs := 0
 	for _, p := range s.Primaries {
 		live := ix.Live(p.Kind.Group, p.Kind.Resource, t)
-		if stopped {
-			unmets = append(unmets, unfinalized(ix, live)...)
-		} else {
+		switch {
+		case !stopped:
 			for _, cr := range live {
 				unmets = append(unmets, crClauses(ix, p, cr, t, s)...)
 			}
+		case step.Step == stop.Action.Step:
+			unmets = append(unmets, unfinalized(ix, live)...)
 		}
 		crs += len(live)
 	}
@@ -60,7 +62,7 @@ func unmetClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 func unfinalized(ix *trace.Index, live []trace.Version) []unmet {
 	var unmets []unmet
 	for _, cr := range live {
-		if deleting(cr.Body) && ix.StopWaitedFor(cr.Ref) {
+		if deleting(cr.Body) && ix.StopWaitedFor(cr.UID) {
 			unmets = append(unmets, unmet{2, kind(cr.Ref), describe(cr.Ref) + " is being deleted"})
 		}
 	}

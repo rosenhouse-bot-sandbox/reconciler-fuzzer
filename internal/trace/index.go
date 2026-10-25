@@ -2,7 +2,6 @@ package trace
 
 import (
 	"cmp"
-	"maps"
 	"math"
 	"slices"
 	"sort"
@@ -21,9 +20,9 @@ type Index struct {
 	actions map[int][]Event
 	// stop is the first stop action that did not fail.
 	stop *Event
-	// deleted holds, until the stop, the CR that a delete last removed from
-	// each slot that no create has filled since.
-	deleted map[string]Ref
+	// deleted holds, until the stop, the UID of the CR that a delete last
+	// removed from each slot that no create has filled since.
+	deleted map[string]string
 	// versions holds each object's Version events by kind: a Ref with no
 	// namespace or name.
 	versions map[Ref]map[Ref][]Event
@@ -70,7 +69,7 @@ func NewIndex(events []Event) *Index {
 		steps:     map[int]*StepSpan{},
 		calls:     map[Caller][]Event{},
 		actions:   map[int][]Event{},
-		deleted:   map[string]Ref{},
+		deleted:   map[string]string{},
 		versions:  map[Ref]map[Ref][]Event{},
 		firstRV:   map[objectRV]Event{},
 		writeCall: map[objectRV]Event{},
@@ -484,7 +483,10 @@ func (ix *Index) addAction(e Event) {
 	case a.Do == "create":
 		delete(ix.deleted, a.Slot)
 	case a.Do == "delete" && a.Ref != nil:
-		ix.deleted[a.Slot] = *a.Ref
+		// A delete returns once the observer has recorded it, so the latest
+		// version is of the CR it removed.
+		v, _ := ix.Latest(*a.Ref)
+		ix.deleted[a.Slot] = v.UID
 	case a.Do == "stop" && a.Error == "":
 		ix.stop = &e
 	}
@@ -493,19 +495,26 @@ func (ix *Index) addAction(e Event) {
 // Actions returns the Action events of step in Seq order.
 func (ix *Index) Actions(step int) []Event { return ix.actions[step] }
 
-// Stopped reports whether a stop action stopped the controller for good by
-// t, and when.
-func (ix *Index) Stopped(t time.Duration) (at time.Duration, stopped bool) {
+// Stop returns the first stop action that did not fail, when it came by t.
+func (ix *Index) Stop(t time.Duration) (Event, bool) {
 	if ix.stop == nil || ix.stop.At > t {
-		return 0, false
+		return Event{}, false
 	}
-	return ix.stop.At, true
+	return *ix.stop, true
 }
 
-// StopWaitedFor reports whether the stop waited for ref: the CR that a
-// delete last removed from a slot that no create filled again.
-func (ix *Index) StopWaitedFor(ref Ref) bool {
-	return ix.stop != nil && slices.Contains(slices.Collect(maps.Values(ix.deleted)), ref)
+// StopWaitedFor reports whether the stop waited for the CR with uid: the
+// last that a delete removed from a slot that no create filled again.
+func (ix *Index) StopWaitedFor(uid string) bool {
+	if ix.stop == nil {
+		return false
+	}
+	for _, deleted := range ix.deleted {
+		if deleted == uid {
+			return true
+		}
+	}
+	return false
 }
 
 // Procs returns every Proc event in Seq order.

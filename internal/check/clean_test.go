@@ -270,3 +270,17 @@ func TestCleanFailsSharedGrowthAtAStoppedRunsEnd(t *testing.T) {
 	r.Stop().EndFaults().Settle()
 	requireFinding(t, judgeWith(t, r, check.Clean), "Clean", 2, "left resources behind", "kube/secrets", "secrets ns/webhook-x2 (shared)")
 }
+
+// No controller is left to remove the finalizer of a child whose CR the
+// plan deletes after the stop, so the child may stay.
+func TestCleanPassesWhatACRDeletedAfterTheStopLeaves(t *testing.T) {
+	r := newRun(3)
+	r.Begin()
+	child := withChild(r, "a", true)
+	r.EndFaults().Settle()
+	r.Begin().Stop().EndFaults().Settle()
+	held := tt.OwnedBy(tt.Object(child.Name), r.UID(widgetA), true)
+	held["metadata"].(map[string]any)["deletionTimestamp"] = "2026-01-01T00:00:00Z"
+	r.Begin().DeleteCR("a", widgetA).Update(trace.GC, child, held).EndFaults().Settle()
+	requireNone(t, judgeWith(t, r, check.Clean))
+}

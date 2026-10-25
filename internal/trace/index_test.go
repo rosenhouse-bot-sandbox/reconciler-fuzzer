@@ -451,45 +451,44 @@ func TestChangedJudgesAFakesWriteWithNoRVByTheObserver(t *testing.T) {
 	}
 }
 
-func TestStoppedIsTheFirstStopThatDidNotFail(t *testing.T) {
+func TestStopIsTheFirstStopThatDidNotFail(t *testing.T) {
 	var b tt.Builder
 	b.At(1 * s).Add(trace.Event{Action: &trace.Action{Step: 1, Do: "stop", Error: "boom"}}).
 		At(2 * s).Add(trace.Event{Action: &trace.Action{Step: 2, Do: "restart"}}).
 		At(3 * s).Add(trace.Event{Action: &trace.Action{Step: 3, Do: "stop"}}).
 		At(4 * s).Add(trace.Event{Action: &trace.Action{Step: 4, Do: "stop"}})
 	ix := b.Index()
-	for _, c := range []struct {
-		t, at   time.Duration
-		stopped bool
-	}{
-		{2 * s, 0, false},
-		{3 * s, 3 * s, true},
-		{5 * s, 3 * s, true},
-	} {
-		if at, stopped := ix.Stopped(c.t); stopped != c.stopped || at != c.at {
-			t.Errorf("Stopped(%v) = %v, %v; want %v, %v", c.t, at, stopped, c.at, c.stopped)
+	if _, stopped := ix.Stop(2 * s); stopped {
+		t.Error("Stop(2s) found a stop before the first that did not fail")
+	}
+	for _, at := range []time.Duration{3 * s, 5 * s} {
+		if stop, stopped := ix.Stop(at); !stopped || stop.At != 3*s || stop.Action.Step != 3 {
+			t.Errorf("Stop(%v) = %+v, %v; want step 3's stop at 3s", at, stop, stopped)
 		}
 	}
 }
 
+// The stop waits for the CR that a delete last removed from each slot that
+// no create filled again. Another slot's CR may take its name.
 func TestTheStopWaitsForEachSlotsLastDeletedCR(t *testing.T) {
 	widgetC := tt.Ref("toy/widgets", "ns", "c")
-	action := func(do, slot string, ref *trace.Ref) trace.Event {
-		return trace.Event{Action: &trace.Action{Step: 1, Do: do, Slot: slot, Ref: ref}}
-	}
 	var b tt.Builder
-	// A delete from an empty slot names no CR.
-	b.At(1*s).Add(action("delete", "a", &widgetA), action("delete", "b", &widgetB), action("delete", "c", nil)).
-		At(2 * s).Add(action("create", "b", &widgetB))
-	if b.Index().StopWaitedFor(widgetA) {
-		t.Error("StopWaitedFor(a) = true before any stop")
+	b.Add(tt.Version(widgetA, "ua", "1", nil), tt.Version(widgetB, "ub", "2", nil), tt.Version(widgetC, "uc", "3", nil)).
+		At(1*s).Add(tt.Deleted(widgetA, "ua", "4", nil), tt.SlotAction(1, "delete", "a", widgetA),
+		tt.Deleted(widgetB, "ub", "5", nil), tt.SlotAction(1, "delete", "b", widgetB),
+		// A delete from an empty slot names no CR.
+		trace.Event{Action: &trace.Action{Step: 1, Do: "delete", Slot: "e"}}).
+		At(2*s).Add(tt.Version(widgetA, "ud", "6", nil), tt.SlotAction(2, "create", "d", widgetA),
+		tt.Version(widgetB, "ub2", "7", nil), tt.SlotAction(2, "create", "b", widgetB))
+	if b.Index().StopWaitedFor("ua") {
+		t.Error("StopWaitedFor(ua) = true before any stop")
 	}
-	b.At(3 * s).Add(action("stop", "", nil)).
-		At(4 * s).Add(action("delete", "c", &widgetC))
+	b.At(3 * s).Add(trace.Event{Action: &trace.Action{Step: 3, Do: "stop"}}).
+		At(4 * s).Add(tt.SlotAction(4, "delete", "c", widgetC))
 	ix := b.Index()
-	for ref, want := range map[trace.Ref]bool{widgetA: true, widgetB: false, widgetC: false} {
-		if got := ix.StopWaitedFor(ref); got != want {
-			t.Errorf("StopWaitedFor(%s) = %v, want %v", ref.Name, got, want)
+	for uid, want := range map[string]bool{"ua": true, "ud": false, "ub": false, "ub2": false, "uc": false, "": false} {
+		if got := ix.StopWaitedFor(uid); got != want {
+			t.Errorf("StopWaitedFor(%q) = %v, want %v", uid, got, want)
 		}
 	}
 }

@@ -98,6 +98,7 @@ type execution struct {
 // deletion is a CR that a delete action removed from its slot, and when.
 type deletion struct {
 	ref trace.Ref
+	uid string
 	at  time.Time
 }
 
@@ -236,46 +237,48 @@ func (s *stepRun) faultPeriod(ctx context.Context) error {
 	return sleepUntil(ctx, s.periodEnd())
 }
 
-// awaitGone waits until d's CR, the slot's previous one, no longer exists,
-// and fails with errSlotTaken when it gives up.
+// awaitGone waits until no object holds the name of d's CR, the slot's
+// previous one, and fails with errSlotTaken when it gives up.
 func (s *stepRun) awaitGone(ctx context.Context, d deletion) error {
 	begun := time.Now()
-	if timedOut, err := s.outwait(ctx, d); !timedOut {
+	if timedOut, err := s.outwait(ctx, d.ref, "", d.at); !timedOut {
 		return err
 	}
 	return s.slotTaken(d.ref, time.Since(begun))
 }
 
-// outwait waits until d's CR no longer exists. The step's faults or a kill
-// may hold it. So once Period has passed with the CR still there, outwait
-// ends them. It gives up once the allowance has passed since the faults
-// stopped, or since d if that is later.
-func (s *stepRun) outwait(ctx context.Context, d deletion) (timedOut bool, err error) {
+// outwait waits until Gone holds for ref and uid. The step's faults or a
+// kill may hold the object. So once Period has passed with it still there,
+// outwait ends them. It gives up once the allowance has passed since the
+// faults stopped, or since deleted if that is later.
+func (s *stepRun) outwait(ctx context.Context, ref trace.Ref, uid string, deleted time.Time) (timedOut bool, err error) {
 	if time.Now().Before(s.periodEnd()) {
-		if timedOut, err := s.waitGone(ctx, d.ref, s.periodEnd()); !timedOut {
+		if timedOut, err := s.waitGone(ctx, ref, uid, s.periodEnd()); !timedOut {
 			return false, err
 		}
 	}
-	if gone, err := s.Cluster.Gone(ctx, d.ref); gone || err != nil {
+	if gone, err := s.Cluster.Gone(ctx, ref, uid); gone || err != nil {
 		return false, err
 	}
 	if err := s.resume(); err != nil {
 		return false, err
 	}
 	from := s.faultsStopped
-	if d.at.After(from) {
-		from = d.at
+	if deleted.After(from) {
+		from = deleted
 	}
 	allowance, _ := s.allowance()
-	return s.waitGone(ctx, d.ref, from.Add(allowance))
+	return s.waitGone(ctx, ref, uid, from.Add(allowance))
 }
 
 // stop waits until the CRs that deletes removed are gone, or until each
-// wait gives up, and then stops the controller for good. Converge judges a
-// CR still there.
+// wait gives up, and then stops the controller for good. A CR is gone once
+// its name is free or another CR holds it. Converge judges a CR still
+// there.
 func (s *stepRun) stop(ctx context.Context) error {
 	for _, slot := range slices.Sorted(maps.Keys(s.deleted)) {
-		if _, err := s.outwait(ctx, s.deleted[slot]); err != nil {
+		d := s.deleted[slot]
+		if _, err := s.outwait(ctx, d.ref, d.uid, d.at); err != nil {
 			return err
 		}
 	}
@@ -286,11 +289,11 @@ func (s *stepRun) stop(ctx context.Context) error {
 	return s.Process.Stop(ctx)
 }
 
-// waitGone waits until ref names no object, or until the time until.
-func (e *execution) waitGone(ctx context.Context, ref trace.Ref, until time.Time) (timedOut bool, err error) {
+// waitGone waits until Gone holds for ref and uid, or until the time until.
+func (e *execution) waitGone(ctx context.Context, ref trace.Ref, uid string, until time.Time) (timedOut bool, err error) {
 	wait, cancel := context.WithDeadline(ctx, until)
 	defer cancel()
-	err = e.Cluster.WaitGone(wait, ref)
+	err = e.Cluster.WaitGone(wait, ref, uid)
 	if err != nil && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
 		return true, nil
 	}
@@ -383,10 +386,15 @@ func (e *execution) act(ctx context.Context, a plan.Action, s *stepRun) (*trace.
 			return nil, err
 		}
 		delete(e.live, a.Slot)
-		e.deleted[a.Slot] = deletion{ref, time.Now()}
-		if err := e.Cluster.Delete(ctx, ref, a.Propagation); !errors.Is(err, system.ErrGone) {
+		at := time.Now()
+		if err := e.Cluster.Delete(ctx, ref, a.Propagation); err != nil && !errors.Is(err, system.ErrGone) {
 			return &ref, err
 		}
+		// Delete returns once the observer has recorded it, so the latest
+		// version is of the CR it removed.
+		e.ix.Append(e.Recorder.EventsSince(e.ix.Len())...)
+		removed, _ := e.ix.Latest(ref)
+		e.deleted[a.Slot] = deletion{ref, removed.UID, at}
 		return &ref, nil
 	case plan.Restart:
 		if err := e.Process.Stop(ctx); err != nil {
