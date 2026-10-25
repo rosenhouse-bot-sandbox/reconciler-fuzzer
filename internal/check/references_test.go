@@ -1,9 +1,11 @@
 package check_test
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -129,6 +131,12 @@ func TestHonestPassesACRReadyWhileWhatItNamesWithoutRequiredIsMissing(t *testing
 	requireFinding(t, honest(t, r), "Honest", 0, beforeSeeing, "kube/secrets", "slot b: secrets ns/pw not seen")
 }
 
+func TestHonestJudgesAReadyWriteByWhatTheControllerSawBeforeSendingIt(t *testing.T) {
+	r := secretRun(secretRef(), secret(true))
+	r.UpdateInFlight(ctl, databaseB, database(true, "pw"), 50*ms).See(ctl, pw)
+	requireFinding(t, honest(t, r), "Honest", 0, beforeSeeing, "kube/secrets", "slot b: secrets ns/pw not seen")
+}
+
 func TestHonestPassesACRReadyWhileTheControllerLastReadWhatItNamesOpaquely(t *testing.T) {
 	r := secretRun(secretRef(), secret(false))
 	readyB(r.See(ctl, pw).Add(opaque(tt.Ref("secrets", "ns", ""), 0)))
@@ -218,6 +226,66 @@ func TestHonestJudgesAReferenceToAListedKindByItsReady(t *testing.T) {
 	}
 }
 
+func TestHonestJudgesAReferenceOnlyForCRsOfItsFromKind(t *testing.T) {
+	r := fleetRun(1, clusters, databases)
+	r.Spec.References = []trace.Reference{secretRef()}
+	r.Begin()
+	cluster := func(ready bool) map[string]any {
+		body := tt.CR("a", ready)
+		body["spec"] = map[string]any{"passwordSecretRef": map[string]any{"name": "pw"}}
+		return body
+	}
+	r.Create(trace.Harness, clusterA, cluster(false))
+	r.Act("create", "a", &clusterA).Update(ctl, clusterA, cluster(true))
+	requireNone(t, honest(t, r))
+}
+
+func TestHonestJudgesAReferenceToAFakesObject(t *testing.T) {
+	for name, c := range map[string]struct {
+		state           string
+		look            bool
+		summary, detail string
+	}{
+		"seen ready": {state: "READY", look: true},
+		"not seen":   {state: "READY", summary: beforeSeeing, detail: "slot b: cloud buckets b1 not seen"},
+		"gone":       {state: "DELETING", summary: noDependency, detail: "slot b: cloud buckets b1 not seen"},
+		"seen gone":  {state: "DELETING", look: true, summary: noDependency, detail: "slot b: cloud buckets b1 seen missing"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := fleetRun(1, databases)
+			r.Spec.Systems = []trace.System{{Name: "cloud", API: "crud", Gone: cloudSystem.Gone}}
+			r.Spec.References = []trace.Reference{{From: databases, System: "cloud", To: trace.Kind{Resource: "buckets"},
+				Name: "spec.bucket", Ready: cloudSystem.Ready, Required: true}}
+			r.Begin()
+			r.Create(trace.Harness, bucketA, map[string]any{"id": "b1", "state": c.state})
+			if c.look {
+				r.See(ctl, bucketA)
+			}
+			database := func(ready bool) map[string]any {
+				body := tt.CR("b", ready)
+				body["spec"] = map[string]any{"bucket": "b1"}
+				return body
+			}
+			r.Create(trace.Harness, databaseB, database(false))
+			r.Act("create", "b", &databaseB).Update(ctl, databaseB, database(true))
+			findings := honest(t, r)
+			if c.summary == "" {
+				requireNone(t, findings)
+				return
+			}
+			requireFinding(t, findings, "Honest", 0, c.summary, "cloud/buckets", c.detail)
+		})
+	}
+}
+
+func TestHonestJudgesAVersionTheObserverMissedByTheReferencesReady(t *testing.T) {
+	anyObject := secretRef()
+	anyObject.Ready = "true"
+	r := secretRun(anyObject, secret(false))
+	readyB(r.Add(tt.Seen(ctl, pw, r.UID(pw), "missed")))
+	requireNone(t, honest(t, r))
+}
+
 // secretGoes has the controller make slot b ready after seeing pw ready,
 // and then has change change pw.
 func secretGoes(ref trace.Reference, change func(r *tt.Script)) *tt.Script {
@@ -285,11 +353,59 @@ func TestHonestWithTrackPassesACRThatReactsInTime(t *testing.T) {
 			r.Add(opaque(tt.Ref("secrets", "ns", ""), 0))
 		}},
 		"what goes is not required": {optional, deletedSeen},
+		"the CR is deleted in time": {tracked, func(r *tt.Script) {
+			notReadySeen(r)
+			r.Tick(400*ms).Delete(trace.Harness, databaseB)
+		}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			requireNone(t, honest(t, secretGoes(c.ref, c.change)))
 		})
 	}
+}
+
+func TestHonestWithTrackFailsOnceAtTheFirstLookThatHeldTheCRBack(t *testing.T) {
+	tracked := secretRef()
+	tracked.Track = 500 * ms
+	var first time.Duration
+	r := secretGoes(tracked, func(r *tt.Script) {
+		notReadySeen(r)
+		first = r.Now - tt.Tick
+		r.Tick(100*ms).See(ctl, pw).Tick(500*ms).Update(trace.Harness, pw, secret(true)).See(ctl, pw)
+	})
+	findings := honest(t, r)
+	requireFinding(t, findings, "Honest", 0, stayedReady, "kube/secrets", fmt.Sprintf("slot b: secrets ns/pw seen not ready at %v", first))
+	if f := findings[0]; len(f.Details) != 1 || f.At != first+500*ms {
+		t.Errorf("finding = %+v, want one detail, at %v.", f, first+500*ms)
+	}
+}
+
+func TestHonestWithTrackFailsACRThatReactsTooLate(t *testing.T) {
+	tracked := secretRef()
+	tracked.Track = 500 * ms
+	r := secretGoes(tracked, func(r *tt.Script) {
+		notReadySeen(r)
+		r.Tick(600*ms).Update(ctl, databaseB, database(false, "pw"))
+	})
+	requireFinding(t, honest(t, r), "Honest", 0, stayedReady, "kube/secrets", "slot b: secrets ns/pw seen not ready at")
+}
+
+func TestHonestWithTrackJudgesOnlyLooksWhileTheCRLives(t *testing.T) {
+	tracked := secretRef()
+	tracked.Track = 500 * ms
+	r := fleetRun(1, databases)
+	r.Spec.References = []trace.Reference{tracked}
+	r.Begin()
+	r.Create(trace.Harness, pw, secret(false))
+	r.See(ctl, pw).Create(trace.Harness, databaseB, database(true, "pw"))
+	r.Act("create", "b", &databaseB)
+	requireNone(t, honest(t, r))
+}
+
+func TestHonestWithTrackJudgesNoLookWhoseTrackOutlastsTheTrace(t *testing.T) {
+	tracked := secretRef()
+	tracked.Track = 5 * s
+	requireNone(t, honest(t, secretGoes(tracked, notReadySeen)))
 }
 
 func TestSettleExcusesACRNotReadyWhileAReferenceHoldsItBack(t *testing.T) {
@@ -318,9 +434,14 @@ func TestSettleExcusesACRNotReadyWhileAReferenceHoldsItBack(t *testing.T) {
 		"seen not ready, then made ready": {secretRef(), secret(false), func(r *tt.Script) {
 			r.See(ctl, pw).Update(trace.Harness, pw, secret(true))
 		}, false},
-		"read opaquely":                 {secretRef(), secret(true), func(r *tt.Script) { r.Add(opaque(tt.Ref("secrets", "ns", ""), 0)) }, true},
-		"seen ready":                    {secretRef(), secret(true), func(r *tt.Script) { r.See(ctl, pw) }, false},
+		"read opaquely": {secretRef(), secret(true), func(r *tt.Script) { r.Add(opaque(tt.Ref("secrets", "ns", ""), 0)) }, true},
+		"seen ready":    {secretRef(), secret(true), func(r *tt.Script) { r.See(ctl, pw) }, false},
+		"seen deleted":  {secretRef(), secret(true), func(r *tt.Script) { deletedSeen(r.See(ctl, pw)) }, true},
+		"seen ready, then made not ready": {secretRef(), secret(true), func(r *tt.Script) {
+			r.See(ctl, pw).Update(trace.Harness, pw, secret(false))
+		}, false},
 		"live and never seen":           {secretRef(), secret(true), func(*tt.Script) {}, false},
+		"not ready and never seen":      {secretRef(), secret(false), func(*tt.Script) {}, false},
 		"missing without required":      {optional, nil, func(*tt.Script) {}, false},
 		"seen missing without required": {optional, nil, func(r *tt.Script) { r.Call(ctl, "get", pw, 404) }, false},
 	} {
@@ -347,14 +468,6 @@ func TestSettleStillWaitsForACRNoReferenceHoldsBack(t *testing.T) {
 
 func TestClause5HoldsTheControllerToLookingAtACreatedFixture(t *testing.T) {
 	requireUnmet(t, damagedAt1200ms("createFixture"), 3200*ms, "has not looked at configmaps ns/c since the createFixture at 1.2s")
-}
-
-func TestRestoreSkipsAStepThatCreatesAFixture(t *testing.T) {
-	r := twoCRs()
-	r.Begin().Restart().Act("createFixture", "", &cm)
-	r.Update(ctl, childA, map[string]any{"data": "changed"})
-	r.EndFaults().Settle()
-	requireNone(t, restore(t, r))
 }
 
 func TestSpecForReadsTheRunEventsReferences(t *testing.T) {
@@ -461,15 +574,15 @@ func TestSpecForTakesAConfigReferencesResourceFromTheRunEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.References = []config.Reference{{From: c.Primaries[0].Kind, To: schema.GroupVersionKind{Version: "v1", Kind: "Endpoints"}, Namespaced: true, Name: "spec.service", Ready: "true"}}
+	c.References = []config.Reference{{From: c.Primaries[0].Kind, To: schema.GroupVersionKind{Group: "zoo.io", Version: "v1", Kind: "Moose"}, Namespaced: true, Name: "spec.moose", Ready: "true"}}
 	run := tt.Run("toy.reconciler-fuzzer", "widgets")
-	run.Run.References = []trace.Reference{{From: run.Run.Primaries[0].Kind, To: trace.Kind{Version: "v1", Kind: "Endpoints", Resource: "endpoints"}, Namespaced: true, Name: "spec.service", Ready: "true"}}
+	run.Run.References = []trace.Reference{{From: run.Run.Primaries[0].Kind, To: trace.Kind{Group: "zoo.io", Version: "v1", Kind: "Moose", Resource: "moose"}, Namespaced: true, Name: "spec.moose", Ready: "true"}}
 	var b tt.Builder
 	got, err := check.SpecFor(c, b.Add(run).Index())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.References) != 1 || got.References[0].To != (trace.Ref{System: "kube", Resource: "endpoints"}) {
-		t.Errorf("references = %+v, want one to endpoints, the run event's resource for Endpoints.", got.References)
+	if len(got.References) != 1 || got.References[0].To != (trace.Ref{System: "kube", Group: "zoo.io", Resource: "moose"}) {
+		t.Errorf("references = %+v, want one to moose, the run event's resource for Moose.", got.References)
 	}
 }

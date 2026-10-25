@@ -77,24 +77,29 @@ func (s Spec) sight(ix *trace.Index, n named, t time.Duration) sight {
 	return g
 }
 
-// shown is what look, one of the controller's looks at n, showed.
+// shown is what look, one of the controller's looks at n, showed. The
+// reference's ready judges a version the observer missed as an empty body.
 func (s Spec) shown(ix *trace.Index, n named, look trace.Event) sight {
 	if look.Seen == nil || look.Seen.Deleted {
 		return sight{looked: true, missing: true}
 	}
-	v, found := ix.VersionOf(look.Seen.Ref, look.Seen.RV)
-	return sight{looked: true, ready: found && satisfies(s.References[n.ref].Ready, decode(v.Body))}
+	v, _ := ix.VersionOf(look.Seen.Ref, look.Seen.RV)
+	return s.showing(n, decode(v.Body))
 }
 
 // world is what a look at n at t would show: the observer's latest version
-// of it by then, missing when deleted or when its system's gone CEL accepts
-// it.
+// of it by then.
 func (s Spec) world(ix *trace.Index, n named, t time.Duration) sight {
 	v, found := ix.LatestAt(n.object, t)
 	if !found || v.Deleted {
 		return sight{looked: true, missing: true}
 	}
-	body := decode(v.Body)
+	return s.showing(n, decode(v.Body))
+}
+
+// showing is what a look that shows body, a live version of n, sees: n
+// missing when its system's gone CEL accepts body.
+func (s Spec) showing(n named, body map[string]any) sight {
 	if gone := s.Owners.Gone[n.object.System]; gone != nil && satisfies(gone, body) {
 		return sight{looked: true, missing: true}
 	}

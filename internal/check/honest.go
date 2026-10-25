@@ -315,8 +315,8 @@ func (h *honesty) streak(dep owner.Instance, m Model, from, to time.Duration) bo
 }
 
 // judgeReferenceTrack fails a CR, of p's kind, that stays ready, naming an
-// object, for its reference's track after a look at the object that held
-// the CR back, while every later look held it back too.
+// object, for its reference's track after a look at the object, while that
+// look and every later one held the CR back.
 func (h *honesty) judgeReferenceTrack(uid string, p Primary, versions []trace.Event, end time.Duration) {
 	cr := versions[0].Version.Ref
 	var objects []named
@@ -334,7 +334,7 @@ func (h *honesty) judgeReferenceTrack(uid string, p Primary, versions []trace.Ev
 		readyNaming := func(body map[string]any) bool { return p.ready(body) && slices.Contains(h.s.names(cr, body), n) }
 		for i, look := range looks {
 			at := look.At + r.Track
-			if at > end || !holds(look) || slices.ContainsFunc(looks[i+1:], func(e trace.Event) bool { return e.At <= at && !holds(e) }) ||
+			if at > end || slices.ContainsFunc(looks[i:], func(e trace.Event) bool { return e.At <= at && !holds(e) }) ||
 				!through(versions, look.At, at, readyNaming) || h.excused(uid, look.At, at) || h.ix.Opaque(trace.Controller, n.object, look.At, at) {
 				continue
 			}

@@ -333,9 +333,7 @@ func recordedResource(run trace.Run) func(schema.GroupVersionKind) (string, bool
 		}
 	}
 	for _, r := range run.References {
-		if r.System == "" {
-			recorded = append(recorded, r.To)
-		}
+		recorded = append(recorded, r.To)
 	}
 	return func(gvk schema.GroupVersionKind) (string, bool, error) {
 		if i := slices.IndexFunc(recorded, func(k trace.Kind) bool { return k.Group == gvk.Group && k.Kind == gvk.Kind }); i >= 0 {
