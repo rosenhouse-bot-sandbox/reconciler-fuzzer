@@ -49,13 +49,12 @@ func Converge(ix *trace.Index, s Spec) (findings []Finding, notes []string) {
 		f.Details = append(f.Details, unmodelledKinds(ix, f.At, s)...)
 		findings = append(findings, f)
 	}
-	return findings, append(notes, deletedAfterTheStop(ix, s)...)
+	return findings, append(notes, unwaitedDeletions(ix, s)...)
 }
 
-// deletedAfterTheStop notes each CR whose deletion began after the stop and
-// that is still being deleted when the trace ends. No controller is left to
-// finalize it.
-func deletedAfterTheStop(ix *trace.Index, s Spec) []string {
+// unwaitedDeletions notes each CR still being deleted when the trace ends
+// that the stop did not wait for. No controller is left to finalize it.
+func unwaitedDeletions(ix *trace.Index, s Spec) []string {
 	events := ix.Events()
 	if len(events) == 0 {
 		return nil
@@ -67,9 +66,13 @@ func deletedAfterTheStop(ix *trace.Index, s Spec) []string {
 	}
 	var notes []string
 	for _, p := range s.Primaries {
-		atStop := deletingAt(ix, p, stop)
+		waited, unwaited := deletionsAt(ix, p, stop)
 		for _, cr := range ix.Live(p.Kind.Group, p.Kind.Resource, end) {
-			if deleting(cr.Body) && !atStop[cr.UID] {
+			switch {
+			case !deleting(cr.Body) || waited[cr.UID]:
+			case unwaited[cr.UID]:
+				notes = append(notes, describe(cr.Ref)+" is not judged: the stop did not wait for it, and it is still being deleted when the trace ends.")
+			default:
 				notes = append(notes, describe(cr.Ref)+" is not judged: the plan deleted it after the stop, and it is still being deleted when the trace ends.")
 			}
 		}

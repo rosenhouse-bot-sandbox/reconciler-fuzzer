@@ -172,3 +172,19 @@ func TestConvergeFailsAStopStepWhoseDeletedCRStays(t *testing.T) {
 		t.Errorf("notes = %q, want none", notes)
 	}
 }
+
+func TestConvergeNotesADeletionTheStopDidNotWaitFor(t *testing.T) {
+	r := newRun(2)
+	r.Begin()
+	r.CreateCR("a", widgetA)
+	r.Ready(widgetA).EndFaults().Settle()
+	r.Begin().Update(trace.Harness, widgetA, terminating("a")).Stop().EndFaults().Settle()
+	findings, notes := convergeOf(t, r)
+	if len(findings) != 0 {
+		t.Errorf("findings = %+v, want none", findings)
+	}
+	want := "widgets.toy ns/a is not judged: the stop did not wait for it, and it is still being deleted when the trace ends."
+	if !slices.Equal(notes, []string{want}) {
+		t.Errorf("notes = %q, want %q", notes, want)
+	}
+}

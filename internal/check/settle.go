@@ -31,7 +31,7 @@ type unmet struct {
 }
 
 // unmetClauses holds a stopped controller only to clauses 2, 6 and 7, and
-// to clause 2 only for the CRs being deleted at the stop.
+// to clause 2 only for the CRs that the stop waited for.
 func unmetClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 	stop, stopped := ix.Stopped(t)
 	var unmets []unmet
@@ -56,28 +56,41 @@ func unmetClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 	return append(unmets, quietClauses(ix, t, s, max(1, crs))...)
 }
 
-// unfinalized are the CRs of live, of p's kind, that were being deleted at
-// the stop.
+// unfinalized are the CRs of live, of p's kind, that the stop waited for.
 func unfinalized(ix *trace.Index, p Primary, live []trace.Version, stop time.Duration) []unmet {
-	atStop := deletingAt(ix, p, stop)
+	waited, _ := deletionsAt(ix, p, stop)
 	var unmets []unmet
 	for _, cr := range live {
-		if atStop[cr.UID] {
+		if waited[cr.UID] {
 			unmets = append(unmets, unmet{2, kind(cr.Ref), describe(cr.Ref) + " is being deleted"})
 		}
 	}
 	return unmets
 }
 
-// deletingAt holds the UIDs of the CRs of p's kind being deleted at t.
-func deletingAt(ix *trace.Index, p Primary, t time.Duration) map[string]bool {
-	uids := map[string]bool{}
-	for _, cr := range ix.Live(p.Kind.Group, p.Kind.Resource, t) {
-		if deleting(cr.Body) {
-			uids[cr.UID] = true
+// deletionsAt splits the UIDs of the CRs of p's kind being deleted at the
+// stop by whether it waited for them, as it does for those a delete action
+// removed.
+func deletionsAt(ix *trace.Index, p Primary, stop time.Duration) (waited, unwaited map[string]bool) {
+	deleted := map[trace.Ref]bool{}
+	for _, step := range ix.Steps() {
+		for _, e := range ix.Actions(step.Step) {
+			if e.Action.Do == "delete" && e.Action.Ref != nil && e.At <= stop {
+				deleted[*e.Action.Ref] = true
+			}
 		}
 	}
-	return uids
+	waited, unwaited = map[string]bool{}, map[string]bool{}
+	for _, cr := range ix.Live(p.Kind.Group, p.Kind.Resource, stop) {
+		switch {
+		case !deleting(cr.Body):
+		case deleted[cr.Ref]:
+			waited[cr.UID] = true
+		default:
+			unwaited[cr.UID] = true
+		}
+	}
+	return waited, unwaited
 }
 
 // runClauses holds the controller to clauses 3 to 5.

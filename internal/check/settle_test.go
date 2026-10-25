@@ -507,12 +507,24 @@ func TestAStoppedControllerOwesNoLookAtALaterChange(t *testing.T) {
 	}
 }
 
-func TestAStoppedControllerMustHaveFinalizedTheCRsDeletingAtTheStop(t *testing.T) {
+func TestAStoppedControllerMustHaveFinalizedTheCRsThePlanDeleted(t *testing.T) {
 	b := settledAt3s()
-	b.At(2 * s).Add(tt.Version(widgetA, "ua", "2", deleting()))
+	b.At(2*s).Add(tt.Phase(1, trace.FaultPeriod), tt.Version(widgetA, "ua", "2", deleting()),
+		trace.Event{Action: &trace.Action{Step: 1, Do: "delete", Slot: "a", Ref: &widgetA}})
 	stopped(b, 2500*ms)
 	if unmet := check.Settled(b.Index(), 5*s, spec); !slices.Equal(unmet, []string{"widgets.toy ns/a is being deleted"}) {
 		t.Fatalf("unmet = %q, want only slot a's CR being deleted", unmet)
+	}
+}
+
+// The stop waits only for the CRs that delete actions removed, so another
+// deletion, such as a cascade's, may outlast it.
+func TestAStoppedControllerOwesNoFinalizerTheStopDidNotWaitFor(t *testing.T) {
+	b := settledAt3s()
+	b.At(2 * s).Add(tt.Version(widgetA, "ua", "2", deleting()))
+	stopped(b, 2500*ms)
+	if unmet := check.Settled(b.Index(), 5*s, spec); len(unmet) != 0 {
+		t.Fatalf("unmet = %q, want none", unmet)
 	}
 }
 

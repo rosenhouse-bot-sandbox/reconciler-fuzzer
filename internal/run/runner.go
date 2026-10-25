@@ -280,6 +280,9 @@ func (s *stepRun) stop(ctx context.Context) error {
 		}
 	}
 	s.stopped = true
+	if err := s.Process.Supervise(false); err != nil {
+		return err
+	}
 	return s.Process.Stop(ctx)
 }
 

@@ -857,7 +857,7 @@ func TestExecuteAppendsNothingAfterAStop(t *testing.T) {
 	if err := f.runner.Execute(context.Background(), p); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := f.process.all(), []string{"supervise(false)", "stop"}; !reflect.DeepEqual(got, want) {
+	if got, want := f.process.all(), []string{"supervise(false)", "supervise(false)", "stop"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("process calls = %q, want %q", got, want)
 	}
 	if _, found := find(f.rec.Events(), 1, trace.FaultPeriod); found {
@@ -966,6 +966,9 @@ func TestExecuteEndsTheFaultsAndRestartsAKilledControllerWhileAStopWaits(t *test
 	}
 	if restarted, found := f.process.whenAfter("supervise(true)", "kill"); !found || restarted.After(f.process.when("stop")) {
 		t.Errorf("process calls = %q, want supervise(true) between the kill and the stop", f.process.all())
+	}
+	if calls := f.process.all(); slices.Index(calls, "stop") < 1 || calls[slices.Index(calls, "stop")-1] != "supervise(false)" {
+		t.Errorf("process calls = %q, want supervise(false) right before the stop, so that no restart follows it", calls)
 	}
 	if got := startedAfterStop(t, f); len(got) != 0 {
 		t.Errorf("process calls after the stop = %q, want none that starts the controller", got)
