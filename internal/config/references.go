@@ -47,8 +47,9 @@ func ReferencedNames(name, namespace string, obj map[string]any) []types.Namespa
 }
 
 // DeleteOrder is the listed kinds, each next the first in config order that
-// no reference of a kind still to come names as To. Where references form a
-// cycle, the first remaining kind in config order comes next.
+// no reference from another kind still to come names as To. Where
+// references form a cycle, the first remaining kind in config order comes
+// next.
 func (c *Config) DeleteOrder() []schema.GroupKind {
 	return c.ListedKinds()
 }

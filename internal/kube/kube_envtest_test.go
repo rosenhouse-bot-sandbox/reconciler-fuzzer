@@ -362,6 +362,49 @@ func TestKube(t *testing.T) {
 		}
 	})
 
+	t.Run("create fixture makes a deleted fixture again as its file declares it", func(t *testing.T) {
+		t.Skip("enabled by the run package")
+		configMap, _ := k.Ref(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}, "widget-config")
+		clusterRole, _ := k.Ref(schema.GroupVersionKind{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRole"}, "rf-fixture")
+		if err := k.Patch(ctx, configMap, []byte(`{"data":{"label":"blue"}}`)); err != nil {
+			t.Fatal(err)
+		}
+		for _, ref := range []trace.Ref{configMap, clusterRole} {
+			if err := k.Delete(ctx, ref, ""); err != nil {
+				t.Fatal(err)
+			}
+			waitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			err := k.WaitGone(waitCtx, ref)
+			cancel()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, err := k.CreateFixture(ctx, ref); err != nil || got != ref {
+				t.Errorf("CreateFixture(%+v) = %+v, %v.", ref, got, err)
+			}
+		}
+		admin := kubernetes.NewForConfigOrDie(k.admin)
+		fixture, err := admin.CoreV1().ConfigMaps(ns).Get(ctx, "widget-config", metav1.GetOptions{})
+		if err != nil || fixture.Data["label"] != "red" {
+			t.Fatalf("After CreateFixture the fixture is %+v, %v; want its file's label red.", fixture, err)
+		}
+		recorded.await(t, "harness create of the fixture again", func(e trace.Event) bool {
+			c := e.Call
+			return c != nil && c.Caller == trace.Harness && c.Verb == "create" && c.ResultName == "widget-config" && c.ResultRV == fixture.ResourceVersion
+		})
+		if _, err := admin.RbacV1().ClusterRoles().Get(ctx, "rf-fixture", metav1.GetOptions{}); err != nil {
+			t.Errorf("Getting the ClusterRole fixture: %v", err)
+		}
+		for _, ref := range []trace.Ref{
+			{System: Name, Resource: "configmaps", Namespace: ns, Name: "not-a-fixture"},
+			{System: Name, Resource: "configmaps", Namespace: "rf-far", Name: "widget-config"},
+		} {
+			if _, err := k.CreateFixture(ctx, ref); err == nil {
+				t.Errorf("CreateFixture(%+v) made an object no fixture file declares.", ref)
+			}
+		}
+	})
+
 	gc, err := k.Listen(trace.GC)
 	if err != nil {
 		t.Fatal(err)

@@ -477,7 +477,7 @@ lasts 0.5 s to `2 × stable`, plus the longest `track` for a model fault.
 A create, or an update that sets a reference's `name`, writes each value with
 a **candidate**: the name of any slot's CR of a listed `to` kind, or of a
 fixture of another, live half the time when one is. With `required: false`, 1
-in 4 writes `missing`, which names nothing. `changeFixture` also deletes a
+in 4 writes `missing`, a name no object has. `changeFixture` also deletes a
 live kube fixture of a `to` kind, and `createFixture` makes it again. Plans
 of a config without references are as before.
 

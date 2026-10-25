@@ -201,7 +201,7 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 	var targets []ModelTarget
 	var fakes []*fake.Fake
 	for _, s := range cfg.Fakes() {
-		fo, err := fakeOptions(s)
+		fo, err := fakeOptions(s, cfg.References)
 		if err != nil {
 			return err
 		}
@@ -308,8 +308,9 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 	return runner.Execute(ctx, p)
 }
 
-// fakeOptions configure the fake of s, with its fixtures and token.
-func fakeOptions(s config.System) (fake.Options, error) {
+// fakeOptions configure the fake of s, with its fixtures and token. It sees
+// every object when s is a dependency or a reference names it.
+func fakeOptions(s config.System, references []config.Reference) (fake.Options, error) {
 	api, err := apiMap(s)
 	if err != nil {
 		return fake.Options{}, err
@@ -389,6 +390,12 @@ func modelKinds(models []config.Model) (watch, seen []schema.GroupVersionKind) {
 		}
 	}
 	return watch, seen
+}
+
+// referenceKinds returns the kube kinds that references name as To, which
+// the observer watches and the controller listener records Seen events for.
+func referenceKinds(references []config.Reference) []schema.GroupVersionKind {
+	return nil
 }
 
 // traceModels describes the models for the run event. ref maps a kind to
