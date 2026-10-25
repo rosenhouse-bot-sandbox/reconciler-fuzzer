@@ -26,9 +26,9 @@ systems:
   - {name: cloud, api: crud, process: {command: [x]}, ready: "self.state == 'ready'"}
   - {name: other, api: crud, process: {command: [x]}}
 primaries:
-  - {kind: toy/v1/Cluster, sample: sample.yaml, ready: self.status.ready, owns: [{kind: v1/ConfigMap, name: self.metadata.name}]}
+  - {kind: toy/v1/Cluster, sample: sample.yaml, ready: self.status.ready, owns: [{kind: v1/ConfigMap, name: self.spec.config}]}
   - {kind: toy/v1/Database, sample: sample.yaml, ready: "true", values: {distinct: [spec.secretName]}}
-  - {kind: toy/v1/User, sample: sample.yaml, ready: "true", owns: [{kind: "other:buckets", name: self.metadata.name}]}
+  - {kind: toy/v1/User, sample: sample.yaml, ready: "true", owns: [{kind: "other:buckets", name: self.spec.b}]}
   - {kind: toy/v1/Tenant, sample: sample.yaml, ready: "true"}
 `
 
@@ -80,6 +80,8 @@ func TestReferencesLoad(t *testing.T) {
   - {from: toy/v1/User, to: "cloud:buckets", name: spec.bucket}
   - {from: toy/v1/Tenant, to: v1/Namespace, name: spec.namespace, ready: "true"}
   - {from: toy/v1/User, to: toy/v2/Gadget, name: spec.gadget, ready: "true"}
+  - {from: toy/v1/Database, to: apps/v1/Deployment, name: spec.deployment, ready: "true"}
+  - {from: toy/v1/Database, to: storage.k8s.io/v1/StorageClass, name: spec.storageClass, ready: "true"}
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -92,6 +94,8 @@ func TestReferencesLoad(t *testing.T) {
 		{From: toyKind("toy", "User"), System: "cloud", Collection: "buckets", Name: "spec.bucket", Ready: "self.state == 'ready'", Required: true},
 		{From: toyKind("toy", "Tenant"), To: toyKind("", "Namespace"), Name: "spec.namespace", Ready: "true", Required: true},
 		{From: toyKind("toy", "User"), To: schema.GroupVersionKind{Group: "toy", Version: "v2", Kind: "Gadget"}, Namespaced: true, Name: "spec.gadget", Ready: "true", Required: true},
+		{From: toyKind("toy", "Database"), To: toyKind("apps", "Deployment"), Namespaced: true, Name: "spec.deployment", Ready: "true", Required: true},
+		{From: toyKind("toy", "Database"), To: toyKind("storage.k8s.io", "StorageClass"), Name: "spec.storageClass", Ready: "true", Required: true},
 	}
 	if !reflect.DeepEqual(c.References, want) {
 		t.Errorf("References =\n%+v\nwant\n%+v", c.References, want)
@@ -109,12 +113,17 @@ func TestReferencesRefusals(t *testing.T) {
 		"a model's to at another version":            {"{from: toy/v1/Database, to: toy/v2/Volume, name: spec.volume}", "references[0].to toy/v2/Volume: the config declares this kind at version v1"},
 		"no to":                                      {"{from: toy/v1/Database, name: spec.s, ready: \"true\"}", "references[0].to is required"},
 		"a malformed to":                             {"{from: toy/v1/Database, to: Secret, name: spec.s, ready: \"true\"}", "references[0].to"},
-		"a to of unknown scope":                      {"{from: toy/v1/Database, to: example.com/v1/Widget, name: spec.w, ready: \"true\"}", "references[0].to"},
-		"a core kind's name in a group":              {"{from: toy/v1/Database, to: example.com/v1/Secret, name: spec.s, ready: \"true\"}", "references[0].to"},
+		"a to of unknown scope":                      {"{from: toy/v1/Database, to: example.com/v1/Widget, name: spec.w, ready: \"true\"}", "references[0].to example.com/v1/Widget: no CRD in crds and no built-in kind has this group and kind"},
+		"a core kind's name in a group":              {"{from: toy/v1/Database, to: example.com/v1/Secret, name: spec.s, ready: \"true\"}", "references[0].to example.com/v1/Secret: no CRD in crds and no built-in kind has this group and kind; did you mean v1/Secret?"},
+		"a core kind in group core":                  {"{from: toy/v1/Database, to: core/v1/Secret, name: spec.s, ready: \"true\"}", "did you mean v1/Secret?"},
+		"a core kind in lower case":                  {"{from: toy/v1/Database, to: v1/secret, name: spec.s, ready: \"true\"}", "did you mean v1/Secret?"},
+		"a built-in kind without its group":          {"{from: toy/v1/Database, to: v1/Deployment, name: spec.d, ready: \"true\"}", "did you mean apps/v1/Deployment?"},
+		"a kind of two groups in lower case":         {"{from: toy/v1/Database, to: v1/event, name: spec.e, ready: \"true\"}", "did you mean events.k8s.io/v1/Event or v1/Event?"},
+		"a CRD's kind in lower case":                 {"{from: toy/v1/Database, to: toy/v1/tenant, name: spec.t, ready: \"true\"}", "did you mean toy/v1/Tenant?"},
 		"a to of an unknown system":                  {"{from: toy/v1/Database, to: \"nope:buckets\", name: spec.b, ready: \"true\"}", "references[0].to"},
 		"a malformed collection":                     {"{from: toy/v1/Database, to: \"cloud:Buckets\", name: spec.b}", "references[0].to"},
-		"a to the from entry owns":                   {"{from: toy/v1/Cluster, to: v1/ConfigMap, name: spec.config, ready: \"true\"}", "references[0].to v1/ConfigMap: the from entry owns this kind"},
-		"a fake the from entry owns":                 {"{from: toy/v1/User, to: \"other:buckets\", name: spec.b, ready: \"true\"}", "references[0].to other:buckets: the from entry owns this kind"},
+		"an object the from entry owns":              {"{from: toy/v1/Cluster, to: v1/ConfigMap, name: spec.config, ready: \"true\"}", "references[0].name spec.config: the from entry owns the v1/ConfigMap it names"},
+		"a fake's resource the from entry owns":      {"{from: toy/v1/User, to: \"other:buckets\", name: spec.b, ready: \"true\"}", "references[0].name spec.b: the from entry owns the other:buckets it names"},
 		"an unlisted to without ready":               {"{from: toy/v1/Database, to: v1/Secret, name: spec.s}", "references[0].ready"},
 		"a fake to without ready":                    {"{from: toy/v1/Database, to: \"other:buckets\", name: spec.b}", "references[0].ready"},
 		"a ready that does not compile":              {"{from: toy/v1/Database, to: v1/Secret, name: spec.s, ready: \"self.(\"}", "references[0].ready"},
@@ -172,8 +181,72 @@ func TestOnlyCRDsGiveScopes(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "crds", "xrd.yaml"), []byte(xrd), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := config.Load(path); err == nil || !strings.Contains(err.Error(), "references[0].to toy/v1/Widget: neither crds nor the core kinds give its scope") {
+	if _, err := config.Load(path); err == nil || !strings.Contains(err.Error(), "references[0].to toy/v1/Widget: no CRD in crds and no built-in kind has this group and kind") {
 		t.Errorf("Load = %v, want toy/v1/Widget of unknown scope, since only a CompositeResourceDefinition describes it.", err)
+	}
+}
+
+// Cluster owns the ConfigMap that spec.config names, and User owns the
+// other:buckets that spec.b names.
+func TestAReferenceMayNameWhatTheFromEntryDoesNotOwn(t *testing.T) {
+	for name, reference := range map[string]string{
+		"another field of an owned kind":       "{from: toy/v1/Cluster, to: v1/ConfigMap, name: spec.settings, ready: \"true\"}",
+		"another kind at an owned field":       "{from: toy/v1/Cluster, to: v1/Secret, name: spec.config, ready: \"true\"}",
+		"another fake at an owned field":       "{from: toy/v1/User, to: \"cloud:buckets\", name: spec.b}",
+		"another collection at an owned field": "{from: toy/v1/User, to: \"other:keys\", name: spec.b, ready: \"true\"}",
+		"an owned kind of another from":        "{from: toy/v1/Database, to: v1/ConfigMap, name: spec.config, ready: \"true\"}",
+	} {
+		if _, err := config.Load(writeReferences(t, "references: ["+reference+"]\n")); err != nil {
+			t.Errorf("%s: Load = %v, want no error.", name, err)
+		}
+	}
+}
+
+const databaseSchema = `
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                clusterRef: {type: string}
+                replicas: {type: integer}
+                keys: {type: array, items: {type: object, properties: {name: {type: string}, namespace: {type: string}}}}
+                names: {type: array, items: {type: string}}
+                extra: {type: object, x-kubernetes-preserve-unknown-fields: true, properties: {known: {type: string}}}
+                labels: {type: object, additionalProperties: {type: string}}
+`
+
+func TestAReferencePathMustBeAStringTheFromSchemaDescribes(t *testing.T) {
+	for _, c := range []struct{ name, namespace, want string }{
+		{"spec.clusterRef", "", ""},
+		{"spec.keys[*].name", "spec.keys[*].namespace", ""},
+		{"spec.extra.secret", "", ""},
+		{"spec.labels.secret", "", ""},
+		{"metadata.name", "metadata.namespace", ""},
+		{"spec.clusterRf", "", "references[0].name spec.clusterRf: the from kind's schema describes no spec.clusterRf"},
+		{"spec.cluster.ref", "", "references[0].name spec.cluster.ref: the from kind's schema describes no spec.cluster"},
+		{"spec.replicas", "", "references[0].name spec.replicas: the from kind's schema gives spec.replicas type integer, not string"},
+		{"spec.clusterRef.name", "", "references[0].name spec.clusterRef.name: the from kind's schema gives spec.clusterRef type string, not object"},
+		{"spec.keys.name", "", "references[0].name spec.keys.name: the from kind's schema gives spec.keys type array, not object"},
+		{"spec.clusterRef[*].name", "", "references[0].name spec.clusterRef[*].name: the from kind's schema gives spec.clusterRef type string, not array"},
+		{"spec.names[*].name", "", "references[0].name spec.names[*].name: the from kind's schema gives spec.names[*] type string, not object"},
+		{"spec.clusterRef", "spec.namespce", "references[0].namespace spec.namespce: the from kind's schema describes no spec.namespce"},
+	} {
+		reference := fmt.Sprintf("{from: toy/v1/Database, to: v1/Secret, name: %q, ready: \"true\"", c.name)
+		if c.namespace != "" {
+			reference += fmt.Sprintf(", namespace: %q", c.namespace)
+		}
+		path := writeReferences(t, "references: ["+reference+"}]\n")
+		database := strings.Replace(crd("Database", "Namespaced"), "versions: [{name: v1, served: true, storage: true}]", "versions:\n    - name: v1\n      served: true\n      storage: true"+databaseSchema, 1)
+		if err := os.WriteFile(filepath.Join(filepath.Dir(path), "crd.yaml"), []byte(crd("Cluster", "Namespaced")+"---\n"+database), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := config.Load(path)
+		if c.want == "" && err != nil || c.want != "" && (err == nil || !strings.HasSuffix(err.Error(), ": "+c.want)) {
+			t.Errorf("name %s, namespace %q: Load = %v, want %q.", c.name, c.namespace, err, c.want)
+		}
 	}
 }
 

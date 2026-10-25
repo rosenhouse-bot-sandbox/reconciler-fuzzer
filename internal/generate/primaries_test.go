@@ -61,7 +61,7 @@ func TestCreatesDrawEachKindsOwnFieldsAndValues(t *testing.T) {
 	}
 	want := map[string][]string{
 		"Cluster":  {"volumeSize=large", "volumeSize=small", "volumes=1", "volumes=2", "volumes=3"},
-		"Database": {"clusterRef=cluster", "engine=mysql", "engine=postgres"},
+		"Database": {"clusterRef=cluster", "engine=mysql", "engine=postgres", "passwordSecretRef=map[name:admin-password]"},
 	}
 	for kind, values := range want {
 		if got := slices.Sorted(maps.Keys(drawn[kind])); !slices.Equal(got, values) {
