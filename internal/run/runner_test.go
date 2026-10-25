@@ -873,18 +873,20 @@ func TestExecuteRecordsTheCRsThatAStopWaitedFor(t *testing.T) {
 		{Actions: []plan.Action{
 			{Do: plan.Delete, Slot: "a"}, {Do: plan.Delete, Slot: "b"}, {Do: plan.Delete, Slot: "c"},
 			{Do: plan.Create, Slot: "b", Object: widget("second")}, {Do: plan.Create, Slot: "d", Object: widget("first")},
-			{Do: plan.Stop},
+			{Do: plan.Stop}, {Do: plan.Delete, Slot: "b"},
 		}},
 	}}
 	if err := f.runner.Execute(context.Background(), p); err != nil {
 		t.Fatal(err)
 	}
-	i := slices.IndexFunc(f.rec.Events(), func(e trace.Event) bool { return e.Action != nil && e.Action.Do == "stop" })
-	if i < 0 {
-		t.Fatal("no stop event")
+	waited := map[string][]string{}
+	for _, e := range f.rec.Events() {
+		if e.Action != nil && e.Action.Waited != nil {
+			waited[e.Action.Do] = e.Action.Waited
+		}
 	}
-	if waited := f.rec.Events()[i].Action.Waited; !slices.Equal(waited, []string{"u1", "u3"}) {
-		t.Errorf("the stop waited for %q, want slot a's CR u1 and slot c's CR u3", waited)
+	if want := map[string][]string{"stop": {"u1", "u3"}}; !reflect.DeepEqual(waited, want) {
+		t.Errorf("waited = %q, want only the stop's, with slot a's CR u1 and slot c's CR u3", waited)
 	}
 }
 

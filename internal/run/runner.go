@@ -171,6 +171,9 @@ type stepRun struct {
 	start         time.Time
 	started       []startedFault
 	faultsStopped time.Time
+	// waited holds the UIDs of the deleted CRs that the step's stop waited
+	// for.
+	waited []string
 }
 
 // periodEnd is when Period has passed. The fault period may last longer.
@@ -227,9 +230,7 @@ func (s *stepRun) faultPeriod(ctx context.Context) error {
 		ref, err := s.execution.act(ctx, a, s)
 		event := &trace.Action{Step: s.n, Index: i, Do: string(a.Do), Slot: a.Slot, Ref: ref}
 		if a.Do == plan.Stop {
-			for _, d := range s.awaited() {
-				event.Waited = append(event.Waited, d.uid)
-			}
+			event.Waited = s.waited
 		}
 		if err != nil {
 			event.Error = err.Error()
@@ -281,26 +282,18 @@ func (s *stepRun) outwait(ctx context.Context, ref trace.Ref, uid string, delete
 // its name is free or another CR holds it. Converge judges a CR still
 // there.
 func (s *stepRun) stop(ctx context.Context) error {
-	for _, d := range s.awaited() {
+	for _, slot := range slices.Sorted(maps.Keys(s.deleted)) {
+		d := s.deleted[slot]
 		if _, err := s.outwait(ctx, d.ref, d.uid, d.at); err != nil {
 			return err
 		}
+		s.waited = append(s.waited, d.uid)
 	}
 	if err := s.Process.Supervise(false); err != nil {
 		return err
 	}
 	s.stopped = true
 	return s.Process.Stop(ctx)
-}
-
-// awaited is what a stop waits for: the last deletion from each slot that no
-// create filled again, in slot order.
-func (e *execution) awaited() []deletion {
-	var awaited []deletion
-	for _, slot := range slices.Sorted(maps.Keys(e.deleted)) {
-		awaited = append(awaited, e.deleted[slot])
-	}
-	return awaited
 }
 
 // waitGone waits until Gone holds for ref and uid, or until the time until.

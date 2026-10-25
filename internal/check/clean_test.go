@@ -242,7 +242,7 @@ func TestCleanJudgesAStoppedRunsLastStep(t *testing.T) {
 	held := tt.OwnedBy(tt.Object("a-vol"), uid, true)
 	held["metadata"].(map[string]any)["deletionTimestamp"] = "2026-01-01T00:00:00Z"
 	r.Begin().DeleteCR("a", widgetA).Update(ctl, volume, held).EndFaults().TimeOut()
-	r.Begin().Stop().EndFaults().Settle()
+	r.Begin().Stop(uid).EndFaults().Settle()
 	requireFinding(t, judgeWith(t, r, check.Clean), "Clean", 2, "left resources behind", "kube/storage.thirdparty/volumes",
 		"volumes.storage.thirdparty ns/a-vol (rule 1, slot a)")
 }
@@ -267,7 +267,7 @@ func TestCleanFailsSharedGrowthAtAStoppedRunsEnd(t *testing.T) {
 	collect(r, child).Settle()
 	r.Begin()
 	r.Create(ctl, tt.Ref("secrets", "ns", "webhook-x2"), tt.Generated("webhook-", "webhook-x2"))
-	r.Stop().EndFaults().Settle()
+	r.Stop(r.UID(widgetA)).EndFaults().Settle()
 	requireFinding(t, judgeWith(t, r, check.Clean), "Clean", 2, "left resources behind", "kube/secrets", "secrets ns/webhook-x2 (shared)")
 }
 
@@ -278,7 +278,7 @@ func TestCleanFailsWhatACRDeletedBeforeTheStopLeavesWhenItGoesAfter(t *testing.T
 	r.Begin()
 	withChild(r, "a", true)
 	r.EndFaults().Settle()
-	r.Begin().Update(trace.Harness, widgetA, terminating("a")).Act("delete", "a", &widgetA).Stop()
+	r.Begin().Update(trace.Harness, widgetA, terminating("a")).Act("delete", "a", &widgetA).Stop(r.UID(widgetA))
 	r.Add(tt.Deleted(widgetA, r.UID(widgetA), "9", terminating("a"))).EndFaults().Settle()
 	requireFinding(t, judgeWith(t, r, check.Clean), "Clean", 1, "left resources behind", "kube/configmaps", "configmaps ns/a-0 (rule 1, slot a)")
 }

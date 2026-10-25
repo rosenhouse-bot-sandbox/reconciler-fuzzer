@@ -64,9 +64,9 @@ Only `check` decides what is a bug.
 (end func(), err error)`. `Endpoints` holds the controller and harness
 listeners and `Vars`, which expand as `${systems.<name>.<key>}` in launch args
 and env, and kube fixtures. Request faults go to a system's controller
-listener. Model faults go to the stage model or fake service that `Takes` them.
-Damage goes to the system the target names. Checks read `work` events, never
-`Pending`.
+listener. Model faults go to the first stage model or fake service that
+`Takes` them. Damage goes to the system the target names. Checks read `work`
+events, never `Pending`.
 
 ## 4. Trace
 
@@ -216,14 +216,15 @@ restarts the controller (§17, entry 4).
 **Deadline.** `endFaults + settle + min(faults, backoffCap) + maxPoll`.
 `endFaults` is the end of the fault period. `faults` runs from the step's start
 until then, or until a create's or a stop's wait ends the faults sooner.
-`maxPoll` is the longest poll interval of the systems that the step acts on. A
-create into an emptied slot waits until no object holds its previous CR's name.
-Once `period` has passed, the wait ends the step's faults and restarts a killed
-controller. It gives up `deadline - endFaults` after the later of the faults'
-end and the slot's delete, and the plan ends after the step. A `stop` waits the
-same way until each CR instance that a `delete` removed is gone, then sends
-SIGTERM even if one stays. A model fault that nothing `Takes` is a harness
-error, as is any other action error except an unmatched target.
+`maxPoll` is the longest poll interval of the systems the step's faults,
+`damage` and `changeFixture` actions name, and of every fake when the step
+changes a CR. A create into an emptied slot waits until no object holds its
+previous CR's name. Once `period` has passed, the wait ends the step's faults
+and restarts a killed controller. It gives up `deadline - endFaults` after the
+later of the faults' end and the slot's delete, and the plan ends after the
+step. A `stop` waits the same way until each CR that a `delete` removed is gone,
+then sends SIGTERM even if one stays. A model fault that nothing `Takes` is a
+harness error, as is any other action error except an unmatched target.
 
 ## 10. Settle condition
 
