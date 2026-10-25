@@ -191,6 +191,12 @@ func Systems(c *config.Config) []trace.System {
 	return systems
 }
 
+// References returns c's references for the run event. resource maps a
+// kube kind to its resource.
+func References(c *config.Config, resource func(schema.GroupVersionKind) (string, bool, error)) ([]trace.Reference, error) {
+	return nil, nil
+}
+
 // Properties returns c's properties for the run event.
 func Properties(c *config.Config) []trace.Property {
 	var properties []trace.Property

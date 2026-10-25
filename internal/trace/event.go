@@ -90,6 +90,25 @@ type Run struct {
 	Systems []System `json:"systems,omitempty"`
 	// Properties are the config's properties.
 	Properties []Property `json:"properties,omitempty"`
+	// References are the config's references. The controller's listeners
+	// record Seen events of each To kind.
+	References []Reference `json:"references,omitempty"`
+}
+
+// Reference is one config reference as the checks need it. A fake's To
+// holds only its collection as Resource, and System names the fake. Name
+// and Namespace are field paths in the From CR, and Ready is CEL over the
+// to object.
+type Reference struct {
+	From       Kind          `json:"from"`
+	System     string        `json:"system,omitempty"`
+	To         Kind          `json:"to"`
+	Namespaced bool          `json:"namespaced,omitempty"`
+	Name       string        `json:"name"`
+	Namespace  string        `json:"namespace,omitempty"`
+	Ready      string        `json:"ready"`
+	Required   bool          `json:"required,omitempty"`
+	Track      time.Duration `json:"track,omitempty"`
 }
 
 // Primary is one primaries entry as the checks need it. Ready, Retain and
@@ -283,8 +302,8 @@ type Work struct {
 
 // Seen says a response on Caller's listener showed it an object version:
 // a get, one item of a list, one watch event, or a write's result.
-// Listeners record Seen only for dependency kinds. Its At is when the
-// listener forwarded it.
+// Listeners record Seen only for dependency and reference To kinds. Its At
+// is when the listener forwarded it.
 type Seen struct {
 	Caller Caller `json:"caller"`
 	Ref    Ref    `json:"ref"`

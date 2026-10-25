@@ -39,6 +39,7 @@ type Config struct {
 	Budgets       Budgets
 	Timeouts      Timeouts
 	Properties    []Property
+	References    []Reference
 }
 
 // Values say how the generator draws CRs of one kind. Paths are dotted,

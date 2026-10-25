@@ -56,6 +56,10 @@ const (
 	// ChangeFixture merge-patches the fixture Target names with Patch, or
 	// deletes it when Patch is empty.
 	ChangeFixture Do = "changeFixture"
+	// CreateFixture creates again, as its file declares it, the kube
+	// fixture that an earlier changeFixture of an equal Target deleted. It
+	// waits as a create of a slot does.
+	CreateFixture Do = "createFixture"
 )
 
 // Action is something the harness does once in a step, At after the fault

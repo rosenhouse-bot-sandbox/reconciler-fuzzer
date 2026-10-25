@@ -415,6 +415,13 @@ func (k *Kube) Create(ctx context.Context, obj map[string]any) (trace.Ref, error
 	return ref, k.awaitVersion(ctx, ref, created.GetResourceVersion())
 }
 
+// CreateFixture creates the fixture at ref again, as its file declares it,
+// and returns the created object's ref. A ref no fixture file declares is
+// an error.
+func (k *Kube) CreateFixture(ctx context.Context, ref trace.Ref) (trace.Ref, error) {
+	return trace.Ref{}, errors.New("createFixture is not implemented")
+}
+
 func (k *Kube) awaitVersion(ctx context.Context, ref trace.Ref, rv string) error {
 	return k.observer.await(ctx, describe(ref)+" at "+rv, func() bool { return k.observer.recorded(ref, rv) })
 }

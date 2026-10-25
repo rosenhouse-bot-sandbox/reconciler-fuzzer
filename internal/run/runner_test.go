@@ -117,6 +117,11 @@ func (c *fakeCluster) WaitGone(ctx context.Context, ref trace.Ref) error {
 	return nil
 }
 
+func (c *fakeCluster) CreateFixture(_ context.Context, ref trace.Ref) (trace.Ref, error) {
+	c.add("createFixture %s", ref.Name)
+	return ref, c.createErr
+}
+
 type fakeTarget struct {
 	*calls
 	// onEnd runs when a fault ends.

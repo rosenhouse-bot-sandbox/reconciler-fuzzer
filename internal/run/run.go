@@ -50,6 +50,9 @@ type Cluster interface {
 	Delete(ctx context.Context, ref trace.Ref, propagation plan.Propagation) error
 	Gone(ctx context.Context, ref trace.Ref) (bool, error)
 	WaitGone(ctx context.Context, ref trace.Ref) error
+	// CreateFixture creates the fixture at ref again, as its file declares
+	// it, and returns the created object's ref.
+	CreateFixture(ctx context.Context, ref trace.Ref) (trace.Ref, error)
 }
 
 var (

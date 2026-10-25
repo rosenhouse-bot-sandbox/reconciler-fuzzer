@@ -38,6 +38,21 @@ type Spec struct {
 	Ignore map[string][]string
 	// Properties come from the config, or else the Run event.
 	Properties []PropertySpec
+	// References come from the config, or else the Run event.
+	References []Reference
+}
+
+// Reference is a config reference as Honest and Converge judge it.
+type Reference struct {
+	From trace.Kind
+	// To names the to kind by a ref with no namespace or name.
+	To         trace.Ref
+	Namespaced bool
+	// Name and Namespace are field paths in the From CR.
+	Name, Namespace string
+	Ready           func(obj map[string]any) (bool, error)
+	Required        bool
+	Track           time.Duration
 }
 
 // Primary is one listed kind as the checks judge its CRs.

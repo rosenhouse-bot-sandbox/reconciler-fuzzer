@@ -1,6 +1,7 @@
 package v1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -13,6 +14,10 @@ type DatabaseSpec struct {
 	ClusterRef string `json:"clusterRef"`
 	// +kubebuilder:validation:Enum=postgres;mysql
 	Engine string `json:"engine"`
+	// PasswordSecretRef names a Secret, in the Database's namespace, whose
+	// data holds the admin password.
+	// +optional
+	PasswordSecretRef *corev1.LocalObjectReference `json:"passwordSecretRef,omitempty"`
 }
 
 // +kubebuilder:object:root=true

@@ -382,6 +382,15 @@ func (ix *Index) Later(ref Ref, rv, base string) (later, found bool) {
 // order.
 func (ix *Index) Seen(caller Caller, uid string) []Event { return ix.seen[caller][uid] }
 
+// Looks returns, in Seq order, the responses that showed caller ref: each
+// Seen event of ref that is not opaque, and each Call event that showed ref
+// missing. Such a call is a get of ref that answered 404, or a 2xx list
+// that covers ref, of a kind that a run event reference names as To, and
+// showed no instance of ref. None is of unknown outcome.
+func (ix *Index) Looks(caller Caller, ref Ref) []Event {
+	return nil
+}
+
 // Opaque reports whether a response that caller's listener could not
 // decode may have shown caller ref in (from, to]: a get or list that ended
 // then, or a watch open then.

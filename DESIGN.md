@@ -1,7 +1,7 @@
 # reconciler-fuzzer design
 
 Issue #114 holds the proposal and its reasons. This document states what the
-code does. It stays under 530 lines. Where the code documents a rule, this
+code does. It stays under 590 lines. Where the code documents a rule, this
 document names it.
 
 ## 1. Terms
@@ -23,6 +23,7 @@ document names it.
 | API map | What reads a system's requests and responses as resources: Kubernetes, `crud`, `vault` or `s3`. |
 | Property | A config CEL expression over every system's resources that must hold (§12). |
 | Dependency | An instance of a model kind or fake service with `dependency`, which its owning CR's readiness needs. |
+| Reference | A field by which a CR names an object it does not own, such as a Database's `spec.clusterRef` (§13). |
 | Caller | Who made a request: `controller`, `harness`, `gc`, `namespace` or `model:<resource>.<group>`. |
 | Instance | One life of an object, from its create to its gone. Its UID names it. |
 | Owning CR, role | The CR an instance belongs to, and the part it plays for it (§11). |
@@ -115,8 +116,11 @@ picks no request: while it lasts, every controller watch of the kind forwards
 nothing, and at its end each stream delivers what it held, in order.
 
 **Seen.** A listener records a `seen` for each object of its `Seen` kinds, or
-of every kind with `SeenAll`, that a 2xx response shows its caller. An
-undecodable response records an `opaque` seen of its ref. A response of unknown
+of every kind with `SeenAll`, that a 2xx response shows its caller. These are
+the dependency kinds and the references' `to` kinds. An undecodable response
+records an `opaque` seen of its ref. A kube listener drops protobuf from such
+a request's `Accept`, since controller-runtime asks for built-in kinds in
+protobuf, whose lists and watch frames it cannot decode. A response of unknown
 outcome shows nothing. `Shown` hears every object any response carries, unknown
 outcomes included.
 
@@ -190,8 +194,10 @@ answer. An answer the map's `Gone` accepts is `system.ErrGone`.
 
 An action's `do` is `create`, `update`, `delete` (optionally `Foreground`),
 `restart`, `kill` (the controller stays down until the fault period ends or a
-slot wait restarts it, §9), `damage` (of an instance the controller created)
-or `changeFixture` (of a fixture, on any system). `plan.go` documents each.
+slot wait restarts it, §9), `damage` (of an instance the controller created),
+`changeFixture` (of a fixture, on any system) or `createFixture` (of a kube
+fixture that an earlier `changeFixture` of an equal target deleted, as its file
+declares it). `plan.go` documents each.
 
 A `target` has `system` (default `kube`), `group`, `resource`, `namespace`,
 `name`, `role` and `nth` (default 1). Empty fields match anything.
@@ -213,20 +219,24 @@ refuses a plan that creates an object of an unlisted kind (`ValidateKinds`).
 ## 9. Step runner
 
 `Runner.Execute` runs the plan's steps, then step `planSteps`, which deletes
-each slot's live CR, and step `planSteps + 1`, which restarts the controller
+each slot's live CR, each reference's `from` kind before its `to` kind
+(`Config.DeleteOrder`), and step `planSteps + 1`, which restarts the controller
 (§17, entry 4).
 
 **Deadline.** `endFaults + settle + min(faults, backoffCap) + maxPoll`.
 `endFaults` is the end of the fault period. `faults` runs from the step's start
 until then, or until a create's slot wait ends the faults sooner. `maxPoll` is
-the longest poll interval of the systems the step's faults and `damage` and
-`changeFixture` actions name, and of every fake when the step changes a CR. The
+the longest poll interval of the systems the step's faults and `damage`,
+`changeFixture` and `createFixture` actions name, and of every fake when the
+step changes a CR. The
 runner gives a model fault to the first model or fake that `Takes` it; none is a
-harness error. A create into an emptied slot waits until its previous CR no
-longer exists. Once `period` has passed, the wait ends the step's faults and
-restarts a killed controller. It gives up `deadline - endFaults` after the later
-of the faults' end and the slot's delete, and the plan ends after the step. Any
-other action error, except an unmatched target, is a harness error.
+harness error. A create into an emptied slot, and a `createFixture`, waits until
+the object its name last held no longer exists. Once `period` has passed, the
+wait ends the step's faults and restarts a killed controller. It gives up
+`deadline - endFaults` after the later of the faults' end and the delete, and
+the plan ends after the step. Any other action error, except an unmatched
+target or a `createFixture` whose `changeFixture` deleted nothing, is a harness
+error.
 
 ## 10. Settle condition
 
@@ -234,12 +244,14 @@ other action error, except an unmatched target, is a harness error.
 judges the step whose fault period started last at or before `t`.
 
 1. Every live CR satisfies its kind's `ready`, or `halted` after an
-   unknown-outcome controller call on it or on an instance only it owns, and
+   unknown-outcome controller call on it or on an instance only it owns, or a
+   reference holds it back or leaves it unknown (§12), and
 2. carries no `deletionTimestamp`.
 3. The controller is up at `t` and has been up for at least `stable`.
 4. The controller made a 2xx request, not ignored and not of unknown
    outcome, that it sent since its last start.
-5. For each object the step's `damage` and `changeFixture` actions changed,
+5. For each object the step's `damage`, `changeFixture` and `createFixture`
+   actions changed,
    the controller looked at it after the change: a 2xx or 404 request,
    not of unknown outcome, that covers it (`Ref.Covers`), or a watch that
    covers it, opened before the change and open at `t`. The clause also
