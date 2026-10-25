@@ -78,11 +78,13 @@ func TestARequestOfASeenKindAsksForJSON(t *testing.T) {
 		accept []string
 		want   string
 	}{
-		{[]string{"application/vnd.kubernetes.protobuf,application/json"}, "application/json"},
+		{[]string{"application/vnd.kubernetes.protobuf,application/json"}, "application/json,application/json"},
 		{[]string{"application/vnd.kubernetes.protobuf"}, "application/json"},
-		{[]string{"application/vnd.kubernetes.protobuf, */*"}, "*/*"},
-		{[]string{"application/vnd.kubernetes.protobuf;" + metadataList + ",application/json;" + metadataList + ",application/json"}, "application/json;" + metadataList + ",application/json"},
-		{[]string{"application/vnd.kubernetes.protobuf", "application/json;" + metadataList}, "application/json;" + metadataList},
+		{[]string{"application/vnd.kubernetes.protobuf, */*"}, "application/json, */*"},
+		{[]string{"application/vnd.kubernetes.protobuf;" + metadataList}, "application/json;" + metadataList},
+		{[]string{"application/vnd.kubernetes.protobuf;" + metadataList + ",application/json;" + metadataList + ",application/json"}, "application/json;" + metadataList + ",application/json;" + metadataList + ",application/json"},
+		{[]string{"application/cbor;q=1, application/json;q=0.9"}, "application/json;q=1, application/json;q=0.9"},
+		{nil, "application/json"},
 	} {
 		for _, path := range []string{gadgetsPath + "/g1", gadgetsPath, gadgetsPath + "?watch=true"} {
 			t.Run(strings.Join(c.accept, " ")+" "+path, func(t *testing.T) {

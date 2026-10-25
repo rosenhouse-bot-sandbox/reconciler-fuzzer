@@ -5,6 +5,7 @@ package interpose
 
 import (
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"context"
 	"encoding/binary"
@@ -279,22 +280,22 @@ func (l *Listener) sees(ref trace.Ref) bool {
 	return ref.Resource != "" && (l.o.SeenAll || l.seen[schema.GroupResource{Group: ref.Group, Resource: ref.Resource}])
 }
 
-// askForJSON drops protobuf from the media ranges of an Accept header, since
-// a listener cannot decode protobuf lists and watch frames. A header with no
-// other range asks for JSON.
+// askForJSON asks for JSON in place of protobuf or CBOR, with the same
+// parameters, since a listener cannot decode those lists and watch frames.
+// A request with no Accept asks for JSON. The API server reads only the
+// first Accept line.
 func askForJSON(header http.Header) {
-	var kept []string
-	for _, value := range header.Values("Accept") {
-		for _, item := range strings.Split(value, ",") {
-			if media(item) != protobufType {
-				kept = append(kept, item)
+	ranges := strings.Split(cmp.Or(header.Get("Accept"), "application/json"), ",")
+	for i, r := range ranges {
+		if m := media(r); m == protobufType || m == cborType {
+			params := ""
+			if k := strings.IndexByte(r, ';'); k >= 0 {
+				params = r[k:]
 			}
+			ranges[i] = "application/json" + params
 		}
 	}
-	if len(kept) == 0 {
-		kept = []string{"application/json"}
-	}
-	header.Set("Accept", strings.Join(kept, ","))
+	header.Set("Accept", strings.Join(ranges, ","))
 }
 
 // upstream keeps a write going after its client leaves, since the server
@@ -565,11 +566,19 @@ func (rec *recorder) readObjects(encoding string) {
 }
 
 type objectMeta struct {
+	metav1.TypeMeta
 	Metadata metav1.ObjectMeta `json:"metadata"`
 }
 
+// table reports whether t is a meta.k8s.io Table, whose rows the listener
+// does not read.
+func table(t metav1.TypeMeta) bool {
+	return t.GroupVersionKind().GroupKind() == schema.GroupKind{Group: metav1.GroupName, Kind: "Table"}
+}
+
 // readSeen records a Seen for each list item, or the one object of any
-// other response. A list with a continue token is Partial.
+// other response. A list with a continue token is Partial. A Table is
+// opaque.
 func (rec *recorder) readSeen(encoding string) {
 	body := decompress(bytes.NewReader(rec.seenBody.Bytes()), encoding)
 	if body == nil {
@@ -579,10 +588,11 @@ func (rec *recorder) readSeen(encoding string) {
 	var objects []objectMeta
 	if rec.call.Verb == "list" {
 		var list struct {
+			metav1.TypeMeta
 			Metadata metav1.ListMeta `json:"metadata"`
 			Items    []objectMeta    `json:"items"`
 		}
-		if json.NewDecoder(body).Decode(&list) != nil {
+		if json.NewDecoder(body).Decode(&list) != nil || table(list.TypeMeta) {
 			rec.recordOpaque()
 			return
 		}
@@ -590,7 +600,7 @@ func (rec *recorder) readSeen(encoding string) {
 		rec.call.Partial = rec.call.Partial || list.Metadata.Continue != ""
 	} else {
 		var object objectMeta
-		if json.NewDecoder(body).Decode(&object) != nil {
+		if json.NewDecoder(body).Decode(&object) != nil || table(object.TypeMeta) {
 			rec.recordOpaque()
 			return
 		}
@@ -687,7 +697,10 @@ func (rec *recorder) recordSeen(meta metav1.ObjectMeta, deleted bool) {
 	}})
 }
 
-const protobufType = "application/vnd.kubernetes.protobuf"
+const (
+	protobufType = "application/vnd.kubernetes.protobuf"
+	cborType     = "application/cbor"
+)
 
 var protobufMagic = []byte("k8s\x00")
 

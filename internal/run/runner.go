@@ -30,8 +30,8 @@ import (
 // not an error.
 func (r *Runner) Execute(ctx context.Context, p *plan.Plan) error {
 	e := &execution{
-		Runner: r, live: map[string]trace.Ref{}, kinds: map[string]schema.GroupKind{},
-		deleted: map[string]deletion{}, fixtures: map[plan.Target]deletion{}, ix: trace.NewIndex(nil),
+		Runner: r, live: map[string]slotCR{}, deleted: map[string]deletion{},
+		fixtures: map[plan.Target]deletion{}, ix: trace.NewIndex(nil),
 	}
 	for n, step := range p.Steps {
 		err := e.step(ctx, n, step)
@@ -90,16 +90,20 @@ func Deadline(endFaults, faultsLasted, maxPoll time.Duration, t config.Timeouts)
 
 type execution struct {
 	*Runner
-	live map[string]trace.Ref
-	// kinds holds the kind of each slot's last created CR.
-	kinds map[string]schema.GroupKind
+	live map[string]slotCR
 	// deleted holds the last deletion from each slot, which a later create
 	// of the slot waits out.
 	deleted map[string]deletion
-	// fixtures holds, by fixtureKey of its target, each fixture that a
+	// fixtures holds, by the Key of its target, each fixture that a
 	// changeFixture deleted and no createFixture has made again.
 	fixtures map[plan.Target]deletion
 	ix       *trace.Index
+}
+
+// slotCR is the live CR a slot holds, and its kind.
+type slotCR struct {
+	ref  trace.Ref
+	kind schema.GroupKind
 }
 
 // deletion is an object that a delete or changeFixture action removed, and
@@ -115,16 +119,9 @@ func (e *execution) deleteOrder() []string {
 	order := e.Config.DeleteOrder()
 	slots := slices.Sorted(maps.Keys(e.live))
 	slices.SortStableFunc(slots, func(a, b string) int {
-		return cmp.Compare(slices.Index(order, e.kinds[a]), slices.Index(order, e.kinds[b]))
+		return cmp.Compare(slices.Index(order, e.live[a].kind), slices.Index(order, e.live[b].kind))
 	})
 	return slots
-}
-
-// fixtureKey is t with an empty system read as kube, so that a createFixture
-// finds the changeFixture of an equal target.
-func fixtureKey(t plan.Target) plan.Target {
-	t.System = cmp.Or(t.System, kube.Name)
-	return t
 }
 
 func (e *execution) phase(step int, name trace.PhaseName) {
@@ -306,8 +303,8 @@ func (e *execution) waitGone(ctx context.Context, ref trace.Ref, until time.Time
 func (e *execution) stillTaken(a plan.Action, ref trace.Ref, waited time.Duration) error {
 	name, holder := "the slot's name", "the CR"
 	if a.Do == plan.CreateFixture {
-		kind := schema.GroupResource{Group: ref.Group, Resource: ref.Resource}
-		name, holder = fmt.Sprintf("the name of %s %s", kind, path.Join(ref.Namespace, ref.Name)), "the object"
+		resource := schema.GroupResource{Group: ref.Group, Resource: ref.Resource}
+		name, holder = fmt.Sprintf("the name of %s %s", resource, path.Join(ref.Namespace, ref.Name)), "the object"
 	}
 	taken := fmt.Errorf("%s %w after the %s waited %v", name, errStillTaken, a.Do, waited.Round(time.Millisecond))
 	e.ix.Append(e.Recorder.EventsSince(e.ix.Len())...)
@@ -378,7 +375,7 @@ func (e *execution) act(ctx context.Context, a plan.Action, s *stepRun) (*trace.
 		if err != nil {
 			return nil, err
 		}
-		e.live[a.Slot], e.kinds[a.Slot] = ref, kind
+		e.live[a.Slot] = slotCR{ref, kind}
 		return &ref, nil
 	case plan.Update:
 		ref, err := e.slot(a)
@@ -427,11 +424,11 @@ func (e *execution) act(ctx context.Context, a plan.Action, s *stepRun) (*trace.
 			return nil, fmt.Errorf("%w: %w", owner.ErrNoMatch, err)
 		}
 		if a.Do == plan.ChangeFixture {
-			e.fixtures[fixtureKey(*a.Target)] = deleted
+			e.fixtures[a.Target.Key()] = deleted
 		}
 		return &ref, err
 	case plan.CreateFixture:
-		key := fixtureKey(*a.Target)
+		key := a.Target.Key()
 		deleted, found := e.fixtures[key]
 		if !found {
 			return nil, fmt.Errorf("%w: no changeFixture deleted it", owner.ErrNoMatch)
@@ -461,11 +458,11 @@ func (e *execution) object(a plan.Action) (map[string]any, error) {
 }
 
 func (e *execution) slot(a plan.Action) (trace.Ref, error) {
-	ref, found := e.live[a.Slot]
+	cr, found := e.live[a.Slot]
 	if !found {
 		return trace.Ref{}, fmt.Errorf("slot %q holds no CR", a.Slot)
 	}
-	return ref, nil
+	return cr.ref, nil
 }
 
 // settle waits until the settle condition holds or the deadline passes. Each

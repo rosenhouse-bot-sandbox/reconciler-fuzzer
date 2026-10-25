@@ -210,8 +210,8 @@ func (p *Plan) Validate() error {
 	// namespace and name, which is sampleName for the sample and empty for a
 	// generated name. A slot an earlier delete emptied maps to emptied.
 	names := map[string]string{}
-	// deleted holds the target of each changeFixture that deleted a fixture
-	// no later createFixture made again, with an empty system read as kube.
+	// deleted holds the Key of each changeFixture target that deleted a
+	// fixture no later createFixture made again.
 	deleted := map[Target]bool{}
 	for i, step := range p.Steps {
 		if step.Period < 0 {
@@ -339,7 +339,7 @@ func (a Action) validateChange(names map[string]string, deleted map[Target]bool)
 			return errors.New("changeFixture needs a target name")
 		}
 		if a.Patch == nil {
-			deleted[withSystem(*a.Target)] = true
+			deleted[a.Target.Key()] = true
 		}
 		return nil
 	}
@@ -367,7 +367,7 @@ func (a Action) validateCreateFixture(deleted map[Target]bool) error {
 	case a.Slot != "" || a.Object != nil || a.Patch != nil:
 		return errors.New("createFixture takes no slot, object or patch")
 	}
-	target := withSystem(*a.Target)
+	target := a.Target.Key()
 	if !deleted[target] {
 		return fmt.Errorf("createFixture of %s follows no changeFixture that deleted it", target.object())
 	}
@@ -375,8 +375,9 @@ func (a Action) validateCreateFixture(deleted map[Target]bool) error {
 	return nil
 }
 
-// withSystem is t with an empty system read as kube.
-func withSystem(t Target) Target {
+// Key is t with an empty system read as kube, so that a createFixture finds
+// the changeFixture of an equal target.
+func (t Target) Key() Target {
 	if t.System == "" {
 		t.System = "kube"
 	}
