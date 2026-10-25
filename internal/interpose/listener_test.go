@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -286,6 +287,40 @@ func TestAResponseOfAnotherTypeRecordsNoResult(t *testing.T) {
 			got := recorded.waitCalls(t, 1)[0]
 			if got.ResultName != "" || got.ResultUID != "" || got.ResultRV != "" {
 				t.Errorf("Recorded name %q, uid %q, rv %q, want none.", got.ResultName, got.ResultUID, got.ResultRV)
+			}
+		})
+	}
+}
+
+func TestAWriteRecordsTheFinalizersOfItsAnswer(t *testing.T) {
+	for _, c := range []struct{ name, body, want string }{
+		{"some", `{"kind":"ConfigMap","metadata":{"name":"cm","uid":"u-1","resourceVersion":"42","finalizers":["a","b"]}}`, `["a","b"]`},
+		{"none", createdBody, `[]`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			l, recorded := listen(t, respond("application/json", c.body))
+
+			do(t, l, "PUT", "/api/v1/namespaces/ns1/configmaps/cm")
+
+			if got, _ := json.Marshal(recorded.waitCalls(t, 1)[0].ResultFinalizers); string(got) != c.want {
+				t.Errorf("Recorded finalizers %s, want %s.", got, c.want)
+			}
+		})
+	}
+}
+
+func TestADryRunOrAnAnswerWithoutAnObjectRecordsNoFinalizers(t *testing.T) {
+	for _, c := range []struct{ name, method, path, body string }{
+		{"a dry run", "PUT", "/api/v1/namespaces/ns1/configmaps/cm?dryRun=All", createdBody},
+		{"a status", "DELETE", "/api/v1/namespaces/ns1/configmaps/cm", `{"kind":"Status","status":"Success"}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			l, recorded := listen(t, respond("application/json", c.body))
+
+			do(t, l, c.method, c.path)
+
+			if got := recorded.waitCalls(t, 1)[0].ResultFinalizers; got != nil {
+				t.Errorf("Recorded finalizers %q, want none.", *got)
 			}
 		})
 	}

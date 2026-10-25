@@ -221,6 +221,7 @@ func (l *Listener) serve(w http.ResponseWriter, r *http.Request) {
 		req:    req,
 		ctx:    r.Context(),
 		decode: mutating(req.Verb),
+		dryRun: r.URL.Query().Has("dryRun"),
 		seen:   showing(req.Verb) && (l.o.API != nil || l.sees(req.Ref)),
 	}
 	if req.Watch {
@@ -380,6 +381,7 @@ type recorder struct {
 	call     trace.Call
 	req      Request
 	decode   bool
+	dryRun   bool
 	body     *bytes.Buffer
 	recorded bool
 	// ctx is the client's request context. released says the client left,
@@ -514,6 +516,10 @@ func (rec *recorder) readResult(encoding string) {
 	rec.call.ResultName = meta.Name
 	rec.call.ResultUID = string(meta.UID)
 	rec.call.ResultRV = meta.ResourceVersion
+	if meta.ResourceVersion != "" && !rec.dryRun {
+		finalizers := append([]string{}, meta.Finalizers...)
+		rec.call.ResultFinalizers = &finalizers
+	}
 }
 
 // readObjects shows each object an API map reads, records a Seen of each

@@ -338,6 +338,7 @@ func Judge(ix *trace.Index, s Spec) Report {
 	findings = append(findings, Unique(ix, s)...)
 	findings = append(findings, Honest(ix, s)...)
 	findings = append(findings, Backoff(ix, s)...)
+	findings = append(findings, Finalizers(ix)...)
 	findings = append(findings, Property(ix, s)...)
 	notes = append(append(append(actionErrors(ix), unpicked(ix, s)...), notes...), unmapped(ix)...)
 	return Report{Findings: findings, Notes: notes}
