@@ -46,7 +46,7 @@ func (g *Generator) readReferences(cfg *config.Config) error {
 				ref.path = append(ref.path, each)
 			}
 		}
-		if i := slices.IndexFunc(g.kinds, func(k *crKind) bool { return r.System == "" && k.groupKind == r.To.GroupKind() }); i >= 0 {
+		if i := slices.IndexFunc(g.kinds, func(k *crKind) bool { return k.groupKind == r.To.GroupKind() }); i >= 0 {
 			ref.to = g.kinds[i]
 			for _, slot := range slots {
 				ref.slotNames = append(ref.slotNames, ref.to.base(slot).GetName())

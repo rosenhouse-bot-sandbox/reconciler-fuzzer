@@ -29,5 +29,7 @@ spec:
                       name: {type: string}
                 bucket: {type: string}
                 secretName: {type: string}
+                configName: {type: string}
+                accountName: {type: string}
                 backupSecretName: {type: string}
                 short: {type: string, maxLength: 2}

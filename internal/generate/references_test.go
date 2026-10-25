@@ -6,6 +6,7 @@ import (
 	"slices"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/runtime"
 	"pgregory.net/rapid"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
@@ -208,8 +209,9 @@ func TestAWriteNamesALiveCandidateHalfTheTime(t *testing.T) {
 }
 
 // TestWritesNameEachListItemAFakeAndAFixture draws Links. Their references
-// name each item of spec.clusters, a fake's bucket and Secrets, and
-// spec.short, which no candidate fits.
+// name each item of spec.clusters, a fake's bucket, Secrets, a ConfigMap,
+// a ServiceAccount, which no fixture holds, and spec.short, which no
+// candidate fits.
 func TestWritesNameEachListItemAFakeAndAFixture(t *testing.T) {
 	secrets := []string{"admin-password", "other-password"}
 	counts := map[string]int{}
@@ -232,9 +234,11 @@ func TestWritesNameEachListItemAFakeAndAFixture(t *testing.T) {
 			if a.Do == plan.Create && len(clusters) > 1 {
 				counts["create of 2 or more clusters"]++
 			}
-			for field, names := range map[string][]string{"bucket": {"shared"}, "secretName": secrets, "backupSecretName": secrets} {
+			for field, names := range map[string][]string{"bucket": {"shared"}, "secretName": secrets, "backupSecretName": secrets, "configName": {"admin-password"}} {
 				switch value, set := spec[field]; {
-				case !set || value == nil && a.Do == plan.Update:
+				case !set:
+				case value == nil && a.Do == plan.Update:
+					counts["update removing "+field]++
 				case slices.Contains(names, value.(string)):
 					counts[field+" "+value.(string)]++
 				default:
@@ -244,10 +248,13 @@ func TestWritesNameEachListItemAFakeAndAFixture(t *testing.T) {
 			if short, _ := spec["short"].(string); len(short) > 2 || a.Do == plan.Update && short != "" {
 				t.Errorf("Seed %d's %s writes short %q, which no candidate fits, want no update and at most 2 characters.", p.Seed, a.Do, short)
 			}
+			if account, set := spec["accountName"]; set {
+				t.Errorf("Seed %d's %s writes accountName %v, which no candidate fits, want none.", p.Seed, a.Do, account)
+			}
 		})
 	}
 	for _, want := range []string{"create of clusters", "update of clusters", "create of 2 or more clusters", "bucket shared",
-		"secretName admin-password", "secretName other-password", "backupSecretName other-password"} {
+		"secretName admin-password", "secretName other-password", "backupSecretName other-password", "update removing secretName", "configName admin-password"} {
 		if counts[want] == 0 {
 			t.Errorf("200 seeds draw %v, want a %s.", counts, want)
 		}
@@ -274,14 +281,14 @@ func TestAWriteNamesALiveFixtureHalfTheTime(t *testing.T) {
 
 func TestReferencedFixturesAreTheKubeFixturesOfToKinds(t *testing.T) {
 	g := newGenerator(t, loadConfig(t, linksConfig))
-	want := []plan.Target{{Resource: "secrets", Name: "admin-password"}, {Resource: "secrets", Name: "other-password"}}
+	want := []plan.Target{{Resource: "secrets", Name: "admin-password"}, {Resource: "secrets", Name: "other-password"}, {Resource: "configmaps", Name: "admin-password"}}
 	if !reflect.DeepEqual(g.referenced, want) {
 		t.Errorf("referenced = %+v, want %+v, each once.", g.referenced, want)
 	}
 }
 
-// TestAFixtureChangesOnlyWhileItLives draws Links' plans, which patch
-// admin-password and delete either Secret.
+// TestAFixtureChangesOnlyWhileItLives draws Links' plans, which patch the
+// Secret admin-password and delete each referenced fixture.
 func TestAFixtureChangesOnlyWhileItLives(t *testing.T) {
 	counts := map[string]int{}
 	for _, p := range plans(t, linksConfig, 100) {
@@ -292,24 +299,64 @@ func TestAFixtureChangesOnlyWhileItLives(t *testing.T) {
 					continue
 				}
 				target := *a.Target
+				fixture := target.Resource + " " + target.Name
 				switch {
 				case a.Do == plan.CreateFixture:
 					counts["create"]++
 					delete(deleted, target)
 				case deleted[target]:
-					t.Errorf("Seed %d changes %s after deleting it.", p.Seed, target.Name)
+					t.Errorf("Seed %d changes %s after deleting it.", p.Seed, fixture)
 				case a.Patch == nil:
-					counts["delete "+target.Name]++
+					counts["delete "+fixture]++
 					deleted[target] = true
 				default:
-					counts["patch "+target.Name]++
+					counts["patch "+fixture]++
 				}
 			}
 		}
 	}
-	for _, want := range []string{"patch admin-password", "delete admin-password", "delete other-password", "create"} {
+	for _, want := range []string{"patch secrets admin-password", "delete secrets admin-password", "delete secrets other-password", "delete configmaps admin-password", "create"} {
 		if counts[want] == 0 {
 			t.Errorf("100 seeds draw %v, want a %s.", counts, want)
+		}
+	}
+}
+
+func TestUnderIsWhatFollowsAPathAtOrAboveTheName(t *testing.T) {
+	r := &reference{path: []string{"spec", "keys", each, "name"}}
+	for _, c := range []struct {
+		path, rest []string
+		holds      bool
+	}{
+		{nil, r.path, true},
+		{[]string{"spec", "keys"}, []string{each, "name"}, true},
+		{[]string{"spec", "keys", each, "name"}, []string{}, true},
+		{[]string{"spec", "other"}, nil, false},
+		{[]string{"spec", "keys", each, "name", "deeper"}, nil, false},
+	} {
+		if rest, holds := r.under(c.path); holds != c.holds || !slices.Equal(rest, c.rest) {
+			t.Errorf("under(%v) = %v, %t, want %v, %t.", c.path, rest, holds, c.rest, c.holds)
+		}
+	}
+}
+
+func TestWriteNamesWritesUnderEachParentTheValueHolds(t *testing.T) {
+	drawn := func() (string, bool) { return "new", true }
+	none := func() (string, bool) { return "", false }
+	for _, c := range []struct {
+		value, want any
+		path        []string
+		draw        func() (string, bool)
+	}{
+		{"old", "new", nil, drawn},
+		{"old", "old", nil, none},
+		{map[string]any{"ref": map[string]any{}}, map[string]any{"ref": map[string]any{"name": "new"}}, []string{"ref", "name"}, drawn},
+		{map[string]any{}, map[string]any{}, []string{"ref", "name"}, drawn},
+		{map[string]any{"ref": "x"}, map[string]any{"ref": "x"}, []string{"ref", "name"}, drawn},
+		{[]any{map[string]any{"name": "old"}, "x"}, []any{map[string]any{"name": "new"}, "x"}, []string{each, "name"}, drawn},
+	} {
+		if got := writeNames(runtime.DeepCopyJSONValue(c.value), c.path, c.draw); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("writeNames(%v, %v) = %v, want %v.", c.value, c.path, got, c.want)
 		}
 	}
 }
