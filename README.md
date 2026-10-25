@@ -172,25 +172,41 @@ references:
 ```
 
 - `from` is a listed kind. `to` is a kube kind, or a fake's collection written as
-  `<system>:<collection>`. `ready` defaults to the `ready` of the `to` kind's entry, model or fake.
-- `name` and `namespace` are field paths in the CR, as in `values.mutate`. `[*]` names a field of
-  each list item, as in `spec.keys[*].secretName`. Without `namespace`, a namespaced object is in
-  the CR's namespace. An empty or absent value names nothing.
-- A reference **holds back** a CR while the controller's last look at the named object showed it
-  not ready, or missing and `required`. Before any look, only a missing `required` object holds
-  the CR back.
+  `<system>:<collection>`. A kube kind needs its CRD in `crds`, unless Kubernetes serves it
+  without one, as it does `v1/Secret` and `apps/v1/Deployment`.
+- `ready` defaults to the `ready` of the `to` kind's entry, model or fake. A model's compares
+  `observedGeneration` with `metadata.generation`, as an entry's should. So Honest fails a CR that
+  the controller writes ready while the named object's status lags its spec. If the controller
+  checks only the named object's condition or phase, set `ready` to that check.
+- `name` and `namespace` are field paths in the CR, as in `values.mutate`, which the `from` CRD's
+  schema must describe as strings. `[*]` names a field of each list item, as in
+  `spec.keys[*].secretName`. Without `namespace`, a namespaced object is in the CR's namespace. An
+  empty or absent value names nothing. A `name` may not be the field that an `owns` entry of the
+  `from` entry reads for the same kind, since the CR owns that object.
+- The controller **looks** at an object when a response or watch event gives it the object, or
+  when a get, a list or the initial events of a watch show it missing. A reference **holds back**
+  a CR while the controller's last look at the named object showed it not ready, or missing and
+  `required`. Before any look, only a missing `required` object holds the CR back.
 - Honest fails a CR that the controller writes ready while a reference holds it back, or before
-  the controller looked at a live named object. With `track: d`, it fails a CR that stays ready
-  `d` after a look that held it back.
-- From `stable` after the step's faults end, the settle condition does not wait for a CR that a
-  reference holds back, if the object as it is now would hold the CR back too.
+  the controller looked at a live named object. It passes the write if, within `stable` of its
+  last look at the object, the controller writes the CR not ready or naming another object, since
+  a reconcile may read its cache before the look reaches the cache. With `track: d`, Honest fails
+  a CR that stays ready `d` after a look that held it back.
+- The settle condition does not wait for a CR that a reference holds back, if the object as it is
+  now would hold the CR back too. This starts once `stable`, and the time the step's faults
+  lasted, at most `timeouts.backoffCap`, have passed since the faults ended. So a controller in
+  retry backoff reacts first. If the controller does not watch the `to` kind, it misses the
+  object's return, and the step does not settle.
+- A response that the harness cannot decode, such as a watch of Tables, may show the named object.
+  If one ends after the controller's last look, or is a watch still open since, the reference is
+  **unknown**. Honest then passes the CR's ready writes, and the settle condition treats the CR as
+  held back.
 - Generated plans write at each `name` the name of a slot's CR of the `to` kind, or of a fixture
   of it, so a CR may name an object that does not exist yet. With `required: false`, 1 write in 4
   names `missing`, which no object has. `changeFixture` may delete a kube fixture of a `to` kind,
   and `createFixture` makes it again:
   `{"do": "createFixture", "target": {"resource": "secrets", "name": "admin-password"}}`.
 - The step that deletes every CR deletes those of each `from` kind before those of its `to` kind.
-- `config.Load` refuses a `to` kind whose scope neither `crds` nor its table of core kinds gives.
 
 [targets/toy-fleet](targets/toy-fleet/config.yaml) declares that a Database names a Cluster and a
 Secret, and a User a Database.
@@ -364,7 +380,8 @@ properties:
 ```
 
 A kind the harness watches from the start maps to an empty list while no object of it exists.
-These include each installed CRD, each listed kind, and each kind that `models` or a fixture names.
+These include each installed CRD, each listed kind, each kind that a reference names as `to`, and
+each kind that `models` or a fixture names.
 They also include each kind that a `launch.rbac` rule names without `*`, except Events, Leases
 and the other kinds the checks ignore. The harness skips a kind that the server does not list
 and watch in the named group. The `run` event of `trace.jsonl` lists these kinds in `kinds`. A

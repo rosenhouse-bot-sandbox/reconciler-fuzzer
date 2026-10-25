@@ -105,10 +105,19 @@ Look at the clause first:
 `did not stay settled (clause k)` means the condition held once, then
 failed again within `stable`.
 
-From `stable` after the step's faults end, clause 1 skips a CR that a
-reference holds back, if the named object as it is now would hold the CR
-back too. So when clause 1 names a CR whose named object is ready, the
-controller missed the object's change, or the reference's `ready` is wrong.
+Clause 1 skips a CR that a reference holds back, if the named object as it
+is now would hold the CR back too, or that a reference leaves unknown. It
+does so once `stable`, and the time the step's faults lasted, at most
+`timeouts.backoffCap`, have passed since the faults ended.
+
+Clause 1's line says what the controller last saw of each object that the
+CR names, such as `; the controller last saw secrets ns/admin-password
+ready at 7.24s`. If it saw the object ready, the reference's `ready`
+accepts an object that the controller treats as not ready. If it saw the
+object missing under `required: false`, the controller treats the object
+as required. If it saw the object missing or not ready, and the object is
+ready now, the controller missed the change, as when it does not watch the
+named kind. `never saw` means the controller never read the object.
 
 After a `stop`, only clauses 2, 6 and 7 apply, and clause 2 only in the
 stop's step. It names a CR that was still being deleted when the stop's wait
