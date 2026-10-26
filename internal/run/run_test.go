@@ -152,7 +152,7 @@ func TestFakeOptionsCarryTheFixturesAndToken(t *testing.T) {
 		Name: "vault", API: "vault", Token: "root", Fixtures: []string{fixtures}, Dependency: &config.Dependency{},
 		Process: &config.Process{Command: []string{"/bin/vault", "server"}, Dir: "/cfg"},
 	}
-	o, err := fakeOptions(s)
+	o, err := fakeOptions(s, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,11 +162,11 @@ func TestFakeOptionsCarryTheFixturesAndToken(t *testing.T) {
 		t.Errorf("fakeOptions = %+v", o)
 	}
 	s.Token, s.Fixtures, s.Dependency = "", nil, nil
-	if o, err := fakeOptions(s); err != nil || o.Vars != nil || o.Fixtures != nil || o.SeenAll {
+	if o, err := fakeOptions(s, nil); err != nil || o.Vars != nil || o.Fixtures != nil || o.SeenAll {
 		t.Errorf("fakeOptions = %+v, %v, want no vars or fixtures", o, err)
 	}
 	s.Fixtures = []string{filepath.Join(t.TempDir(), "missing.yaml")}
-	if _, err := fakeOptions(s); err == nil {
+	if _, err := fakeOptions(s, nil); err == nil {
 		t.Error("fakeOptions read a missing fixtures file")
 	}
 }

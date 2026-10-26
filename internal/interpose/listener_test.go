@@ -827,16 +827,30 @@ func TestAGetOfASeenKindRecordsSeen(t *testing.T) {
 	}
 }
 
-func TestAListOfASeenKindRecordsSeenForEachItem(t *testing.T) {
-	body := `{"kind":"GadgetList","metadata":{"resourceVersion":"9"},"items":[` + gadgetJSON("g1", "u1", "5") + "," + gadgetJSON("g2", "u2", "6") + "]}"
+func TestAnObjectOfAKindNamedTableRecordsSeen(t *testing.T) {
+	body := `{"apiVersion":"toy.reconciler-fuzzer/v1","kind":"Table","metadata":{"name":"g1","namespace":"ns1","uid":"u1","resourceVersion":"5"}}`
 	l, recorded := listen(t, respondOK("application/json", "", body), seeingGadgets)
 
-	do(t, l, "GET", gadgetsPath)
+	do(t, l, "GET", gadgetsPath+"/g1")
 
 	recorded.waitCalls(t, 1)
-	want := []trace.Seen{seenGadget("g1", "u1", "5"), seenGadget("g2", "u2", "6")}
-	if got := recorded.seen(); !reflect.DeepEqual(got, want) {
+	if got, want := recorded.seen(), []trace.Seen{seenGadget("g1", "u1", "5")}; !reflect.DeepEqual(got, want) {
 		t.Errorf("Recorded %+v, want %+v.", got, want)
+	}
+}
+
+func TestAListOfASeenKindRecordsSeenForEachItem(t *testing.T) {
+	for _, header := range []string{`"kind":"GadgetList"`, `"apiVersion":"meta.k8s.io/v1","kind":"PartialObjectMetadataList"`} {
+		body := `{` + header + `,"metadata":{"resourceVersion":"9"},"items":[` + gadgetJSON("g1", "u1", "5") + "," + gadgetJSON("g2", "u2", "6") + "]}"
+		l, recorded := listen(t, respondOK("application/json", "", body), seeingGadgets)
+
+		do(t, l, "GET", gadgetsPath)
+
+		recorded.waitCalls(t, 1)
+		want := []trace.Seen{seenGadget("g1", "u1", "5"), seenGadget("g2", "u2", "6")}
+		if got := recorded.seen(); !reflect.DeepEqual(got, want) {
+			t.Errorf("A list with %s recorded %+v, want %+v.", header, got, want)
+		}
 	}
 }
 
@@ -936,6 +950,7 @@ func TestAWriteOfASeenKindRecordsSeen(t *testing.T) {
 
 func TestAResponseOfASeenKindItCannotDecodeRecordsAnOpaqueSeen(t *testing.T) {
 	big := `{"items":[` + strings.Repeat(gadgetJSON("g1", "u1", "5")+",", interpose.MaxResultBody/80) + gadgetJSON("g1", "u1", "5") + "]}"
+	const table = `{"apiVersion":"meta.k8s.io/v1","kind":"Table","metadata":{"resourceVersion":"9"},"rows":[]}`
 	for _, c := range []struct {
 		name, path string
 		handler    http.Handler
@@ -946,6 +961,9 @@ func TestAResponseOfASeenKindItCannotDecodeRecordsAnOpaqueSeen(t *testing.T) {
 		{"a watch in an unknown encoding", gadgetsPath + "?watch=true", respondOK("application/json", "br", "")},
 		{"bad JSON", gadgetsPath + "/g1", respondOK("application/json", "", "{")},
 		{"a big list", gadgetsPath, respondOK("application/json", "", big)},
+		{"a table", gadgetsPath, respondOK("application/json", "", table)},
+		{"a table of one", gadgetsPath + "/g1", respondOK("application/json", "", table)},
+		{"a watch of tables", gadgetsPath + "?watch=true", respondOK("application/json", "", `{"type":"ADDED","object":`+table+"}\n")},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			l, recorded := listen(t, c.handler, seeingGadgets)
@@ -959,7 +977,7 @@ func TestAResponseOfASeenKindItCannotDecodeRecordsAnOpaqueSeen(t *testing.T) {
 			switch {
 			case strings.Contains(c.path, "watch"):
 				want.Stream = 1
-			case c.name != "a big list":
+			case strings.HasSuffix(c.path, "/g1"):
 				want.Ref.Name = "g1"
 			}
 			if got := recorded.seen(); !reflect.DeepEqual(got, []trace.Seen{want}) {

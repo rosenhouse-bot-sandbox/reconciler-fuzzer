@@ -80,11 +80,13 @@ List the external HTTP APIs it calls, such as a cloud's. Each needs a fake servi
 The controller must take the API's endpoint from a flag or an environment variable, and speak
 plain HTTP to it. If it cannot, tell the user.
 
-A config lists every CRD kind the controller serves, one `primaries` entry each. A generated
-CR can name another CR that does not exist, such as a Database's Cluster, and then never gets
-ready. Hunt seeds (step 9) with configs that list no kind with such a field, or that list it
-alone and make each object it names a fixture. Hand-written plans can use the config that lists
-every kind.
+A config lists every CRD kind the controller serves, one `primaries` entry each. A CR may name
+an object that it does not own, such as a Database's Cluster or the Secret that holds its
+password. Declare each such field in `references` (step 4). If the controller holds a named
+object's deletion until the CRs that name it are deleted, a generated plan that deletes the
+object fails Converge clause 2. Hunt seeds (step 9) for such a controller with configs that list
+one side alone and make each object it names a fixture. Hand-written plans can use the config
+that lists every kind.
 
 ## 3. Choose a directory
 
@@ -145,12 +147,26 @@ Fill each key from the project:
 - An entry's `retain`: CEL over a deleted CR that allows its resources to stay. Set it only where
   the controller keeps resources by design, such as under a `deletionPolicy: Retain`.
 - `values`: no webhook runs, so `overlay` narrows the CRD schema to what the webhooks admit.
-  A field naming another object, such as a fixture, gets `{enum: [<sample's value>]}`.
+  A field naming another object gets a `references` entry, or else
+  `{enum: [<sample's value>]}`.
   `distinct` names fields that must differ between CRs, such as a Secret's name. `mutate`
   names the fields updates change. `values.fixtures` names fixture strings to change.
 - `fixtures`: objects the controller reads and does not create, of kinds the config does not
   list. Drop `metadata.namespace` unless the controller reads the object in another namespace;
   the harness creates that namespace.
+- `references: [{from, to, name, namespace, ready, required, track}]`: one entry for each field
+  by which a CR names an object that it does not own, such as an issuer, a store or a Secret.
+  `to` is the named kind, or `<system>:<collection>` for a fake's. Put the `to` kind's CRD in
+  `crds` unless Kubernetes serves the kind without one, such as `v1/Secret` or
+  `apps/v1/Deployment`. `name` and `namespace` are field paths in the CR, with `[*]` for each
+  list item; `namespace` defaults to the CR's. The `from` CRD's schema must describe each path
+  as a string, and `name` may not be the field that an `owns` entry reads. `ready` is CEL over
+  the named object, true once the CR may be ready; it defaults to the `ready` of the `to` kind's
+  entry, model or fake. A model's `ready` compares `observedGeneration` with
+  `metadata.generation`, as an entry's should; when the controller checks only the object's
+  condition or phase, write `ready` without that comparison. `required: false` allows a CR to be
+  ready while the object is missing. Set `track` when the controller should notice the object
+  turning not ready.
 - An entry's `owns`, and `systems`: a child without an ownerReference to its CR, such as one in
   another namespace, or a cluster-scoped child of a namespaced CR, needs one. Otherwise Clean
   judges it only by the CRs alive at its creation that the controller did not create.
@@ -162,9 +178,10 @@ Fill each key from the project:
 - `models`: one entry for every kind whose status another controller sets and the controller
   reads. Add `dependency` when a CR's readiness waits on it and the CR owns it: through
   ownerReferences, directly or through owned objects, or by `owns` or `owner`. Honest judges only such
-  dependencies, so leave `dependency` off a kind the CR names by reference, such as an
-  issuer or a store. A dependency belongs only to the nearest CR that owns it, even one that
-  the controller created. `required: false` allows a CR to be ready with none. `required` binds
+  dependencies, so leave `dependency` off a kind the CR names by a field, such as an
+  issuer or a store, and write a `references` entry instead. A dependency belongs only to the
+  nearest CR that owns it, even one that the controller created. `required: false` allows a CR
+  to be ready with none. `required` binds
   only CRs of the first entry, so list first the kind of that nearest CR. A config that does
   not list that kind leaves `dependency` out. Set `track` when the
   controller should notice a dependency going not ready. `status:` adds literal fields to each
@@ -275,7 +292,10 @@ Write `plans/create.json`. It creates the sample, updates it, and deletes it:
 
 With several kinds, step 0 also creates each other entry's sample, each in a slot of its own.
 Delete a CR that others name only after them, since its controller may hold its deletion until
-they go. With a model, add a step whose fault keeps it not ready, such as
+they are deleted. With a `references` entry to a fixture, add a step that deletes the fixture,
+`{"do": "changeFixture", "target": {"resource": "secrets", "name": "<fixture>"}}`, and a later
+one that makes it again, `{"do": "createFixture", "target": <the same target>}`. With a model,
+add a step whose fault keeps it not ready, such as
 `{"actions": [...], "period": "3s", "faults": [{"match": {"group": "gadgets.example.com",
 "resource": "gadgets"}, "stuck": true}]}`. With a fake, add a step that drops the response
 to the first create, such as `{"actions": [...], "period": "1s", "faults": [{"system": "cloud",
@@ -315,9 +335,13 @@ controller:
 | Converge, clause 7, on CR writes each refresh period | The controller refreshes on a timer. | Set the entry's `periodic`, and raise `budgets.reads` if each refresh reads more than twice. |
 | Converge | A drawn value is one a webhook would refuse. | Narrow `values.overlay`. |
 | Honest, `reported ready with no dependency` | The CR can be ready without that kind, or does not own it. | Set `required: false` in the first case. In the second, add `owns` or `owner`, or drop `dependency`. |
+| Honest, on an object that a `references` entry names | The CR may be ready while the object is missing or, by `ready`, not ready. | Set the entry's `required: false`, or fix its `ready`. |
+| Honest, `reported ready before seeing its dependency ready`, on a named object whose spec just changed | The default `ready` waits for the object's `observedGeneration`, but the controller checks only its condition or phase. | Set the entry's `ready` to the controller's check. |
+| Converge, clause 1, `the controller last saw … ready` | The entry's `ready` accepts an object that the controller treats as not ready. | Fix the entry's `ready`. |
+| Converge, clause 1, `the controller last saw … missing` or `not ready`, on an object that is ready now | Nothing, if the controller does not watch the named kind: it missed the change. | Report the bug (step 11). The controller should watch that kind and requeue the CRs that name the object. |
 | Clean | The controller keeps resources by design. | Set the entry's `retain`. |
 | Unique, on a fake | The CR owns several resources in one collection by design. | Set the system's `role`. |
-| Converge, with a CR that halted after a create of unknown outcome | The controller stops on purpose and waits for a person. | Set the entry's `halted` to CEL over its halted condition. |
+| Converge or Restore, with a CR that halted after a create of unknown outcome | The controller stops on purpose and waits for a person. | Set the entry's `halted` to CEL over its halted condition. |
 
 Every other finding is a bug in the controller. Never hide one to make a check pass, and ask
 the user when in doubt. On a finding, stop and report it (step 11).

@@ -43,3 +43,8 @@ type CommonStatus struct {
 	// +optional
 	Message string `json:"message,omitempty"`
 }
+
+// ReadyAt says whether s reports Ready for generation.
+func (s CommonStatus) ReadyAt(generation int64) bool {
+	return s.Phase == Ready && s.ObservedGeneration == generation
+}

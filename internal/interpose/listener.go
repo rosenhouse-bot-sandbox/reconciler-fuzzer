@@ -5,6 +5,7 @@ package interpose
 
 import (
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"context"
 	"encoding/binary"
@@ -20,6 +21,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -208,6 +210,9 @@ func (l *Listener) serve(w http.ResponseWriter, r *http.Request) {
 	defer l.inFlight.Done()
 
 	req := l.classify(r)
+	if l.o.API == nil && l.sees(req.Ref) {
+		askForJSON(r.Header)
+	}
 	rec := &recorder{
 		ResponseWriter: w,
 		listener:       l,
@@ -216,7 +221,7 @@ func (l *Listener) serve(w http.ResponseWriter, r *http.Request) {
 			Caller: l.o.Caller, Method: r.Method, Path: r.URL.Path,
 			Verb: req.Verb, APIVersion: req.APIVersion, Ref: req.Ref,
 			Subresource: req.Subresource, Watch: req.Watch,
-			RequestName: req.RequestName, Unmapped: req.Unmapped,
+			RequestName: req.RequestName, Unmapped: req.Unmapped, Partial: req.Partial,
 		},
 		req:    req,
 		ctx:    r.Context(),
@@ -274,6 +279,21 @@ func (l *Listener) classify(r *http.Request) Request {
 // sees reports whether the listener records Seen events of ref's kind.
 func (l *Listener) sees(ref trace.Ref) bool {
 	return ref.Resource != "" && (l.o.SeenAll || l.seen[schema.GroupResource{Group: ref.Group, Resource: ref.Resource}])
+}
+
+// askForJSON asks for JSON in place of protobuf or CBOR, with the same
+// parameters, since a listener cannot decode those lists and watch frames.
+// A request with no Accept asks for JSON. The API server reads only the
+// first Accept line.
+func askForJSON(header http.Header) {
+	ranges := strings.Split(cmp.Or(header.Get("Accept"), "application/json"), ",")
+	for i, r := range ranges {
+		mediaType, _, _ := strings.Cut(r, ";")
+		if m := strings.TrimSpace(mediaType); m == protobufType || m == cborType {
+			ranges[i] = "application/json" + r[len(mediaType):]
+		}
+	}
+	header.Set("Accept", strings.Join(ranges, ","))
 }
 
 // upstream keeps a write going after its client leaves, since the server
@@ -549,11 +569,19 @@ func (rec *recorder) readObjects(encoding string) {
 }
 
 type objectMeta struct {
+	metav1.TypeMeta
 	Metadata metav1.ObjectMeta `json:"metadata"`
 }
 
+// table reports whether t is a meta.k8s.io Table, whose rows the listener
+// does not read.
+func table(t metav1.TypeMeta) bool {
+	return t.GroupVersionKind().GroupKind() == schema.GroupKind{Group: metav1.GroupName, Kind: "Table"}
+}
+
 // readSeen records a Seen for each list item, or the one object of any
-// other response.
+// other response. A list with a continue token is Partial. A Table is
+// opaque.
 func (rec *recorder) readSeen(encoding string) {
 	body := decompress(bytes.NewReader(rec.seenBody.Bytes()), encoding)
 	if body == nil {
@@ -563,16 +591,19 @@ func (rec *recorder) readSeen(encoding string) {
 	var objects []objectMeta
 	if rec.call.Verb == "list" {
 		var list struct {
-			Items []objectMeta `json:"items"`
+			metav1.TypeMeta
+			Metadata metav1.ListMeta `json:"metadata"`
+			Items    []objectMeta    `json:"items"`
 		}
-		if json.NewDecoder(body).Decode(&list) != nil {
+		if json.NewDecoder(body).Decode(&list) != nil || table(list.TypeMeta) {
 			rec.recordOpaque()
 			return
 		}
 		objects = list.Items
+		rec.call.Partial = rec.call.Partial || list.Metadata.Continue != ""
 	} else {
 		var object objectMeta
-		if json.NewDecoder(body).Decode(&object) != nil {
+		if json.NewDecoder(body).Decode(&object) != nil || table(object.TypeMeta) {
 			rec.recordOpaque()
 			return
 		}
@@ -584,7 +615,8 @@ func (rec *recorder) readSeen(encoding string) {
 }
 
 // decodeWatch decodes the watch's frames as the listener forwards them, and
-// records a Seen for each ADDED, MODIFIED or DELETED event.
+// records a Seen for each ADDED, MODIFIED or DELETED event, and a Synced for
+// the bookmark that ends the initial events. A watch of Tables is opaque.
 func (rec *recorder) decodeWatch(encoding string) {
 	rec.frames, rec.decoded = &feed{chunks: make(chan []byte), drained: make(chan struct{})}, make(chan struct{})
 	go func() {
@@ -603,9 +635,17 @@ func (rec *recorder) decodeWatch(encoding string) {
 			if err := decoder.Decode(&event); err != nil {
 				return
 			}
+			if table(event.Object.TypeMeta) {
+				rec.recordOpaque()
+				return
+			}
 			switch event.Type {
 			case "ADDED", "MODIFIED", "DELETED":
 				rec.recordSeen(event.Object.Metadata, event.Type == "DELETED")
+			case "BOOKMARK":
+				if event.Object.Metadata.Annotations[metav1.InitialEventsAnnotationKey] == "true" {
+					rec.recordSynced()
+				}
 			}
 		}
 	}()
@@ -656,6 +696,12 @@ func (rec *recorder) recordOpaque() {
 	}
 }
 
+func (rec *recorder) recordSynced() {
+	if record := rec.listener.o.Record; record != nil {
+		record(trace.Event{Synced: &trace.Synced{Caller: rec.call.Caller, System: rec.call.Ref.System, Stream: rec.call.Stream}})
+	}
+}
+
 func (rec *recorder) recordSeen(meta metav1.ObjectMeta, deleted bool) {
 	record := rec.listener.o.Record
 	if record == nil {
@@ -669,7 +715,10 @@ func (rec *recorder) recordSeen(meta metav1.ObjectMeta, deleted bool) {
 	}})
 }
 
-const protobufType = "application/vnd.kubernetes.protobuf"
+const (
+	protobufType = "application/vnd.kubernetes.protobuf"
+	cborType     = "application/cbor"
+)
 
 var protobufMagic = []byte("k8s\x00")
 

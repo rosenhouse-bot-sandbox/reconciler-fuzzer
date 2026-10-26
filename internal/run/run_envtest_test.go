@@ -241,3 +241,84 @@ func TestTheControllerGetsTheHarnessKubeconfigByDefault(t *testing.T) {
 		t.Errorf("The controller got KUBECONFIG %q, want %q.", text, want)
 	}
 }
+
+// TestRunSeesAReferencedFixtureAndCreatesItAgain runs a controller that lists
+// Secrets in protobuf, under a config whose reference names the fixture
+// Secret pw. The plan deletes pw and creates it again.
+func TestRunSeesAReferencedFixtureAndCreatesItAgain(t *testing.T) {
+	toyDir, err := filepath.Abs(toy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	files := map[string]string{
+		"role.yaml":   "apiVersion: rbac.authorization.k8s.io/v1\nkind: Role\nmetadata: {name: secret-reader}\nrules: [{apiGroups: [''], resources: [secrets], verbs: [list]}]\n",
+		"secret.yaml": "apiVersion: v1\nkind: Secret\nmetadata: {name: pw}\nstringData: {password: p1}\n",
+		"config.yaml": fmt.Sprintf(`launch:
+  binary: /bin/sh
+  args: [-c, 'while true; do curl -sf -H "Accept: application/vnd.kubernetes.protobuf" "${systems.kube.url}/api/v1/namespaces/${systems.kube.namespace}/secrets" >/dev/null; sleep 0.2; done']
+  rbac: [role.yaml]
+crds: [%[1]s/crds/]
+fixtures: [secret.yaml]
+primary: {kind: toy.reconciler-fuzzer/v1/Widget, sample: %[1]s/widget.yaml, ready: "true"}
+references:
+  - {from: toy.reconciler-fuzzer/v1/Widget, to: v1/Secret, name: metadata.annotations.secret, ready: has(self.data.password)}
+timeouts: {settle: 10s, stable: 500ms}
+budgets: {reads: 100}
+`, toyDir),
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pw := &plan.Target{Resource: "secrets", Name: "pw"}
+	p := &plan.Plan{Steps: []plan.Step{
+		{Actions: []plan.Action{{Do: plan.Create, Slot: "a"}}},
+		{Actions: []plan.Action{{Do: plan.ChangeFixture, Target: pw}}},
+		{Actions: []plan.Action{{Do: plan.CreateFixture, Target: pw}}},
+	}}
+	out := filepath.Join(dir, "out")
+	report, err := Run(context.Background(), Options{ConfigPath: filepath.Join(dir, "config.yaml"), Plan: p, Out: out})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Findings) > 0 || len(report.Notes) > 0 {
+		t.Errorf("findings %+v, notes %q, want none", report.Findings, report.Notes)
+	}
+	events, err := trace.Load(filepath.Join(out, "trace.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ix := trace.NewIndex(events)
+	run, _ := ix.Run()
+	if len(run.References) != 1 || run.References[0].To.Resource != "secrets" {
+		t.Errorf("the run event's references are %+v, want the one to secrets", run.References)
+	}
+	deleted, _ := findAction(events, 1, 0)
+	created, _ := findAction(events, 2, 0)
+	for _, a := range []trace.Event{deleted, created} {
+		if a.Action == nil || a.Action.Error != "" || a.Action.Ref == nil || a.Action.Ref.Name != "pw" {
+			t.Fatalf("action %+v, want one of pw without an error", a.Action)
+		}
+	}
+	ref := *created.Action.Ref
+	first, _ := ix.LatestAt(ref, deleted.At)
+	again, _ := ix.LatestAt(ref, created.At)
+	if !first.Deleted || again.Deleted || again.UID == first.UID {
+		t.Errorf("pw is %+v at its delete and %+v after the createFixture, want a deleted instance and then a new one", first, again)
+	}
+	var sawFirst, sawMissing, sawAgain bool
+	for _, look := range ix.Looks(trace.Controller, ref) {
+		switch {
+		case look.Seen != nil:
+			sawFirst = sawFirst || look.Seen.UID == first.UID
+			sawAgain = sawAgain || look.Seen.UID == again.UID
+		case look.At > deleted.At && look.At < created.At:
+			sawMissing = true
+		}
+	}
+	if !sawFirst || !sawMissing || !sawAgain {
+		t.Errorf("the controller's lists showed it pw's first instance %v, pw missing %v and its second instance %v, want all", sawFirst, sawMissing, sawAgain)
+	}
+}

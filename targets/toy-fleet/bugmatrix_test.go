@@ -22,6 +22,9 @@ const (
 var bugs = map[int]string{
 	0:   "The correct controller.",
 	116: "Removes every finalizer from a deleting Volume while its Cluster is deleted.",
+	123: "Readies a Database on a Cluster that is not Ready.",
+	124: "Readies a Database without checking its Secret.",
+	125: "Keeps a Ready Database ready after its Secret is deleted.",
 	150: "Strips its finalizers from deleting CRs when it shuts down.",
 	151: "Puts a finalizer on each Volume, and releases a deleted Cluster before its Volumes, whose finalizers it strips only afterwards.",
 	152: "Errors when a dependent kind is not served, as after its CRD is deleted, so the parent's deletion never ends.",
@@ -45,7 +48,7 @@ func renderBugMatrix(plans []string) string {
 	var b strings.Builder
 	b.WriteString(section + "\n" +
 		"Each Cluster owns Volumes of a third party's kind, which a model sets ready. " +
-		"A Database names its Cluster, and a User its Database (targets/toy-fleet).\n\n" +
+		"A Database names its Cluster and maybe a Secret, and a User its Database (targets/toy-fleet).\n\n" +
 		"| Bug | Description | Plan | Check | Step |\n|---|---|---|---|---|\n")
 	fmt.Fprintf(&b, "| B0 | %s | all %d plans of %s | none | |\n", bugs[0], len(plans), strings.Join(configs, ", "))
 	for _, g := range rows {
@@ -67,6 +70,7 @@ func TestRenderBugMatrix(t *testing.T) {
 		"| B116 | Removes every finalizer from a deleting Volume while its Cluster is deleted. | protect/b0 | Finalizers | 2 |\n" +
 			"| B116 | Removes every finalizer from a deleting Volume while its Cluster is deleted. | slow-delete | Finalizers | 1 |\n",
 		"| B0 | The correct controller. | uninstall/stop-first | none | |\n",
+		"| B125 | Keeps a Ready Database ready after its Secret is deleted. | secret-recreate | Honest | 1 |\n",
 		"| B150 | Strips its finalizers from deleting CRs when it shuts down. | database/restart-cluster-delete | Converge | 1 |\n",
 		"| B152 | Errors when a dependent kind is not served, as after its CRD is deleted, so the parent's deletion never ends. | uninstall/crd-first-stop | Converge | 2 |\n",
 	} {

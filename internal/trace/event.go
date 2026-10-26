@@ -3,6 +3,7 @@
 package trace
 
 import (
+	"cmp"
 	"encoding/json"
 	"time"
 )
@@ -56,6 +57,8 @@ type Event struct {
 	Proc    *Proc    `json:"proc,omitempty"`
 	// WatchEnd records that a watch Call's stream closed.
 	WatchEnd *WatchEnd `json:"watchEnd,omitempty"`
+	// Synced records that a watch Call's stream ended its initial events.
+	Synced *Synced `json:"synced,omitempty"`
 	// Work records that a model started or stopped having work pending.
 	Work *Work `json:"work,omitempty"`
 	// Seen records that a response showed a caller one object version.
@@ -91,6 +94,30 @@ type Run struct {
 	Systems []System `json:"systems,omitempty"`
 	// Properties are the config's properties.
 	Properties []Property `json:"properties,omitempty"`
+	// References are the config's references. The controller's listeners
+	// record Seen events of each To kind.
+	References []Reference `json:"references,omitempty"`
+}
+
+// Reference is one config reference as the checks need it. A fake's To
+// holds only its collection as Resource, and System names the fake. Name
+// and Namespace are field paths in the From CR, and Ready is CEL over the
+// to object.
+type Reference struct {
+	From       Kind          `json:"from"`
+	System     string        `json:"system,omitempty"`
+	To         Kind          `json:"to"`
+	Namespaced bool          `json:"namespaced,omitempty"`
+	Name       string        `json:"name"`
+	Namespace  string        `json:"namespace,omitempty"`
+	Ready      string        `json:"ready"`
+	Required   bool          `json:"required,omitempty"`
+	Track      time.Duration `json:"track,omitempty"`
+}
+
+// ToRef names r's To kind by a ref with no namespace or name.
+func (r Reference) ToRef() Ref {
+	return Ref{System: cmp.Or(r.System, "kube"), Group: r.To.Group, Resource: r.To.Resource}
 }
 
 // Primary is one primaries entry as the checks need it. Ready, Retain and
@@ -187,14 +214,17 @@ type Phase struct {
 	Step     int           `json:"step"`
 	Name     PhaseName     `json:"name"`
 	Deadline time.Duration `json:"deadline,omitempty"`
-	// BackoffBound says that backoffCap, not the time from the step's start
-	// until its faults ended, set Deadline.
-	BackoffBound bool `json:"backoffBound,omitempty"`
+	// Backoff is the part of Deadline that allows for the controller's
+	// backoff: the time from the step's start until its faults ended, at
+	// most backoffCap. BackoffBound says that backoffCap was the smaller.
+	Backoff      time.Duration `json:"backoff,omitempty"`
+	BackoffBound bool          `json:"backoffBound,omitempty"`
 }
 
 // Action records one plan action as the harness applied it. Ref is the CR
-// of a CR action, and the object a damage or changeFixture action changed.
-// Waited holds the UIDs of the deleted CRs that a stop waited for.
+// of a CR action, and the object a damage, changeFixture or createFixture
+// action changed. Waited holds the UIDs of the deleted CRs that a stop
+// waited for.
 type Action struct {
 	Step   int      `json:"step"`
 	Index  int      `json:"index"`
@@ -262,6 +292,10 @@ type Call struct {
 	Stream uint64 `json:"stream,omitempty"`
 	// Unmapped says the system's API map could not place the request.
 	Unmapped bool `json:"unmapped,omitempty"`
+	// Partial says a kube list or watch may leave objects out: it has a
+	// label or field selector, or a continue token in its request or, for
+	// a Seen kind, in the list it answered with.
+	Partial bool `json:"partial,omitempty"`
 }
 
 // Unknown outcome effects: the server committed the request, and the caller
@@ -273,6 +307,15 @@ const (
 
 // Unknown says the caller cannot tell whether the request happened.
 func (c Call) Unknown() bool { return c.Injected == DropResponse || c.Injected == KillAfter }
+
+// Synced says the watch Call with Stream on Caller's listener for System
+// sent the k8s.io/initial-events-end bookmark. A watch with
+// sendInitialEvents sends it after an event for each object in its scope.
+type Synced struct {
+	Caller Caller `json:"caller"`
+	System string `json:"system"`
+	Stream uint64 `json:"stream"`
+}
 
 // WatchEnd says the watch Call with Stream on Caller's listener for System
 // closed.
@@ -290,8 +333,8 @@ type Work struct {
 
 // Seen says a response on Caller's listener showed it an object version:
 // a get, one item of a list, one watch event, or a write's result.
-// Listeners record Seen only for dependency kinds. Its At is when the
-// listener forwarded it.
+// Listeners record Seen only for dependency and reference To kinds. Its At
+// is when the listener forwarded it.
 type Seen struct {
 	Caller Caller `json:"caller"`
 	Ref    Ref    `json:"ref"`

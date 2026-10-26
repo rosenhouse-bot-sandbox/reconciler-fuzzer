@@ -3,7 +3,9 @@ package controller
 import (
 	"bytes"
 	"context"
+	"errors"
 	"maps"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -43,6 +45,7 @@ func newClient(t *testing.T, objects ...client.Object) client.WithWatch {
 	return fake.NewClientBuilder().WithScheme(scheme).
 		WithStatusSubresource(&fleetv1.Cluster{}, &fleetv1.Database{}, &fleetv1.User{}, &storagev1.Volume{}).
 		WithIndex(&fleetv1.Database{}, clusterRefField, clusterRef).
+		WithIndex(&fleetv1.Database{}, passwordSecretRefField, passwordSecretRef).
 		WithIndex(&fleetv1.User{}, databaseRefField, databaseRef).
 		WithObjects(objects...).Build()
 }
@@ -81,6 +84,15 @@ func (f *fleet) cluster() *fleetv1.Cluster {
 		f.t.Fatal(err)
 	}
 	return c
+}
+
+func (f *fleet) database() *fleetv1.Database {
+	f.t.Helper()
+	db := &fleetv1.Database{}
+	if err := f.get("db", db); err != nil {
+		f.t.Fatal(err)
+	}
+	return db
 }
 
 func (f *fleet) listVolumes() []storagev1.Volume {
@@ -147,6 +159,24 @@ func databaseObj() *fleetv1.Database {
 	return &fleetv1.Database{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "db", Generation: 1}, Spec: fleetv1.DatabaseSpec{ClusterRef: "cluster", Engine: "postgres"}}
 }
 
+// databaseNaming is databaseObj naming the Secret secret.
+func databaseNaming(secret string) *fleetv1.Database {
+	db := databaseObj()
+	db.Spec.PasswordSecretRef = &corev1.LocalObjectReference{Name: secret}
+	return db
+}
+
+func passwordSecret(data map[string][]byte) *corev1.Secret {
+	return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "admin-password"}, Data: data}
+}
+
+// readyCluster is clusterObj reporting Ready for its generation.
+func readyCluster() *fleetv1.Cluster {
+	c := clusterObj()
+	c.Status.CommonStatus = readyStatus()
+	return c
+}
+
 func userObj() *fleetv1.User {
 	return &fleetv1.User{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "alice", Generation: 1, UID: "u1"}, Spec: fleetv1.UserSpec{DatabaseRef: "db"}}
 }
@@ -154,6 +184,11 @@ func userObj() *fleetv1.User {
 // pendingStatus is the Pending status of a generation 1 CR with message.
 func pendingStatus(message string) fleetv1.CommonStatus {
 	return fleetv1.CommonStatus{Phase: fleetv1.Pending, ObservedGeneration: 1, Message: message}
+}
+
+// readyStatus is the Ready status of a generation 1 CR.
+func readyStatus() fleetv1.CommonStatus {
+	return fleetv1.CommonStatus{Phase: fleetv1.Ready, ObservedGeneration: 1}
 }
 
 func TestClusterIsReadyOnlyOnceItsVolumesAre(t *testing.T) {
@@ -376,10 +411,103 @@ func TestDatabaseWaitsForItsClusterAndHoldsDeletionForUsers(t *testing.T) {
 	}
 }
 
-func TestADeletingClusterHostsOnlyReadyDatabases(t *testing.T) {
-	cluster := &fleetv1.Cluster{Status: fleetv1.ClusterStatus{CommonStatus: fleetv1.CommonStatus{Phase: fleetv1.Deleting}}}
-	if ready, pending := hosts(cluster, fleetv1.Ready), hosts(cluster, fleetv1.Pending); !ready || pending {
-		t.Errorf("A Deleting Cluster hosts a Ready Database: %v, and a Pending one: %v; want true and false.", ready, pending)
+func TestDatabaseWaitsForItsClusterToReportItsGenerationReady(t *testing.T) {
+	cluster := readyCluster()
+	cluster.Generation = 2
+	db := databaseObj()
+	db.Status = readyStatus()
+	f := newFleet(t, cluster, db)
+	f.settle(f.databases, "db")
+	if got := f.database().Status; got != pendingStatus("waiting for Cluster cluster to be Ready") {
+		t.Errorf("On a Cluster that reports an older generation Ready, the Ready Database is %+v.", got)
+	}
+}
+
+// Deletion raises a CR's generation before its controller writes Deleting.
+// A deleting Cluster readies no Database, and leaves a Ready one as it is,
+// even after its spec changes.
+func TestADeletingClusterReadiesNoDatabase(t *testing.T) {
+	cluster := deleting(readyCluster(), fleetv1.ClusterFinalizer)
+	cluster.Generation = 2
+	ready := databaseObj()
+	ready.Generation, ready.Status = 2, readyStatus()
+	pending := databaseObj()
+	pending.Name = "pending"
+	f := newFleet(t, cluster, ready, pending)
+	f.settle(f.databases, "db")
+	f.settle(f.databases, "pending")
+	if got := f.database().Status; got != readyStatus() {
+		t.Errorf("On a deleting Cluster, the Ready Database of generation 2 is %+v, want it Ready for generation 1.", got)
+	}
+	if err := f.get("pending", pending); err != nil || pending.Status != pendingStatus("waiting for Cluster cluster to be Ready") {
+		t.Errorf("On a deleting Cluster, the new Database is %+v, %v.", pending.Status, err)
+	}
+}
+
+// A deleting Cluster keeps a Ready Database, but not after its Secret is deleted.
+func TestADeletingClusterKeepsNoDatabaseWithoutItsSecret(t *testing.T) {
+	db := databaseNaming("admin-password")
+	db.Status = readyStatus()
+	f := newFleet(t, deleting(readyCluster(), fleetv1.ClusterFinalizer), db)
+	f.settle(f.databases, "db")
+	if got := f.database().Status; got != pendingStatus("waiting for Secret admin-password") {
+		t.Errorf("On a deleting Cluster, without its Secret, the Database is %+v.", got)
+	}
+}
+
+func TestDatabaseWaitsForASecretWithAPassword(t *testing.T) {
+	f := newFleet(t, readyCluster(), databaseNaming("admin-password"))
+	f.settle(f.databases, "db")
+	if got := f.database().Status; got != pendingStatus("waiting for Secret admin-password") {
+		t.Fatalf("Without its Secret, the Database is %+v.", got)
+	}
+	secret := passwordSecret(map[string][]byte{"username": []byte("admin")})
+	if err := f.c.Create(t.Context(), secret); err != nil {
+		t.Fatal(err)
+	}
+	f.settle(f.databases, "db")
+	if got := f.database().Status; got != pendingStatus("waiting for Secret admin-password to hold a password") {
+		t.Fatalf("On a Secret without a password, the Database is %+v.", got)
+	}
+	secret.Data["password"] = []byte("p")
+	if err := f.c.Update(t.Context(), secret); err != nil {
+		t.Fatal(err)
+	}
+	f.settle(f.databases, "db")
+	if got := f.database().Status; got != readyStatus() {
+		t.Fatalf("On a Secret with a password, the Database is %+v.", got)
+	}
+	f.delete(secret)
+	f.settle(f.databases, "db")
+	if got := f.database().Status; got != pendingStatus("waiting for Secret admin-password") {
+		t.Errorf("After its Secret went, the Database is %+v.", got)
+	}
+}
+
+func TestAFailedReadLeavesTheDatabaseAsItWas(t *testing.T) {
+	for _, failed := range []client.Object{&fleetv1.Cluster{}, &corev1.Secret{}} {
+		f := newFleet(t, readyCluster(), databaseNaming("admin-password"), passwordSecret(map[string][]byte{"password": []byte("p")}))
+		f.reconcileOnce(f.databases, "db") // It adds its finalizer.
+		f.databases.Client = interceptor.NewClient(f.c, interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if reflect.TypeOf(obj) == reflect.TypeOf(failed) {
+					return apierrors.NewInternalError(errors.New("injected"))
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		})
+		_, err := f.databases.Reconcile(t.Context(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "db"}})
+		if db := f.database(); err == nil || db.Status != (fleetv1.CommonStatus{}) {
+			t.Errorf("When reading its %T fails, the Database reconcile returns %v and writes %+v.", failed, err, db.Status)
+		}
+	}
+}
+
+func TestADatabaseNamingAnEmptySecretNameNeedsNoSecret(t *testing.T) {
+	f := newFleet(t, readyCluster(), databaseNaming(""))
+	f.settle(f.databases, "db")
+	if got := f.database().Status; got != readyStatus() {
+		t.Errorf("Naming no Secret, the Database is %+v, want Ready.", got)
 	}
 }
 
@@ -389,6 +517,17 @@ func TestUserWaitsForItsDatabase(t *testing.T) {
 	user := &fleetv1.User{}
 	if err := f.get("alice", user); err != nil || user.Status != pendingStatus("waiting for Database db") {
 		t.Fatalf("Without a Database, the User is %+v, %v.", user.Status, err)
+	}
+}
+
+func TestUserWaitsForItsDatabaseToReportItsGenerationReady(t *testing.T) {
+	db := databaseObj()
+	db.Generation, db.Status = 2, readyStatus()
+	f := newFleet(t, db, userObj())
+	f.settle(f.users, "alice")
+	user := &fleetv1.User{}
+	if err := f.get("alice", user); err != nil || user.Status != pendingStatus("waiting for Database db to be Ready") {
+		t.Errorf("On a Database that reports an older generation Ready, the User is %+v, %v.", user.Status, err)
 	}
 }
 
@@ -434,21 +573,26 @@ func TestDatabaseFinalizeSeesUsersTheCacheMisses(t *testing.T) {
 	}
 }
 
-// A change to a Cluster requeues the Databases that name it, and a change to
-// a Database the Users.
+// A change to a Cluster or a Secret requeues the Databases that name it, and
+// a change to a Database the Users.
 func TestAChangeRequeuesWhatNamesIt(t *testing.T) {
 	inOther := func(o client.Object) client.Object {
 		o.SetNamespace("other")
 		return o
 	}
 	elsewhere := &fleetv1.Database{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "elsewhere"}, Spec: fleetv1.DatabaseSpec{ClusterRef: "other"}}
+	secured := databaseNaming("admin-password")
+	secured.Name, secured.Spec.ClusterRef = "secured", "other"
 	bob := &fleetv1.User{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "bob"}, Spec: fleetv1.UserSpec{DatabaseRef: "other"}}
-	f := newFleet(t, databaseObj(), userObj(), elsewhere, bob, inOther(databaseObj()), inOther(userObj()))
+	f := newFleet(t, databaseObj(), userObj(), elsewhere, secured, bob, inOther(databaseNaming("admin-password")), inOther(userObj()))
 	only := func(name string) []reconcile.Request {
 		return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: ns, Name: name}}}
 	}
-	if got := f.databases.databasesOf(t.Context(), clusterObj()); !slices.Equal(got, only("db")) {
+	if got := f.databases.databasesNaming(clusterRefField)(t.Context(), clusterObj()); !slices.Equal(got, only("db")) {
 		t.Errorf("A Cluster's change requeues %v, want its Database.", got)
+	}
+	if got := f.databases.databasesNaming(passwordSecretRefField)(t.Context(), passwordSecret(nil)); !slices.Equal(got, only("secured")) {
+		t.Errorf("A Secret's change requeues %v, want the Database that names it.", got)
 	}
 	if got := f.users.usersOf(t.Context(), databaseObj()); !slices.Equal(got, only("alice")) {
 		t.Errorf("A Database's change requeues %v, want its User.", got)
@@ -499,12 +643,50 @@ func TestReconcileOfAMissingCRSucceeds(t *testing.T) {
 }
 
 func TestParseBugAcceptsOnlyKnownBugs(t *testing.T) {
-	for _, id := range []int{0, 116, 150, 151, 152} {
+	for _, id := range []int{0, 116, 123, 124, 125, 150, 151, 152} {
 		if b, err := ParseBug(id); int(b) != id || err != nil {
 			t.Errorf("ParseBug(%d) = %v, %v", id, b, err)
 		}
 	}
 	if _, err := ParseBug(100); err == nil {
 		t.Error("ParseBug(100) succeeded, want an error.")
+	}
+}
+
+func TestB123ReadiesADatabaseOnAPendingCluster(t *testing.T) {
+	f := newFleet(t, clusterObj(), databaseObj())
+	f.databases.Bug = B123
+	f.settle(f.clusters, "cluster")
+	f.settle(f.databases, "db")
+	if db, c := f.database(), f.cluster(); db.Status != readyStatus() || c.Status.Phase == fleetv1.Ready {
+		t.Errorf("Under B123, on Cluster %+v, the Database is %+v.", c.Status, db.Status)
+	}
+}
+
+func TestB124ReadiesADatabaseWithoutItsSecret(t *testing.T) {
+	f := newFleet(t, readyCluster(), databaseNaming("admin-password"))
+	f.databases.Bug = B124
+	f.settle(f.databases, "db")
+	if got := f.database().Status; got != readyStatus() {
+		t.Errorf("Under B124, without its Secret, the Database is %+v, want Ready.", got)
+	}
+}
+
+func TestB125KeepsADatabaseReadyAfterItsSecretGoes(t *testing.T) {
+	f := newFleet(t, readyCluster(), databaseNaming("admin-password"))
+	f.databases.Bug = B125
+	f.settle(f.databases, "db")
+	if got := f.database().Status; got != pendingStatus("waiting for Secret admin-password") {
+		t.Fatalf("Under B125, before its Secret, the Database is %+v.", got)
+	}
+	secret := passwordSecret(map[string][]byte{"password": []byte("p")})
+	if err := f.c.Create(t.Context(), secret); err != nil {
+		t.Fatal(err)
+	}
+	f.settle(f.databases, "db")
+	f.delete(secret)
+	f.settle(f.databases, "db")
+	if got := f.database().Status; got != readyStatus() {
+		t.Errorf("Under B125, after its Secret went, the Database is %+v, want Ready.", got)
 	}
 }

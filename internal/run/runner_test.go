@@ -133,6 +133,11 @@ func (c *fakeCluster) WaitGone(ctx context.Context, ref trace.Ref, uid string) e
 	return nil
 }
 
+func (c *fakeCluster) CreateFixture(_ context.Context, ref trace.Ref) (trace.Ref, error) {
+	c.add("createFixture %s", ref.Name)
+	return ref, c.createErr
+}
+
 type fakeTarget struct {
 	*calls
 	// onEnd runs when a fault ends.
@@ -588,23 +593,30 @@ func TestExecuteRestartsAKilledControllerWhileACreateWaits(t *testing.T) {
 }
 
 func TestExecuteBoundsTheBackoffByHowLongTheFaultsLasted(t *testing.T) {
-	f := newFixture(t, nil)
-	f.runner.Config.Timeouts.BackoffCap = 350 * time.Millisecond
-	faultHoldsDeletedCRs(f, 200*time.Millisecond)
-	p := recreateUnder(50*time.Millisecond, holdWidgets)
-	p.Steps[1].Actions[1].At = plan.Duration(250 * time.Millisecond)
-	if err := f.runner.Execute(context.Background(), p); err != nil {
-		t.Fatal(err)
-	}
-	events := f.rec.Events()
-	lasted := faultLasted(t, events)
-	if lasted < 245*time.Millisecond {
-		t.Fatalf("the fault lasted %v, want it to outlast the period until the create", lasted)
-	}
-	endFaults, _ := find(events, 1, trace.EndFaults)
-	want, wantBound := Deadline(endFaults.At, lasted, f.runner.Config.Poll("kube"), f.runner.Config.Timeouts)
-	if got := endFaults.Phase; (got.Deadline-want).Abs() > 20*time.Millisecond || got.BackoffBound != wantBound {
-		t.Errorf("deadline = %v, backoff-bound %v, want about %v, %v", got.Deadline, got.BackoffBound, want, wantBound)
+	for _, backoffCap := range []time.Duration{350 * time.Millisecond, 100 * time.Millisecond} {
+		t.Run(fmt.Sprint("backoffCap ", backoffCap), func(t *testing.T) {
+			f := newFixture(t, nil)
+			f.runner.Config.Timeouts.BackoffCap = backoffCap
+			faultHoldsDeletedCRs(f, 200*time.Millisecond)
+			p := recreateUnder(50*time.Millisecond, holdWidgets)
+			p.Steps[1].Actions[1].At = plan.Duration(250 * time.Millisecond)
+			if err := f.runner.Execute(context.Background(), p); err != nil {
+				t.Fatal(err)
+			}
+			events := f.rec.Events()
+			lasted := faultLasted(t, events)
+			if lasted < 245*time.Millisecond {
+				t.Fatalf("the fault lasted %v, want it to outlast the period until the create", lasted)
+			}
+			endFaults, _ := find(events, 1, trace.EndFaults)
+			want, wantBound := Deadline(endFaults.At, lasted, f.runner.Config.Poll("kube"), f.runner.Config.Timeouts)
+			if got := endFaults.Phase; (got.Deadline-want).Abs() > 20*time.Millisecond || got.BackoffBound != wantBound {
+				t.Errorf("deadline = %v, backoff-bound %v, want about %v, %v", got.Deadline, got.BackoffBound, want, wantBound)
+			}
+			if got, want := endFaults.Phase.Backoff, min(lasted, backoffCap); (got - want).Abs() > 20*time.Millisecond {
+				t.Errorf("backoff = %v, want about %v", got, want)
+			}
+		})
 	}
 }
 
@@ -702,7 +714,7 @@ func TestExecuteWaitsForEveryRecreatedSlotInAStepWithoutFaults(t *testing.T) {
 	}
 }
 
-func TestSlotTakenNamesWhatTheObserverLastSawHoldTheCR(t *testing.T) {
+func TestStillTakenNamesWhatTheObserverLastSawHoldTheName(t *testing.T) {
 	ref := trace.Ref{System: "kube", Resource: "widgets", Namespace: "ns", Name: "first"}
 	held := trace.Event{Version: &trace.Version{Ref: ref, UID: "u1", RV: "2",
 		Body: json.RawMessage(`{"metadata":{"deletionTimestamp":"2026-10-24T09:06:40Z","finalizers":["toy/cleanup"]}}`)}}
@@ -712,16 +724,21 @@ func TestSlotTakenNamesWhatTheObserverLastSawHoldTheCR(t *testing.T) {
 		Body: json.RawMessage(`{"metadata":{"finalizers":["toy/cleanup"]}}`)}}
 	undecodable := trace.Event{Version: &trace.Version{Ref: ref, UID: "u1", RV: "2", Body: json.RawMessage(`[]`)}}
 	const taken = "the slot's name is still taken after the create waited 1.5s"
+	const fixtureTaken = "the name of widgets ns/first is still taken after the createFixture waited 1.5s"
 	for _, c := range []struct {
 		name   string
+		do     plan.Do
 		events []trace.Event
 		want   string
 	}{
-		{"held", []trace.Event{held}, taken + ": the CR with that name has deletionTimestamp 2026-10-24T09:06:40Z and finalizers [toy/cleanup]"},
-		{"replaced", []trace.Event{held, gone, replaced}, taken + ": the CR with that name is not being deleted"},
-		{"gone since", []trace.Event{held, gone}, taken},
-		{"unrecorded", nil, taken},
-		{"undecodable", []trace.Event{undecodable}, taken},
+		{"held", plan.Create, []trace.Event{held}, taken + ": the CR with that name has deletionTimestamp 2026-10-24T09:06:40Z and finalizers [toy/cleanup]"},
+		{"replaced", plan.Create, []trace.Event{held, gone, replaced}, taken + ": the CR with that name is not being deleted"},
+		{"gone since", plan.Create, []trace.Event{held, gone}, taken},
+		{"unrecorded", plan.Create, nil, taken},
+		{"undecodable", plan.Create, []trace.Event{undecodable}, taken},
+		{"fixture held", plan.CreateFixture, []trace.Event{held}, fixtureTaken + ": the object with that name has deletionTimestamp 2026-10-24T09:06:40Z and finalizers [toy/cleanup]"},
+		{"fixture replaced", plan.CreateFixture, []trace.Event{held, gone, replaced}, fixtureTaken + ": the object with that name is not being deleted"},
+		{"fixture unrecorded", plan.CreateFixture, nil, fixtureTaken},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newFixture(t, nil)
@@ -729,10 +746,16 @@ func TestSlotTakenNamesWhatTheObserverLastSawHoldTheCR(t *testing.T) {
 				f.rec.Record(e)
 			}
 			e := &execution{Runner: f.runner, ix: trace.NewIndex(nil)}
-			if got := e.slotTaken(ref, 1500*time.Millisecond+400*time.Microsecond).Error(); got != c.want {
-				t.Errorf("slotTaken = %q, want %q", got, c.want)
+			if got := e.stillTaken(plan.Action{Do: c.do}, ref, 1500*time.Millisecond+400*time.Microsecond).Error(); got != c.want {
+				t.Errorf("stillTaken = %q, want %q", got, c.want)
 			}
 		})
+	}
+	clusterRole := trace.Ref{System: "kube", Group: "rbac.authorization.k8s.io", Resource: "clusterroles", Name: "reader"}
+	e := &execution{Runner: newFixture(t, nil).runner, ix: trace.NewIndex(nil)}
+	const want = "the name of clusterroles.rbac.authorization.k8s.io reader is still taken after the createFixture waited 2s"
+	if got := e.stillTaken(plan.Action{Do: plan.CreateFixture}, clusterRole, 2*time.Second).Error(); got != want {
+		t.Errorf("stillTaken = %q, want %q", got, want)
 	}
 }
 

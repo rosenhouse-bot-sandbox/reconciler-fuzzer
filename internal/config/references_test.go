@@ -1,0 +1,354 @@
+package config_test
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
+)
+
+// referencesHead lists four kinds of group toy, whose CRDs writeReferences
+// writes, beside a model and two fakes. Tenant is cluster-scoped.
+const referencesHead = `launch: {binary: bin/controller, rbac: [role.yaml]}
+crds: [crd.yaml, crds]
+fixtures: [fixture.yaml]
+models: [{kind: toy/v1/Volume, after: 1s}]
+systems:
+  - {name: cloud, api: crud, process: {command: [x]}, ready: "self.state == 'ready'"}
+  - {name: other, api: crud, process: {command: [x]}}
+primaries:
+  - {kind: toy/v1/Cluster, sample: sample.yaml, ready: self.status.ready, owns: [{kind: v1/ConfigMap, name: self.spec.config}]}
+  - {kind: toy/v1/Database, sample: sample.yaml, ready: "true", values: {distinct: [spec.secretName]}}
+  - {kind: toy/v1/User, sample: sample.yaml, ready: "true", owns: [{kind: "other:buckets", name: self.spec.b}]}
+  - {kind: toy/v1/Tenant, sample: sample.yaml, ready: "true"}
+`
+
+// writeReferences writes referencesHead, then rest, with the CRDs of
+// Cluster and Database in crd.yaml and of User, Tenant, Volume and Gadget in
+// crds/.
+func writeReferences(t *testing.T, rest string) string {
+	t.Helper()
+	path := writeConfig(t, referencesHead+rest)
+	dir := filepath.Dir(path)
+	if err := os.Mkdir(filepath.Join(dir, "crds"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for file, content := range map[string]string{
+		"crd.yaml":                crd("Cluster", "Namespaced") + "---\n" + crd("Database", "Namespaced"),
+		"crds/more.yaml":          crd("User", "Namespaced") + "---\n" + crd("Tenant", "Cluster") + "---\n" + crd("Volume", "Namespaced") + "---\n" + crd("Gadget", "Namespaced"),
+		"crds/kustomization.yaml": "resources: [more.yaml]\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return path
+}
+
+func crd(kind, scope string) string {
+	plural := strings.ToLower(kind) + "s"
+	return fmt.Sprintf(`apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata: {name: %s.toy}
+spec:
+  group: toy
+  names: {kind: %s, plural: %s}
+  scope: %s
+  versions: [{name: v1, served: true, storage: true}]
+`, plural, kind, plural, scope)
+}
+
+func toyKind(group, kind string) schema.GroupVersionKind {
+	return schema.GroupVersionKind{Group: group, Version: "v1", Kind: kind}
+}
+
+func TestReferencesLoad(t *testing.T) {
+	c, err := config.Load(writeReferences(t, `references:
+  - {from: toy/v1/Database, to: toy/v1/Cluster, name: spec.clusterRef}
+  - {from: toy/v1/Database, to: v1/Secret, name: spec.passwordSecretRef.name, ready: has(self.data.password), required: false, track: 2s}
+  - {from: toy/v1/User, to: toy/v1/Volume, name: "spec.volumes[*].name"}
+  - {from: toy/v1/Tenant, to: v1/Secret, name: spec.secretRef.name, namespace: spec.secretRef.namespace, ready: "true"}
+  - {from: toy/v1/User, to: "cloud:buckets", name: spec.bucket}
+  - {from: toy/v1/Tenant, to: v1/Namespace, name: spec.namespace, ready: "true"}
+  - {from: toy/v1/User, to: toy/v2/Gadget, name: spec.gadget, ready: "true"}
+  - {from: toy/v1/Database, to: apps/v1/Deployment, name: spec.deployment, ready: "true"}
+  - {from: toy/v1/Database, to: storage.k8s.io/v1/StorageClass, name: spec.storageClass, ready: "true"}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []config.Reference{
+		{From: toyKind("toy", "Database"), To: toyKind("toy", "Cluster"), Namespaced: true, Name: "spec.clusterRef", Ready: "self.status.ready", Required: true},
+		{From: toyKind("toy", "Database"), To: toyKind("", "Secret"), Namespaced: true, Name: "spec.passwordSecretRef.name", Ready: "has(self.data.password)", Track: 2 * time.Second},
+		{From: toyKind("toy", "User"), To: toyKind("toy", "Volume"), Namespaced: true, Name: "spec.volumes[*].name", Ready: config.ReadyConditionCEL, Required: true},
+		{From: toyKind("toy", "Tenant"), To: toyKind("", "Secret"), Namespaced: true, Name: "spec.secretRef.name", Namespace: "spec.secretRef.namespace", Ready: "true", Required: true},
+		{From: toyKind("toy", "User"), System: "cloud", Collection: "buckets", Name: "spec.bucket", Ready: "self.state == 'ready'", Required: true},
+		{From: toyKind("toy", "Tenant"), To: toyKind("", "Namespace"), Name: "spec.namespace", Ready: "true", Required: true},
+		{From: toyKind("toy", "User"), To: schema.GroupVersionKind{Group: "toy", Version: "v2", Kind: "Gadget"}, Namespaced: true, Name: "spec.gadget", Ready: "true", Required: true},
+		{From: toyKind("toy", "Database"), To: toyKind("apps", "Deployment"), Namespaced: true, Name: "spec.deployment", Ready: "true", Required: true},
+		{From: toyKind("toy", "Database"), To: toyKind("storage.k8s.io", "StorageClass"), Name: "spec.storageClass", Ready: "true", Required: true},
+	}
+	if !reflect.DeepEqual(c.References, want) {
+		t.Errorf("References =\n%+v\nwant\n%+v", c.References, want)
+	}
+}
+
+func TestReferencesRefusals(t *testing.T) {
+	for name, c := range map[string]struct{ references, want string }{
+		"no from":                                    {"{to: v1/Secret, name: spec.s, ready: \"true\"}", "references[0].from is required"},
+		"a malformed from":                           {"{from: Database, to: v1/Secret, name: spec.s, ready: \"true\"}", "references[0].from"},
+		"an unlisted from":                           {"{from: toy/v1/Gadget, to: v1/Secret, name: spec.s, ready: \"true\"}", "references[0].from"},
+		"a listed kind's name in another group":      {"{from: other/v1/Database, to: v1/Secret, name: spec.s, ready: \"true\"}", "references[0].from other/v1/Database: primaries does not list this kind"},
+		"a from at another version":                  {"{from: toy/v2/Database, to: v1/Secret, name: spec.s, ready: \"true\"}", "references[0].from toy/v2/Database: primaries lists this kind at version v1"},
+		"a listed to at another version":             {"{from: toy/v1/Database, to: toy/v9/Cluster, name: spec.clusterRef}", "references[0].to toy/v9/Cluster: the config declares this kind at version v1"},
+		"a model's to at another version":            {"{from: toy/v1/Database, to: toy/v2/Volume, name: spec.volume}", "references[0].to toy/v2/Volume: the config declares this kind at version v1"},
+		"no to":                                      {"{from: toy/v1/Database, name: spec.s, ready: \"true\"}", "references[0].to is required"},
+		"a malformed to":                             {"{from: toy/v1/Database, to: Secret, name: spec.s, ready: \"true\"}", "references[0].to"},
+		"a to of unknown scope":                      {"{from: toy/v1/Database, to: example.com/v1/Widget, name: spec.w, ready: \"true\"}", "references[0].to example.com/v1/Widget: no CRD in crds and no built-in kind has this group and kind"},
+		"a core kind's name in a group":              {"{from: toy/v1/Database, to: example.com/v1/Secret, name: spec.s, ready: \"true\"}", "references[0].to example.com/v1/Secret: no CRD in crds and no built-in kind has this group and kind; did you mean v1/Secret?"},
+		"a core kind in group core":                  {"{from: toy/v1/Database, to: core/v1/Secret, name: spec.s, ready: \"true\"}", "did you mean v1/Secret?"},
+		"a core kind in lower case":                  {"{from: toy/v1/Database, to: v1/secret, name: spec.s, ready: \"true\"}", "did you mean v1/Secret?"},
+		"a built-in kind without its group":          {"{from: toy/v1/Database, to: v1/Deployment, name: spec.d, ready: \"true\"}", "did you mean apps/v1/Deployment?"},
+		"a kind of two groups in lower case":         {"{from: toy/v1/Database, to: v1/event, name: spec.e, ready: \"true\"}", "did you mean events.k8s.io/v1/Event or v1/Event?"},
+		"a CRD's kind in lower case":                 {"{from: toy/v1/Database, to: toy/v1/tenant, name: spec.t, ready: \"true\"}", "did you mean toy/v1/Tenant?"},
+		"a CRD's kind at a version it lacks":         {"{from: toy/v1/Database, to: toy/v2/tenant, name: spec.t, ready: \"true\"}", "did you mean toy/v1/Tenant?"},
+		"a to of an unknown system":                  {"{from: toy/v1/Database, to: \"nope:buckets\", name: spec.b, ready: \"true\"}", "references[0].to"},
+		"a malformed collection":                     {"{from: toy/v1/Database, to: \"cloud:Buckets\", name: spec.b}", "references[0].to"},
+		"an object the from entry owns":              {"{from: toy/v1/Cluster, to: v1/ConfigMap, name: spec.config, ready: \"true\"}", "references[0].name spec.config: the from entry owns the v1/ConfigMap it names"},
+		"a fake's resource the from entry owns":      {"{from: toy/v1/User, to: \"other:buckets\", name: spec.b, ready: \"true\"}", "references[0].name spec.b: the from entry owns the other:buckets it names"},
+		"an unlisted to without ready":               {"{from: toy/v1/Database, to: v1/Secret, name: spec.s}", "references[0].ready"},
+		"a fake to without ready":                    {"{from: toy/v1/Database, to: \"other:buckets\", name: spec.b}", "references[0].ready"},
+		"a ready that does not compile":              {"{from: toy/v1/Database, to: v1/Secret, name: spec.s, ready: \"self.(\"}", "references[0].ready"},
+		"a ready that is not bool":                   {"{from: toy/v1/Database, to: v1/Secret, name: spec.s, ready: \"'x'\"}", "references[0].ready"},
+		"no name":                                    {"{from: toy/v1/Database, to: toy/v1/Cluster}", "references[0].name is required"},
+		"a name with an index":                       {"{from: toy/v1/Database, to: toy/v1/Cluster, name: \"spec.refs[0].name\"}", "references[0].name"},
+		"a name with an empty segment":               {"{from: toy/v1/Database, to: toy/v1/Cluster, name: spec..name}", "references[0].name"},
+		"a name that ends in [*]":                    {"{from: toy/v1/Database, to: v1/Secret, name: \"spec.keys[*]\", ready: \"true\"}", "references[0].name"},
+		"a distinct name":                            {"{from: toy/v1/Database, to: v1/Secret, name: spec.secretName, ready: \"true\"}", "references[0].name spec.secretName: the from entry's values.distinct lists it"},
+		"a namespace on a cluster scope":             {"{from: toy/v1/Database, to: v1/Namespace, name: spec.ns, namespace: spec.nsns, ready: \"true\"}", "references[0].namespace: the to kind is cluster-scoped"},
+		"a namespace on a fake":                      {"{from: toy/v1/Database, to: \"cloud:buckets\", name: spec.b, namespace: spec.n}", "references[0].namespace: a fake's resources have no namespace"},
+		"a cluster-scoped from":                      {"{from: toy/v1/Tenant, to: v1/Secret, name: spec.s, ready: \"true\"}", "references[0].namespace"},
+		"a namespace of another list":                {"{from: toy/v1/Database, to: v1/Secret, name: \"spec.keys[*].name\", namespace: \"spec.other[*].namespace\", ready: \"true\"}", "references[0].namespace"},
+		"a namespace list without a name":            {"{from: toy/v1/Database, to: v1/Secret, name: spec.s, namespace: \"spec.keys[*].namespace\", ready: \"true\"}", "references[0].namespace"},
+		"a namespace list below the name":            {"{from: toy/v1/Database, to: v1/Secret, name: spec.s, namespace: \"spec.s.keys[*].namespace\", ready: \"true\"}", "references[0].namespace"},
+		"a namespace list at another path":           {"{from: toy/v1/Database, to: v1/Secret, name: \"spec.a.keys[*].name\", namespace: \"spec.b.keys[*].ns\", ready: \"true\"}", "references[0].namespace"},
+		"a namespace in the name's list without [*]": {"{from: toy/v1/Database, to: v1/Secret, name: \"spec.keys[*].name\", namespace: spec.keys.ns, ready: \"true\"}", "references[0].namespace spec.keys.ns: it must read with [*] each list it shares with name, and no other list"},
+		"a namespace with an empty field":            {"{from: toy/v1/Database, to: v1/Secret, name: spec.s, namespace: spec..ns, ready: \"true\"}", "references[0].namespace"},
+		"a track of zero":                            {"{from: toy/v1/Database, to: toy/v1/Cluster, name: spec.clusterRef, track: 0s}", "references[0].track"},
+		"a second entry of one name":                 {"{from: toy/v1/Database, to: toy/v1/Cluster, name: spec.clusterRef}\n  - {from: toy/v1/Database, to: toy/v1/User, name: spec.clusterRef}", "references[1].name"},
+		"an unknown key":                             {"{from: toy/v1/Database, to: toy/v1/Cluster, name: spec.clusterRef, onDelete: block}", "references[0].onDelete is not a key; references[0] takes from, to, name, namespace, ready, required and track"},
+	} {
+		_, err := config.Load(writeReferences(t, "references:\n  - "+c.references+"\n"))
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: Load = %v, want an error that names %s.", name, err, c.want)
+		}
+	}
+}
+
+// TestAFromKindOfUnknownScopeNeedsNoNamespace loads a reference from
+// Database, whose CRD crds lacks, to a namespaced kind.
+func TestAFromKindOfUnknownScopeNeedsNoNamespace(t *testing.T) {
+	path := writeReferences(t, "references: [{from: toy/v1/Database, to: v1/Secret, name: spec.s, ready: \"true\"}]\n")
+	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "crd.yaml"), []byte(crd("Cluster", "Namespaced")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err != nil {
+		t.Errorf("Load = %v, want no namespace needed for a from kind that crds do not describe.", err)
+	}
+}
+
+func TestACRDWithoutAScopeIsNamespaced(t *testing.T) {
+	path := writeReferences(t, "references: [{from: toy/v1/Database, to: toy/v1/Cluster, name: spec.clusterRef, namespace: spec.clusterNamespace}]\n")
+	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "crd.yaml"), []byte(crd("Cluster", "")+"---\n"+crd("Database", "Namespaced")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err != nil {
+		t.Errorf("Load = %v, want a CRD without a scope read as namespaced, as Kubernetes defaulted it.", err)
+	}
+}
+
+func TestOnlyCRDsGiveScopes(t *testing.T) {
+	path := writeReferences(t, "references: [{from: toy/v1/Database, to: toy/v1/Widget, name: spec.widget, ready: \"true\"}]\n")
+	xrd := strings.Replace(crd("Widget", "Namespaced"), "kind: CustomResourceDefinition", "kind: CompositeResourceDefinition", 1)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "crds", "xrd.yaml"), []byte(xrd), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err == nil || !strings.Contains(err.Error(), "references[0].to toy/v1/Widget: no CRD in crds and no built-in kind has this group and kind") {
+		t.Errorf("Load = %v, want toy/v1/Widget of unknown scope, since only a CompositeResourceDefinition describes it.", err)
+	}
+}
+
+// Cluster owns the ConfigMap that spec.config names, and User owns the
+// other:buckets that spec.b names.
+func TestAReferenceMayNameWhatTheFromEntryDoesNotOwn(t *testing.T) {
+	for name, reference := range map[string]string{
+		"another field of an owned kind":       "{from: toy/v1/Cluster, to: v1/ConfigMap, name: spec.settings, ready: \"true\"}",
+		"another kind at an owned field":       "{from: toy/v1/Cluster, to: v1/Secret, name: spec.config, ready: \"true\"}",
+		"another fake at an owned field":       "{from: toy/v1/User, to: \"cloud:buckets\", name: spec.b}",
+		"another collection at an owned field": "{from: toy/v1/User, to: \"other:keys\", name: spec.b, ready: \"true\"}",
+		"an owned kind of another from":        "{from: toy/v1/Database, to: v1/ConfigMap, name: spec.config, ready: \"true\"}",
+	} {
+		if _, err := config.Load(writeReferences(t, "references: ["+reference+"]\n")); err != nil {
+			t.Errorf("%s: Load = %v, want no error.", name, err)
+		}
+	}
+}
+
+const databaseSchema = `
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                clusterRef: {type: string}
+                replicas: {type: integer}
+                keys: {type: array, items: {type: object, properties: {name: {type: string}, namespace: {type: string}}}}
+                names: {type: array, items: {type: string}}
+                extra: {type: object, x-kubernetes-preserve-unknown-fields: true, properties: {known: {type: string}}}
+                labels: {type: object, additionalProperties: {type: string}}
+                refs: {type: object, additionalProperties: {type: object, properties: {name: {type: string}}}}
+                pruned: {type: object}
+                open: {type: object, additionalProperties: true}
+`
+
+func TestAReferencePathMustBeAStringTheFromSchemaDescribes(t *testing.T) {
+	for _, c := range []struct{ name, namespace, want string }{
+		{"spec.clusterRef", "", ""},
+		{"spec.keys[*].name", "spec.keys[*].namespace", ""},
+		{"spec.extra.secret", "", ""},
+		{"spec.labels.secret", "", ""},
+		{"spec.refs.db.name", "", ""},
+		{"spec.open.any.name", "", ""},
+		{"metadata.name", "metadata.namespace", ""},
+		{"spec.clusterRf", "", "references[0].name spec.clusterRf: the from kind's schema describes no spec.clusterRf"},
+		{"spec.cluster.ref", "", "references[0].name spec.cluster.ref: the from kind's schema describes no spec.cluster"},
+		{"spec.replicas", "", "references[0].name spec.replicas: the from kind's schema gives spec.replicas type integer, not string"},
+		{"spec.clusterRef.name", "", "references[0].name spec.clusterRef.name: the from kind's schema gives spec.clusterRef type string, not object"},
+		{"spec.keys.name", "", "references[0].name spec.keys.name: the from kind's schema gives spec.keys type array, not object"},
+		{"spec.clusterRef[*].name", "", "references[0].name spec.clusterRef[*].name: the from kind's schema gives spec.clusterRef type string, not array"},
+		{"spec.names[*].name", "", "references[0].name spec.names[*].name: the from kind's schema gives spec.names[*] type string, not object"},
+		{"spec.clusterRef", "spec.namespce", "references[0].namespace spec.namespce: the from kind's schema describes no spec.namespce"},
+		{"spec.labels.secret.name", "", "references[0].name spec.labels.secret.name: the from kind's schema gives spec.labels.secret type string, not object"},
+		{"spec.refs.db.nam", "", "references[0].name spec.refs.db.nam: the from kind's schema describes no spec.refs.db.nam"},
+		{"spec.pruned.name", "", "references[0].name spec.pruned.name: the from kind's schema describes no spec.pruned.name"},
+	} {
+		reference := fmt.Sprintf("{from: toy/v1/Database, to: v1/Secret, name: %q, ready: \"true\"", c.name)
+		if c.namespace != "" {
+			reference += fmt.Sprintf(", namespace: %q", c.namespace)
+		}
+		path := writeReferences(t, "references: ["+reference+"}]\n")
+		database := strings.Replace(crd("Database", "Namespaced"), "versions: [{name: v1, served: true, storage: true}]", "versions:\n    - name: v1\n      served: true\n      storage: true"+databaseSchema, 1)
+		if err := os.WriteFile(filepath.Join(filepath.Dir(path), "crd.yaml"), []byte(crd("Cluster", "Namespaced")+"---\n"+database), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := config.Load(path)
+		if c.want == "" && err != nil || c.want != "" && (err == nil || !strings.HasSuffix(err.Error(), ": "+c.want)) {
+			t.Errorf("name %s, namespace %q: Load = %v, want %q.", c.name, c.namespace, err, c.want)
+		}
+	}
+}
+
+func TestReferencesOfTwoKindsMayShareAName(t *testing.T) {
+	_, err := config.Load(writeReferences(t, `references:
+  - {from: toy/v1/Database, to: toy/v1/Cluster, name: spec.clusterRef}
+  - {from: toy/v1/User, to: toy/v1/Cluster, name: spec.clusterRef}
+`))
+	if err != nil {
+		t.Error(err)
+	}
+}
+
+func TestAConfigWithoutReferencesNeedsNoCRDs(t *testing.T) {
+	path := writeConfig(t, minimal(t))
+	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "crd.yaml"), []byte("{not: [yaml"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err != nil {
+		t.Errorf("Load = %v, want a config without references to load whatever its CRDs hold.", err)
+	}
+}
+
+func TestReferencedNames(t *testing.T) {
+	obj := map[string]any{"spec": map[string]any{
+		"clusterRef": "c1",
+		"empty":      "",
+		"number":     int64(3),
+		"keys": []any{
+			map[string]any{"secretName": "k1", "namespace": "ns1"},
+			map[string]any{"secretName": ""},
+			map[string]any{"other": "x"},
+			map[string]any{"secretName": "k2", "namespace": int64(1)},
+			"not an object",
+		},
+		"ref": map[string]any{"name": "r", "namespace": "there"},
+		"groups": []any{
+			map[string]any{"namespace": "g1", "members": []any{map[string]any{"name": "m1"}, map[string]any{"name": "m2"}}},
+			map[string]any{"members": []any{map[string]any{"name": "m3"}}},
+		},
+	}}
+	for _, c := range []struct {
+		name, namespace string
+		want            []types.NamespacedName
+	}{
+		{"spec.clusterRef", "", []types.NamespacedName{{Name: "c1"}}},
+		{"spec..clusterRef", "", nil},
+		{"spec.empty", "", nil},
+		{"spec.absent", "", nil},
+		{"spec.number", "", nil},
+		{"spec.keys.secretName", "", nil},
+		{"spec.clusterRef[*].name", "", nil},
+		{"spec.keys[*].secretName", "", []types.NamespacedName{{Name: "k1"}, {Name: "k2"}}},
+		{"spec.keys[*].secretName", "spec.keys[*].namespace", []types.NamespacedName{{Name: "k1", Namespace: "ns1"}, {Name: "k2"}}},
+		{"spec.ref.name", "spec.ref.namespace", []types.NamespacedName{{Name: "r", Namespace: "there"}}},
+		{"spec.ref.name", "spec.absent", []types.NamespacedName{{Name: "r"}}},
+		{"spec.keys[*].secretName", "spec.ref.namespace", []types.NamespacedName{{Name: "k1", Namespace: "there"}, {Name: "k2", Namespace: "there"}}},
+		{"spec.groups[*].members[*].name", "spec.groups[*].namespace", []types.NamespacedName{{Name: "m1", Namespace: "g1"}, {Name: "m2", Namespace: "g1"}, {Name: "m3"}}},
+	} {
+		if got := config.ReferencedNames(c.name, c.namespace, obj); !slices.Equal(got, c.want) {
+			t.Errorf("ReferencedNames(%q, %q) = %v, want %v.", c.name, c.namespace, got, c.want)
+		}
+	}
+}
+
+func TestDeleteOrderPutsEachFromKindBeforeItsToKinds(t *testing.T) {
+	gk := func(kind string) schema.GroupKind { return schema.GroupKind{Group: "toy", Kind: kind} }
+	for name, c := range map[string]struct {
+		references string
+		want       []schema.GroupKind
+	}{
+		"none": {"", []schema.GroupKind{gk("Cluster"), gk("Database"), gk("User"), gk("Tenant")}},
+		"a chain": {`  - {from: toy/v1/Database, to: toy/v1/Cluster, name: spec.clusterRef}
+  - {from: toy/v1/User, to: toy/v1/Database, name: spec.databaseRef}
+  - {from: toy/v1/Database, to: v1/Secret, name: spec.secretRef, ready: "true"}
+`, []schema.GroupKind{gk("User"), gk("Database"), gk("Cluster"), gk("Tenant")}},
+		"a cycle": {`  - {from: toy/v1/Cluster, to: toy/v1/Database, name: spec.primary}
+  - {from: toy/v1/Database, to: toy/v1/Cluster, name: spec.clusterRef}
+  - {from: toy/v1/User, to: toy/v1/Database, name: spec.databaseRef}
+`, []schema.GroupKind{gk("User"), gk("Tenant"), gk("Cluster"), gk("Database")}},
+		"a self reference": {`  - {from: toy/v1/Cluster, to: toy/v1/Cluster, name: spec.parent}
+`, []schema.GroupKind{gk("Cluster"), gk("Database"), gk("User"), gk("Tenant")}},
+	} {
+		rest := ""
+		if c.references != "" {
+			rest = "references:\n" + c.references
+		}
+		cfg, err := config.Load(writeReferences(t, rest))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := cfg.DeleteOrder(); !slices.Equal(got, c.want) {
+			t.Errorf("%s: DeleteOrder = %v, want %v.", name, got, c.want)
+		}
+	}
+}

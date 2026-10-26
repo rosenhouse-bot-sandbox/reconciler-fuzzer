@@ -1,5 +1,6 @@
-# Databases as the primary, on a fixture Cluster. Paths resolve against this
-# file's directory.
+# Databases as the primary, on a fixture Cluster, with the fixture Secret
+# that each names. Generated plans may delete the Secret and create it again.
+# Paths resolve against this file's directory.
 launch:
   binary: ../../../bin/toy-fleet
   args:
@@ -23,6 +24,13 @@ models:
     after: 300ms
 fixtures:
   - ../cluster.yaml
+  - ../admin-password.yaml
+references:
+  - from: toy.reconciler-fuzzer/v1/Database
+    to: v1/Secret
+    name: spec.passwordSecretRef.name
+    ready: has(self.data) && has(self.data.password)
+    track: 1s
 values:
   overlay: {spec.clusterRef: {enum: [cluster]}}
   mutate: [spec.engine]

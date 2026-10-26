@@ -1,0 +1,31 @@
+# This config lists Links, whose references name list items, a fake's
+# bucket, Secrets, a ConfigMap that shares a Secret's name, a ServiceAccount
+# no fixture holds, and a field too short for any candidate. Nothing
+# launches this target.
+launch:
+  binary: none
+  rbac: [../../../../targets/toy-fleet/rbac/role.yaml]
+crds: [../../../../targets/toy-fleet/crds/, link-crd.yaml]
+primaries:
+  - kind: toy.reconciler-fuzzer/v1/Cluster
+    sample: ../../../../targets/toy-fleet/cluster.yaml
+    ready: "true"
+    values: {mutate: [spec.volumes]}
+  - kind: test.reconciler-fuzzer/v1/Link
+    sample: link.yaml
+    ready: "true"
+    values: {mutate: [spec.clusters, spec.bucket, spec.secretName, spec.short]}
+fixtures: [admin-password.yaml, other-password.yaml, settings.yaml]
+values:
+  fixtures: {admin-password.yaml: [stringData.password]}
+systems:
+  - {name: cloud, process: {command: [crudfake]}, api: crud, fixtures: [buckets.yaml]}
+  - {name: dns, process: {command: [crudfake]}, api: crud, fixtures: [records.yaml]}
+references:
+  - {from: test.reconciler-fuzzer/v1/Link, to: toy.reconciler-fuzzer/v1/Cluster, name: "spec.clusters[*].name"}
+  - {from: test.reconciler-fuzzer/v1/Link, to: "cloud:buckets", name: spec.bucket, ready: "true"}
+  - {from: test.reconciler-fuzzer/v1/Link, to: v1/Secret, name: spec.secretName, ready: "true"}
+  - {from: test.reconciler-fuzzer/v1/Link, to: v1/Secret, name: spec.backupSecretName, ready: "true"}
+  - {from: test.reconciler-fuzzer/v1/Link, to: toy.reconciler-fuzzer/v1/Cluster, name: spec.short}
+  - {from: test.reconciler-fuzzer/v1/Link, to: v1/ConfigMap, name: spec.configName, ready: "true"}
+  - {from: test.reconciler-fuzzer/v1/Link, to: v1/ServiceAccount, name: spec.accountName, ready: "true"}

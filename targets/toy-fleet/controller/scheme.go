@@ -17,14 +17,23 @@ import (
 	storagev1 "github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/targets/toy-fleet/thirdparty/storage/v1"
 )
 
-// Field indexes that map a Cluster to its Databases and a Database to its Users.
+// These field indexes map a Cluster or a Secret to the Databases that name
+// it, and a Database to its Users.
 const (
-	clusterRefField  = "spec.clusterRef"
-	databaseRefField = "spec.databaseRef"
+	clusterRefField        = "spec.clusterRef"
+	passwordSecretRefField = "spec.passwordSecretRef.name"
+	databaseRefField       = "spec.databaseRef"
 )
 
 func clusterRef(o client.Object) []string  { return []string{o.(*fleetv1.Database).Spec.ClusterRef} }
 func databaseRef(o client.Object) []string { return []string{o.(*fleetv1.User).Spec.DatabaseRef} }
+
+func passwordSecretRef(o client.Object) []string {
+	if ref := o.(*fleetv1.Database).Spec.PasswordSecretRef; ref != nil {
+		return []string{ref.Name}
+	}
+	return nil
+}
 
 // NewScheme registers the built-in kinds, the fleet's and the Volume.
 func NewScheme() (*runtime.Scheme, error) {
@@ -42,6 +51,9 @@ func Setup(m ctrl.Manager, bug Bug) error {
 	ctx := context.Background()
 	indexer := m.GetFieldIndexer()
 	if err := indexer.IndexField(ctx, &fleetv1.Database{}, clusterRefField, clusterRef); err != nil {
+		return fmt.Errorf("indexing Databases: %w", err)
+	}
+	if err := indexer.IndexField(ctx, &fleetv1.Database{}, passwordSecretRefField, passwordSecretRef); err != nil {
 		return fmt.Errorf("indexing Databases: %w", err)
 	}
 	if err := indexer.IndexField(ctx, &fleetv1.User{}, databaseRefField, databaseRef); err != nil {

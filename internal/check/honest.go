@@ -7,15 +7,17 @@ import (
 	"maps"
 	"math"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/owner"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 )
 
-// Honest fails a CR that reports Ready on a dependency the controller did
-// not see ready, or, with track, that stays Ready too long after the
-// controller saw a dependency not ready. DESIGN.md §12 defines it.
+// Honest fails a CR that reports Ready on a dependency, or on an object it
+// names, that the controller did not see ready, or, with track, that stays
+// Ready too long after the controller saw one not ready. DESIGN.md §12
+// defines it.
 func Honest(ix *trace.Index, s Spec) []Finding {
 	var deps []Model
 	for _, m := range s.Models {
@@ -23,10 +25,11 @@ func Honest(ix *trace.Index, s Spec) []Finding {
 			deps = append(deps, m)
 		}
 	}
-	if len(deps) == 0 {
+	if len(deps) == 0 && len(s.References) == 0 {
 		return nil
 	}
 	h := &honesty{ix: ix, s: s, w: owner.New(ix, s.Owners), steps: ix.Steps(), deletes: controllerDeletes(ix), found: map[findingKey]*Finding{}}
+	h.stalls = stalls(ix)
 	order, crs := crVersions(ix, s)
 	for _, uid := range order {
 		versions := crs[uid]
@@ -34,6 +37,7 @@ func Honest(ix *trace.Index, s Spec) []Finding {
 		h.judgeTriggers(uid, p, versions, deps)
 		if events := ix.Events(); len(events) > 0 {
 			h.judgeTrack(uid, p, versions, deps, events[len(events)-1].At)
+			h.judgeReferenceTrack(uid, p, versions, events[len(events)-1].At)
 		}
 	}
 	keys := slices.SortedFunc(maps.Keys(h.found), func(a, b findingKey) int {
@@ -53,6 +57,7 @@ type honesty struct {
 	steps   []trace.StepSpan
 	deletes map[trace.Ref][]time.Duration
 	found   map[findingKey]*Finding
+	stalls  []stall
 }
 
 type findingKey struct {
@@ -79,10 +84,13 @@ func crVersions(ix *trace.Index, s Spec) ([]string, map[string][]trace.Event) {
 // judgeTriggers judges each version of the CR, of p's kind, that the
 // controller wrote that becomes ready, or raises observedGeneration while
 // ready. Only a CR of the first entry's kind needs a required dependency.
+// The version fails on an object it names that the controller's sight holds
+// back, or that the controller never looked at while it lived, unless a stale
+// cache explains the write and the controller corrected it in time.
 func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, deps []Model) {
 	requires := p.Kind == h.s.Primaries[0].Kind
 	wasReady, wasObserved := false, 0.0
-	for _, e := range versions {
+	for i, e := range versions {
 		v := e.Version
 		body := decode(v.Body)
 		isReady, observed := satisfies(p.Ready, body), observedGeneration(body)
@@ -93,6 +101,7 @@ func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, d
 		}
 		call, _ := h.ix.WriteCall(v.Ref, v.RV)
 		t0 := call.At - call.Call.Latency
+		due := sync.OnceValue(func() time.Duration { return h.correctionDue(call) })
 		for _, m := range deps {
 			owned := h.dependencies(uid, m, t0)
 			if len(owned) == 0 && m.Dependency.Required && requires {
@@ -104,7 +113,157 @@ func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, d
 				}
 			}
 		}
+		for _, n := range h.s.names(v.Ref, body) {
+			g := h.s.sight(h.ix, n, t0)
+			if g.allowsReady(h.s.References[n.ref].Required) || h.stale(n, g, t0) && h.corrected(p, versions[i+1:], n, due()) {
+				continue
+			}
+			summary := beforeSeeing
+			if g.missing {
+				summary = noDependency
+			}
+			h.add(t0, summary, kind(n.object), fmt.Sprintf("%s: %s %s", crName(h.w, uid), describe(n.object), g.describe()))
+		}
 	}
+}
+
+// stale reports whether a reconcile that read the cache before g's look at
+// n could have written the CR ready at t0. The controller must have sent the
+// write within twice stable of that look, stalls aside. An earlier look, with
+// no start since, must have shown n as it lets the CR be ready.
+func (h *honesty) stale(n named, g sight, t0 time.Duration) bool {
+	required := h.s.References[n.ref].Required
+	return t0 <= until(g.at, 2*h.s.Stable, h.stalls) && slices.ContainsFunc(h.ix.Looks(trace.Controller, n.object), func(look trace.Event) bool {
+		return look.At < g.at && !h.restarted(look.At, t0) && !h.s.shown(h.ix, n, look).holds(required)
+	})
+}
+
+// restarted reports whether the controller started in (from, to].
+func (h *honesty) restarted(from, to time.Duration) bool {
+	return slices.ContainsFunc(h.ix.Procs(), func(e trace.Event) bool {
+		return e.Proc.Event == trace.Start && from < e.At && e.At <= to
+	})
+}
+
+// corrected reports whether the controller sent a write of one of later,
+// the CR's later versions, that is not ready or does not name n, by due.
+func (h *honesty) corrected(p Primary, later []trace.Event, n named, due time.Duration) bool {
+	return slices.ContainsFunc(later, func(e trace.Event) bool {
+		v := e.Version
+		call, found := h.ix.WriteCall(v.Ref, v.RV)
+		if !found || call.Call.Caller != trace.Controller || call.At-call.Call.Latency > due {
+			return false
+		}
+		body := decode(v.Body)
+		return !p.ready(body) || !slices.Contains(h.s.names(v.Ref, body), n)
+	})
+}
+
+// correctionDue is when the controller must have corrected ready, the write
+// that made the CR ready. The window is stable from ready's response, since
+// the CR's next reconcile starts only once ready returns. A start in it
+// gives the controller stable from that start, since a restart loses the
+// reconcile. A write of the CR that failed or had an unknown outcome, ready
+// itself or one in the window, gives it retryDue.
+func (h *honesty) correctionDue(ready trace.Event) time.Duration {
+	due := until(ready.At, h.s.Stable, h.stalls)
+	if retried(*ready.Call, ready) {
+		due = max(due, h.retryDue(ready))
+	}
+	for _, e := range h.ix.EventsIn(ready.At, math.MaxInt64) {
+		switch {
+		case e.Proc != nil && e.Proc.Event == trace.Start && e.At <= due:
+			due = max(due, until(e.At, h.s.Stable, h.stalls))
+		case e.Call != nil && e.At-e.Call.Latency <= due && retried(*e.Call, ready):
+			due = max(due, h.retryDue(e))
+		}
+	}
+	return due
+}
+
+// retryDue is when a correction must have come after the controller's write
+// e of the CR failed or had an unknown outcome, such as a conflict from a
+// cache that lacks ready: the backoff allowance of the step that answered e,
+// whose faults fail its retries too, and stable from e's response.
+func (h *honesty) retryDue(e trace.Event) time.Duration {
+	step, _ := latestStep(h.ix, e.At)
+	return until(e.At, step.Backoff+h.s.Stable, h.stalls)
+}
+
+// retried reports whether the controller must retry c, its write of the
+// object that the write ready wrote, which failed or had an unknown
+// outcome. A write that a kill ended is not one, since the controller starts
+// again and reconciles with an empty backoff.
+func retried(c trace.Call, ready trace.Event) bool {
+	return c.Caller == trace.Controller && trace.Mutating(c.Verb) &&
+		c.Object() == ready.Call.Object() && unconfirmed(c) && c.Injected != trace.KillAfter
+}
+
+// unconfirmed reports whether c failed or had an unknown outcome.
+func unconfirmed(c trace.Call) bool { return !succeeded(c) || c.Unknown() }
+
+// A stall is a time in which the controller cannot act on what it saw.
+type stall struct{ start, end time.Duration }
+
+// stalls returns the run's stalls, merged and in order of start. A step's
+// fault events stall the controller from the first until the last, if a
+// fault altered one of its requests. An exit stalls it until the next start.
+func stalls(ix *trace.Index) []stall {
+	byStep := map[int]stall{}
+	for _, e := range ix.Events() {
+		if f := e.Fault; f != nil && f.Model == "" && f.Hold == nil {
+			s, found := byStep[f.Step]
+			if !found {
+				s.start = e.At
+			}
+			s.end = e.At
+			byStep[f.Step] = s
+		}
+	}
+	var all []stall
+	for _, s := range byStep {
+		if altered(ix, s) {
+			all = append(all, s)
+		}
+	}
+	procs := ix.Procs()
+	for i := 1; i < len(procs); i++ {
+		if procs[i-1].Proc.Event == trace.Exit {
+			all = append(all, stall{procs[i-1].At, procs[i].At})
+		}
+	}
+	slices.SortFunc(all, func(a, b stall) int { return cmp.Compare(a.start, b.start) })
+	var merged []stall
+	for _, s := range all {
+		if last := len(merged) - 1; last >= 0 && s.start <= merged[last].end {
+			merged[last].end = max(merged[last].end, s.end)
+			continue
+		}
+		merged = append(merged, s)
+	}
+	return merged
+}
+
+// altered reports whether a fault altered a request of the controller that
+// s covers: one answered after s began and sent before it ended. A model
+// fault and a held watch alter none.
+func altered(ix *trace.Index, s stall) bool {
+	return slices.ContainsFunc(ix.Calls(trace.Controller, s.start, math.MaxInt64), func(e trace.Event) bool {
+		return e.Call.Injected != "" && e.At-e.Call.Latency <= s.end
+	})
+}
+
+// until is when a window of d from t closes: d after t, and the time after t
+// in which the stalls that start by then stall the controller. stalls are
+// disjoint and in order of start.
+func until(t, d time.Duration, stalls []stall) time.Duration {
+	end := t + d
+	for _, s := range stalls {
+		if s.start <= end && s.end > t {
+			end += s.end - max(s.start, t)
+		}
+	}
+	return end
 }
 
 const (
@@ -238,9 +397,9 @@ func (h *honesty) ready(seen trace.Event, m Model) bool {
 	return found && !seen.Seen.Deleted && satisfies(m.Ready, decode(v.Body))
 }
 
-// judgeTrack fails a CR, of p's kind, that stays ready for track after the
-// controller saw one of its dependencies not ready, and saw nothing better
-// since.
+// judgeTrack fails a CR, of p's kind, that stays ready for track, stalls
+// aside, after the controller saw one of its dependencies not ready, and saw
+// nothing better since.
 func (h *honesty) judgeTrack(uid string, p Primary, versions []trace.Event, deps []Model, end time.Duration) {
 	for _, m := range deps {
 		d := m.Dependency.Track
@@ -249,9 +408,9 @@ func (h *honesty) judgeTrack(uid string, p Primary, versions []trace.Event, deps
 		}
 		for _, dep := range h.allOf(m) {
 			for _, seen := range h.ix.Seen(trace.Controller, dep.UID) {
-				at := seen.At + d
+				at := until(seen.At, d, h.stalls)
 				if at > end || h.ready(seen, m) || seen.Seen.Deleted || h.seenDeleting(seen) ||
-					!h.streak(dep, m, seen.At, at) || !readyThrough(p, versions, seen.At, at) || h.excused(uid, seen.At, at) ||
+					!h.streak(dep, m, seen.At, at) || !through(versions, seen.At, at, p.ready) || h.excused(uid, seen.At, at) ||
 					h.ix.Opaque(trace.Controller, dep.Ref, seen.At, at) {
 					continue
 				}
@@ -270,17 +429,24 @@ func (h *honesty) seenDeleting(seen trace.Event) bool {
 	return found && deleting(v.Body)
 }
 
-// excused reports whether, in (from, to], the controller started or exited,
-// or a write of its to the CR failed or had an unknown outcome. Either can
-// keep an honest controller from reporting a dependency's change.
+// excused reports whether the controller started or exited in (from, to],
+// or a write of the CR by the controller failed or had an unknown outcome in
+// (from, to] or was in flight at to. Each can keep an honest controller from
+// reporting a dependency's change.
 func (h *honesty) excused(uid string, from, to time.Duration) bool {
 	if slices.ContainsFunc(h.ix.Procs(), func(e trace.Event) bool { return e.At > from && e.At <= to }) {
 		return true
 	}
 	cr, found := h.w.Instance(uid)
-	return found && slices.ContainsFunc(h.ix.Calls(trace.Controller, from, to), func(e trace.Event) bool {
+	return found && slices.ContainsFunc(h.ix.Calls(trace.Controller, from, math.MaxInt64), func(e trace.Event) bool {
 		c := e.Call
-		return trace.Mutating(c.Verb) && c.Object() == cr.Ref && (c.Status < 200 || c.Status > 299 || c.Unknown())
+		if !trace.Mutating(c.Verb) || c.Object() != cr.Ref {
+			return false
+		}
+		if e.At > to {
+			return e.At-c.Latency <= to
+		}
+		return unconfirmed(*c)
 	})
 }
 
@@ -302,18 +468,48 @@ func (h *honesty) streak(dep owner.Instance, m Model, from, to time.Duration) bo
 	})
 }
 
-// readyThrough reports whether the CR's version at from, and every later
-// one until to, satisfies p's ready.
-func readyThrough(p Primary, versions []trace.Event, from, to time.Duration) bool {
+// judgeReferenceTrack fails a CR, of p's kind, that stays ready, naming an
+// object, for its reference's track, stalls aside, after a look at the
+// object, while that look and every later one held the CR back.
+func (h *honesty) judgeReferenceTrack(uid string, p Primary, versions []trace.Event, end time.Duration) {
+	cr := versions[0].Version.Ref
+	var objects []named
+	for _, e := range versions {
+		for _, n := range h.s.names(cr, decode(e.Version.Body)) {
+			if h.s.References[n.ref].Track > 0 && !slices.Contains(objects, n) {
+				objects = append(objects, n)
+			}
+		}
+	}
+	for _, n := range objects {
+		r := h.s.References[n.ref]
+		looks := h.ix.Looks(trace.Controller, n.object)
+		holds := func(look trace.Event) bool { return h.s.shown(h.ix, n, look).holds(r.Required) }
+		readyNaming := func(body map[string]any) bool { return p.ready(body) && slices.Contains(h.s.names(cr, body), n) }
+		for i, look := range looks {
+			at := until(look.At, r.Track, h.stalls)
+			if at > end || slices.ContainsFunc(looks[i:], func(e trace.Event) bool { return e.At <= at && !holds(e) }) ||
+				!through(versions, look.At, at, readyNaming) || h.excused(uid, look.At, at) || h.ix.Opaque(trace.Controller, n.object, look.At, at) {
+				continue
+			}
+			h.add(at, stayedReady, kind(n.object), fmt.Sprintf("%s: %s %s at %v", crName(h.w, uid), describe(n.object), h.s.shown(h.ix, n, look).describe(), look.At))
+			break
+		}
+	}
+}
+
+// through reports whether ok accepts the CR's version at from, and every
+// later one until to. A deleted version fails.
+func through(versions []trace.Event, from, to time.Duration, ok func(body map[string]any) bool) bool {
 	current := false
 	for _, e := range versions {
 		if e.At > to {
 			break
 		}
-		ok := !e.Version.Deleted && satisfies(p.Ready, decode(e.Version.Body))
+		accepted := !e.Version.Deleted && ok(decode(e.Version.Body))
 		if e.At <= from {
-			current = ok
-		} else if !ok {
+			current = accepted
+		} else if !accepted {
 			return false
 		}
 	}

@@ -127,9 +127,9 @@ func TestAFakeFaultComesWithTheActionItExercises(t *testing.T) {
 	} {
 		action := example(t, 0, func(rt *rapid.T) plan.Action {
 			rapid.Bool().Draw(rt, "rapid needs a draw")
-			at := state{}
+			at := newState()
 			if c.live {
-				at["a"] = g.kinds[0].base("a").Object
+				at.slots["a"] = g.kinds[0].base("a").Object
 			}
 			return g.traffic(rt, at, c.fault)
 		})

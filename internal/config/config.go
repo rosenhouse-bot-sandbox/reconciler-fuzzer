@@ -42,6 +42,7 @@ type Config struct {
 	Budgets       Budgets
 	Timeouts      Timeouts
 	Properties    []Property
+	References    []Reference
 }
 
 // Values say how the generator draws CRs of one kind. Paths are dotted,
@@ -266,11 +267,12 @@ type declaration struct {
 		Env    map[string]string `json:"env"`
 		RBAC   []string          `json:"rbac"`
 	} `json:"launch"`
-	CRDs      []string         `json:"crds"`
-	Primary   *declaredPrimary `json:"primary"`
-	Primaries []declaredEntry  `json:"primaries"`
-	Fixtures  []string         `json:"fixtures"`
-	Models    []struct {
+	CRDs       []string            `json:"crds"`
+	Primary    *declaredPrimary    `json:"primary"`
+	Primaries  []declaredEntry     `json:"primaries"`
+	References []declaredReference `json:"references"`
+	Fixtures   []string            `json:"fixtures"`
+	Models     []struct {
 		Kind        string              `json:"kind"`
 		Stages      string              `json:"stages"`
 		Status      map[string]any      `json:"status"`
@@ -462,6 +464,9 @@ func load(path string) (*Config, error) {
 		return nil, err
 	}
 	if err := refuseListedFixtures(d.Fixtures, c.Fixtures, c.ListedKinds()); err != nil {
+		return nil, err
+	}
+	if c.References, err = c.references(d.References); err != nil {
 		return nil, err
 	}
 	fixtures := slices.Clone(c.Fixtures)
@@ -767,17 +772,15 @@ func owns(entryKey string, entries []declaredOwns, fakes []System) ([]Owns, erro
 			return nil, fmt.Errorf("%s.kind is required", key)
 		}
 		var o Owns
-		if system, collection, isFake := strings.Cut(declared.Kind, ":"); isFake {
-			if !systemName.MatchString(collection) {
-				return nil, fmt.Errorf("%s.kind %s: want <system>:<collection>, with a collection matching %s", key, declared.Kind, systemName)
-			}
-			if !slices.ContainsFunc(fakes, func(s System) bool { return s.Name == system }) {
-				return nil, fmt.Errorf("%s.kind %s: systems declares no fake %s", key, declared.Kind, system)
+		if strings.Contains(declared.Kind, ":") {
+			fake, collection, err := fakeKind(declared.Kind, fakes)
+			if err != nil {
+				return nil, fmt.Errorf("%s.kind %s: %w", key, declared.Kind, err)
 			}
 			if declared.Namespace != "" {
 				return nil, fmt.Errorf("%s.namespace: a fake's resources have no namespace", key)
 			}
-			o.System, o.Collection = system, collection
+			o.System, o.Collection = fake.Name, collection
 		} else {
 			kind, err := parseGVK(declared.Kind)
 			if err != nil {

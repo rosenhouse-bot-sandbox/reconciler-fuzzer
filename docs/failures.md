@@ -52,8 +52,10 @@ with such notes may need a different fault.
 
 `the slot's name is still taken after the create waited 37s` means that
 a create gave up waiting until its slot's previous CR no longer existed.
+`the name of secrets ns/pw is still taken after the createFixture waited
+37s` says the same of a `createFixture` and the fixture it makes again.
 The step's faults had ended by then (DESIGN.md §9). When the observer last
-recorded a live CR with that name, the rest of the note names its
+recorded a live object with that name, the rest of the note names its
 `deletionTimestamp` and finalizers, or says that it is not being deleted.
 The run then skips to the `delete all` and `restart` steps that the runner
 appends.
@@ -96,12 +98,26 @@ Look at the clause first:
 | 2 | A CR is still being deleted. | Its finalizers, and why the controller did not remove them. |
 | 3 | The controller is down, or restarted within `stable`. | `controller.log`, and any Crash finding. |
 | 4 | The controller made no successful request since it started. | Its startup in `controller.log`, and its RBAC. |
-| 5 | The controller did not look at an object a `damage` or `changeFixture` changed. | Its watches and the kinds it reads. |
+| 5 | The controller did not look at an object a `damage`, `changeFixture` or `createFixture` changed. | Its watches and the kinds it reads. |
 | 6 | A model, such as `gc`, has work pending. | What the model waits on. Churn under clause 7 often keeps it busy. A stage model's `finalizer:` holds each deletion for `finalizer.after`, so lower it, or raise `timeouts.settle`. |
 | 7 | The controller kept changing objects, or went over the `budgets`. | The first changed write the detail names: it shows what the controller fights over. |
 
 `did not stay settled (clause k)` means the condition held once, then
 failed again within `stable`.
+
+Clause 1 skips a CR that a reference holds back, if the named object as it
+is now would hold the CR back too, or that a reference leaves unknown. It
+does so once `stable`, and the time the step's faults lasted, at most
+`timeouts.backoffCap`, have passed since the faults ended.
+
+Clause 1's line says what the controller last saw of each object that the
+CR names, such as `; the controller last saw secrets ns/admin-password
+ready at 7.24s`. If it saw the object ready, the reference's `ready`
+accepts an object that the controller treats as not ready. If it saw the
+object missing under `required: false`, the controller treats the object
+as required. If it saw the object missing or not ready, and the object is
+ready now, the controller missed the change, as when it does not watch the
+named kind. `never saw` means the controller never read the object.
 
 After a `stop`, only clauses 2, 6 and 7 apply, and clause 2 only in the
 stop's step. It names a CR that was still being deleted when the stop's wait
@@ -160,7 +176,9 @@ from the previous step's end.
   recreated, or every resource of some kind under the damaged resource's
   root (DESIGN.md §11) is gone. Once a damaged resource's owner is gone, a
   CR that the controller made in the step must own a resource of the
-  damaged one's kind and role under that root.
+  damaged one's kind and role under that root. A resource may stay gone
+  while each of its CRs is not ready at the step's end, but halted or held
+  back by a reference.
 - `replaced resources`: an undamaged resource was replaced, or a new one
   appeared.
 - `changed resources`: an undamaged resource's body changed. Each line
@@ -190,7 +208,23 @@ dependency:
 - `reported ready with no dependency`: under `dependency.required`, the
   CR owned none that counts.
 - `stayed ready after seeing its dependency not ready`: the CR stayed
-  ready longer than `track`.
+  ready longer than `track`, not counting time in which the controller
+  stalled (README.md, References).
+
+A `references` entry's findings take the same summaries. Each line names
+the CR and the object that its field names. The finding takes the object's
+kind:
+
+- `reported ready with no dependency`: the object was missing and
+  `required`. `seen missing` means the controller's last look showed it
+  missing; `not seen` means the controller never looked.
+- `reported ready before seeing its dependency ready`: `seen not ready`
+  means the controller's last look showed the object not ready; `not seen`
+  means the controller never looked at the live object.
+- `stayed ready after seeing its dependency not ready`: the CR stayed
+  ready, naming the object, for `track` after the look at the time the
+  line gives, not counting time in which the controller stalled, and each
+  later look by then held it back.
 
 ### Backoff: retried a failing request in a tight loop
 

@@ -41,7 +41,12 @@ type Generator struct {
 	granted map[gvk.GroupResource][]string
 	// requests are what faults match, each with the weight of its draw.
 	requests []request
+	// fixtures are those whose strings changeFixture may set.
 	fixtures []fixture
+	// referenced are the kube fixtures of a reference's to kind other than
+	// core Namespaces, which changeFixture deletes and createFixture makes
+	// again.
+	referenced []plan.Target
 	// watchable are the resources the RBAC lets the controller watch,
 	// which holdWatch faults hold. A kind appears once per unit of its
 	// holdWeight.
@@ -71,9 +76,12 @@ type crKind struct {
 	fields    []field
 	leftAlone []string
 	distinct  [][]string
+	// references are the config's references from this kind.
+	references []*reference
 }
 
-// fixture is one fixture whose strings changeFixture may set.
+// fixture is one fixture that changeFixture patches at one of its paths, or
+// deletes when it has none.
 type fixture struct {
 	target plan.Target
 	paths  [][]string
@@ -81,8 +89,8 @@ type fixture struct {
 
 var slots = []string{"a", "b", "c"}
 
-// New reads each listed kind's CRD schema, sample and values, and the
-// fixtures of cfg.
+// New reads each listed kind's CRD schema, sample and values, the fixtures
+// and the references of cfg.
 func New(cfg *config.Config) (*Generator, error) {
 	g, err := build(cfg)
 	if err != nil {
@@ -110,9 +118,11 @@ func build(cfg *config.Config) (*Generator, error) {
 			}
 		}
 	}
-	if err := g.readFixtures(cfg); err != nil {
+	fixtures, err := g.readFixtures(cfg)
+	if err != nil {
 		return nil, err
 	}
+	g.readReferences(cfg, fixtures)
 	if err := g.readRBAC(cfg.Launch.RBAC); err != nil {
 		return nil, err
 	}
@@ -243,24 +253,27 @@ func (g *Generator) addResource(gr gvk.GroupResource) {
 	}
 }
 
-func (g *Generator) readFixtures(cfg *config.Config) error {
+// readFixtures reads the fixtures whose strings changeFixture may set, and
+// returns the target of each kube and system fixture.
+func (g *Generator) readFixtures(cfg *config.Config) ([]plan.Target, error) {
+	var targets []plan.Target
 	for _, path := range cfg.Fixtures {
-		documents, err := readDocuments(path)
+		documents, err := config.ReadManifests([]string{path})
 		if err != nil {
-			return err
+			return nil, err
 		}
 		paths := cfg.FixtureValues[path]
 		if len(paths) > 0 && len(documents) != 1 {
-			return fmt.Errorf("values.fixtures %s: the file holds %d objects, want 1", path, len(documents))
+			return nil, fmt.Errorf("values.fixtures %s: the file holds %d objects, want 1", path, len(documents))
 		}
 		for _, document := range documents {
-			object := unstructured.Unstructured{Object: document}
-			gvr, _ := meta.UnsafeGuessKindToResource(object.GroupVersionKind())
-			g.addResource(gvr.GroupResource())
+			target := kubeFixture(document)
+			targets = append(targets, target)
+			g.addResource(gvk.GroupResource{Group: target.Group, Resource: target.Resource})
 			if len(paths) == 0 {
 				continue
 			}
-			f := fixture{target: plan.Target{Group: gvr.Group, Resource: gvr.Resource, Namespace: object.GetNamespace(), Name: object.GetName()}}
+			f := fixture{target: target}
 			for _, dotted := range paths {
 				f.paths = append(f.paths, strings.Split(dotted, "."))
 			}
@@ -269,16 +282,18 @@ func (g *Generator) readFixtures(cfg *config.Config) error {
 	}
 	for _, s := range cfg.Systems {
 		for _, path := range s.Fixtures {
-			paths := cfg.FixtureValues[path]
-			if len(paths) == 0 {
-				continue
-			}
 			entries, err := config.ReadSystemFixtures(path)
 			if err != nil {
-				return err
+				return nil, err
 			}
+			paths := cfg.FixtureValues[path]
 			for _, entry := range entries {
-				f := fixture{target: plan.Target{System: s.Name, Resource: entry.Resource, Name: entry.Name}}
+				target := plan.Target{System: s.Name, Resource: entry.Resource, Name: entry.Name}
+				targets = append(targets, target)
+				if len(paths) == 0 {
+					continue
+				}
+				f := fixture{target: target}
 				for _, dotted := range paths {
 					f.paths = append(f.paths, strings.Split(dotted, "."))
 				}
@@ -286,13 +301,20 @@ func (g *Generator) readFixtures(cfg *config.Config) error {
 			}
 		}
 	}
-	return nil
+	return targets, nil
+}
+
+// kubeFixture is the target of a fixture's object.
+func kubeFixture(document map[string]any) plan.Target {
+	object := unstructured.Unstructured{Object: document}
+	gvr, _ := meta.UnsafeGuessKindToResource(object.GroupVersionKind())
+	return plan.Target{Group: gvr.Group, Resource: gvr.Resource, Namespace: object.GetNamespace(), Name: object.GetName()}
 }
 
 // readRBAC adds the resources the rules name, without wildcards and
 // subresources, and records the verbs each rule grants.
 func (g *Generator) readRBAC(paths []string) error {
-	documents, err := readManifests(paths)
+	documents, err := config.ReadManifests(paths)
 	if err != nil {
 		return fmt.Errorf("launch.rbac: %w", err)
 	}
@@ -331,7 +353,7 @@ func (g *Generator) readModels(cfg *config.Config) error {
 	if len(cfg.Models) == 0 {
 		return nil
 	}
-	crds, err := readManifests(cfg.CRDs)
+	crds, err := config.ReadManifests(cfg.CRDs)
 	if err != nil {
 		return fmt.Errorf("reading the CRDs: %w", err)
 	}
@@ -364,16 +386,24 @@ func (g *Generator) Plan(seed uint64) (p *plan.Plan, err error) {
 	return p, nil
 }
 
-// state is what the plan so far leaves each slot holding: its CR as last
-// written, or nil once deleted.
-type state map[string]map[string]any
+// state is what the plan so far leaves each slot holding, its CR as last
+// written or nil once deleted, and the referenced fixtures it deleted and
+// did not create again.
+type state struct {
+	slots   map[string]map[string]any
+	deleted map[plan.Target]bool
+}
+
+func newState() state {
+	return state{slots: map[string]map[string]any{}, deleted: map[plan.Target]bool{}}
+}
 
 func (s state) live() []string {
-	return slices.DeleteFunc(slices.Clone(slots), func(slot string) bool { return s[slot] == nil })
+	return slices.DeleteFunc(slices.Clone(slots), func(slot string) bool { return s.slots[slot] == nil })
 }
 
 func (s state) free() []string {
-	return slices.DeleteFunc(slices.Clone(slots), func(slot string) bool { return s[slot] != nil })
+	return slices.DeleteFunc(slices.Clone(slots), func(slot string) bool { return s.slots[slot] != nil })
 }
 
 // kindOf is the listed kind of a CR the plan holds, by its apiVersion and
@@ -385,16 +415,16 @@ func (g *Generator) kindOf(cr map[string]any) *crKind {
 
 // updatable are the live slots whose kind has fields to change.
 func (g *Generator) updatable(at state) []string {
-	return slices.DeleteFunc(at.live(), func(slot string) bool { return len(g.kindOf(at[slot]).fields) == 0 })
+	return slices.DeleteFunc(at.live(), func(slot string) bool { return len(g.kindOf(at.slots[slot]).fields) == 0 })
 }
 
 // ofResource are the slots in from whose CR is of the resource gr.
 func (g *Generator) ofResource(at state, from []string, gr gvk.GroupResource) []string {
-	return slices.DeleteFunc(slices.Clone(from), func(slot string) bool { return g.kindOf(at[slot]).resource != gr })
+	return slices.DeleteFunc(slices.Clone(from), func(slot string) bool { return g.kindOf(at.slots[slot]).resource != gr })
 }
 
 func (g *Generator) plan(t *rapid.T) *plan.Plan {
-	at := state{}
+	at := newState()
 	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{g.create(t, at, "a")}}}}
 	for range 2 + uniform(t, 6, "steps") {
 		p.Steps = append(p.Steps, g.step(t, at))
@@ -452,7 +482,7 @@ func (g *Generator) step(t *rapid.T, at state) plan.Step {
 // within 50 ms.
 func (g *Generator) burst(t *rapid.T, at state) []plan.Action {
 	slot := sampled(t, at.live(), "slot")
-	k := g.kindOf(at[slot])
+	k := g.kindOf(at.slots[slot])
 	if len(k.fields) > 0 && rapid.Bool().Draw(t, "updates") {
 		return within50ms(t, []plan.Action{g.update(t, at, slot), g.update(t, at, slot)})
 	}
@@ -476,9 +506,9 @@ func (g *Generator) holdTraffic(t *rapid.T, at state, f plan.Fault) []plan.Actio
 		return []plan.Action{g.create(t, at, sampled(t, free, "slot"))}
 	}
 	slot := sampled(t, live, "slot")
-	cr := at[slot]
+	cr := at.slots[slot]
 	deleted := g.delete(t, at, slot)
-	at[slot] = cr
+	at.slots[slot] = cr
 	return within50ms(t, []plan.Action{deleted, {Do: plan.Create, Slot: slot, Object: marshal(cr)}})
 }
 
@@ -505,8 +535,13 @@ func (g *Generator) action(t *rapid.T, at state) plan.Action {
 	if g.damageable() {
 		legal = append(legal, plan.Damage)
 	}
-	if len(g.fixtures) > 0 {
+	changes := g.fixtureChanges(at)
+	if len(changes) > 0 {
 		legal = append(legal, plan.ChangeFixture)
+	}
+	deleted := g.deletedFixtures(at)
+	if len(deleted) > 0 {
+		legal = append(legal, plan.CreateFixture)
 	}
 	switch do := sampled(t, legal, "do"); do {
 	case plan.Create:
@@ -518,9 +553,11 @@ func (g *Generator) action(t *rapid.T, at state) plan.Action {
 	case plan.Damage:
 		return g.damage(t, at)
 	case plan.ChangeFixture:
-		f := sampled(t, g.fixtures, "fixture")
-		target := f.target
-		return plan.Action{Do: do, Target: &target, Patch: marshal(nest(sampled(t, f.paths, "path"), fixtureWords.Draw(t, "word")))}
+		return changeFixture(t, at, sampled(t, changes, "fixture"))
+	case plan.CreateFixture:
+		target := sampled(t, deleted, "fixture")
+		delete(at.deleted, target)
+		return plan.Action{Do: do, Target: &target}
 	default:
 		return plan.Action{Do: do}
 	}
@@ -531,24 +568,37 @@ func (g *Generator) create(t *rapid.T, at state, slot string) plan.Action {
 	return g.createOf(t, at, slot, sampled(t, g.kinds, "kind"))
 }
 
+// createOf creates the slot's CR of kind k. It writes candidates at each
+// reference's name, unless the CRD refuses them.
 func (g *Generator) createOf(t *rapid.T, at state, slot string, k *crKind) plan.Action {
-	cr := k.cr(t, slot)
-	at[slot] = cr.Object
-	return plan.Action{Do: plan.Create, Slot: slot, Object: marshal(cr.Object)}
+	cr := k.cr(t, slot).Object
+	for _, r := range k.references {
+		if written := g.refer(t, at, r, nil, cr).(map[string]any); k.rules.refusal(written, nil) == nil {
+			cr = written
+		}
+	}
+	at.slots[slot] = cr
+	return plan.Action{Do: plan.Create, Slot: slot, Object: marshal(cr)}
 }
 
 // update changes one field of the slot's CR, or restarts the controller
-// when its CRD refused every patch drawn.
+// when its CRD refused every patch drawn. A drawn field at or above a
+// reference's name holds a candidate there.
 func (g *Generator) update(t *rapid.T, at state, slot string) plan.Action {
-	k := g.kindOf(at[slot])
+	k := g.kindOf(at.slots[slot])
 	for range updateDraws {
 		mutable := sampled(t, k.fields, "field")
-		value, _ := mutable.draw(t)
+		value, present := mutable.draw(t)
+		if present {
+			for _, r := range k.references {
+				value = g.refer(t, at, r, mutable.path, value)
+			}
+		}
 		// A merge patch removes the field where the draw left it absent.
 		patch := nest(mutable.path, value)
-		patched := mergePatch(runtime.DeepCopyJSON(at[slot]), patch)
-		if k.rules.refusal(patched, at[slot]) == nil {
-			at[slot] = patched
+		patched := mergePatch(runtime.DeepCopyJSON(at.slots[slot]), patch)
+		if k.rules.refusal(patched, at.slots[slot]) == nil {
+			at.slots[slot] = patched
 			return plan.Action{Do: plan.Update, Slot: slot, Patch: marshal(patch)}
 		}
 	}
@@ -557,7 +607,7 @@ func (g *Generator) update(t *rapid.T, at state, slot string) plan.Action {
 
 // delete deletes the slot's CR, with Foreground propagation 1 time in 4.
 func (g *Generator) delete(t *rapid.T, at state, slot string) plan.Action {
-	at[slot] = nil
+	at.slots[slot] = nil
 	a := plan.Action{Do: plan.Delete, Slot: slot}
 	if uniform(t, 4, "propagation") == 0 {
 		a.Propagation = plan.Foreground
