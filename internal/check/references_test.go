@@ -26,8 +26,8 @@ const (
 	// volumesFail is a step's fault that fails the controller's requests on
 	// Volumes.
 	volumesFail = "error(500) on resource=volumes"
-	// databasesDelay is a step's fault that holds the controller's requests
-	// on Databases for 2s.
+	// databasesDelay is a step's fault that delays the controller's requests
+	// on Databases by 2s.
 	databasesDelay = "delay(2s) on resource=databases"
 )
 
@@ -323,9 +323,9 @@ func TestHonestGivesNoTimeForAnEarlierRestart(t *testing.T) {
 	requireHonest(t, r.Tick(1*s-tt.Tick).Update(ctl, databaseB, database(false, "pw")), false)
 }
 
-// A crash within a step's faults holds the controller no longer than they
+// A crash within a step's faults stalls the controller no longer than they
 // do, since it starts again as they end.
-func TestHonestCountsOverlappingHoldsOnce(t *testing.T) {
+func TestHonestCountsOverlappingStallsOnce(t *testing.T) {
 	for name, late := range map[string]time.Duration{"stable after the faults end": 0, "later": tt.Tick} {
 		t.Run(name, func(t *testing.T) {
 			r := secretRun(secretRef(), secret(true))
@@ -340,7 +340,7 @@ func TestHonestCountsOverlappingHoldsOnce(t *testing.T) {
 	}
 }
 
-// A step's faults hold the controller until they end, not only until a
+// A step's faults stall the controller until they end, not only until a
 // restart in them brings it back.
 func TestHonestCountsAStepsFaultsPastARestartInThem(t *testing.T) {
 	for name, late := range map[string]time.Duration{"stable after the faults end": 0, "later": tt.Tick} {
@@ -498,15 +498,15 @@ func lost(r *tt.Script) *tt.Script {
 	for i := len(events) - 1; i >= 0; i-- {
 		if events[i].Call != nil {
 			events[i].Call.Injected = trace.DropResponse
-			return r
+			break
 		}
 	}
-	panic("no call to lose")
+	return r
 }
 
 // A step can time out just after the ready write. The next step's faults
-// then hold the controller until they end, and its own step's, which ended
-// before it wrote, hold it not at all.
+// then stall the controller until they end, and its own step's, which ended
+// before it wrote, stall it not at all.
 func TestHonestCountsACorrectionFromTheEndOfTheNextStepsFaults(t *testing.T) {
 	for name, c := range map[string]struct {
 		// begins is how long after the ready write's response the next step
@@ -537,8 +537,8 @@ func TestHonestCountsACorrectionFromTheEndOfTheNextStepsFaults(t *testing.T) {
 	}
 }
 
-// A fault holds the controller only if it altered one of its requests.
-func TestHonestGivesNoTimeForAFaultThatHoldsNoRequest(t *testing.T) {
+// A fault stalls the controller only if it altered one of its requests.
+func TestHonestGivesNoTimeForAFaultThatAlteredNoRequest(t *testing.T) {
 	for name, fault := range map[string]func(step int, ended bool) trace.Event{
 		"a model's fault": func(step int, ended bool) trace.Event { return tt.ModelFault(step, 0, ended, "stuck", "volumes") },
 		"a held watch": func(step int, ended bool) trace.Event {
@@ -562,7 +562,7 @@ func TestHonestGivesNoTimeForAFaultThatHoldsNoRequest(t *testing.T) {
 	}
 }
 
-// The next step's faults hold a controller that started within stable of
+// The next step's faults stall a controller that started within stable of
 // them.
 func TestHonestCountsTheNextStepsFaultsAfterAStart(t *testing.T) {
 	for name, late := range map[string]time.Duration{"what stable leaves once they end": 0, "later": tt.Tick} {
@@ -585,9 +585,9 @@ func TestHonestCountsTheNextStepsFaultsAfterAStart(t *testing.T) {
 	}
 }
 
-// A model fault and a held watch are no part of the hold that a step's
+// A model fault and a held watch are no part of the stall that a step's
 // request faults make.
-func TestHonestGivesNoTimeForAFaultThatHoldsNoRequestBesideOneThatDoes(t *testing.T) {
+func TestHonestGivesNoTimeForAFaultThatAlteredNoRequestBesideOneThatDid(t *testing.T) {
 	for name, fault := range map[string]func(step int, ended bool) trace.Event{
 		"a model's fault": func(step int, ended bool) trace.Event { return tt.ModelFault(step, 1, ended, "stuck", "volumes") },
 		"a held watch": func(step int, ended bool) trace.Event {
@@ -609,8 +609,8 @@ func TestHonestGivesNoTimeForAFaultThatHoldsNoRequestBesideOneThatDoes(t *testin
 	}
 }
 
-// A step's faults hold the controller only if they altered a request of its
-// own, not one the step before or after altered.
+// A step's faults stall the controller only if a fault altered a request in
+// them, not one the step before or after altered.
 func TestHonestGivesNoTimeForFaultsThatAlteredNoRequestOfTheirOwnStep(t *testing.T) {
 	for name, late := range map[string]time.Duration{"stable after the ready write": 0, "later": tt.Tick} {
 		t.Run(name, func(t *testing.T) {
@@ -634,7 +634,7 @@ func TestHonestGivesNoTimeForFaultsThatAlteredNoRequestOfTheirOwnStep(t *testing
 }
 
 // A reconcile that read its cache before the look may wait on requests that
-// a fault holds until it ends, before it writes ready.
+// a fault stalls until it ends, before it writes ready.
 func TestHonestExcusesACorrectedReadyWriteOnlySoonAfterTheLook(t *testing.T) {
 	for name, c := range map[string]struct {
 		// faultsEnd is how long after the look the step's request faults,
@@ -665,8 +665,8 @@ func TestHonestExcusesACorrectedReadyWriteOnlySoonAfterTheLook(t *testing.T) {
 	}
 }
 
-// Faults that start after the look hold the controller while they last.
-func TestHonestExcusesAReadyWriteSentWhileFaultsAfterTheLookHold(t *testing.T) {
+// Faults that start after the look stall the controller while they last.
+func TestHonestExcusesAReadyWriteSentWhileFaultsAfterTheLookStall(t *testing.T) {
 	for name, late := range map[string]time.Duration{"twice stable, the faults aside": 0, "later": tt.Tick} {
 		t.Run(name, func(t *testing.T) {
 			r := secretRun(secretRef(), secret(true))

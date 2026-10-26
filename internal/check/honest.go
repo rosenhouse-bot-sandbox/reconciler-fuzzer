@@ -190,8 +190,8 @@ func (h *honesty) retryDue(e trace.Event) time.Duration {
 
 // retried reports whether the controller must retry c, its write of the
 // object that the write ready wrote, which failed or had an unknown
-// outcome. A killed write is none, since the controller starts again and
-// reconciles with an empty backoff.
+// outcome. A write that a kill ended is not one, since the controller starts
+// again and reconciles with an empty backoff.
 func retried(c trace.Call, ready trace.Event) bool {
 	return c.Caller == trace.Controller && trace.Mutating(c.Verb) &&
 		c.Object() == ready.Call.Object() && unconfirmed(c) && c.Injected != trace.KillAfter
