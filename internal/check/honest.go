@@ -194,8 +194,8 @@ func unconfirmed(c trace.Call) bool { return !succeeded(c) || c.Unknown() }
 type hold struct{ start, end time.Duration }
 
 // holds returns the run's holds, merged and in order of start. A step's
-// fault events hold the controller from the first until the last, if a
-// fault altered one of its requests. An exit holds it until the next start.
+// faults hold the controller from their first event until their last, if
+// they altered one of its requests. An exit holds it until the next start.
 func holds(ix *trace.Index) []hold {
 	byStep := map[int]hold{}
 	for _, e := range ix.Events() {
@@ -232,12 +232,12 @@ func holds(ix *trace.Index) []hold {
 	return merged
 }
 
-// altered reports whether a fault altered a request that the controller
-// sent while h held. A model fault and a held watch alter none.
+// altered reports whether a fault altered a request of the controller that h
+// holds: one answered after h began and sent before it ended. A model fault
+// and a held watch alter none.
 func altered(ix *trace.Index, h hold) bool {
 	return slices.ContainsFunc(ix.Calls(trace.Controller, h.start, math.MaxInt64), func(e trace.Event) bool {
-		sent := e.At - e.Call.Latency
-		return e.Call.Injected != "" && h.start <= sent && sent <= h.end
+		return e.Call.Injected != "" && e.At-e.Call.Latency <= h.end
 	})
 }
 

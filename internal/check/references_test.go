@@ -340,6 +340,23 @@ func TestHonestCountsOverlappingHoldsOnce(t *testing.T) {
 	}
 }
 
+// A step's faults hold the controller until they end, not only until a
+// restart in them brings it back.
+func TestHonestCountsAStepsFaultsPastARestartInThem(t *testing.T) {
+	for name, late := range map[string]time.Duration{"stable after the faults end": 0, "later": tt.Tick} {
+		t.Run(name, func(t *testing.T) {
+			r := secretRun(secretRef(), secret(true))
+			r.Add(tt.Fault(r.Step, 0, false, volumesFail)).Add(failedGet(volumeB))
+			readyB(seenThenDeleted(r))
+			r.Tick(500 * ms).Restart()
+			end := r.Tick(500 * ms).Now
+			r.Add(tt.Fault(r.Step, 0, true, volumesFail))
+			endFaults(r, 2*s)
+			requireHonest(t, r.Tick(end+1*s+late-r.Now).Update(ctl, databaseB, database(false, "pw")), late > 0)
+		})
+	}
+}
+
 // Supervision is off during a step's faults, so a controller that exits
 // before them starts again only once they end. It takes no request of its
 // own while down, so its step's faults alter none.
@@ -476,9 +493,56 @@ func TestHonestGivesNoTimeForAFaultThatHoldsNoRequest(t *testing.T) {
 	}
 }
 
-// A step's faults hold the controller only if they altered a request that it
-// sent while they ran, not one an earlier step's faults altered.
-func TestHonestGivesNoTimeForFaultsThatAlteredAnEarlierStepsRequest(t *testing.T) {
+// The next step's faults hold a controller that started within stable of
+// them.
+func TestHonestCountsTheNextStepsFaultsAfterAStart(t *testing.T) {
+	for name, late := range map[string]time.Duration{"what stable leaves once they end": 0, "later": tt.Tick} {
+		t.Run(name, func(t *testing.T) {
+			r := secretRun(secretRef(), secret(true))
+			readyB(seenThenDeleted(r))
+			ready := r.Now - tt.Tick
+			r.Tick(ready + 500*ms - r.Now).Add(tt.Exit("exit status 2", false, "panic: nil map"))
+			start := r.Tick(100 * ms).Now
+			r.Add(tt.Start(2))
+			timesOut(r, 1*s, start+500*ms)
+			begin := r.Now
+			r.Add(tt.Fault(r.Step, 0, false, volumesFail)).Add(failedGet(volumeB))
+			end := r.Tick(2 * s).Now
+			r.Add(tt.Fault(r.Step, 0, true, volumesFail))
+			endFaults(r, 2*s)
+			due := start + r.Spec.Stable + (end - begin)
+			requireHonest(t, r.Tick(due+late-r.Now).Update(ctl, databaseB, database(false, "pw")), late > 0)
+		})
+	}
+}
+
+// A model fault and a held watch are no part of the hold that a step's
+// request faults make.
+func TestHonestGivesNoTimeForAFaultThatHoldsNoRequestBesideOneThatDoes(t *testing.T) {
+	for name, fault := range map[string]func(step int, ended bool) trace.Event{
+		"a model's fault": func(step int, ended bool) trace.Event { return tt.ModelFault(step, 1, ended, "stuck", "volumes") },
+		"a held watch": func(step int, ended bool) trace.Event {
+			return tt.HoldFault(step, 1, ended, tt.Ref("configmaps", "ns", ""))
+		},
+	} {
+		for when, late := range map[string]time.Duration{"stable after the request faults end": 0, "later": tt.Tick} {
+			t.Run(name+", "+when, func(t *testing.T) {
+				r := secretRun(secretRef(), secret(true))
+				r.Add(tt.Fault(r.Step, 0, false, volumesFail), fault(r.Step, false)).Add(failedGet(volumeB))
+				readyB(seenThenDeleted(r))
+				end := r.Tick(500 * ms).Now
+				r.Add(tt.Fault(r.Step, 0, true, volumesFail))
+				r.Tick(1 * s).Add(fault(r.Step, true))
+				endFaults(r, 2*s)
+				requireHonest(t, r.Tick(end+1*s+late-r.Now).Update(ctl, databaseB, database(false, "pw")), late > 0)
+			})
+		}
+	}
+}
+
+// A step's faults hold the controller only if they altered a request of its
+// own, not one the step before or after altered.
+func TestHonestGivesNoTimeForFaultsThatAlteredNoRequestOfTheirOwnStep(t *testing.T) {
 	for name, late := range map[string]time.Duration{"stable after the ready write": 0, "later": tt.Tick} {
 		t.Run(name, func(t *testing.T) {
 			r := secretRun(secretRef(), secret(true))
@@ -491,6 +555,10 @@ func TestHonestGivesNoTimeForFaultsThatAlteredAnEarlierStepsRequest(t *testing.T
 			r.Tick(500 * ms).Add(tt.Fault(r.Step, 0, true, volumesFail))
 			endFaults(r, 1*s)
 			r.Tick(ready+1*s+late-r.Now).Update(ctl, databaseB, database(false, "pw"))
+			r.Add(tt.Phase(r.Step, trace.TimedOut)).Begin()
+			r.Add(tt.Fault(r.Step, 0, false, volumesFail)).Add(failedGet(volumeB))
+			r.Tick(500 * ms).Add(tt.Fault(r.Step, 0, true, volumesFail))
+			endFaults(r, 1*s)
 			requireHonestIn(t, r, 1, late > 0)
 		})
 	}
