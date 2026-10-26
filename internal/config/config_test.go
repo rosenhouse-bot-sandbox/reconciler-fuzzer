@@ -678,3 +678,10 @@ func TestLaunchVarsNameDeclaredSystems(t *testing.T) {
 		}
 	}
 }
+
+func TestLaunchArgsNameDeclaredSystems(t *testing.T) {
+	_, err := config.Load(writeConfig(t, strings.Replace(minimal(t), "launch:\n", "launch:\n  args: [--a, '${systems.cloud.port}']\n", 1)+"systems: ["+fake+"]\n"))
+	if want := "launch args[1]: system cloud has no port"; err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("err = %v, want one containing %q", err, want)
+	}
+}

@@ -241,3 +241,36 @@ func TestTheControllerGetsTheHarnessKubeconfigByDefault(t *testing.T) {
 		t.Errorf("The controller got KUBECONFIG %q, want %q.", text, want)
 	}
 }
+
+// A restart's args expand ${key}s and keep the --launch-args after them,
+// and the appended restart starts the same command.
+func TestARestartExpandsItsArgsAndKeepsTheLaunchArgs(t *testing.T) {
+	toyDir, err := filepath.Abs(toy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	got := filepath.Join(dir, "got")
+	script := fmt.Sprintf(`echo "$0 $*" >> %s; exec sleep 60`, got)
+	config := fmt.Sprintf("launch: {binary: /bin/sh, args: [-c, '%[2]s', v1]}\ncrds: [%[1]s/crds/]\nprimary: {kind: toy.reconciler-fuzzer/v1/Widget, sample: %[1]s/widget.yaml, ready: \"true\"}\ntimeouts: {settle: 1s, stable: 200ms}\n",
+		toyDir, script)
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "out")
+	restart := plan.Action{Do: plan.Restart, Upgrade: plan.Upgrade{Args: []string{"-c", script, "v2", "${systems.kube.kubeconfig}"}}}
+	o := Options{ConfigPath: filepath.Join(dir, "config.yaml"), Plan: &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{restart}}}}, Out: out,
+		LaunchArgs: []string{"--kubeconfig=${systems.kube.kubeconfig}"}}
+	if _, err := Run(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	text, err := os.ReadFile(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kubeconfig := filepath.Join(out, "kubeconfig")
+	v2 := fmt.Sprintf("v2 %[1]s --kubeconfig=%[1]s\n", kubeconfig)
+	if want := "v1 --kubeconfig=" + kubeconfig + "\n" + v2 + v2; string(text) != want {
+		t.Errorf("The controller started as\n%s\nwant\n%s", text, want)
+	}
+}

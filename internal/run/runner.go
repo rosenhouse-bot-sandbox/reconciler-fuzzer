@@ -226,7 +226,7 @@ func (s *stepRun) faultPeriod(ctx context.Context) error {
 			return err
 		}
 		ref, err := s.execution.act(ctx, a, s)
-		event := &trace.Action{Step: s.n, Index: i, Do: string(a.Do), Slot: a.Slot, Ref: ref}
+		event := &trace.Action{Step: s.n, Index: i, Do: string(a.Do), Slot: a.Slot, Ref: ref, Upgrade: a.Upgrades()}
 		if a.Do == plan.Stop {
 			event.Waited = s.waited
 		}
@@ -402,10 +402,7 @@ func (e *execution) act(ctx context.Context, a plan.Action, s *stepRun) (*trace.
 		e.deleted[a.Slot] = deletion{ref, cr.UID, at}
 		return &ref, nil
 	case plan.Restart:
-		if err := e.Process.Stop(ctx); err != nil {
-			return nil, err
-		}
-		return nil, e.Process.Start(ctx)
+		return nil, e.restart(ctx, a.Upgrade)
 	case plan.Kill:
 		return nil, e.Process.Kill(ctx)
 	case plan.Stop:
@@ -434,6 +431,31 @@ func (e *execution) act(ctx context.Context, a plan.Action, s *stepRun) (*trace.
 		return &ref, err
 	}
 	return nil, fmt.Errorf("unknown do %q", a.Do)
+}
+
+// restart installs u's CRDs while the controller runs, then stops the
+// controller and starts it again. When u sets a binary or args, this start
+// and every later one use them, with the --launch-args after u's args.
+func (e *execution) restart(ctx context.Context, u plan.Upgrade) error {
+	var args []string
+	if u.Args != nil {
+		var err error
+		if args, err = expandArgs(u.Args, e.LaunchArgs, e.Vars); err != nil {
+			return fmt.Errorf("args: %w", err)
+		}
+	}
+	if len(u.CRDs) > 0 {
+		if err := e.Cluster.InstallCRDs(ctx, u.CRDs); err != nil {
+			return err
+		}
+	}
+	if err := e.Process.Stop(ctx); err != nil {
+		return err
+	}
+	if u.Binary != "" || u.Args != nil {
+		e.Process.SetCommand(u.Binary, args)
+	}
+	return e.Process.Start(ctx)
 }
 
 func (e *execution) object(a plan.Action) (map[string]any, error) {

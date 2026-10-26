@@ -71,6 +71,11 @@ func (p fakeProcess) Stop(context.Context) error  { p.add("stop"); return nil }
 func (p fakeProcess) Kill(context.Context) error  { p.add("kill"); return nil }
 func (p fakeProcess) Supervise(on bool) error     { p.add("supervise(%v)", on); return nil }
 
+// SetCommand logs args with %#v, which tells nil from empty.
+func (p fakeProcess) SetCommand(path string, args []string) {
+	p.add("setCommand %q %#v", path, args)
+}
+
 type fakeCluster struct {
 	*calls
 	createErr error
@@ -85,7 +90,8 @@ type fakeCluster struct {
 	deleteErr error
 	// replaced makes Delete find that another CR, which it records, took
 	// the name, and so remove nothing.
-	replaced bool
+	replaced   bool
+	installErr error
 }
 
 func (c *fakeCluster) Create(_ context.Context, obj map[string]any) (trace.Ref, error) {
@@ -123,6 +129,11 @@ func (c *fakeCluster) Delete(_ context.Context, ref trace.Ref, propagation plan.
 func (c *fakeCluster) Gone(_ context.Context, ref trace.Ref, uid string) (bool, error) {
 	c.add("%s", strings.TrimSpace("gone "+ref.Name+" "+uid))
 	return c.waitGone == nil && c.goneErr == nil, c.goneErr
+}
+
+func (c *fakeCluster) InstallCRDs(_ context.Context, paths []string) error {
+	c.add("install %q", paths)
+	return c.installErr
 }
 
 func (c *fakeCluster) WaitGone(ctx context.Context, ref trace.Ref, uid string) error {

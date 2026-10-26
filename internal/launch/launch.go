@@ -257,6 +257,21 @@ func signal(p *process, sig syscall.Signal) error {
 	return fmt.Errorf("sending %s to %s: %w", sig, p.cmd.Path, err)
 }
 
+// SetCommand sets the path and args of later starts, restarts included. An
+// empty path or nil args keeps the current one.
+func (b *Binary) SetCommand(path string, args []string) {
+	b.ops.Lock()
+	defer b.ops.Unlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if path != "" {
+		b.o.Path = path
+	}
+	if args != nil {
+		b.o.Args = args
+	}
+}
+
 // Running reports whether a process runs now.
 func (b *Binary) Running() bool {
 	b.mu.Lock()

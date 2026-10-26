@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"maps"
 	"net/url"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -202,7 +203,7 @@ func (k *Kube) start(ctx context.Context, env *system.Env) (system.Endpoints, er
 		grs = append(grs, schema.GroupResource{Group: crd.Spec.Group, Resource: crd.Spec.Names.Plural})
 	}
 	grs = append(grs, ruleKinds(roles, clusterRoles)...)
-	if err := k.observer.watchAll(grs); err != nil {
+	if err := k.observer.watchAll(ctx, grs); err != nil {
 		return system.Endpoints{}, err
 	}
 	// No listener exists yet, so the observer watches only the kinds above.
@@ -551,6 +552,47 @@ func (k *Kube) Subscribe(hear func(trace.Version)) {
 		hear(k.observer.latest[ref])
 	}
 	k.observer.hear = append(k.observer.hear, hear)
+}
+
+// InstallCRDs creates or updates, as admin, the CRDs in paths, files or
+// directories, and waits until discovery serves them. The mapper then
+// rediscovers every kind, and the observer watches the CRDs' kinds. Kinds and
+// StatusKinds stay as Start left them. It installs nothing if a CRD stops
+// serving the version the observer watches. ctx bounds only the wait for the
+// kinds' first lists, since envtest's install takes no context.
+func (k *Kube) InstallCRDs(ctx context.Context, paths []string) error {
+	read := envtest.CRDInstallOptions{Paths: paths, ErrorIfPathMissing: true}
+	if err := envtest.ReadCRDFiles(&read); err != nil {
+		return fmt.Errorf("installing CRDs: %w", err)
+	}
+	if err := k.observer.checkServed(read.CRDs); err != nil {
+		return fmt.Errorf("installing CRDs: %w", err)
+	}
+	crds, err := envtest.InstallCRDs(k.admin, envtest.CRDInstallOptions{CRDs: read.CRDs})
+	if err != nil {
+		return fmt.Errorf("installing CRDs: %w", err)
+	}
+	k.mapper.Reset()
+	var grs []schema.GroupResource
+	for _, crd := range crds {
+		grs = append(grs, schema.GroupResource{Group: crd.Spec.Group, Resource: crd.Spec.Names.Plural})
+	}
+	return k.observer.watchAll(ctx, grs)
+}
+
+// CheckCRDs refuses a path, a file or a directory, that holds no CRD.
+func CheckCRDs(path string) error {
+	if _, err := os.Stat(path); err != nil {
+		return err
+	}
+	o := envtest.CRDInstallOptions{Paths: []string{path}}
+	if err := envtest.ReadCRDFiles(&o); err != nil {
+		return fmt.Errorf("reading CRDs in %s: %w", path, err)
+	}
+	if len(o.CRDs) == 0 {
+		return fmt.Errorf("%s holds no CustomResourceDefinition", path)
+	}
+	return nil
 }
 
 // Kinds names each kind the observer watches from the start, by a ref with

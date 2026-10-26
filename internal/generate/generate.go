@@ -59,7 +59,10 @@ type Generator struct {
 	// adds.
 	track  time.Duration
 	stable time.Duration
-	plans  *rapid.Generator[*plan.Plan]
+	// upgrades are the config's launch.upgrades, which each plan applies
+	// in order.
+	upgrades []plan.Upgrade
+	plans    *rapid.Generator[*plan.Plan]
 }
 
 // crKind is what the generator draws the CRs of one listed kind from.
@@ -92,7 +95,7 @@ func New(cfg *config.Config) (*Generator, error) {
 }
 
 func build(cfg *config.Config) (*Generator, error) {
-	g := &Generator{listed: cfg.ListedKinds(), stable: cfg.Timeouts.Stable, granted: map[gvk.GroupResource][]string{}, modelFakes: map[string]bool{}, readOnly: map[string]bool{}}
+	g := &Generator{listed: cfg.ListedKinds(), stable: cfg.Timeouts.Stable, upgrades: cfg.Launch.Upgrades, granted: map[gvk.GroupResource][]string{}, modelFakes: map[string]bool{}, readOnly: map[string]bool{}}
 	for i, p := range cfg.Primaries {
 		k, err := newCRKind(cfg.CRDs, p)
 		if err != nil {
@@ -399,7 +402,24 @@ func (g *Generator) plan(t *rapid.T) *plan.Plan {
 	for range 2 + uniform(t, 6, "steps") {
 		p.Steps = append(p.Steps, g.step(t, at))
 	}
+	g.upgrade(t, p)
 	return p
+}
+
+// upgrade appends one restart per config upgrade, in order. Each ends a step
+// drawn from the previous upgrade's step on, 0 to stable after the step's
+// last action. These draws come after all others, so upgrades only add
+// restarts to a seed's plan.
+func (g *Generator) upgrade(t *rapid.T, p *plan.Plan) {
+	from := 0
+	for _, u := range g.upgrades {
+		from += uniform(t, len(p.Steps)-from, "upgrade step")
+		step := &p.Steps[from]
+		last := step.Actions[len(step.Actions)-1].At
+		delay := plan.Duration(uniform(t, 11, "upgrade delay")) * plan.Duration(g.stable) / 10
+		u.Args, u.CRDs = slices.Clone(u.Args), slices.Clone(u.CRDs)
+		step.Actions = append(step.Actions, plan.Action{At: last + delay, Do: plan.Restart, Upgrade: u})
+	}
 }
 
 // step draws one step: a single restart, kill or damage, or a fault with

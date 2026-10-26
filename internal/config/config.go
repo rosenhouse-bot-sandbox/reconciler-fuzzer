@@ -21,6 +21,7 @@ import (
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/yaml"
 
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 )
 
@@ -55,8 +56,8 @@ type Values struct {
 	Mutate []string
 }
 
-// Launch says how to run the controller. Args and Env may hold
-// ${systems.<name>.<key>}.
+// Launch says how to run the controller. Args, Env and each upgrade's args
+// may hold ${systems.<name>.<key>}.
 type Launch struct {
 	Binary string
 	Args   []string
@@ -66,6 +67,9 @@ type Launch struct {
 	// RBAC holds Role and ClusterRole manifests that the controller's
 	// identity is bound to.
 	RBAC []string
+	// Upgrades are the later versions that generated plans restart into, in
+	// order.
+	Upgrades []plan.Upgrade
 }
 
 // Primary describes one CR kind the controller serves, which the harness
@@ -261,10 +265,11 @@ var defaultTimeouts = Timeouts{Settle: 30 * time.Second, Stable: 3 * time.Second
 // declaration mirrors the YAML file.
 type declaration struct {
 	Launch struct {
-		Binary string            `json:"binary"`
-		Args   []string          `json:"args"`
-		Env    map[string]string `json:"env"`
-		RBAC   []string          `json:"rbac"`
+		Binary   string            `json:"binary"`
+		Args     []string          `json:"args"`
+		Env      map[string]string `json:"env"`
+		RBAC     []string          `json:"rbac"`
+		Upgrades []plan.Upgrade    `json:"upgrades"`
 	} `json:"launch"`
 	CRDs      []string         `json:"crds"`
 	Primary   *declaredPrimary `json:"primary"`
@@ -362,8 +367,8 @@ type declaredFinalizer struct {
 }
 
 // Load reads the file strictly: an unknown key is an error that names its
-// line. It compiles each entry's expressions, checks that every path exists
-// and refuses a kube fixture of a listed kind.
+// line. It compiles each entry's expressions, checks that every path but a
+// binary exists and refuses a kube fixture of a listed kind.
 func Load(path string) (*Config, error) {
 	c, err := load(path)
 	if err != nil {
@@ -403,6 +408,15 @@ func load(path string) (*Config, error) {
 	c.Launch.Binary = resolve(dir, d.Launch.Binary)
 	if c.Launch.RBAC, err = existing(dir, "launch.rbac", d.Launch.RBAC); err != nil {
 		return nil, err
+	}
+	for i, u := range d.Launch.Upgrades {
+		if u.Binary != "" {
+			u.Binary = resolve(dir, u.Binary)
+		}
+		if u.CRDs, err = existing(dir, fmt.Sprintf("launch.upgrades[%d].crds", i), u.CRDs); err != nil {
+			return nil, err
+		}
+		c.Launch.Upgrades = append(c.Launch.Upgrades, u)
 	}
 	if c.CRDs, err = existing(dir, "crds", d.CRDs); err != nil {
 		return nil, err
@@ -616,9 +630,39 @@ func (c *Config) ListedKinds() []schema.GroupKind {
 // a token also holds token.
 var launchVars = map[string][]string{"kube": {"kubeconfig", "namespace", "url"}, "fake": {"url"}}
 
-// checkLaunchVars refuses a launch arg or env value whose ${key} names no
-// system or no key of one.
+// checkLaunchVars refuses a launch arg, env value or upgrade arg whose
+// ${key} names no system or no key of one.
 func (c *Config) checkLaunchVars() error {
+	if err := c.CheckArgs(c.Launch.Args); err != nil {
+		return fmt.Errorf("launch %w", err)
+	}
+	for name, value := range c.Launch.Env {
+		if err := c.checkVars("launch env "+name, value); err != nil {
+			return err
+		}
+	}
+	for i, u := range c.Launch.Upgrades {
+		if err := c.CheckArgs(u.Args); err != nil {
+			return fmt.Errorf("launch.upgrades[%d].%w", i, err)
+		}
+	}
+	return nil
+}
+
+// CheckArgs reports the first of args that holds a ${key} the config's
+// systems lack, as in "args[2]: unknown key x".
+func (c *Config) CheckArgs(args []string) error {
+	for i, arg := range args {
+		if err := c.checkVars(fmt.Sprintf("args[%d]", i), arg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkVars refuses a ${key} in value that names no system or no key of
+// one, and a ${ with no closing }. where names value in the error.
+func (c *Config) checkVars(where, value string) error {
 	vars := map[string]string{}
 	for _, key := range launchVars["kube"] {
 		vars["systems.kube."+key] = ""
@@ -631,47 +675,38 @@ func (c *Config) checkLaunchVars() error {
 			vars["systems."+f.Name+".token"] = ""
 		}
 	}
-	check := func(where, value string) error {
-		for _, key := range keys(value) {
-			if _, known := vars[key]; known {
-				continue
-			}
-			system, rest, ok := strings.Cut(strings.TrimPrefix(key, "systems."), ".")
-			switch {
-			case !strings.HasPrefix(key, "systems.") || !ok:
-				return fmt.Errorf("%s: unknown key %s", where, key)
-			case system != "kube" && !slices.ContainsFunc(c.Fakes(), func(f System) bool { return f.Name == system }):
-				return fmt.Errorf("%s: no system %s", where, system)
-			default:
-				return fmt.Errorf("%s: system %s has no %s", where, system, rest)
-			}
+	found, closed := keys(value)
+	for _, key := range found {
+		if _, known := vars[key]; known {
+			continue
 		}
-		return nil
-	}
-	for i, arg := range c.Launch.Args {
-		if err := check(fmt.Sprintf("launch args[%d]", i), arg); err != nil {
-			return err
+		system, rest, ok := strings.Cut(strings.TrimPrefix(key, "systems."), ".")
+		switch {
+		case !strings.HasPrefix(key, "systems.") || !ok:
+			return fmt.Errorf("%s: unknown key %s", where, key)
+		case system != "kube" && !slices.ContainsFunc(c.Fakes(), func(f System) bool { return f.Name == system }):
+			return fmt.Errorf("%s: no system %s", where, system)
+		default:
+			return fmt.Errorf("%s: system %s has no %s", where, system, rest)
 		}
 	}
-	for name, value := range c.Launch.Env {
-		if err := check("launch env "+name, value); err != nil {
-			return err
-		}
+	if !closed {
+		return fmt.Errorf("%s: ${ has no closing }", where)
 	}
 	return nil
 }
 
-// keys returns each ${key} in s.
-func keys(s string) []string {
+// keys returns each ${key} in s, and false if a ${ has no closing }.
+func keys(s string) ([]string, bool) {
 	var found []string
 	for {
 		_, rest, ok := strings.Cut(s, "${")
 		if !ok {
-			return found
+			return found, true
 		}
 		key, after, closed := strings.Cut(rest, "}")
 		if !closed {
-			return found
+			return found, false
 		}
 		found, s = append(found, key), after
 	}

@@ -37,8 +37,8 @@ func NewScheme() (*runtime.Scheme, error) {
 	return scheme, nil
 }
 
-// Setup indexes the references and adds the three reconcilers to m.
-func Setup(m ctrl.Manager, bug Bug) error {
+// Setup indexes the references and adds the three reconcilers of version to m.
+func Setup(m ctrl.Manager, bug Bug, version int) error {
 	ctx := context.Background()
 	indexer := m.GetFieldIndexer()
 	if err := indexer.IndexField(ctx, &fleetv1.Database{}, clusterRefField, clusterRef); err != nil {
@@ -47,7 +47,7 @@ func Setup(m ctrl.Manager, bug Bug) error {
 	if err := indexer.IndexField(ctx, &fleetv1.User{}, databaseRefField, databaseRef); err != nil {
 		return fmt.Errorf("indexing Users: %w", err)
 	}
-	base := reconciler{Client: m.GetClient(), APIReader: m.GetAPIReader(), Scheme: m.GetScheme(), Bug: bug}
+	base := reconciler{Client: m.GetClient(), APIReader: m.GetAPIReader(), Scheme: m.GetScheme(), Bug: bug, Version: version}
 	for _, r := range []interface{ SetupWithManager(ctrl.Manager) error }{
 		&ClusterReconciler{base}, &DatabaseReconciler{base}, &UserReconciler{base},
 	} {
@@ -66,6 +66,9 @@ type reconciler struct {
 	APIReader client.Reader
 	Scheme    *runtime.Scheme
 	Bug       Bug
+	// Version is 1 or 2. Version 2 renames the Cluster finalizer and the
+	// phase Provisioning, and labels each Volume with its version.
+	Version int
 }
 
 // unserved says whether a list failed because the server no longer serves

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -44,7 +45,9 @@ const (
 	Update Do = "update"
 	// Delete deletes the slot's CR.
 	Delete Do = "delete"
-	// Restart stops the controller with SIGTERM and starts it again.
+	// Restart installs the Upgrade's CRDs, stops the controller with SIGTERM
+	// and starts it again. The binary and args the Upgrade sets replace the
+	// current ones for every later start.
 	Restart Do = "restart"
 	// Kill sends SIGKILL. The controller stays down until the fault period
 	// ends, or until a create's or a stop's wait for a deleted CR restarts
@@ -77,6 +80,8 @@ type Action struct {
 	// Propagation is a delete's propagation policy. Empty is the server's
 	// default.
 	Propagation Propagation `json:"propagation,omitempty"`
+	// Upgrade holds a restart's new binary, args and crds.
+	Upgrade
 }
 
 // Propagation is a delete's propagation policy.
@@ -177,7 +182,8 @@ func (d *Duration) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// Load reads plan.json strictly and validates it.
+// Load reads plan.json strictly and validates it. It resolves each
+// restart's binary and crds against the file's directory.
 func Load(path string) (*Plan, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -195,7 +201,33 @@ func Load(path string) (*Plan, error) {
 	if err := p.Validate(); err != nil {
 		return nil, fmt.Errorf("loading plan %s: %w", path, err)
 	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("loading plan %s: %w", path, err)
+	}
+	p.resolve(filepath.Dir(abs))
 	return &p, nil
+}
+
+// resolve joins each relative binary and crds path to dir.
+func (p *Plan) resolve(dir string) {
+	join := func(path string) string {
+		if filepath.IsAbs(path) {
+			return path
+		}
+		return filepath.Join(dir, path)
+	}
+	for i := range p.Steps {
+		for j := range p.Steps[i].Actions {
+			u := &p.Steps[i].Actions[j].Upgrade
+			if u.Binary != "" {
+				u.Binary = join(u.Binary)
+			}
+			for k, path := range u.CRDs {
+				u.CRDs[k] = join(path)
+			}
+		}
+	}
 }
 
 // Save writes p as indented JSON.
@@ -269,15 +301,25 @@ func (a Action) validate(names map[string]string) error {
 	if a.At < 0 {
 		return errors.New("at is negative")
 	}
-	if a.Target != nil && a.Do != Damage && a.Do != ChangeFixture {
-		return fmt.Errorf("%s takes no target", a.Do)
+	if err := a.validateDo(names); err != nil {
+		return err
 	}
 	switch {
+	case a.Target != nil && a.Do != Damage && a.Do != ChangeFixture:
+		return fmt.Errorf("%s takes no target", a.Do)
+	case a.Upgrades() && a.Do != Restart:
+		return fmt.Errorf("%s takes no binary, args or crds", a.Do)
 	case a.Propagation != "" && a.Do != Delete:
 		return fmt.Errorf("%s takes no propagation", a.Do)
 	case a.Propagation != "" && a.Propagation != Foreground:
 		return fmt.Errorf("delete propagation %q is not %s", a.Propagation, Foreground)
 	}
+	return nil
+}
+
+// validateDo refuses an unknown Do, checks what a's Do needs, and records in
+// names the slots that creates fill and deletes empty.
+func (a Action) validateDo(names map[string]string) error {
 	switch a.Do {
 	case Create:
 		if a.Slot == "" {

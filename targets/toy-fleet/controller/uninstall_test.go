@@ -113,6 +113,18 @@ func TestShutdownStripsDeletingCRsFinalizersOnlyUnderB150(t *testing.T) {
 	}
 }
 
+func TestB150StripsTheVersion2Finalizer(t *testing.T) {
+	f := newFleet(t, clusterObj()).as(2, B150)
+	f.settle(f.clusters, "cluster")
+	f.delete(f.cluster())
+	if err := Shutdown(t.Context(), f.c, ns, B150); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.get("cluster", &fleetv1.Cluster{}); !apierrors.IsNotFound(err) {
+		t.Errorf("After shutdown, the deleted Cluster gives %v; want gone.", err)
+	}
+}
+
 func TestB151ReleasesTheClusterBeforeItsVolumes(t *testing.T) {
 	f := deletedReadyCluster(t, B151)
 	if volumes := f.listVolumes(); len(volumes) != 2 || !slices.Contains(volumes[0].Finalizers, VolumeFinalizer) {

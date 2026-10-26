@@ -136,7 +136,10 @@ Fill each key from the project:
   from the requests they grant. For another namespace, use a ClusterRole, or a Role with
   `metadata.namespace`.
 - `crds`: each listed kind's CRD, and the CRD of every other kind the controller watches or
-  creates.
+  creates. Put a CRD that a plan deletes, as an uninstall may, under `fixtures` instead, and
+  never under both. Its kind must not be listed.
+- `launch.upgrades`: leave it out unless the user wants upgrades tested. Each entry names a
+  later version's `binary`, `args` or `crds`, and each generated plan restarts into it once.
 - `primary` describes one kind. For several, write `primaries`, a list of such entries, and
   move each kind's `overlay`, `distinct` and `mutate` into its entry's `values`.
 - An entry's `ready`: CEL over the CR, true only once the controller acted on the current spec.
@@ -285,7 +288,11 @@ Vault fixture, add a step that writes a new version, `{"do": "changeFixture", "t
 {"system": "vault", "resource": "secret", "name": "token"}, "patch": {"value": "new"}}`. A step
 that deletes and creates slot `a` with `"faults": [{"match": {"resource": "secrets"},
 "holdWatch": true}]` tests how the controller acts on a stale cache. A last step
-`{"actions": [{"do": "delete", "slot": "a"}, {"do": "stop"}]}` tests an uninstall. A report
+`{"actions": [{"do": "delete", "slot": "a"}, {"do": "stop"}]}` tests an uninstall. To test an
+upgrade, build the previous release to `launch.binary` and the new one beside it. Point `crds`
+at the previous release's CRDs, and give `launch.rbac` the rules both versions need. Then add a
+step `{"actions": [{"do": "restart", "binary": "<new build>", "crds": ["<new CRDs>"]}]}`. The
+restart installs the CRDs first, and its paths resolve against the plan's directory. A report
 note that the `holdWatch` held no watch means the controller watches no such kind, or the match
 is wrong.
 A note that a `stuck` fault held no object means no object matched, or the API server refused
@@ -318,6 +325,8 @@ controller:
 | Clean | The controller keeps resources by design. | Set the entry's `retain`. |
 | Unique, on a fake | The CR owns several resources in one collection by design. | Set the system's `role`. |
 | Converge, with a CR that halted after a create of unknown outcome | The controller stops on purpose and waits for a person. | Set the entry's `halted` to CEL over its halted condition. |
+| Converge after an upgrade, with `forbidden` errors in `controller.log` | `launch.rbac` lacks a rule the new version needs. | Add the rule to `launch.rbac`. |
+| Restore after an upgrade, on a resource the new version adds, deletes, renames or gives another owner, or on a field the new CRDs default | Nothing: `<module>/README.md` lists this limit under Upgrading. | Ask the user whether the change is intended. If so, report the finding as that limit, not as a bug. |
 
 Every other finding is a bug in the controller. Never hide one to make a check pass, and ask
 the user when in doubt. On a finding, stop and report it (step 11).
