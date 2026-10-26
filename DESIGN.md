@@ -200,11 +200,10 @@ slots' CRs clash only with equal group, kind, namespace and name. `run.Run`
 refuses a plan that creates an object of an unlisted kind (`ValidateKinds`).
 
 **Upgrades.** A `restart` may take `binary`, `args` and `crds`, whose paths
-`plan.Load` resolves against the plan's directory. It installs the `crds` while
-the old controller runs, and a failed install is a harness error. Then `binary`
-and `args`, when set, replace the current ones, and `--launch-arg`s follow the
-args. Every later start keeps them. Env and RBAC stay fixed. `run.Run` refuses
-a missing path or an unknown `${key}` before it starts.
+resolve against the plan's directory. It installs the `crds` while the old
+controller runs; a failed install is a harness error. A set `binary` or `args`
+replaces the current one for every later start, with `--launch-arg`s after the
+args. Env and RBAC stay fixed. `run.Run` checks the paths and `${key}`s first.
 
 ## 9. Step runner
 
@@ -468,8 +467,9 @@ User a Database. Its bugs start at B100. `config.yaml` lists all three kinds.
 The generated test fuzzes `cluster/`, which lists Clusters alone, `database/`,
 which lists Databases on a fixture Cluster, `protect/`, whose Volume model
 holds each Volume's deletion with its finalizer, and `upgrade/`, which is
-`cluster/` with an upgrade to `--version=2`. `uninstall/` makes the Database
-CRD a fixture, which a plan may delete.
+`cluster/` with an upgrade to `--version=2`. Only gate rows run
+`upgrade/properties/`, which adds an `always` property, and `uninstall/`, whose
+Database CRD is a fixture that a plan may delete.
 
 Each config's `plans/` holds its gated bugs' and B0's plans. A toy's
 `gate_envtest_test.go` runs `gate_test.go`'s rows, and its `bugmatrix_test.go`

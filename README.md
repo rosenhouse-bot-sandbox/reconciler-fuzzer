@@ -206,9 +206,11 @@ models:
   Gadget ready. `required` (the default)
   also fails one with no Gadget. `track: d` fails a CR that stays ready longer than `d` after
   the controller saw its Gadget not ready.
-- Generated plans then draw two model faults. `stuck` keeps Gadgets not ready, and `slowDelete`
-  holds their deletion. Each ends with the fault period. A create that waits until a deleted CR
-  no longer exists ends them once `period` has passed. A plan step writes one as
+- Generated plans then draw two model faults. `stuck` keeps Gadgets not ready. `slowDelete`
+  holds their deletion with the finalizer `reconciler-fuzzer.dev/slow-delete`, which the model
+  keeps on each Gadget only while the fault lasts. Each ends with the fault period. A create
+  that waits until a deleted CR no longer exists ends them once `period` has passed. A plan step
+  writes one as
   `{"match": {"group": "example.com", "resource": "gadgets"}, "stuck": true}`.
 - `finalizer: {name: example.com/cleanup, after: 500ms}` plays a controller, such as a storage
   controller, that holds each Gadget's deletion with its own finalizer. The model adds the
@@ -361,6 +363,54 @@ cert-manager seed in 11 holds Secrets this way, so a 20-seed `make hunt-cert-man
 but not always, finds #63. A report notes a `holdWatch` while the controller had no watch of
 its kind, such as one with a misspelt resource.
 
+### Upgrading
+
+A `restart` stops the controller with SIGTERM and starts it again with the same `launch.binary`,
+args and env. The harness installs `crds:` before step 0, and the CRDs stay fixed unless a
+restart installs new ones. A restart that names `binary`, `args` or `crds` tests an upgrade:
+
+```json
+{"actions": [{"do": "restart", "args": ["--version=2"], "crds": ["../v2/crds/"]}]}
+```
+
+- It installs `crds` first, while the old controller still runs.
+- `args` replace `launch.args`, and `[]` drops them. The `--launch-arg`s still come after the
+  new args, and `${systems.<name>.<key>}` expands as in `launch.args`.
+- Every later start keeps the new `binary` and `args`: restarts, crash restarts, the start after
+  a `kill`, and the appended restart. Env and RBAC do not change.
+- Paths resolve against the plan's directory. `run` refuses a missing path or an unknown key
+  before it starts.
+
+`launch.upgrades` lists later versions with the same keys:
+
+```yaml
+launch:
+  upgrades:
+    - {args: [--bug=0, --version=2], crds: [v2/crds/]}
+```
+
+Each generated plan then restarts into each version once, in order, at the end of a random step.
+That step may hold a fault or come before a delete.
+
+The checks judge an upgrade's step as they judge any restart's. So Restore fails a version that replaces or
+rewrites the old version's resources in a step that changes no CR.
+[targets/toy-fleet/upgrade](targets/toy-fleet/upgrade/config.yaml) upgrades toy-fleet to
+`--version=2`. Its bugs B140 to B142 mishandle the Clusters that version 1 made.
+
+Upgrades have these limits:
+
+- No conversion webhook runs, and the two versions never run at once.
+- For about a second after an install, the harness's watches still decode objects with the old
+  schema.
+- The harness watches each kind at the API version it first used. A CRD that stops serving that
+  version ends the kind's record.
+- A property sees a kind that only the new CRDs serve as missing until an object of it exists.
+- A default that the new CRDs add to a kind the controller makes shows as a Restore change once
+  the controller writes such an object.
+- A version that renames its resources fails Restore, even when it deletes the old ones.
+- A plan that `run --seed`, `hunt` or `shrink` writes holds each upgrade's paths as absolute
+  paths. Make them relative before you commit the plan.
+
 ### Uninstalling
 
 A `stop` action lets a plan test an uninstall. It waits until the CRs the plan deleted are gone,
@@ -376,6 +426,23 @@ runner appends no steps. Clean then judges the plan's last step, but spares what
 No controller is left to clean up after a CR that the plan deletes after the stop, so Clean
 counts that CR as live. A CR that the stop did not wait for, such as that one, may keep its
 finalizers, and gets a note.
+
+An uninstall may delete a CRD before the stop. List that CRD under `fixtures:`, not `crds:`. Its
+kind must be one the config does not list. `changeFixture` without a `patch` deletes it:
+
+```json
+{"actions": [{"do": "changeFixture", "target": {"group": "apiextensions.k8s.io",
+  "resource": "customresourcedefinitions", "name": "databases.example.com"}}]}
+```
+
+- A CRD under both `crds:` and `fixtures:` fails the run with `already exists`.
+- A listed kind's CRD must stay in `crds:`. As a fixture alone, the run fails with `no matches for
+  kind`, and generation with `the CRDs describe no <kind>`.
+- No target matches a CRD that `crds:` or a restart installed. Such an action only gets the note
+  `no instance matches`.
+
+[targets/toy-fleet/uninstall](targets/toy-fleet/uninstall/config.yaml) makes the Database CRD a
+fixture this way.
 
 ### Examples
 

@@ -45,8 +45,9 @@ const (
 	Update Do = "update"
 	// Delete deletes the slot's CR.
 	Delete Do = "delete"
-	// Restart applies the Upgrade's CRDs, stops the controller with SIGTERM,
-	// and starts it again with the Upgrade's binary and args.
+	// Restart installs the Upgrade's CRDs, stops the controller with SIGTERM
+	// and starts it again. The binary and args the Upgrade sets replace the
+	// current ones for every later start.
 	Restart Do = "restart"
 	// Kill sends SIGKILL. The controller stays down until the fault period
 	// ends, or until a create's or a stop's wait for a deleted CR restarts

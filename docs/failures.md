@@ -58,6 +58,12 @@ recorded a live CR with that name, the rest of the note names its
 The run then skips to the `delete all` and `restart` steps that the runner
 appends.
 
+`Step 1, action 0 (changeFixture) failed ...: no instance matches` means
+the action's target matched no live object. A `damage` matches only
+objects the controller created, and a `changeFixture` only objects the
+harness created, such as fixtures. Neither matches a CRD that `crds:` or a
+restart installed.
+
 `cloud: unmapped request POST /v2/buckets/b-1/acl` means the system's API
 map could not place a controller request on a resource. No check judges
 that request, so a leak or duplicate it causes goes unseen. The `crud` map
@@ -222,7 +228,11 @@ names its cause. A run that started leaves its partial trace in `--out`. Common 
 | `starting envtest: ... etcd: no such file or directory` | Set `KUBEBUILDER_ASSETS` to `$(make -s assets-path)`. |
 | `starting <binary>: ... no such file or directory` | Build the controller to `launch.binary`. |
 | `creating fixture ...` | Fix the fixture, or install the CRD it needs under `crds`. |
-| `launch args: ...` or `launch env <name>: ...` | Use only `${systems.kube.kubeconfig}`, `namespace` and `url`, and a fake's `${systems.<name>.url}`. |
+| `creating fixture CustomResourceDefinition ...: ... already exists` | List the CRD under `crds` or under `fixtures`, not both. |
+| `mapping <group>/<version>, Kind=<kind>: no matches for kind ...` | Install the listed kind's CRD under `crds`. |
+| `steps[i].actions[j]: stat <path>: no such file or directory` | Fix the restart's `binary` or `crds`. Paths resolve against the plan's directory. |
+| `installing CRDs: ...` | Fix the CRDs that a restart's `crds` names. |
+| `launch args[i]: ...`, `launch env <name>: ...`, `launch.upgrades[i].args[k]: ...` or `steps[i].actions[j].args[k]: ...` | Use only `${systems.kube.kubeconfig}`, `namespace` and `url`, and a fake's `${systems.<name>.url}`. |
 | `fake <name> exited ...` | Read `<out>/<name>.log`. Fix the `systems[].process` command or the fake's own config. |
 | `create of slot "<s>" makes a <kind>, which primaries does not list` | List the kind under `primaries`, or make the object a fixture. |
 | `create of slot "<s>" makes an object without apiVersion or kind` | Give the create's `object` both. |

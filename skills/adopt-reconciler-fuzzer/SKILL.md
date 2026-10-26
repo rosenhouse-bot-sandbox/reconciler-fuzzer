@@ -136,7 +136,10 @@ Fill each key from the project:
   from the requests they grant. For another namespace, use a ClusterRole, or a Role with
   `metadata.namespace`.
 - `crds`: each listed kind's CRD, and the CRD of every other kind the controller watches or
-  creates.
+  creates. A CRD that a plan deletes, as an uninstall may, goes under `fixtures` instead, and
+  never under both. Its kind must not be listed.
+- `launch.upgrades`: leave it out unless the user wants upgrades tested. Each entry names a
+  later version's `binary`, `args` or `crds`, and each generated plan restarts into it once.
 - `primary` describes one kind. For several, write `primaries`, a list of such entries, and
   move each kind's `overlay`, `distinct` and `mutate` into its entry's `values`.
 - An entry's `ready`: CEL over the CR, true only once the controller acted on the current spec.
@@ -285,7 +288,10 @@ Vault fixture, add a step that writes a new version, `{"do": "changeFixture", "t
 {"system": "vault", "resource": "secret", "name": "token"}, "patch": {"value": "new"}}`. A step
 that deletes and creates slot `a` with `"faults": [{"match": {"resource": "secrets"},
 "holdWatch": true}]` tests how the controller acts on a stale cache. A last step
-`{"actions": [{"do": "delete", "slot": "a"}, {"do": "stop"}]}` tests an uninstall. A report
+`{"actions": [{"do": "delete", "slot": "a"}, {"do": "stop"}]}` tests an uninstall. To test an
+upgrade, build the previous release to `launch.binary` and the new one beside it, and add a step
+`{"actions": [{"do": "restart", "binary": "<new build>", "crds": ["<new CRDs>"]}]}`. The
+restart installs the CRDs first, and its paths resolve against the plan's directory. A report
 note that the `holdWatch` held no watch means the controller watches no such kind, or the match
 is wrong.
 A note that a `stuck` fault held no object means no object matched, or the API server refused
