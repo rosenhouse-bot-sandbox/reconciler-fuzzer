@@ -61,10 +61,10 @@ Only `check` decides what is a bug.
 
 `system.System` has `Name`, `Start`, `Snapshot`, `Pending` and `Fault`. Its
 `Endpoints` hold the controller and harness listeners and `Vars`, which expand
-as `${systems.<name>.<key>}` in launch args and env, and kube fixtures. Request
-faults go to a system's controller listener, model faults to the first stage
-model or fake service that `Takes` them, and damage to the system the target
-names. Checks read `work` events, never `Pending`.
+as `${systems.<name>.<key>}` in launch and restart args, env and kube fixtures.
+Request faults go to a system's controller listener, model faults to the first
+stage model or fake service that `Takes` them, and damage to the system the
+target names. Checks read `work` events, never `Pending`.
 
 ## 4. Trace
 
@@ -144,7 +144,7 @@ kind `launch.rbac` names that is not ignored (§10). These are the run event's
 `kinds`. It then watches any kind a listener records a call on, and records one
 `version` per (ref, resourceVersion). `InstallCRDs` creates or updates CRDs as
 admin, waits until discovery serves them, and watches their kinds, which the
-run event omits. The observer sees a new schema about a second later.
+run event omits. A served CRD's new schema applies about a second later.
 
 ## 7. Models and fake services
 
@@ -200,11 +200,11 @@ slots' CRs clash only with equal group, kind, namespace and name. `run.Run`
 refuses a plan that creates an object of an unlisted kind (`ValidateKinds`).
 
 **Upgrades.** A `restart` may take `binary`, `args` and `crds`, whose paths
-`plan.Load` resolves against the plan's directory. It applies the `crds` while
-the old controller runs. Then `binary` and `args`, when set, replace the
-launch's, and `--launch-arg`s still follow the args. Every later start keeps
-them, kills and the appended restart included; env and RBAC stay fixed.
-`run.Run` refuses a missing path or an unknown `${key}` before it starts.
+`plan.Load` resolves against the plan's directory. It installs the `crds` while
+the old controller runs, and a failed install is a harness error. Then `binary`
+and `args`, when set, replace the current ones, and `--launch-arg`s follow the
+args. Every later start keeps them. Env and RBAC stay fixed. `run.Run` refuses
+a missing path or an unknown `${key}` before it starts.
 
 ## 9. Step runner
 
@@ -421,23 +421,22 @@ in-process, rejects invalid ones. `Plan(seed)` draws 3 to 8 steps of 1 to 4
 actions and at most one fault each. A create draws its kind uniformly from
 `primaries`, and each CR takes its kind's `values`. Step 0 creates slot `a`.
 About 30% of steps hold one `restart`, `kill` or `damage`, so Restore has steps
-to judge. A kube fault draws its request from what `launch.rbac` grants,
-creates weighted most (§17, entry 20), holds a kind it lets the controller
-watch, with the traffic `holdTraffic` documents, or, with `models:`, is a
-model fault. With fakes, half of the fault draws and of the `damage` draws name
+to judge. A kube fault is a request fault on what `launch.rbac` grants,
+creates weighted most (§17, entry 20), a `holdWatch` of a kind it lets the
+controller watch, with the traffic `holdTraffic` documents, or, with `models:`,
+a model fault. With fakes, half of the fault draws and of the `damage` draws name
 a fake: a request fault by verb alone, or a model fault on a `crud` fake, and a
 target by system alone. A read-only fake takes no damage and only read faults.
-`changeFixture` draws kube and system fixtures alike.
-`damage` only deletes. `generate.go` documents the weights, bursts and fault
-periods.
+`changeFixture` draws kube and system fixtures alike. `damage` only deletes.
+`generate.go` documents the weights, bursts and fault periods.
 
 **Hunt.** `hunt.Hunt` runs each seed, keeps runs with a new signature, replays
 each 5 times and shrinks it (`shrink.go`), trying at most 16 candidates.
 `summary.md` lists the findings with seed, reproduction rate and shrunk plan.
 
-**Upgrades.** A plan applies each `launch.upgrades` entry once, in order: a
-restart ending a step drawn from the previous upgrade's step on, 0 to `stable`
-after the step's last action. Plans of a config without upgrades are as before.
+**Upgrades.** Each `launch.upgrades` entry becomes one restart, in order, that
+ends a step drawn from the previous upgrade's step on, 0 to `stable` after its
+last action. These draws come last, so they only add restarts to a seed's plan.
 
 ## 15. Commands
 
@@ -463,9 +462,10 @@ owns one bucket in the `crudfake` system `cloud`; its bugs start at B30, and
 Cluster owns modelled third-party Volumes, a Database names a Cluster, and a
 User a Database. Its bugs start at B100. `config.yaml` lists all three kinds.
 The generated test fuzzes `cluster/`, which lists Clusters alone, `database/`,
-which lists Databases on a fixture Cluster, and `protect/`, whose Volume model
-holds each Volume's deletion with its finalizer. `uninstall/` makes the
-Database CRD a fixture, which a plan may delete.
+which lists Databases on a fixture Cluster, `protect/`, whose Volume model
+holds each Volume's deletion with its finalizer, and `upgrade/`, which is
+`cluster/` with an upgrade to `--version=2`. `uninstall/` makes the Database
+CRD a fixture, which a plan may delete.
 
 Each config's `plans/` holds its gated bugs' and B0's plans. A toy's
 `gate_envtest_test.go` runs `gate_test.go`'s rows, and its `bugmatrix_test.go`

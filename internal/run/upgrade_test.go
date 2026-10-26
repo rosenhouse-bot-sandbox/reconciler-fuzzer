@@ -52,8 +52,8 @@ func TestARestartKeepsWhatItsUpgradeLeavesUnset(t *testing.T) {
 		want       string
 	}{
 		{"a binary keeps the args", plan.Upgrade{Binary: "/v2"}, []string{"--bug=1"}, `setCommand "/v2" []string(nil)`},
-		{"empty args keep the launch args", plan.Upgrade{Args: []string{}}, []string{"--bug=1"}, `setCommand "" []string{"--bug=1"}`},
-		{"empty args without launch args", plan.Upgrade{Args: []string{}}, nil, `setCommand "" []string{}`},
+		{"empty args keep only --launch-args", plan.Upgrade{Args: []string{}}, []string{"--bug=1"}, `setCommand "" []string{"--bug=1"}`},
+		{"empty args and no --launch-args", plan.Upgrade{Args: []string{}}, nil, `setCommand "" []string{}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			got, err := upgradeCalls(t, upgradeFixture(t, c.launchArgs...), c.upgrade)
