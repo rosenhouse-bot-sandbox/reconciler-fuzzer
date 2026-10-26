@@ -34,7 +34,7 @@ type Generator struct {
 	// other kind.
 	listed []gvk.GroupKind
 	// resources are the listed kinds first, then the fixture and RBAC
-	// resources, which damage targets.
+	// resources.
 	resources []gvk.GroupResource
 	// granted holds the verbs the RBAC grants on each resource and
 	// subresource, such as "widgets/status".
@@ -44,10 +44,17 @@ type Generator struct {
 	fixtures []fixture
 	// watchable are the resources the RBAC lets the controller watch,
 	// which holdWatch faults hold. A kind appears once per unit of its
-	// holdWeight.
+	// kindWeight.
 	watchable []gvk.GroupResource
-	// owned are the kube kinds that the entries' owns name.
-	owned []gvk.GroupResource
+	// favors holds the kinds the controller deals with, which faults and
+	// damage favor: the listed kinds, the model kinds and the kube kinds the
+	// entries' owns name. Without model or owns kinds, the core kinds the
+	// RBAC lets the controller create stand in for those.
+	favors map[gvk.GroupResource]bool
+	// creatable are the unlisted resources the RBAC lets the controller
+	// create, which damage targets. A damage deletes only what the
+	// controller made.
+	creatable []gvk.GroupResource
 	// models are the resources of the model kinds, which model faults match.
 	models []gvk.GroupResource
 	// fakes are the fake services' names. modelFakes take model faults,
@@ -93,6 +100,7 @@ func New(cfg *config.Config) (*Generator, error) {
 
 func build(cfg *config.Config) (*Generator, error) {
 	g := &Generator{listed: cfg.ListedKinds(), stable: cfg.Timeouts.Stable, granted: map[gvk.GroupResource][]string{}, modelFakes: map[string]bool{}, readOnly: map[string]bool{}}
+	var owned []gvk.GroupResource
 	for i, p := range cfg.Primaries {
 		k, err := newCRKind(cfg.CRDs, p)
 		if err != nil {
@@ -106,7 +114,7 @@ func build(cfg *config.Config) (*Generator, error) {
 		for _, o := range p.Owns {
 			if o.System == "" {
 				gvr, _ := meta.UnsafeGuessKindToResource(o.Kind)
-				g.owned = append(g.owned, gvr.GroupResource())
+				owned = append(owned, gvr.GroupResource())
 			}
 		}
 	}
@@ -116,16 +124,17 @@ func build(cfg *config.Config) (*Generator, error) {
 	if err := g.readRBAC(cfg.Launch.RBAC); err != nil {
 		return nil, err
 	}
+	if err := g.readModels(cfg); err != nil {
+		return nil, err
+	}
+	g.favorKinds(owned)
 	g.addRequests()
-	for n, gr := range g.resources {
-		if verbs := g.granted[gr]; slices.Contains(verbs, "watch") || slices.Contains(verbs, "*") {
-			for range g.holdWeight(n, gr) {
+	for _, gr := range g.resources {
+		if g.grants(gr, "watch") {
+			for range g.kindWeight(gr) {
 				g.watchable = append(g.watchable, gr)
 			}
 		}
-	}
-	if err := g.readModels(cfg); err != nil {
-		return nil, err
 	}
 	for _, f := range cfg.Fakes() {
 		g.fakes = append(g.fakes, f.Name)
@@ -349,6 +358,30 @@ func (g *Generator) readModels(cfg *config.Config) error {
 	return nil
 }
 
+// favorKinds records the kinds that faults and damage favor, and the
+// resources that damage targets.
+func (g *Generator) favorKinds(owned []gvk.GroupResource) {
+	dealtWith := slices.Concat(g.models, owned)
+	standIn := len(dealtWith) == 0
+	for _, gr := range g.unlisted() {
+		if g.grants(gr, "create") {
+			g.creatable = append(g.creatable, gr)
+			if standIn && gr.Group == "" {
+				dealtWith = append(dealtWith, gr)
+			}
+		}
+	}
+	g.favors = map[gvk.GroupResource]bool{}
+	for _, gr := range slices.Concat(g.resources[:len(g.kinds)], dealtWith) {
+		g.favors[gr] = true
+	}
+}
+
+// grants says whether the RBAC grants the verb on the resource.
+func (g *Generator) grants(gr gvk.GroupResource, verb string) bool {
+	return slices.Contains(g.granted[gr], verb) || slices.Contains(g.granted[gr], "*")
+}
+
 // Plan draws the plan for seed. The same seed draws the same plan.
 func (g *Generator) Plan(seed uint64) (p *plan.Plan, err error) {
 	defer func() {
@@ -565,25 +598,25 @@ func (g *Generator) delete(t *rapid.T, at state, slot string) plan.Action {
 	return a
 }
 
-// unlisted are the resources after the listed kinds, which damage targets.
+// unlisted are the resources after the listed kinds.
 func (g *Generator) unlisted() []gvk.GroupResource { return g.resources[len(g.kinds):] }
 
 // damageable says whether a kube resource or a fake can take damage.
-func (g *Generator) damageable() bool { return len(g.unlisted()) > 0 || len(g.writable()) > 0 }
+func (g *Generator) damageable() bool { return len(g.creatable) > 0 || len(g.writable()) > 0 }
 
 // writable are the fakes that are not read-only.
 func (g *Generator) writable() []string {
 	return slices.DeleteFunc(slices.Clone(g.fakes), func(name string) bool { return g.readOnly[name] })
 }
 
-// damage deletes an object of a drawn resource, of a live slot when one is.
-// With writable fakes, half the draws, or all without a kube resource,
-// target one drawn uniformly.
+// damage deletes an object of a creatable resource, drawn by its
+// kindWeight, of a live slot when one is. With writable fakes, half the
+// draws, or all without a creatable resource, target one drawn uniformly.
 func (g *Generator) damage(t *rapid.T, at state) plan.Action {
-	if fakes := g.writable(); len(fakes) > 0 && (len(g.unlisted()) == 0 || uniform(t, 2, "damage a fake") == 0) {
+	if fakes := g.writable(); len(fakes) > 0 && (len(g.creatable) == 0 || uniform(t, 2, "damage a fake") == 0) {
 		return g.damageOf(t, at, plan.Target{System: sampled(t, fakes, "fake")})
 	}
-	gr := sampled(t, g.unlisted(), "resource")
+	gr := weighted(t, g.creatable, g.kindWeight, "resource")
 	return g.damageOf(t, at, plan.Target{Group: gr.Group, Resource: gr.Resource})
 }
 
@@ -596,8 +629,8 @@ func (g *Generator) damageOf(t *rapid.T, at state, target plan.Target) plan.Acti
 }
 
 // traffic is an action that exercises a fault during its period. A request
-// fault takes a damage of its resource or, on a listed kind, an update of a
-// live CR of that kind. Stuck takes an update of a live CR, which gives its
+// fault takes a damage of its resource if creatable or, on a listed kind,
+// an update of a live CR of that kind. Stuck takes an update of a live CR, which gives its
 // dependencies a new generation to keep not ready, or else a create.
 // SlowDelete takes a delete of a live CR, whose dependencies' deletion it
 // holds; a later step may create the slot again. Otherwise a restart.
@@ -617,7 +650,7 @@ func (g *Generator) traffic(t *rapid.T, at state, f plan.Fault) plan.Action {
 		return g.delete(t, at, sampled(t, at.live(), "slot"))
 	case f.ModelFault():
 		return plan.Action{Do: plan.Restart}
-	case slices.Contains(g.unlisted(), gr):
+	case slices.Contains(g.creatable, gr):
 		return g.damageOf(t, at, plan.Target{Group: gr.Group, Resource: gr.Resource})
 	case len(ofFault) > 0:
 		return g.update(t, at, sampled(t, ofFault, "slot"))
@@ -664,27 +697,12 @@ type request struct {
 // verbWeights favor the writes whose outcome a fault can hide, creates most.
 var verbWeights = map[string]int{"get": 1, "list": 1, "create": 6, "update": 2, "patch": 2, "delete": 2}
 
-// favored is how much more often faults match the listed kinds and the
-// core kinds the controller may create, such as Secrets.
+// favored is how much more often faults and damage name a kind that
+// g.favors holds.
 const favored = 4
 
-// holdWeight is favored for the listed kinds, g.resources[:len(g.kinds)],
-// and for the kube kinds the entries' owns name, else 1. Without owned
-// kinds it is kindWeight.
-func (g *Generator) holdWeight(n int, gr gvk.GroupResource) int {
-	if len(g.owned) == 0 {
-		return g.kindWeight(n, gr)
-	}
-	if n < len(g.kinds) || slices.Contains(g.owned, gr) {
-		return favored
-	}
-	return 1
-}
-
-// kindWeight is favored for the listed kinds, g.resources[:len(g.kinds)],
-// and for core kinds the RBAC lets the controller create, else 1.
-func (g *Generator) kindWeight(n int, gr gvk.GroupResource) int {
-	if n < len(g.kinds) || gr.Group == "" && slices.Contains(g.granted[gr], "create") {
+func (g *Generator) kindWeight(gr gvk.GroupResource) int {
+	if g.favors[gr] {
 		return favored
 	}
 	return 1
@@ -695,8 +713,8 @@ func (g *Generator) kindWeight(n int, gr gvk.GroupResource) int {
 // resource's match has an empty subresource, so it also matches the
 // resource's status requests.
 func (g *Generator) addRequests() {
-	for n, gr := range g.resources {
-		kindWeight := g.kindWeight(n, gr)
+	for _, gr := range g.resources {
+		kindWeight := g.kindWeight(gr)
 		for _, subresource := range []string{"", "status"} {
 			named := gr
 			if subresource != "" {
@@ -732,16 +750,8 @@ func (g *Generator) fault(t *rapid.T) plan.Fault {
 	if len(g.fakes) > 0 && uniform(t, 2, "fault on a fake") == 0 {
 		return g.fakeFault(t)
 	}
-	total := 0
-	for _, r := range g.requests {
-		total += r.weight
-	}
-	n := uniform(t, total, "request")
-	i := 0
-	for ; n >= g.requests[i].weight; i++ {
-		n -= g.requests[i].weight
-	}
-	f := plan.Fault{Match: g.requests[i].match, Nth: sampled(t, nths, "nth")}
+	r := weighted(t, g.requests, func(r request) int { return r.weight }, "request")
+	f := plan.Fault{Match: r.match, Nth: sampled(t, nths, "nth")}
 	effects := 5
 	if len(g.models) > 0 {
 		effects = 7
@@ -899,6 +909,23 @@ func uniform(t *rapid.T, n int, label string) int {
 // sampled draws an element of the slice, each with equal chance.
 func sampled[E any](t *rapid.T, slice []E, label string) E {
 	return slice[uniform(t, len(slice), label)]
+}
+
+// weighted draws an element of the slice, each with a chance in proportion
+// to its weight. Like sampled, it draws nothing from one element.
+func weighted[E any](t *rapid.T, slice []E, weight func(E) int, label string) E {
+	if len(slice) == 1 {
+		return slice[0]
+	}
+	total := 0
+	for _, e := range slice {
+		total += weight(e)
+	}
+	i := 0
+	for n := uniform(t, total, label); n >= weight(slice[i]); i++ {
+		n -= weight(slice[i])
+	}
+	return slice[i]
 }
 
 // fixtureWords are short words whose length is a multiple of four, so that
