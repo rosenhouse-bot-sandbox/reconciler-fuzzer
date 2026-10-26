@@ -56,6 +56,7 @@ var gate = []gateRow{
 	// The update error keeps B151's Volumes held until the stop.
 	{plan: "stop-after-delete", bug: 151, finding: "Clean: left resources behind", step: 1, detail: "/cluster-vol-0 (rule 1, slot a)", config: uninstallConfig},
 	{plan: "crd-first-stop", bug: 152, finding: "Converge: did not settle (clause 2)", step: 2, detail: "cluster is being deleted", config: uninstallConfig},
+	{plan: "slow-delete", bug: 162, finding: "Backoff: repeated a no-op write in a tight loop", step: 1, detail: "delete volumes.storage.thirdparty "},
 	{plan: "crd-first-stop", config: uninstallConfig},
 	{plan: "kill-recreate", config: uninstallConfig},
 	// The create waits for the name, the slowDelete for the create, and the

@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -325,6 +326,31 @@ func TestB116StripsTheFinalizersOfVolumesOnlyWhileTheClusterIsDeleted(t *testing
 	}
 }
 
+func TestB162DeletesHeldVolumesOnEachReconcileAndRequeuesAfter1ms(t *testing.T) {
+	for bug, want := range map[Bug]struct {
+		deletes int
+		requeue time.Duration
+	}{0: {1, 0}, B162: {11, time.Millisecond}} {
+		f := newBuggyFleet(t, bug, clusterObj())
+		deletes := map[string]int{}
+		f.clusters.Client = interceptor.NewClient(f.c, interceptor.Funcs{
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				deletes[obj.GetName()]++
+				return c.Delete(ctx, obj, opts...)
+			},
+		})
+		f.settle(f.clusters, "cluster")
+		f.holdVolumes()
+		f.delete(f.cluster())
+		f.settle(f.clusters, "cluster")
+		result, err := f.clusters.Reconcile(t.Context(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "cluster"}})
+		if err != nil || result.RequeueAfter != want.requeue || deletes["cluster-vol-0"] != want.deletes || deletes["cluster-vol-1"] != want.deletes {
+			t.Errorf("B%d: 11 reconciles of a deleted Cluster with held Volumes give %+v, %v, and Volume deletes %v; want a requeue after %v and %d deletes of each Volume.",
+				bug, result, err, deletes, want.requeue, want.deletes)
+		}
+	}
+}
+
 func TestDatabaseWaitsForItsClusterAndHoldsDeletionForUsers(t *testing.T) {
 	elsewhere := &fleetv1.User{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "bob"}, Spec: fleetv1.UserSpec{DatabaseRef: "other"}}
 	f := newFleet(t, databaseObj(), userObj(), elsewhere)
@@ -499,7 +525,7 @@ func TestReconcileOfAMissingCRSucceeds(t *testing.T) {
 }
 
 func TestParseBugAcceptsOnlyKnownBugs(t *testing.T) {
-	for _, id := range []int{0, 116, 150, 151, 152} {
+	for _, id := range []int{0, 116, 150, 151, 152, 162} {
 		if b, err := ParseBug(id); int(b) != id || err != nil {
 			t.Errorf("ParseBug(%d) = %v, %v", id, b, err)
 		}

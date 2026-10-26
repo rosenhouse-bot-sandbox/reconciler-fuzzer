@@ -1,6 +1,7 @@
 package check_test
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -11,12 +12,15 @@ import (
 	tt "github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace/tracetest"
 )
 
-const tightLoop = "retried a failing request in a tight loop"
+const (
+	tightLoop = "retried a failing request in a tight loop"
+	noOpLoop  = "repeated a no-op write in a tight loop"
+)
 
-// retries has the controller fail a get of slot a's Gadget at each start,
-// each response taking 2ms. Before the n-th (1-based) it adds between(n),
-// a call that starts there or a version.
-func retries(starts []time.Duration, between func(n int) trace.Event) *tt.Timeline {
+// repeat has the controller make a copy of call at each start, each
+// response taking 2ms. Before the n-th (1-based) it adds between(n), a call
+// that starts there or a version.
+func repeat(call trace.Event, starts []time.Duration, between func(n int) trace.Event) *tt.Timeline {
 	var tl tt.Timeline
 	tl.At(0, tt.Run("toy", "widgets"), tt.Start(1), tt.Phase(0, trace.FaultPeriod))
 	for n, start := range starts {
@@ -28,11 +32,25 @@ func retries(starts []time.Duration, between func(n int) trace.Event) *tt.Timeli
 				tl.At(start, e)
 			}
 		}
-		get := tt.Call(ctl, "get", gadgetA, 500, "")
-		get.Call.Latency = 2 * ms
-		tl.At(start+2*ms, get)
+		c := *call.Call
+		c.Latency = 2 * ms
+		tl.At(start+2*ms, trace.Event{Call: &c})
 	}
 	return &tl
+}
+
+// retries has the controller fail a get of slot a's Gadget at each start.
+func retries(starts []time.Duration, between func(n int) trace.Event) *tt.Timeline {
+	return repeat(tt.Call(ctl, "get", gadgetA, 500, ""), starts, between)
+}
+
+// noOpDeletes has the controller delete slot a's Gadget at each start, while
+// a finalizer holds it. Each delete answers with the Gadget's version 2, so
+// none changes it.
+func noOpDeletes(starts []time.Duration, between func(n int) trace.Event) *tt.Timeline {
+	tl := repeat(tt.Call(ctl, "delete", gadgetA, 200, "2"), starts, between)
+	deleting := map[string]any{"metadata": map[string]any{"name": "a", "finalizers": []any{"x"}, "deletionTimestamp": "2026-10-26T00:00:00Z"}}
+	return tl.At(0, tt.Version(gadgetA, "ug", "2", deleting))
 }
 
 func every(gap time.Duration, n int) []time.Duration {
@@ -52,12 +70,107 @@ func TestBackoffPassesControllerRuntimesDefaultBackoff(t *testing.T) {
 		at += limiter.When("a")
 	}
 	requireNone(t, check.Backoff(retries(starts, nil).Index(), spec))
+	requireNone(t, check.Backoff(noOpDeletes(starts, nil).Index(), spec))
 }
 
 func TestBackoffFailsATightLoop(t *testing.T) {
 	findings := check.Backoff(retries(every(10*ms, 11), nil).Index(), spec)
 	requireFinding(t, findings, "Backoff", 0, tightLoop, "kube/toy/gadgets", "get gadgets.toy ns/a: 500")
 	requireNone(t, check.Backoff(retries(every(10*ms, 10), nil).Index(), spec))
+}
+
+// A controller that requeues a deleting CR at once deletes its deleting
+// dependency again on each pass. Each delete succeeds and changes nothing.
+func TestBackoffFailsATightLoopOfNoOpDeletes(t *testing.T) {
+	findings := check.Backoff(noOpDeletes(every(10*ms, 21), nil).Index(), spec)
+	if len(findings) != 1 || findings[0].Check != "Backoff" {
+		t.Fatalf("Want one Backoff finding for 21 no-op deletes 10ms apart, got %+v.", findings)
+	}
+	requireFinding(t, findings, "Backoff", 0, noOpLoop, "kube/toy/gadgets", "delete gadgets.toy ns/a: 200, 11 calls")
+	requireNone(t, check.Backoff(noOpDeletes(every(10*ms, 10), nil).Index(), spec))
+}
+
+func TestBackoffPassesATightLoopOfWritesThatChangeTheObject(t *testing.T) {
+	var tl tt.Timeline
+	tl.At(0, tt.Run("toy", "widgets"), tt.Phase(0, trace.FaultPeriod))
+	for n, start := range every(10*ms, 21) {
+		rv := strconv.Itoa(n + 2)
+		update := tt.Call(ctl, "update", gadgetA, 200, rv)
+		update.Call.Latency = 2 * ms
+		tl.At(start+ms, tt.Version(gadgetA, "ug", rv, tt.Object("a")))
+		tl.At(start+2*ms, update)
+	}
+	requireNone(t, check.Backoff(tl.Index(), spec))
+}
+
+func TestBackoffNoOpRunBreaks(t *testing.T) {
+	widget := func(generation int) trace.Event {
+		return tt.Version(widgetA, "ua", "v", map[string]any{"metadata": map[string]any{"name": "a", "generation": generation}})
+	}
+	for name, tc := range map[string]struct {
+		event  trace.Event
+		breaks bool
+	}{
+		"a delete that changes the object": {tt.Call(ctl, "delete", gadgetA, 200, "3"), true},
+		"a failing delete":                 {tt.Call(ctl, "delete", gadgetA, 500, ""), false},
+		"a new generation":                 {widget(2), true},
+	} {
+		findings := check.Backoff(noOpDeletes(every(10*ms, 16), func(n int) trace.Event {
+			switch n {
+			case 1:
+				return widget(1)
+			case 9:
+				return tc.event
+			}
+			return tt.Start(1)
+		}).Index(), spec)
+		if got := len(findings) == 0; got != tc.breaks {
+			t.Errorf("%s: findings = %+v", name, findings)
+		}
+	}
+}
+
+func TestBackoffRunOfFailingWritesBreaksOnlyOnAChange(t *testing.T) {
+	for name, tc := range map[string]struct {
+		resultRV string
+		breaks   bool
+	}{
+		"a write that changes the object": {"3", true},
+		"a no-op write":                   {"2", false},
+	} {
+		tl := repeat(tt.Call(ctl, "update", gadgetA, 500, ""), every(10*ms, 16), func(n int) trace.Event {
+			if n == 9 {
+				return tt.Call(ctl, "update", gadgetA, 200, tc.resultRV)
+			}
+			return tt.Start(1)
+		})
+		tl.At(0, tt.Version(gadgetA, "ug", "2", tt.Object("a")))
+		if got := len(check.Backoff(tl.Index(), spec)) == 0; got != tc.breaks {
+			t.Errorf("%s: breaks = %v, want %v", name, got, tc.breaks)
+		}
+	}
+}
+
+// A fake's answer carries no resourceVersion, so the observer tells whether
+// a write changed its object.
+func TestBackoffFailsATightLoopOfWritesToAFakeThatTheObserverSeesNoChangeFrom(t *testing.T) {
+	bucket := trace.Ref{System: "s3", Resource: "buckets", Name: "b"}
+	for name, observed := range map[string]bool{"no new version": false, "a new version after each": true} {
+		var tl tt.Timeline
+		tl.At(0, tt.Run("toy", "widgets"), tt.Phase(0, trace.FaultPeriod), tt.Version(bucket, "ub", "1", tt.Object("b")))
+		for n, start := range every(10*ms, 11) {
+			put := tt.Call(ctl, "update", bucket, 200, "")
+			put.Call.Latency = 2 * ms
+			tl.At(start+2*ms, put)
+			if observed {
+				tl.At(start+5*ms, tt.Version(bucket, "ub", strconv.Itoa(n+2), tt.Object("b")))
+			}
+		}
+		tl.At(time.Second, tt.Phase(0, trace.Settled))
+		if findings := check.Backoff(tl.Index(), spec); (len(findings) == 1) == observed {
+			t.Errorf("%s: findings = %+v", name, findings)
+		}
+	}
 }
 
 func TestBackoffJudgesOnlyCallsSixToEleven(t *testing.T) {

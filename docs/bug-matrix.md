@@ -77,3 +77,4 @@ Each Cluster owns Volumes of a third party's kind, which a model sets ready. A D
 | B151 | Puts a finalizer on each Volume, and releases a deleted Cluster before its Volumes, whose finalizers it strips only afterwards. | uninstall/kill-recreate | Converge | 1 |
 | B151 | Puts a finalizer on each Volume, and releases a deleted Cluster before its Volumes, whose finalizers it strips only afterwards. | uninstall/stop-after-delete | Clean | 1 |
 | B152 | Errors when a dependent kind is not served, as after its CRD is deleted, so the parent's deletion never ends. | uninstall/crd-first-stop | Converge | 2 |
+| B162 | Requeues a Cluster being deleted every 1 ms while its Volumes remain, and deletes them again each time. | slow-delete | Backoff | 1 |

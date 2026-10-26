@@ -10,8 +10,8 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 )
 
-// Backoff fails a failing request that the controller repeats in a tight
-// loop. DESIGN.md §12 defines it.
+// Backoff fails a failing or no-op request that the controller repeats in a
+// tight loop. DESIGN.md §12 defines it.
 func Backoff(ix *trace.Index, s Spec) []Finding {
 	runs := map[request][]time.Duration{}
 	found := map[findingKey]*Finding{}
@@ -32,7 +32,7 @@ func Backoff(ix *trace.Index, s Spec) []Finding {
 		object := c.Object()
 		object.Name = cmp.Or(object.Name, c.RequestName)
 		r := request{c.Ref.System, c.Verb, object, c.Subresource, c.Status}
-		if succeeded(*c) {
+		if !futile(ix, e) {
 			for key := range runs {
 				if key.object == r.object && key.verb == r.verb && key.subresource == r.subresource {
 					delete(runs, key)
@@ -48,9 +48,13 @@ func Backoff(ix *trace.Index, s Spec) []Finding {
 		if len(runs[r]) != tightRepeats*2*n+1 || !tight(runs[r][tightRepeats*n:]) {
 			continue
 		}
-		key := findingKey{stepAt(steps, start), tightLoop, kind(c.Ref)}
+		summary := tightLoop
+		if succeeded(*c) {
+			summary = noOpLoop
+		}
+		key := findingKey{stepAt(steps, start), summary, kind(c.Ref)}
 		if found[key] == nil {
-			found[key] = &Finding{Check: "Backoff", Step: key.step, At: e.At, Summary: tightLoop, Kind: key.kind}
+			found[key] = &Finding{Check: "Backoff", Step: key.step, At: e.At, Summary: summary, Kind: key.kind}
 			order = append(order, key)
 		}
 		f := found[key]
@@ -65,6 +69,11 @@ func Backoff(ix *trace.Index, s Spec) []Finding {
 		findings[n] = *found[key]
 	}
 	return findings
+}
+
+// futile reports whether e, a call, failed or wrote nothing new.
+func futile(ix *trace.Index, e trace.Event) bool {
+	return !succeeded(*e.Call) || trace.Mutating(e.Call.Verb) && !ix.Changed(e)
 }
 
 // crsLive counts the CRs live at some time in [from, to]. Each CR may back
@@ -95,13 +104,14 @@ func ownedByAnother(w *owner.World, ref trace.Ref, cr string, t time.Duration) b
 
 const (
 	tightLoop = "retried a failing request in a tight loop"
+	noOpLoop  = "repeated a no-op write in a tight loop"
 	// tightRepeats is how many repeats per CR come before the judged gaps,
 	// and how many gaps per CR are judged.
 	tightRepeats = 5
 	tightGap     = 100 * time.Millisecond
 )
 
-// request is what a run of failing calls repeats.
+// request is what a run of futile calls repeats.
 type request struct {
 	system, verb string
 	object       trace.Ref
