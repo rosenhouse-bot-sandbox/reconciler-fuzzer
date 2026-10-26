@@ -99,7 +99,7 @@ func TestTheUpgradeCRDOnlyAddsSpecTier(t *testing.T) {
 
 // The harness may hear a Cluster's delete before its last Volume's, so
 // volumes-go-first must pass a Volume that is being deleted then.
-func TestVolumesGoFirstPassesOnlyAVolumeBeingDeletedWhenItsClusterGoes(t *testing.T) {
+func TestVolumesGoFirstPassesOnlyAVolumeBeingDeletedWhenItsClusterIsDeleted(t *testing.T) {
 	c, err := config.Load(upgradePropertiesConfig)
 	if err != nil {
 		t.Fatal(err)

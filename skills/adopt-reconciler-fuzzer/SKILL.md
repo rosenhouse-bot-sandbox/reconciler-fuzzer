@@ -136,8 +136,8 @@ Fill each key from the project:
   from the requests they grant. For another namespace, use a ClusterRole, or a Role with
   `metadata.namespace`.
 - `crds`: each listed kind's CRD, and the CRD of every other kind the controller watches or
-  creates. A CRD that a plan deletes, as an uninstall may, goes under `fixtures` instead, and
-  never under both. Its kind must not be listed.
+  creates. A CRD that a plan deletes, as an uninstall may, is listed under `fixtures` instead,
+  and never under both. Its kind must not be listed.
 - `launch.upgrades`: leave it out unless the user wants upgrades tested. Each entry names a
   later version's `binary`, `args` or `crds`, and each generated plan restarts into it once.
 - `primary` describes one kind. For several, write `primaries`, a list of such entries, and
@@ -326,7 +326,7 @@ controller:
 | Unique, on a fake | The CR owns several resources in one collection by design. | Set the system's `role`. |
 | Converge, with a CR that halted after a create of unknown outcome | The controller stops on purpose and waits for a person. | Set the entry's `halted` to CEL over its halted condition. |
 | Converge after an upgrade, with `forbidden` errors in `controller.log` | `launch.rbac` lacks a rule the new version needs. | Add the rule to `launch.rbac`. |
-| Restore after an upgrade, on a resource the new version adds or renames, or on a field the new CRDs default | Nothing: `<module>/README.md` lists this limit under Upgrading. | Ask the user whether the change is intended. If so, report the finding as that limit, not as a bug. |
+| Restore after an upgrade, on a resource the new version adds, deletes or renames, or on a field the new CRDs default | Nothing: `<module>/README.md` lists this limit under Upgrading. | Ask the user whether the change is intended. If so, report the finding as that limit, not as a bug. |
 
 Every other finding is a bug in the controller. Never hide one to make a check pass, and ask
 the user when in doubt. On a finding, stop and report it (step 11).
