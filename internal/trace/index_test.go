@@ -175,6 +175,21 @@ func TestWriter(t *testing.T) {
 	}
 }
 
+func TestAnswers(t *testing.T) {
+	var b tt.Builder
+	b.Add(tt.Call(trace.Harness, "patch", widgetA, 200, "3")).
+		Add(tt.Call(trace.Controller, "update", widgetB, 200, "3")).
+		Add(tt.Call(trace.Controller, "patch", widgetA, 200, "3")).
+		Add(tt.Call(trace.GC, "patch", widgetA, 200, "4"))
+	var callers []trace.Caller
+	for _, e := range b.Index().Answers(widgetA, "3") {
+		callers = append(callers, e.Call.Caller)
+	}
+	if want := []trace.Caller{trace.Harness, trace.Controller}; !slices.Equal(callers, want) {
+		t.Errorf("Answers(a, 3) came from %v, want %v.", callers, want)
+	}
+}
+
 func TestChanged(t *testing.T) {
 	var b tt.Builder
 	b.At(1 * s).Add(tt.Version(widgetA, "u", "1", nil))

@@ -72,6 +72,8 @@ Each Cluster owns Volumes of a third party's kind, which a model sets ready. A D
 | B0 | The correct controller. | uninstall/stop-after-delete | none | |
 | B0 | The correct controller. | uninstall/stop-first | none | |
 | B0 | The correct controller. | upgrade/properties/upgrade-and-update | none | |
+| B116 | Removes every finalizer from a deleting Volume while its Cluster is deleted. | protect/b0 | Finalizers | 2 |
+| B116 | Removes every finalizer from a deleting Volume while its Cluster is deleted. | slow-delete | Finalizers | 1 |
 | B140 | Under version 2, keeps the version 1 finalizer, so a deleted Cluster is never removed. | upgrade/delete | Converge | 2 |
 | B141 | Under version 2, names its Volumes `<cluster>-data-<i>` and sees only those, so it makes new ones and leaves version 1's. | upgrade/properties/upgrade-and-update | Property | 2 |
 | B141 | Under version 2, names its Volumes `<cluster>-data-<i>` and sees only those, so it makes new ones and leaves version 1's. | upgrade/update | Restore | 1 |

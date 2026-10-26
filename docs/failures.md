@@ -199,6 +199,19 @@ names the verb, the object, the status and the calls. Retry through a rate
 limiter, such as controller-runtime's default, rather than a short
 `RequeueAfter`.
 
+### Finalizers: removed another caller's finalizer
+
+A controller update or patch dropped a finalizer that a model added. Each
+line names the object, the finalizer, the model and the removing write. A
+stage model adds its `finalizer:` and, during `slowDelete`,
+`reconciler-fuzzer.dev/slow-delete`. The API server adds
+`foregroundDeletion` or `orphan` for a delete with that propagation policy,
+and `gc` owns them. Remove only your own finalizer, as
+`controllerutil.RemoveFinalizer` does. A `client.MergeFrom` patch replaces
+the whole list, so it drops a finalizer added after your read. Write with
+`Update`, or patch with
+`client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})`.
+
 ## When a run exits 2
 
 Exit 2 means a usage or harness error: the run judged nothing. The error
