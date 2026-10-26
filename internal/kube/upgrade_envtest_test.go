@@ -67,4 +67,13 @@ func TestInstallCRDsUpdatesACRDAndWatchesANewOne(t *testing.T) {
 	if err := k.InstallCRDs(ctx, []string{"testdata/upgrade/missing"}); err == nil {
 		t.Error("InstallCRDs of a missing path succeeded.")
 	}
+
+	// The harness acts on a kind through its preferred version, which v3 changes.
+	if err := k.InstallCRDs(ctx, []string{"testdata/upgrade/v3"}); err != nil {
+		t.Fatal(err)
+	}
+	things := schema.GroupVersionResource{Group: "upgrade.reconciler-fuzzer", Resource: "things"}
+	if gvr, err := k.Mapper().ResourceFor(things); err != nil || gvr.Version != "v2" {
+		t.Errorf("Things map to %v, %v after InstallCRDs; want version v2.", gvr, err)
+	}
 }

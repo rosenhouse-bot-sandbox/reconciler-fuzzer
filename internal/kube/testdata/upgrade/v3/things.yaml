@@ -1,0 +1,34 @@
+# v2/things.yaml plus a served version v2.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: things.upgrade.reconciler-fuzzer
+spec:
+  group: upgrade.reconciler-fuzzer
+  names: {kind: Thing, listKind: ThingList, plural: things, singular: thing}
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                size: {type: integer}
+                tier: {type: string, default: standard}
+    - name: v2
+      served: true
+      storage: false
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                size: {type: integer}
+                tier: {type: string, default: standard}

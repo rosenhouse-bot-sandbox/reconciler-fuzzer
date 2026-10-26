@@ -285,7 +285,8 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 		return err
 	}
 	defer func() { err = errors.Join(err, log.Close()) }()
-	launchOptions, err := expandLaunch(cfg.Launch, o.LaunchArgs, vars)
+	launchVars := flatten(vars)
+	launchOptions, err := expandLaunch(cfg.Launch, o.LaunchArgs, launchVars)
 	if err != nil {
 		return err
 	}
@@ -330,7 +331,7 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 		Select: func(ix *trace.Index, creator trace.Caller, target plan.Target, slot string, t time.Duration) (trace.Ref, error) {
 			return owner.New(ix, spec.Owners).Select(creator, target, slot, t)
 		},
-		Vars:       flatten(vars),
+		Vars:       launchVars,
 		LaunchArgs: o.LaunchArgs,
 	}
 	if err := runner.Quiet(ctx); err != nil {
@@ -458,17 +459,13 @@ func primaryKinds(primaries []config.Primary) []schema.GroupVersionKind {
 }
 
 // expandLaunch expands ${systems.<name>.<key>} in the launch args, with
-// extra appended, and in the env. systemVars maps a system to its Vars.
-func expandLaunch(l config.Launch, extra []string, systemVars map[string]map[string]string) (launch.Options, error) {
-	vars := flatten(systemVars)
-	o := launch.Options{Path: l.Binary, Env: map[string]string{}}
-	for _, arg := range append(slices.Clone(l.Args), extra...) {
-		expanded, err := config.Expand(arg, vars)
-		if err != nil {
-			return launch.Options{}, fmt.Errorf("launch args: %w", err)
-		}
-		o.Args = append(o.Args, expanded)
+// extra appended, and in the env.
+func expandLaunch(l config.Launch, extra []string, vars map[string]string) (launch.Options, error) {
+	args, err := expandArgs(l.Args, extra, vars)
+	if err != nil {
+		return launch.Options{}, fmt.Errorf("launch args: %w", err)
 	}
+	o := launch.Options{Path: l.Binary, Args: args, Env: map[string]string{}}
 	for name, value := range l.Env {
 		expanded, err := config.Expand(value, vars)
 		if err != nil {
@@ -477,6 +474,20 @@ func expandLaunch(l config.Launch, extra []string, systemVars map[string]map[str
 		o.Env[name] = expanded
 	}
 	return o, nil
+}
+
+// expandArgs expands ${key} in each of args, then in each of extra. It never
+// returns nil, so a restart's empty args replace the current ones.
+func expandArgs(args, extra []string, vars map[string]string) ([]string, error) {
+	out := []string{}
+	for _, arg := range slices.Concat(args, extra) {
+		expanded, err := config.Expand(arg, vars)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, expanded)
+	}
+	return out, nil
 }
 
 // loadSamples reads each entry's sample, in config order. A sample of

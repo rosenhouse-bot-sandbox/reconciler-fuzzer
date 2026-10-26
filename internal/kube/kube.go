@@ -554,13 +554,15 @@ func (k *Kube) Subscribe(hear func(trace.Version)) {
 }
 
 // InstallCRDs creates or updates, as admin, the CRDs in paths, files or
-// directories, waits until discovery serves them, and has the observer
-// watch their kinds. Kinds and StatusKinds stay as Start left them.
+// directories, and waits until discovery serves them. The mapper then
+// rediscovers every kind, and the observer watches the CRDs' kinds. Kinds and
+// StatusKinds stay as Start left them.
 func (k *Kube) InstallCRDs(ctx context.Context, paths []string) error {
 	crds, err := envtest.InstallCRDs(k.admin, envtest.CRDInstallOptions{Paths: paths, ErrorIfPathMissing: true})
 	if err != nil {
 		return fmt.Errorf("installing CRDs: %w", err)
 	}
+	k.mapper.Reset()
 	var grs []schema.GroupResource
 	for _, crd := range crds {
 		grs = append(grs, schema.GroupResource{Group: crd.Spec.Group, Resource: crd.Spec.Names.Plural})

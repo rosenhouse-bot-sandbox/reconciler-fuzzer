@@ -439,13 +439,9 @@ func (e *execution) act(ctx context.Context, a plan.Action, s *stepRun) (*trace.
 func (e *execution) restart(ctx context.Context, u plan.Upgrade) error {
 	var args []string
 	if u.Args != nil {
-		args = []string{}
-		for _, arg := range slices.Concat(u.Args, e.LaunchArgs) {
-			expanded, err := config.Expand(arg, e.Vars)
-			if err != nil {
-				return fmt.Errorf("args: %w", err)
-			}
-			args = append(args, expanded)
+		var err error
+		if args, err = expandArgs(u.Args, e.LaunchArgs, e.Vars); err != nil {
+			return fmt.Errorf("args: %w", err)
 		}
 	}
 	if len(u.CRDs) > 0 {
