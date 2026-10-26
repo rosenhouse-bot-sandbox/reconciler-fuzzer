@@ -56,8 +56,8 @@ type Values struct {
 	Mutate []string
 }
 
-// Launch says how to run the controller. Args and Env may hold
-// ${systems.<name>.<key>}.
+// Launch says how to run the controller. Args, Env and each upgrade's args
+// may hold ${systems.<name>.<key>}.
 type Launch struct {
 	Binary string
 	Args   []string
@@ -68,7 +68,7 @@ type Launch struct {
 	// identity is bound to.
 	RBAC []string
 	// Upgrades are the later versions that generated plans restart into, in
-	// order. Their paths are absolute.
+	// order.
 	Upgrades []plan.Upgrade
 }
 
@@ -367,8 +367,8 @@ type declaredFinalizer struct {
 }
 
 // Load reads the file strictly: an unknown key is an error that names its
-// line. It compiles each entry's expressions, checks that every path exists
-// and refuses a kube fixture of a listed kind.
+// line. It compiles each entry's expressions, checks that every path but a
+// binary exists and refuses a kube fixture of a listed kind.
 func Load(path string) (*Config, error) {
 	c, err := load(path)
 	if err != nil {

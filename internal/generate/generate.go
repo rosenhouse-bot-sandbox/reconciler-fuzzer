@@ -406,9 +406,9 @@ func (g *Generator) plan(t *rapid.T) *plan.Plan {
 	return p
 }
 
-// upgrade adds a restart into each of the config's upgrades, in order.
-// Each restart ends a step drawn from the previous upgrade's step on, 0 to
-// stable after the step's last action. These draws come after all others,
+// upgrade appends one restart per config upgrade, in order. Each ends a step
+// drawn from the previous upgrade's step on, 0 to stable after the step's
+// last action. These draws come after all others,
 // so upgrades only add restarts to a seed's plan.
 func (g *Generator) upgrade(t *rapid.T, p *plan.Plan) {
 	from := 0

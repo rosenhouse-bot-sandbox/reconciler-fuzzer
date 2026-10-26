@@ -1,4 +1,4 @@
-# toy-widget with two later versions. Nothing launches this target.
+# toy-widget with three later versions. Nothing launches this target.
 launch:
   binary: none
   args: [--bug=0]
@@ -6,6 +6,7 @@ launch:
   upgrades:
     - {args: [--bug=0, --version=2], crds: [../../../../targets/toy-widget/crds/]}
     - {binary: v3}
+    - {args: []}
 crds: [../../../../targets/toy-widget/crds/]
 primary:
   kind: toy.reconciler-fuzzer/v1/Widget

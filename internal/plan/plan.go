@@ -296,7 +296,12 @@ const (
 	emptied    = "\x00emptied"
 )
 
+var dos = []Do{Create, Update, Delete, Restart, Kill, Damage, ChangeFixture, Stop}
+
 func (a Action) validate(names map[string]string) error {
+	if !slices.Contains(dos, a.Do) {
+		return fmt.Errorf("unknown do %q", a.Do)
+	}
 	if a.At < 0 {
 		return errors.New("at is negative")
 	}
@@ -350,8 +355,6 @@ func (a Action) validate(names map[string]string) error {
 		}
 	case Damage, ChangeFixture:
 		return a.validateChange(names)
-	default:
-		return fmt.Errorf("unknown do %q", a.Do)
 	}
 	return nil
 }

@@ -52,8 +52,8 @@ func TestEveryPlanAppliesEachUpgradeOnceInOrder(t *testing.T) {
 	}
 }
 
-// An upgrade may come as the controller starts on the action before it,
-// or a full stable later.
+// An upgrade comes 0 to stable after the action before it, both ends
+// included.
 func TestUpgradeDelaysRunFromZeroToStable(t *testing.T) {
 	cfg := loadConfig(t, upgradesConfig)
 	delays := map[plan.Duration]bool{}
@@ -68,6 +68,20 @@ func TestUpgradeDelaysRunFromZeroToStable(t *testing.T) {
 	}
 	if stable := plan.Duration(cfg.Timeouts.Stable); !delays[0] || !delays[stable] {
 		t.Errorf("Upgrade delays %v lack 0 or %v.", slices.Sorted(maps.Keys(delays)), stable)
+	}
+}
+
+// An upgrade may come in step 0, and two upgrades may share a step.
+func TestUpgradesMayComeInStepZeroAndShareAStep(t *testing.T) {
+	inStepZero, shared := false, false
+	for _, p := range plans(t, upgradesConfig, 20) {
+		inStepZero = inStepZero || len(upgrades(p.Steps[0])) > 0
+		for _, step := range p.Steps {
+			shared = shared || len(upgrades(step)) > 1
+		}
+	}
+	if !inStepZero || !shared {
+		t.Errorf("In 20 plans, an upgrade comes in step 0: %v, and two share a step: %v. Want both.", inStepZero, shared)
 	}
 }
 
@@ -124,11 +138,10 @@ func TestUpgradesOnlyAddRestarts(t *testing.T) {
 	}
 }
 
-// A plan shares no slice with the config. A change to one plan changes no
-// later plan.
-func TestChangingAPlansUpgradeLeavesTheConfig(t *testing.T) {
-	cfg := loadConfig(t, upgradesConfig)
-	for _, step := range drawPlans(t, newGenerator(t, cfg), 1)[0].Steps {
+// A plan shares no slice with the config or another plan.
+func TestChangingAPlanChangesNoLaterPlan(t *testing.T) {
+	g := newGenerator(t, loadConfig(t, upgradesConfig))
+	for _, step := range drawPlans(t, g, 1)[0].Steps {
 		for _, a := range step.Actions {
 			for _, field := range [][]string{a.Args, a.CRDs} {
 				for k := range field {
@@ -137,7 +150,7 @@ func TestChangingAPlansUpgradeLeavesTheConfig(t *testing.T) {
 			}
 		}
 	}
-	if want := loadConfig(t, upgradesConfig).Launch.Upgrades; !reflect.DeepEqual(cfg.Launch.Upgrades, want) {
-		t.Errorf("Upgrades = %+v after a plan changed, want %+v.", cfg.Launch.Upgrades, want)
+	if !reflect.DeepEqual(drawPlans(t, g, 2), drawPlans(t, newGenerator(t, loadConfig(t, upgradesConfig)), 2)) {
+		t.Error("A change to seed 1's plan changed the plans the generator draws next.")
 	}
 }

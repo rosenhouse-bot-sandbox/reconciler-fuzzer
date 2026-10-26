@@ -36,6 +36,7 @@ func TestOnlyARestartTakesAnUpgrade(t *testing.T) {
 	create, widget := Action{Do: Create, Slot: "a"}, json.RawMessage(`{"metadata":{"name":"w"}}`)
 	for name, a := range map[string]Action{
 		"kill with args":          {Do: Kill, Upgrade: Upgrade{Args: []string{}}},
+		"kill with crds":          {Do: Kill, Upgrade: Upgrade{CRDs: []string{}}},
 		"stop with a binary":      {Do: Stop, Upgrade: Upgrade{Binary: "/v2"}},
 		"create with crds":        {Do: Create, Slot: "b", Object: widget, Upgrade: Upgrade{CRDs: []string{"/crds"}}},
 		"update with args":        {Do: Update, Slot: "a", Patch: json.RawMessage(`{}`), Upgrade: Upgrade{Args: []string{"--v2"}}},
