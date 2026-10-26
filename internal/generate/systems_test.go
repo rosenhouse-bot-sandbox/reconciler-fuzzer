@@ -176,6 +176,33 @@ func TestAWildcardVerbLetsTheControllerWatch(t *testing.T) {
 	t.Error("No fault holds the watch of secrets, which the RBAC grants with *.")
 }
 
+func TestAWildcardVerbLetsTheControllerCreate(t *testing.T) {
+	for _, a := range actions(plans(t, "testdata/systems/star.yaml", 100)) {
+		if a.Do == plan.Damage && a.Target.Resource == "secrets" {
+			return
+		}
+	}
+	t.Error("No damage targets secrets, which the RBAC grants with *.")
+}
+
+// A damage deletes only what the controller made.
+func TestWithoutAKindTheControllerMayCreateEachDamageNamesAFake(t *testing.T) {
+	cfg := loadConfig(t, systemsConfig)
+	cfg.Launch.RBAC = []string{"testdata/systems/read-role.yaml"}
+	damages := 0
+	for _, a := range actions(drawPlans(t, newGenerator(t, cfg), 100)) {
+		if a.Do == plan.Damage {
+			damages++
+			if a.Target.System != "vault" {
+				t.Errorf("A damage targets %+v, want vault.", *a.Target)
+			}
+		}
+	}
+	if damages == 0 {
+		t.Error("No plan draws a damage.")
+	}
+}
+
 func TestAReadOnlyFakeTakesNoDamageAndOnlyReadFaults(t *testing.T) {
 	drawn := plans(t, "testdata/systems/read-only.yaml", 300)
 	reads := 0

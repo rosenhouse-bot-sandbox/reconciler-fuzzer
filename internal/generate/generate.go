@@ -630,10 +630,11 @@ func (g *Generator) damageOf(t *rapid.T, at state, target plan.Target) plan.Acti
 
 // traffic is an action that exercises a fault during its period. A request
 // fault takes a damage of its resource if creatable or, on a listed kind,
-// an update of a live CR of that kind. Stuck takes an update of a live CR, which gives its
-// dependencies a new generation to keep not ready, or else a create.
-// SlowDelete takes a delete of a live CR, whose dependencies' deletion it
-// holds; a later step may create the slot again. Otherwise a restart.
+// an update of a live CR of that kind. Stuck takes an update of a live CR,
+// which gives its dependencies a new generation to keep not ready, or else
+// a create. SlowDelete takes a delete of a live CR, whose dependencies'
+// deletion it holds; a later step may create the slot again. Otherwise a
+// restart.
 func (g *Generator) traffic(t *rapid.T, at state, f plan.Fault) plan.Action {
 	if f.System != "" {
 		return g.fakeTraffic(t, at, f)
@@ -701,6 +702,7 @@ var verbWeights = map[string]int{"get": 1, "list": 1, "create": 6, "update": 2, 
 // g.favors holds.
 const favored = 4
 
+// kindWeight is favored for a kind that g.favors holds, else 1.
 func (g *Generator) kindWeight(gr gvk.GroupResource) int {
 	if g.favors[gr] {
 		return favored
