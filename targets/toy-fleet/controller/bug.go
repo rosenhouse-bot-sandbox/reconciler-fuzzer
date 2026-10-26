@@ -7,6 +7,9 @@ import "fmt"
 type Bug int
 
 const (
+	// B116 removes every finalizer from a deleting Volume while its Cluster is
+	// deleted.
+	B116 Bug = 116
 	// B150 strips its finalizers from deleting CRs when it shuts down.
 	B150 Bug = 150
 	// B151 puts a finalizer on each Volume, and releases a deleted Cluster
@@ -18,7 +21,7 @@ const (
 )
 
 // bugs holds every seeded bug ID.
-var bugs = map[Bug]bool{B150: true, B151: true, B152: true}
+var bugs = map[Bug]bool{B116: true, B150: true, B151: true, B152: true}
 
 // ParseBug converts a --bug value into a Bug.
 func ParseBug(id int) (Bug, error) {

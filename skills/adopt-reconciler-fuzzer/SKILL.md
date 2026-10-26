@@ -5,7 +5,7 @@ description: Sets up reconciler-fuzzer for a Kubernetes controller. Writes confi
 # Adopt reconciler-fuzzer
 
 reconciler-fuzzer runs a controller against envtest, follows a plan of CR changes, faults,
-restarts and damage, and judges the trace with seven checks. This skill writes the config for
+restarts and damage, and judges the trace with eight checks. This skill writes the config for
 one controller and runs it until reconciler-fuzzer tests the controller.
 
 Never edit the controller's source without the user's consent.
@@ -177,8 +177,9 @@ Fill each key from the project:
   stays done and `Ready`. The model retries the refused write until the fault ends. Add
   `finalizer: {name, after}` when something else puts a finalizer on each object, such as
   Kubernetes' `kubernetes.io/pvc-protection` on a PVC. The model adds `name` to each live
-  object, and removes it `after` past the deletion. Keep `after` under `timeouts.stable`, or
-  a step can settle before the controller reacts to the release.
+  object, and removes it `after` past the deletion. Finalizers then fails a controller write
+  that drops it. Keep `after` under `timeouts.stable`, or a step can settle before the
+  controller reacts to the release.
 - `budgets` and `timeouts`: leave them out at first. Raise `timeouts.settle` for a slow
   controller, or one that waits out `finalizer` holds one by one, and `stable` for one that
   requeues with a delay by design. Ask the user first.

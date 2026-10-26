@@ -26,8 +26,8 @@ type Index struct {
 	// firstRV is the first event, a version or a response, to hold each
 	// object's resourceVersion.
 	firstRV map[objectRV]Event
-	// writeCall is the first response to hold each resourceVersion.
-	writeCall map[objectRV]Event
+	// answers holds the calls whose responses held each resourceVersion.
+	answers map[objectRV][]Event
 	// byRV holds each object's Version event of each resourceVersion.
 	byRV map[objectRV]Event
 	// seen holds each caller's Seen events by UID, and opaque its opaque
@@ -63,15 +63,15 @@ type objectRV struct {
 // NewIndex indexes events, which must be in Seq order.
 func NewIndex(events []Event) *Index {
 	ix := &Index{
-		steps:     map[int]*StepSpan{},
-		calls:     map[Caller][]Event{},
-		actions:   map[int][]Event{},
-		versions:  map[Ref]map[Ref][]Event{},
-		firstRV:   map[objectRV]Event{},
-		writeCall: map[objectRV]Event{},
-		byRV:      map[objectRV]Event{},
-		seen:      map[Caller]map[string][]Event{},
-		opaque:    map[Caller][]Event{},
+		steps:    map[int]*StepSpan{},
+		calls:    map[Caller][]Event{},
+		actions:  map[int][]Event{},
+		versions: map[Ref]map[Ref][]Event{},
+		firstRV:  map[objectRV]Event{},
+		answers:  map[objectRV][]Event{},
+		byRV:     map[objectRV]Event{},
+		seen:     map[Caller]map[string][]Event{},
+		opaque:   map[Caller][]Event{},
 
 		watches:   map[Caller][]Event{},
 		watchEnds: map[WatchEnd]time.Duration{},
@@ -201,9 +201,7 @@ func (ix *Index) addCall(e Event) {
 	if _, seen := ix.firstRV[key]; !seen {
 		ix.firstRV[key] = e
 	}
-	if _, seen := ix.writeCall[key]; !seen {
-		ix.writeCall[key] = e
-	}
+	ix.answers[key] = append(ix.answers[key], e)
 }
 
 func (ix *Index) addVersion(e Event) {
@@ -328,7 +326,7 @@ func compareRefs(a, b Ref) int {
 // Writer returns the caller whose response carried v's Ref and RV, or
 // Cluster when none did.
 func (ix *Index) Writer(v Version) Caller {
-	if e, found := ix.writeCall[objectRV{v.Ref, v.RV}]; found {
+	if e, found := ix.WriteCall(v.Ref, v.RV); found {
 		return e.Call.Caller
 	}
 	return Cluster
@@ -336,9 +334,15 @@ func (ix *Index) Writer(v Version) Caller {
 
 // WriteCall is the first call whose response carried ref and rv.
 func (ix *Index) WriteCall(ref Ref, rv string) (Event, bool) {
-	e, found := ix.writeCall[objectRV{ref, rv}]
-	return e, found
+	answers := ix.Answers(ref, rv)
+	if len(answers) == 0 {
+		return Event{}, false
+	}
+	return answers[0], true
 }
+
+// Answers are the calls whose responses carried ref and rv, in Seq order.
+func (ix *Index) Answers(ref Ref, rv string) []Event { return ix.answers[objectRV{ref, rv}] }
 
 // VersionOf is the version of ref with rv.
 func (ix *Index) VersionOf(ref Ref, rv string) (Version, bool) {

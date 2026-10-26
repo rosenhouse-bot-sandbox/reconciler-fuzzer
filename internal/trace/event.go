@@ -251,6 +251,10 @@ type Call struct {
 	// ResultName is the name the server gave an object created with
 	// generateName.
 	ResultName string `json:"resultName,omitempty"`
+	// ResultFinalizers are the finalizers of the kube object in a mutating
+	// request's response. They are nil when the listener read no kube object
+	// from the answer, or the request was a dry run.
+	ResultFinalizers *[]string `json:"resultFinalizers,omitempty"`
 	// RequestName is a create's requested name, or else its generateName.
 	RequestName string `json:"requestName,omitempty"`
 	// Stream numbers a watch within its listener, so its WatchEnd can name
