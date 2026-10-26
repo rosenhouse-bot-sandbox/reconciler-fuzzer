@@ -396,9 +396,8 @@ That step may hold a fault or come before a delete. `shrink` and `hunt` drop upg
 last one back, so the versions stay in order.
 
 The checks judge an upgrade's step as they judge any restart's, except that Restore lets the new
-version change the old version's resources. Restore still fails a version that replaces them in
-a step that changes no CR. Restore judges a generated upgrade only when its step changes no CR.
-Only some seeds draw such a step.
+version change the old version's resources but not replace them. Restore judges a generated
+upgrade only when its step changes no CR. Only some seeds draw such a step.
 [targets/toy-fleet/upgrade](targets/toy-fleet/upgrade/config.yaml) upgrades toy-fleet to
 `--version=2`, which labels each Volume with its version. Its bugs B140 to B142 mishandle the
 Clusters that version 1 made.
