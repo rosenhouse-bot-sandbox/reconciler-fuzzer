@@ -210,25 +210,23 @@ func Load(path string) (*Plan, error) {
 
 // resolve joins each relative binary and crds path to dir.
 func (p *Plan) resolve(dir string) {
+	join := func(path string) string {
+		if filepath.IsAbs(path) {
+			return path
+		}
+		return filepath.Join(dir, path)
+	}
 	for i := range p.Steps {
 		for j := range p.Steps[i].Actions {
 			u := &p.Steps[i].Actions[j].Upgrade
 			if u.Binary != "" {
-				u.Binary = under(dir, u.Binary)
+				u.Binary = join(u.Binary)
 			}
 			for k, path := range u.CRDs {
-				u.CRDs[k] = under(dir, path)
+				u.CRDs[k] = join(path)
 			}
 		}
 	}
-}
-
-// under joins path to dir unless path is absolute.
-func under(dir, path string) string {
-	if filepath.IsAbs(path) {
-		return path
-	}
-	return filepath.Join(dir, path)
 }
 
 // Save writes p as indented JSON.

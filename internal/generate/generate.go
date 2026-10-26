@@ -406,18 +406,19 @@ func (g *Generator) plan(t *rapid.T) *plan.Plan {
 	return p
 }
 
-// upgrade ends steps with a restart into each upgrade, in order. Each
-// takes a step drawn from the previous upgrade's step on, 0 to stable
-// after the step's last action. These draws come after all others, so
-// upgrades only add restarts to a seed's plan.
+// upgrade adds a restart into each of the config's upgrades, in order.
+// Each restart ends a step drawn from the previous upgrade's step on, 0 to
+// stable after the step's last action. These draws come after all others,
+// so upgrades only add restarts to a seed's plan.
 func (g *Generator) upgrade(t *rapid.T, p *plan.Plan) {
 	from := 0
 	for _, u := range g.upgrades {
 		from += uniform(t, len(p.Steps)-from, "upgrade step")
 		step := &p.Steps[from]
+		last := step.Actions[len(step.Actions)-1].At
 		delay := plan.Duration(uniform(t, 11, "upgrade delay")) * plan.Duration(g.stable) / 10
 		u.Args, u.CRDs = slices.Clone(u.Args), slices.Clone(u.CRDs)
-		step.Actions = append(step.Actions, plan.Action{At: step.Actions[len(step.Actions)-1].At + delay, Do: plan.Restart, Upgrade: u})
+		step.Actions = append(step.Actions, plan.Action{At: last + delay, Do: plan.Restart, Upgrade: u})
 	}
 }
 

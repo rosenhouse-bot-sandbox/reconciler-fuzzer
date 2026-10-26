@@ -25,7 +25,6 @@ var upgradeRows = []gateRow{
 }
 
 func TestAConfigCanDeclareAnUpgrade(t *testing.T) {
-	t.Skip("enabled by the load package")
 	c, err := config.Load(upgradeConfig)
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +39,6 @@ func TestAConfigCanDeclareAnUpgrade(t *testing.T) {
 }
 
 func TestRestartActionsLoadWithUpgradeFields(t *testing.T) {
-	t.Skip("enabled by the load package")
 	p, err := plan.Load(planPath(upgradeConfig, "crds"))
 	if err != nil {
 		t.Fatal(err)
