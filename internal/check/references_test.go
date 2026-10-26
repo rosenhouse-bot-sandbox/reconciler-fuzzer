@@ -288,20 +288,38 @@ func TestHonestGivesNoTimeForAnEarlierRestart(t *testing.T) {
 	requireHonest(t, r.Tick(r.Now+1*s-tt.Tick-r.Now).Update(ctl, databaseB, database(false, "pw")), false)
 }
 
-// A kill in a step's faults holds the controller no longer than they do.
+// A restart within a step's faults holds the controller no longer than they
+// do.
 func TestHonestCountsOverlappingHoldsOnce(t *testing.T) {
 	for name, late := range map[string]time.Duration{"stable after the faults end": 0, "later": tt.Tick} {
 		t.Run(name, func(t *testing.T) {
 			r := secretRun(secretRef(), secret(true))
 			r.Add(tt.Fault(r.Step, 0, false, "error(500) on resource=databases"))
 			readyB(seenThenDeleted(r))
-			r.Tick(500 * ms).Add(tt.Exit("signal: killed", true, ""))
-			end := r.Tick(2 * s).Now
-			r.Add(tt.Fault(r.Step, 0, true, "error(500) on resource=databases"), tt.Start(2))
+			r.Tick(500 * ms).Add(tt.Exit("signal: terminated", true, "")).Tick(1 * s).Add(tt.Start(2))
+			end := r.Tick(1 * s).Now
+			r.Add(tt.Fault(r.Step, 0, true, "error(500) on resource=databases"))
 			endFaults(r, 3*s)
 			requireHonest(t, r.Tick(end+1*s+late-r.Now).Update(ctl, databaseB, database(false, "pw")), late > 0)
 		})
 	}
+}
+
+// Supervision is off during a step's faults, so a controller that exits
+// before them starts again only once they end.
+func TestHonestCountsAnExitThatOutlastsItsStep(t *testing.T) {
+	r := secretRun(secretRef(), secret(true))
+	readyB(seenThenDeleted(r))
+	ready := r.Now - tt.Tick
+	r.Tick(ready + 500*ms - r.Now).Add(tt.Exit("exit status 2", false, "panic: nil map"))
+	timeOut := ready + 2*s
+	r.Add(trace.Event{Phase: &trace.Phase{Step: r.Step, Name: trace.EndFaults, Deadline: timeOut}})
+	r.Tick(timeOut - r.Now).Add(tt.Phase(r.Step, trace.TimedOut)).Begin().
+		Add(tt.Fault(r.Step, 0, false, "error(500) on resource=databases"))
+	end := r.Tick(2 * s).Now
+	r.Add(tt.Fault(r.Step, 0, true, "error(500) on resource=databases"), tt.Start(2))
+	endFaults(r, 3*s)
+	requireHonest(t, r.Tick(end+1*s-r.Now).Update(ctl, databaseB, database(false, "pw")), false)
 }
 
 func TestHonestCountsARestartThatFollowsAFailedWriteOfTheCR(t *testing.T) {

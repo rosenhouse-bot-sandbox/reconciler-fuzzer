@@ -241,6 +241,18 @@ func TestFirstSettledIsAFakeCallPlusItsPoll(t *testing.T) {
 	}
 }
 
+// The lookback is stable when every fake polls faster, so that FirstSettled
+// finds the candidate that an earlier write sets.
+func TestFirstSettledLooksBackByStableWithShorterPolls(t *testing.T) {
+	sp := spec
+	sp.Polls = map[string]time.Duration{"cloud": 500 * ms}
+	b := settledAt3s()
+	b.At(1100*ms).Add(tt.Call(ctl, "update", widgetA, 200, "2"), tt.Version(widgetA, "ua", "2", ready(true)))
+	if got, ok := check.FirstSettled(b.Index(), 3*s, 20*s, sp); !ok || got != 3100*ms {
+		t.Fatalf("FirstSettled = %v, %v; want 3.1s", got, ok)
+	}
+}
+
 func TestClause5LooksAtABucket(t *testing.T) {
 	b := fakeDamagedAt1200ms(bucketA)
 	b.At(1500 * ms).Add(tt.Call(ctl, "get", bucketA, 404, ""))
