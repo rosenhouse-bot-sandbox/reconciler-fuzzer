@@ -59,7 +59,7 @@ func TestInstallCRDsUpdatesACRDAndWatchesANewOne(t *testing.T) {
 	if _, err := dynamic.NewForConfigOrDie(k.admin).Resource(gadgets).Namespace(k.Namespace()).Create(ctx, gadget, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	recorded.await(t, "a version of the Gadget", func(e trace.Event) bool { return e.Version != nil && e.Version.Ref.Resource == "gadgets" })
+	recorded.await(t, "version of the Gadget", func(e trace.Event) bool { return e.Version != nil && e.Version.Ref.Resource == "gadgets" })
 	if got := k.Kinds(); !reflect.DeepEqual(got, kinds) {
 		t.Errorf("Kinds = %v after InstallCRDs, want %v as Start left them.", got, kinds)
 	}

@@ -268,7 +268,7 @@ func (b *Binary) SetCommand(path string, args []string) {
 		b.o.Path = path
 	}
 	if args != nil {
-		b.o.Args = slices.Clone(args)
+		b.o.Args = args
 	}
 }
 
