@@ -16,7 +16,6 @@ func TestRunRejectsAnUnknownBug(t *testing.T) {
 }
 
 func TestRunRejectsAnUnknownVersion(t *testing.T) {
-	t.Skip("enabled by the toy-fleet package")
 	if err := run([]string{"--version=3"}, nil); err == nil || !strings.Contains(err.Error(), "--version=3: want 1 or 2") {
 		t.Errorf("run(--version=3) = %v, want an error naming --version=3", err)
 	}
@@ -86,7 +85,7 @@ func TestRunPrintsTheUsageForHelp(t *testing.T) {
 	if !errors.Is(err, flag.ErrHelp) {
 		t.Errorf("run returned %v for --help, want flag.ErrHelp so that main exits 0.", err)
 	}
-	for _, name := range []string{"-bug", "-kubeconfig", "-metrics-bind-address"} {
+	for _, name := range []string{"-bug", "-kubeconfig", "-metrics-bind-address", "-version"} {
 		if !strings.Contains(printed.String(), name) {
 			t.Errorf("run printed %q for --help, want the usage of %s.", printed.String(), name)
 		}

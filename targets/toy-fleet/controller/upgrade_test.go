@@ -34,7 +34,6 @@ func (f *fleet) sortedVolumes() []string {
 }
 
 func TestVersion2RenamesItsFinalizerAndPhaseButNotItsVolumes(t *testing.T) {
-	t.Skip("enabled by the toy-fleet package")
 	f := newFleet(t, clusterObj()).as(2, 0)
 	f.settle(f.clusters, "cluster")
 	if got := f.sortedVolumes(); !slices.Equal(got, []string{"cluster-vol-0 small", "cluster-vol-1 small"}) {
@@ -46,7 +45,6 @@ func TestVersion2RenamesItsFinalizerAndPhaseButNotItsVolumes(t *testing.T) {
 }
 
 func TestVersion2TakesOverAVersion1ClusterAndDeletesIt(t *testing.T) {
-	t.Skip("enabled by the toy-fleet package")
 	f := version1Cluster(t, true).as(2, 0)
 	f.settle(f.clusters, "cluster")
 	if c := f.cluster(); c.Status.Phase != fleetv1.Ready || !slices.Equal(c.Finalizers, []string{fleetv1.ClusterFinalizerV2}) {
@@ -63,7 +61,6 @@ func TestVersion2TakesOverAVersion1ClusterAndDeletesIt(t *testing.T) {
 }
 
 func TestVersion2ReleasesAClusterDeletedUnderVersion1(t *testing.T) {
-	t.Skip("enabled by the toy-fleet package")
 	f := version1Cluster(t, true)
 	f.delete(f.cluster())
 	f.as(2, 0).settle(f.clusters, "cluster")
@@ -73,7 +70,6 @@ func TestVersion2ReleasesAClusterDeletedUnderVersion1(t *testing.T) {
 }
 
 func TestVersion2FinishesAVersion1ClusterStillProvisioning(t *testing.T) {
-	t.Skip("enabled by the toy-fleet package")
 	f := version1Cluster(t, false).as(2, 0)
 	f.settle(f.clusters, "cluster")
 	f.readyVolumes()
@@ -84,7 +80,6 @@ func TestVersion2FinishesAVersion1ClusterStillProvisioning(t *testing.T) {
 }
 
 func TestB140KeepsTheVersion1Finalizer(t *testing.T) {
-	t.Skip("enabled by the toy-fleet package")
 	f := version1Cluster(t, true).as(2, B140)
 	f.settle(f.clusters, "cluster")
 	f.delete(f.cluster())
@@ -95,7 +90,6 @@ func TestB140KeepsTheVersion1Finalizer(t *testing.T) {
 }
 
 func TestB141MakesVersion2VolumesBesideVersion1Ones(t *testing.T) {
-	t.Skip("enabled by the toy-fleet package")
 	f := version1Cluster(t, true).as(2, B141)
 	f.settle(f.clusters, "cluster")
 	want := []string{"cluster-data-0 small", "cluster-data-1 small", "cluster-vol-0 small", "cluster-vol-1 small"}
@@ -104,13 +98,43 @@ func TestB141MakesVersion2VolumesBesideVersion1Ones(t *testing.T) {
 	}
 }
 
+func TestB142ReadiesAClusterThatVersion2Made(t *testing.T) {
+	f := newFleet(t, clusterObj()).as(2, B142)
+	f.settle(f.clusters, "cluster")
+	f.readyVolumes()
+	f.settle(f.clusters, "cluster")
+	if c := f.cluster(); c.Status.Phase != fleetv1.Ready {
+		t.Errorf("The Cluster is %+v, want Ready.", c.Status)
+	}
+}
+
 func TestB142LeavesAVersion1ClusterProvisioning(t *testing.T) {
-	t.Skip("enabled by the toy-fleet package")
 	f := version1Cluster(t, false).as(2, B142)
 	f.settle(f.clusters, "cluster")
 	f.readyVolumes()
 	f.settle(f.clusters, "cluster")
 	if c := f.cluster(); c.Status.Phase != fleetv1.Provisioning {
 		t.Errorf("The Cluster is %+v, want Provisioning.", c.Status)
+	}
+}
+
+// B140 to B142 are bugs of version 2, so version 1 runs correctly under them.
+func TestVersion1IgnoresTheVersion2Bugs(t *testing.T) {
+	for _, bug := range []Bug{B140, B141, B142} {
+		f := newBuggyFleet(t, bug, clusterObj())
+		f.settle(f.clusters, "cluster")
+		f.readyVolumes()
+		f.settle(f.clusters, "cluster")
+		if c := f.cluster(); c.Status.Phase != fleetv1.Ready || !slices.Equal(c.Finalizers, []string{fleetv1.ClusterFinalizer}) {
+			t.Errorf("B%d left the Cluster %+v with finalizers %v, want Ready under version 1's finalizer.", bug, c.Status, c.Finalizers)
+		}
+		if got := f.sortedVolumes(); !slices.Equal(got, []string{"cluster-vol-0 small", "cluster-vol-1 small"}) {
+			t.Errorf("B%d made the Volumes %q, want version 1's.", bug, got)
+		}
+		f.delete(f.cluster())
+		f.settle(f.clusters, "cluster")
+		if err := f.get("cluster", &fleetv1.Cluster{}); !apierrors.IsNotFound(err) {
+			t.Errorf("B%d: the deleted Cluster gives %v, want not found.", bug, err)
+		}
 	}
 }

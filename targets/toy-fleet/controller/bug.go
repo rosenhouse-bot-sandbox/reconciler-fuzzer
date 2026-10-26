@@ -31,7 +31,7 @@ const (
 )
 
 // bugs holds every seeded bug ID.
-var bugs = map[Bug]bool{B150: true, B151: true, B152: true}
+var bugs = map[Bug]bool{B140: true, B141: true, B142: true, B150: true, B151: true, B152: true}
 
 // ParseBug converts a --bug value into a Bug.
 func ParseBug(id int) (Bug, error) {
