@@ -18,6 +18,17 @@ import (
 var (
 	secrets = trace.Kind{Version: "v1", Kind: "Secret", Resource: "secrets"}
 	pw      = tt.Ref("secrets", "ns", "pw")
+	// volumeB is a Volume that the controller makes for slot b's Database.
+	volumeB = tt.Ref("toy/volumes", "ns", "b-0")
+)
+
+const (
+	// volumesFail is a step's fault that fails the controller's requests on
+	// Volumes.
+	volumesFail = "error(500) on resource=volumes"
+	// databasesDelay is a step's fault that holds the controller's requests
+	// on Databases for 2s.
+	databasesDelay = "delay(2s) on resource=databases"
 )
 
 // secretRef is a Database's reference to the Secret its
@@ -171,6 +182,7 @@ func TestHonestPassesACorrectionThatAFailedWriteOfTheCRDelays(t *testing.T) {
 		fails       bool
 	}{
 		"a conflict":                         {slowCall("update", databaseB, 409), 0, 0, false},
+		"a conflicting write of its status":  {onStatus(slowCall("update", databaseB, 409)), 0, 0, false},
 		"a server error":                     {slowCall("update", databaseB, 500), 0, 0, false},
 		"a conflicting patch":                {slowCall("patch", databaseB, 409), 0, 0, false},
 		"an unknown outcome":                 {dropped, 0, 0, false},
@@ -228,18 +240,41 @@ func TestHonestPassesACorrectionSentInTimeThatReturnsLate(t *testing.T) {
 
 // injected is a controller call on ref with status that a fault altered by
 // effect.
-func injected(ref trace.Ref, status int, effect string) trace.Event {
-	e := tt.Call(ctl, "update", ref, status, "")
+func injected(verb string, ref trace.Ref, status int, effect string) trace.Event {
+	e := tt.Call(ctl, verb, ref, status, "")
 	e.Call.Injected = effect
 	return e
 }
 
+// failedGet is the controller's get of ref that an error fault failed.
+func failedGet(ref trace.Ref) trace.Event { return injected("get", ref, 500, "error(500)") }
+
+// delayedGet is the controller's get of ref whose response a delay fault
+// held for 2s.
+func delayedGet(ref trace.Ref) trace.Event {
+	e := injected("get", ref, 200, "delay(2s)")
+	e.Call.Latency = 2 * s
+	return e
+}
+
+// onStatus is the call e on its object's status subresource.
+func onStatus(e trace.Event) trace.Event {
+	e.Call.Subresource = "status"
+	return e
+}
+
 // requireHonest fails the test unless Honest finds that slot b reported
-// ready while pw was missing exactly when fails is set.
+// ready in step 0 while pw was missing exactly when fails is set.
 func requireHonest(t *testing.T, r *tt.Script, fails bool) {
 	t.Helper()
+	requireHonestIn(t, r, 0, fails)
+}
+
+// requireHonestIn is requireHonest for a finding of step.
+func requireHonestIn(t *testing.T, r *tt.Script, step int, fails bool) {
+	t.Helper()
 	if findings := honest(t, r); fails {
-		requireFinding(t, findings, "Honest", 0, noDependency, "kube/secrets", "slot b: secrets ns/pw seen missing")
+		requireFinding(t, findings, "Honest", step, noDependency, "kube/secrets", "slot b: secrets ns/pw seen missing")
 	} else {
 		requireNone(t, findings)
 	}
@@ -288,37 +323,36 @@ func TestHonestGivesNoTimeForAnEarlierRestart(t *testing.T) {
 	requireHonest(t, r.Tick(r.Now+1*s-tt.Tick-r.Now).Update(ctl, databaseB, database(false, "pw")), false)
 }
 
-// A restart within a step's faults holds the controller no longer than they
-// do.
+// A crash within a step's faults holds the controller no longer than they
+// do, since it starts again as they end.
 func TestHonestCountsOverlappingHoldsOnce(t *testing.T) {
 	for name, late := range map[string]time.Duration{"stable after the faults end": 0, "later": tt.Tick} {
 		t.Run(name, func(t *testing.T) {
 			r := secretRun(secretRef(), secret(true))
-			r.Add(tt.Fault(r.Step, 0, false, "error(500) on resource=databases"))
+			r.Add(tt.Fault(r.Step, 0, false, volumesFail)).Add(failedGet(volumeB))
 			readyB(seenThenDeleted(r))
-			r.Tick(500 * ms).Add(tt.Exit("signal: terminated", true, "")).Tick(1 * s).Add(tt.Start(2))
-			end := r.Tick(1 * s).Now
-			r.Add(tt.Fault(r.Step, 0, true, "error(500) on resource=databases"))
-			endFaults(r, 3*s)
+			r.Tick(500 * ms).Add(tt.Exit("exit status 2", false, "panic: nil map"))
+			end := r.Tick(1500 * ms).Now
+			r.Add(tt.Fault(r.Step, 0, true, volumesFail), tt.Start(2))
+			endFaults(r, 2*s)
 			requireHonest(t, r.Tick(end+1*s+late-r.Now).Update(ctl, databaseB, database(false, "pw")), late > 0)
 		})
 	}
 }
 
 // Supervision is off during a step's faults, so a controller that exits
-// before them starts again only once they end.
+// before them starts again only once they end. It takes no request of its
+// own while down, so its step's faults alter none.
 func TestHonestCountsAnExitThatOutlastsItsStep(t *testing.T) {
 	r := secretRun(secretRef(), secret(true))
 	readyB(seenThenDeleted(r))
 	ready := r.Now - tt.Tick
 	r.Tick(ready + 500*ms - r.Now).Add(tt.Exit("exit status 2", false, "panic: nil map"))
-	timeOut := ready + 2*s
-	r.Add(trace.Event{Phase: &trace.Phase{Step: r.Step, Name: trace.EndFaults, Deadline: timeOut}})
-	r.Tick(timeOut - r.Now).Add(tt.Phase(r.Step, trace.TimedOut)).Begin().
-		Add(tt.Fault(r.Step, 0, false, "error(500) on resource=databases"))
+	timesOut(r, 1*s, ready+2*s)
+	r.Add(tt.Fault(r.Step, 0, false, volumesFail))
 	end := r.Tick(2 * s).Now
-	r.Add(tt.Fault(r.Step, 0, true, "error(500) on resource=databases"), tt.Start(2))
-	endFaults(r, 3*s)
+	r.Add(tt.Fault(r.Step, 0, true, volumesFail), tt.Start(2))
+	endFaults(r, 2*s)
 	requireHonest(t, r.Tick(end+1*s-r.Now).Update(ctl, databaseB, database(false, "pw")), false)
 }
 
@@ -334,20 +368,59 @@ func TestHonestCountsARestartThatFollowsAFailedWriteOfTheCR(t *testing.T) {
 func TestHonestGivesTheStepsBackoffAfterAFailedWriteOfTheCR(t *testing.T) {
 	for name, late := range map[string]time.Duration{"the backoff and stable after the failure": 0, "later": tt.Tick} {
 		t.Run(name, func(t *testing.T) {
-			const backoff = 3 * s
+			const backoff = 1 * s
 			r := secretRun(secretRef(), secret(true))
-			r.Add(tt.Fault(r.Step, 0, false, "error(500) on resource=databases"))
+			r.Add(tt.Fault(r.Step, 0, false, volumesFail)).Add(failedGet(volumeB))
 			readyB(seenThenDeleted(r)).Tick(500*ms).Call(ctl, "update", databaseB, 409)
 			end := r.Tick(1 * s).Now
-			r.Add(tt.Fault(r.Step, 0, true, "error(500) on resource=databases"))
+			r.Add(tt.Fault(r.Step, 0, true, volumesFail))
 			endFaults(r, backoff)
 			requireHonest(t, r.Tick(end+backoff+r.Spec.Stable+late-r.Now).Update(ctl, databaseB, database(false, "pw")), late > 0)
 		})
 	}
 }
 
+// A start within the backoff allowance of a failed write of the CR does not
+// cut the allowance short.
+func TestHonestKeepsTheBackoffAcrossAStartWithinIt(t *testing.T) {
+	for name, late := range map[string]time.Duration{"the backoff and stable after the failure": 0, "later": tt.Tick} {
+		t.Run(name, func(t *testing.T) {
+			const backoff = 1 * s
+			r := secretRun(secretRef(), secret(true))
+			readyB(seenThenDeleted(r)).Tick(100*ms).Call(ctl, "update", databaseB, 409)
+			sent := r.Now - tt.Tick
+			exit := r.Tick(800 * ms).Now
+			r.Add(tt.Exit("exit status 2", false, "panic: nil map"))
+			start := r.Tick(200 * ms).Now
+			r.Add(tt.Start(2))
+			endFaults(r, backoff)
+			due := sent + backoff + r.Spec.Stable + (start - exit)
+			requireHonest(t, r.Tick(due+late-r.Now).Update(ctl, databaseB, database(false, "pw")), late > 0)
+		})
+	}
+}
+
+// Each failed write of the CR is retried after the backoff of its own step.
+func TestHonestGivesTheBackoffOfAFailedWritesOwnStep(t *testing.T) {
+	for name, late := range map[string]time.Duration{"the next step's backoff after a write in it": 0, "later": tt.Tick} {
+		t.Run(name, func(t *testing.T) {
+			const backoff = 100 * ms
+			r := secretRun(secretRef(), secret(true))
+			readyB(seenThenDeleted(r))
+			ready := r.Now - tt.Tick
+			timesOut(r, 3*s, ready+200*ms)
+			r.Tick(ready+500*ms-r.Now).Call(ctl, "update", databaseB, 409)
+			sent := r.Now - tt.Tick
+			endFaults(r, backoff)
+			due := sent + backoff + r.Spec.Stable
+			requireHonest(t, r.Tick(due+late-r.Now).Update(ctl, databaseB, database(false, "pw")), late > 0)
+		})
+	}
+}
+
 // A step can time out just after the ready write. The next step's faults
-// then hold the controller until they end.
+// then hold the controller until they end, and its own step's, which ended
+// before it wrote, hold it not at all.
 func TestHonestCountsACorrectionFromTheEndOfTheNextStepsFaults(t *testing.T) {
 	for name, c := range map[string]struct {
 		// begins is how long after the ready write's response the next step
@@ -362,28 +435,31 @@ func TestHonestCountsACorrectionFromTheEndOfTheNextStepsFaults(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := secretRun(secretRef(), secret(true))
+			r.Add(tt.Fault(r.Step, 0, false, volumesFail)).Add(failedGet(volumeB))
+			r.Tick(500 * ms).Add(tt.Fault(r.Step, 0, true, volumesFail))
 			readyB(seenThenDeleted(r))
 			ready := r.Now - tt.Tick
-			timeOut := ready + c.begins
-			r.Add(trace.Event{Phase: &trace.Phase{Step: r.Step, Name: trace.EndFaults, Deadline: timeOut}})
-			r.Tick(timeOut - r.Now).Add(tt.Phase(r.Step, trace.TimedOut)).Begin()
+			timesOut(r, 1*s, ready+c.begins)
 			begin := r.Now
-			r.Add(tt.Fault(r.Step, 0, false, "error(500) on resource=databases"))
+			r.Add(tt.Fault(r.Step, 0, false, volumesFail)).Add(failedGet(volumeB))
 			end := r.Tick(2 * s).Now
-			r.Add(tt.Fault(r.Step, 0, true, "error(500) on resource=databases"))
-			endFaults(r, 3*s)
+			r.Add(tt.Fault(r.Step, 0, true, volumesFail))
+			endFaults(r, 2*s)
 			due := end + r.Spec.Stable - (begin - ready)
 			requireHonest(t, r.Tick(due+c.late-r.Now).Update(ctl, databaseB, database(false, "pw")), c.fails)
 		})
 	}
 }
 
-// A model fault and a held watch hold no request of the controller.
+// A fault holds the controller only if it altered one of its requests.
 func TestHonestGivesNoTimeForAFaultThatHoldsNoRequest(t *testing.T) {
 	for name, fault := range map[string]func(step int, ended bool) trace.Event{
 		"a model's fault": func(step int, ended bool) trace.Event { return tt.ModelFault(step, 0, ended, "stuck", "volumes") },
 		"a held watch": func(step int, ended bool) trace.Event {
-			return tt.HoldFault(step, 0, ended, tt.Ref("secrets", "ns", ""))
+			return tt.HoldFault(step, 0, ended, tt.Ref("configmaps", "ns", ""))
+		},
+		"a fault that altered no request": func(step int, ended bool) trace.Event {
+			return tt.Fault(step, 0, ended, "error(500) on resource=volumes")
 		},
 	} {
 		for when, late := range map[string]time.Duration{"stable after the ready write": 0, "later": tt.Tick} {
@@ -397,6 +473,26 @@ func TestHonestGivesNoTimeForAFaultThatHoldsNoRequest(t *testing.T) {
 				requireHonest(t, r.Tick(ready+1*s+late-r.Now).Update(ctl, databaseB, database(false, "pw")), late > 0)
 			})
 		}
+	}
+}
+
+// A step's faults hold the controller only if they altered a request that it
+// sent while they ran, not one an earlier step's faults altered.
+func TestHonestGivesNoTimeForFaultsThatAlteredAnEarlierStepsRequest(t *testing.T) {
+	for name, late := range map[string]time.Duration{"stable after the ready write": 0, "later": tt.Tick} {
+		t.Run(name, func(t *testing.T) {
+			r := secretRun(secretRef(), secret(true))
+			r.Add(tt.Fault(r.Step, 0, false, volumesFail)).Add(failedGet(volumeB))
+			r.Tick(500 * ms).Add(tt.Fault(r.Step, 0, true, volumesFail))
+			timesOut(r, 1*s, r.Now+500*ms)
+			r.Add(tt.Fault(r.Step, 0, false, volumesFail))
+			readyB(seenThenDeleted(r))
+			ready := r.Now - tt.Tick
+			r.Tick(500 * ms).Add(tt.Fault(r.Step, 0, true, volumesFail))
+			endFaults(r, 1*s)
+			r.Tick(ready+1*s+late-r.Now).Update(ctl, databaseB, database(false, "pw"))
+			requireHonestIn(t, r, 1, late > 0)
+		})
 	}
 }
 
@@ -418,11 +514,11 @@ func TestHonestExcusesACorrectedReadyWriteOnlySoonAfterTheLook(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			r := secretRun(secretRef(), secret(true))
 			if c.faultsEnd > 0 {
-				r.Add(tt.Fault(r.Step, 0, false, "delay(2s) on resource=databases"))
+				r.Add(tt.Fault(r.Step, 0, false, databasesDelay))
 			}
 			look := seenThenDeleted(r).Now - tt.Tick
 			if c.faultsEnd > 0 {
-				r.Tick(look + c.faultsEnd - r.Now).Add(tt.Fault(r.Step, 0, true, "delay(2s) on resource=databases"))
+				r.Tick(look + c.faultsEnd - r.Now).Add(tt.Fault(r.Step, 0, true, databasesDelay)).Add(delayedGet(databaseB))
 				endFaults(r, 3*s)
 			}
 			r.Tick(look+c.sent-r.Now).UpdateInFlight(ctl, databaseB, database(true, "pw"), 500*ms).
@@ -439,9 +535,9 @@ func TestHonestExcusesAReadyWriteSentWhileFaultsAfterTheLookHold(t *testing.T) {
 			r := secretRun(secretRef(), secret(true))
 			look := seenThenDeleted(r).Now - tt.Tick
 			begin := r.Tick(1 * s).Now
-			r.Add(tt.Fault(r.Step, 0, false, "delay(2s) on resource=databases"))
+			r.Add(tt.Fault(r.Step, 0, false, databasesDelay))
 			end := r.Tick(2 * s).Now
-			r.Add(tt.Fault(r.Step, 0, true, "delay(2s) on resource=databases"))
+			r.Add(tt.Fault(r.Step, 0, true, databasesDelay)).Add(delayedGet(databaseB))
 			endFaults(r, 3*s)
 			sent := look + 2*r.Spec.Stable + (end - begin) + late
 			r.Tick(sent-r.Now).UpdateInFlight(ctl, databaseB, database(true, "pw"), 500*ms).
@@ -684,7 +780,7 @@ func TestHonestWithTrackPassesACRThatReactsInTime(t *testing.T) {
 		}},
 		"a write of the CR has an unknown outcome in time": {tracked, func(r *tt.Script) {
 			notReadySeen(r)
-			r.Tick(400 * ms).Add(injected(databaseB, 200, trace.DropResponse))
+			r.Tick(400 * ms).Add(injected("update", databaseB, 200, trace.DropResponse))
 		}},
 		"the controller restarts in time": {tracked, func(r *tt.Script) {
 			notReadySeen(r)
@@ -828,6 +924,14 @@ func TestFirstSettledIsWhenTheHeldBackCRsExcuseStarts(t *testing.T) {
 	if got, ok := check.FirstSettled(ix, from, excuse+time.Second, spec); !ok || got != excuse {
 		t.Errorf("FirstSettled = %v, %v; want %v.", got, ok, excuse)
 	}
+}
+
+// timesOut ends r's step's faults now with backoff, times the step out at
+// deadline and begins the next step.
+func timesOut(r *tt.Script, backoff, deadline time.Duration) *tt.Script {
+	r.Add(trace.Event{Phase: &trace.Phase{Step: r.Step, Name: trace.EndFaults, Deadline: deadline, Backoff: backoff}})
+	r.Tick(deadline - r.Now).Add(tt.Phase(r.Step, trace.TimedOut))
+	return r.Begin()
 }
 
 // endFaults ends r's step's faults now with backoff, and returns when the

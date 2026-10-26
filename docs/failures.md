@@ -107,7 +107,7 @@ failed again within `stable`.
 
 Clause 1 skips a CR that a reference holds back, if the named object as it
 is now would hold the CR back too, or that a reference leaves unknown. It
-does so once `stable`, and the time the step's faults lasted, at most
+does so once `stable`, and the step's fault period, at most
 `timeouts.backoffCap`, have passed since the faults ended.
 
 Clause 1's line says what the controller last saw of each object that the
@@ -124,8 +124,9 @@ stop's step. It names a CR that was still being deleted when the stop's wait
 for it gave up.
 
 The `backoff-bound` label means `timeouts.backoffCap` set the deadline,
-because the step's faults lasted longer. A controller whose retry backoff
-exceeds the cap fails there. Raise the cap if that backoff is intended.
+because the step's fault period lasted longer. A controller whose retry
+backoff exceeds the cap fails there. Raise the cap if that backoff is
+intended.
 
 ### Crash: the controller exited
 

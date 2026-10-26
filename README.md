@@ -192,17 +192,18 @@ references:
   look, with no restart since, that the controller retracts within `stable` of the write's
   response, by writing the CR not ready or naming another object, since a reconcile may read its
   cache before the look reaches the cache. Neither window counts time in which a step's faults
-  hold the controller, or in which it is down. A model fault and a held watch hold no request.
-  The retraction window starts again at a start in it, since a restart loses the reconcile. A
-  write of the CR in it that failed or had an unknown outcome, such as a conflict, gives the
-  controller the time the step's faults lasted, at most `timeouts.backoffCap`, and `stable` from
-  that write's response, since it retries after a backoff. With `track: d`, Honest fails a CR
-  that stays ready `d` after a look that held it back.
+  hold the controller, or between an exit and its next start. A step's faults hold it only if
+  they altered one of its requests, so a model fault and a held watch hold none. The retraction
+  window starts again at a start in it, since a restart loses the reconcile. A write of the CR in
+  it that failed or had an unknown outcome, such as a conflict, gives the controller that write's
+  step's fault period, at most `timeouts.backoffCap`, and `stable` from the write's response,
+  since it retries after a backoff. With `track: d`, Honest fails a CR that stays ready `d` after
+  a look that held it back.
 - The settle condition does not wait for a CR that a reference holds back, if the object as it is
-  now would hold the CR back too. This starts once `stable`, and the time the step's faults
-  lasted, at most `timeouts.backoffCap`, have passed since the faults ended. So a controller in
-  retry backoff reacts first. If the controller does not watch the `to` kind, it misses the
-  object's return, and the step does not settle.
+  now would hold the CR back too. This starts once `stable`, and the step's fault period, at most
+  `timeouts.backoffCap`, have passed since the faults ended. So a controller in retry backoff
+  reacts first. If the controller does not watch the `to` kind, it misses the object's return, and
+  the step does not settle.
 - A response that the harness cannot decode, such as a watch of Tables, may show the named object.
   If one ends after the controller's last look, or is a watch still open since, the reference is
   **unknown**. Honest then passes the CR's ready writes, and the settle condition treats the CR as

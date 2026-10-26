@@ -57,8 +57,7 @@ type honesty struct {
 	steps   []trace.StepSpan
 	deletes map[trace.Ref][]time.Duration
 	found   map[findingKey]*Finding
-	// holds are the run's holds, as holds returns them.
-	holds []hold
+	holds   []hold
 }
 
 type findingKey struct {
@@ -129,9 +128,9 @@ func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, d
 	}
 }
 
-// stale reports whether a reconcile that read the controller's cache before
-// its look at an object could have written the CR ready at t0: it looked,
-// it has not restarted since, and the write came within twice stable of the
+// stale reports whether a reconcile that read the cache before the look at
+// an object could have written the CR ready at t0. The controller must have
+// looked, not started since, and sent the write within twice stable of the
 // look, holds aside.
 func (h *honesty) stale(g sight, t0 time.Duration) bool {
 	return g.looked && !h.restarted(g.at, t0) && t0 <= until(g.at, 2*h.s.Stable, h.holds)
@@ -159,13 +158,13 @@ func (h *honesty) corrected(p Primary, later []trace.Event, n named, due time.Du
 }
 
 // correctionDue is when the controller must have corrected ready, the write
-// that made the CR ready: stable after ready's response, since the CR's next
-// reconcile starts only once ready returns. A start by then gives the
-// controller stable from then, since a restart loses the reconcile. A write
-// of the CR sent by then that failed or had an unknown outcome, such as a
-// conflict from a cache that lacks ready, gives it its step's backoff
-// allowance and stable from that write's response, since it retries after a
-// backoff.
+// that made the CR ready. The window is stable from ready's response, since
+// the CR's next reconcile starts only once ready returns. A start in it
+// gives the controller stable from that start, since a restart loses the
+// reconcile. A write of the CR in it that failed or had an unknown outcome,
+// such as a conflict from a cache that lacks ready, gives it that write's
+// step's backoff allowance and stable from the write's response, since the
+// controller retries after a backoff.
 func (h *honesty) correctionDue(ready trace.Event) time.Duration {
 	due := until(ready.At, h.s.Stable, h.holds)
 	for _, e := range h.ix.EventsIn(ready.At, math.MaxInt64) {
@@ -194,10 +193,9 @@ func unconfirmed(c trace.Call) bool { return !succeeded(c) || c.Unknown() }
 // A hold is a time in which the controller cannot act on what it saw.
 type hold struct{ start, end time.Duration }
 
-// holds returns the run's holds, merged and in order of start: each step's
-// faults, which fail or stall the controller's requests, and the time from
-// each exit until the next start. A model fault and a held watch hold no
-// request of the controller.
+// holds returns the run's holds, merged and in order of start. A step's
+// fault events hold the controller from the first until the last, if a
+// fault altered one of its requests. An exit holds it until the next start.
 func holds(ix *trace.Index) []hold {
 	byStep := map[int]hold{}
 	for _, e := range ix.Events() {
@@ -210,7 +208,12 @@ func holds(ix *trace.Index) []hold {
 			byStep[f.Step] = h
 		}
 	}
-	held := slices.Collect(maps.Values(byStep))
+	var held []hold
+	for _, h := range byStep {
+		if altered(ix, h) {
+			held = append(held, h)
+		}
+	}
 	procs := ix.Procs()
 	for i := 1; i < len(procs); i++ {
 		if procs[i-1].Proc.Event == trace.Exit {
@@ -227,6 +230,15 @@ func holds(ix *trace.Index) []hold {
 		merged = append(merged, h)
 	}
 	return merged
+}
+
+// altered reports whether a fault altered a request that the controller
+// sent while h held. A model fault and a held watch alter none.
+func altered(ix *trace.Index, h hold) bool {
+	return slices.ContainsFunc(ix.Calls(trace.Controller, h.start, math.MaxInt64), func(e trace.Event) bool {
+		sent := e.At - e.Call.Latency
+		return e.Call.Injected != "" && h.start <= sent && sent <= h.end
+	})
 }
 
 // until is when a window of d from t closes: d after t, and the time after t
