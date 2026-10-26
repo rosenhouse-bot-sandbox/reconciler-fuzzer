@@ -16,7 +16,6 @@ func withUpgrades(t *testing.T, upgrades string) string {
 }
 
 func TestLaunchUpgradesResolveAgainstTheConfig(t *testing.T) {
-	t.Skip("enabled by the load package")
 	path := writeConfig(t, withUpgrades(t, "[{binary: bin/v2, args: [--version=2], crds: [crd.yaml]}, {args: []}]"))
 	c, err := config.Load(path)
 	if err != nil {
@@ -30,7 +29,6 @@ func TestLaunchUpgradesResolveAgainstTheConfig(t *testing.T) {
 }
 
 func TestLaunchUpgradesRefuseAMissingCRDPath(t *testing.T) {
-	t.Skip("enabled by the load package")
 	_, err := config.Load(writeConfig(t, withUpgrades(t, "[{crds: [crd.yaml]}, {crds: [missing/]}]")))
 	if want := "launch.upgrades[1].crds: stat "; err == nil || !strings.Contains(err.Error(), want) {
 		t.Errorf("err = %v, want one containing %q", err, want)
@@ -38,7 +36,6 @@ func TestLaunchUpgradesRefuseAMissingCRDPath(t *testing.T) {
 }
 
 func TestLaunchUpgradeArgsNameDeclaredSystems(t *testing.T) {
-	t.Skip("enabled by the load package")
 	if _, err := config.Load(writeConfig(t, withUpgrades(t, "[{args: ['${systems.cloud.url}']}]"))); err != nil {
 		t.Error(err)
 	}
@@ -49,7 +46,6 @@ func TestLaunchUpgradeArgsNameDeclaredSystems(t *testing.T) {
 }
 
 func TestAnUnknownUpgradeKeyListsTheUpgradeKeys(t *testing.T) {
-	t.Skip("enabled by the load package")
 	_, err := config.Load(writeConfig(t, withUpgrades(t, "[{zzzzzz: x}]")))
 	if want := "launch.upgrades[0].zzzzzz is not a key; launch.upgrades[0] takes binary, args and crds"; err == nil || !strings.Contains(err.Error(), want) {
 		t.Errorf("err = %v, want one containing %q", err, want)
@@ -57,7 +53,6 @@ func TestAnUnknownUpgradeKeyListsTheUpgradeKeys(t *testing.T) {
 }
 
 func TestCheckArgsNamesTheArgAndItsKey(t *testing.T) {
-	t.Skip("enabled by the load package")
 	c, err := config.Load(writeConfig(t, minimal(t)+"systems: ["+fake+"]\n"))
 	if err != nil {
 		t.Fatal(err)
