@@ -1,6 +1,7 @@
 package generate
 
 import (
+	"maps"
 	"reflect"
 	"slices"
 	"testing"
@@ -25,7 +26,6 @@ func upgrades(step plan.Step) []plan.Upgrade {
 // Each upgrade is a restart that ends its step, 0 to stable after the
 // action before it, in a step no earlier than the previous upgrade's.
 func TestEveryPlanAppliesEachUpgradeOnceInOrder(t *testing.T) {
-	t.Skip("enabled by the load package")
 	cfg := loadConfig(t, upgradesConfig)
 	for i, p := range drawPlans(t, newGenerator(t, cfg), 20) {
 		var got []plan.Upgrade
@@ -52,9 +52,27 @@ func TestEveryPlanAppliesEachUpgradeOnceInOrder(t *testing.T) {
 	}
 }
 
+// An upgrade may meet the controller as it starts on the action before
+// it, or once that action had stable to settle.
+func TestUpgradeDelaysRunFromZeroToStable(t *testing.T) {
+	cfg := loadConfig(t, upgradesConfig)
+	delays := map[plan.Duration]bool{}
+	for _, p := range drawPlans(t, newGenerator(t, cfg), 50) {
+		for _, step := range p.Steps {
+			for j, a := range step.Actions {
+				if isUpgrade(a) {
+					delays[a.At-step.Actions[j-1].At] = true
+				}
+			}
+		}
+	}
+	if stable := plan.Duration(cfg.Timeouts.Stable); !delays[0] || !delays[stable] {
+		t.Errorf("Upgrade delays %v lack 0 or %v.", slices.Sorted(maps.Keys(delays)), stable)
+	}
+}
+
 // An upgrade during a fault meets the controller mid-reconcile.
 func TestSomeUpgradesComeInsideAFaultPeriod(t *testing.T) {
-	t.Skip("enabled by the load package")
 	inside := 0
 	for _, p := range plans(t, upgradesConfig, 20) {
 		for _, step := range p.Steps {
@@ -72,7 +90,6 @@ func TestSomeUpgradesComeInsideAFaultPeriod(t *testing.T) {
 
 // The new version must finalize CRs the old one made.
 func TestSomeUpgradesComeBeforeADelete(t *testing.T) {
-	t.Skip("enabled by the load package")
 	before := 0
 	for _, p := range plans(t, upgradesConfig, 20) {
 		upgraded := false
@@ -93,7 +110,6 @@ func TestSomeUpgradesComeBeforeADelete(t *testing.T) {
 // Upgrades are drawn after the rest of the plan, so a seed's plan only
 // gains the restarts.
 func TestUpgradesOnlyAddRestarts(t *testing.T) {
-	t.Skip("enabled by the load package")
 	cfg := loadConfig(t, upgradesConfig)
 	without := *cfg
 	without.Launch.Upgrades = nil
@@ -105,5 +121,23 @@ func TestUpgradesOnlyAddRestarts(t *testing.T) {
 		if !reflect.DeepEqual(p, plain[i]) {
 			t.Errorf("Seed %d's plan without its upgrades differs from the plan of the config without upgrades.", i+1)
 		}
+	}
+}
+
+// A plan shares no slice with the config, so a change to one plan leaves
+// later plans as they were.
+func TestChangingAPlansUpgradeLeavesTheConfig(t *testing.T) {
+	cfg := loadConfig(t, upgradesConfig)
+	for _, step := range drawPlans(t, newGenerator(t, cfg), 1)[0].Steps {
+		for _, a := range step.Actions {
+			for _, field := range [][]string{a.Args, a.CRDs} {
+				for k := range field {
+					field[k] = "changed"
+				}
+			}
+		}
+	}
+	if want := loadConfig(t, upgradesConfig).Launch.Upgrades; !reflect.DeepEqual(cfg.Launch.Upgrades, want) {
+		t.Errorf("Upgrades = %+v after a plan changed, want %+v.", cfg.Launch.Upgrades, want)
 	}
 }
