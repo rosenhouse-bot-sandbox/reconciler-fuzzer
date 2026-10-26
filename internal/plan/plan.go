@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -180,7 +181,8 @@ func (d *Duration) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// Load reads plan.json strictly and validates it.
+// Load reads plan.json strictly and validates it. It resolves each
+// restart's binary and crds against the file's directory.
 func Load(path string) (*Plan, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -198,7 +200,35 @@ func Load(path string) (*Plan, error) {
 	if err := p.Validate(); err != nil {
 		return nil, fmt.Errorf("loading plan %s: %w", path, err)
 	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("loading plan %s: %w", path, err)
+	}
+	p.resolve(filepath.Dir(abs))
 	return &p, nil
+}
+
+// resolve joins each relative binary and crds path to dir.
+func (p *Plan) resolve(dir string) {
+	for i := range p.Steps {
+		for j := range p.Steps[i].Actions {
+			u := &p.Steps[i].Actions[j].Upgrade
+			if u.Binary != "" {
+				u.Binary = under(dir, u.Binary)
+			}
+			for k, path := range u.CRDs {
+				u.CRDs[k] = under(dir, path)
+			}
+		}
+	}
+}
+
+// under joins path to dir unless path is absolute.
+func under(dir, path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(dir, path)
 }
 
 // Save writes p as indented JSON.
@@ -274,6 +304,9 @@ func (a Action) validate(names map[string]string) error {
 	}
 	if a.Target != nil && a.Do != Damage && a.Do != ChangeFixture {
 		return fmt.Errorf("%s takes no target", a.Do)
+	}
+	if (a.Binary != "" || a.Args != nil || a.CRDs != nil) && a.Do != Restart {
+		return fmt.Errorf("%s takes no binary, args or crds", a.Do)
 	}
 	switch {
 	case a.Propagation != "" && a.Do != Delete:

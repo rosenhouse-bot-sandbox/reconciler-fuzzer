@@ -8,7 +8,6 @@ import (
 )
 
 func TestLoadResolvesARestartsPathsAgainstThePlan(t *testing.T) {
-	t.Skip("enabled by the load package")
 	path := write(t, `{"steps": [{"actions": [{"do": "restart", "binary": "bin/v2", "args": ["--version=2"], "crds": ["crds/", "/abs/crds"]}]}]}`)
 	p, err := Load(path)
 	if err != nil {
@@ -21,8 +20,19 @@ func TestLoadResolvesARestartsPathsAgainstThePlan(t *testing.T) {
 	}
 }
 
+func TestARelativePlanPathResolvesToAbsolutePaths(t *testing.T) {
+	path := write(t, `{"steps": [{"actions": [{"do": "restart", "binary": "v2"}]}]}`)
+	t.Chdir(filepath.Dir(path))
+	p, err := Load(filepath.Base(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := p.Steps[0].Actions[0].Binary, filepath.Join(filepath.Dir(path), "v2"); got != want {
+		t.Errorf("Binary = %q, want %q", got, want)
+	}
+}
+
 func TestOnlyARestartTakesAnUpgrade(t *testing.T) {
-	t.Skip("enabled by the load package")
 	create, widget := Action{Do: Create, Slot: "a"}, json.RawMessage(`{"metadata":{"name":"w"}}`)
 	for name, a := range map[string]Action{
 		"kill with args":          {Do: Kill, Upgrade: Upgrade{Args: []string{}}},
