@@ -31,7 +31,6 @@ func upgradeCalls(t *testing.T, f *fixture, u plan.Upgrade) ([]string, error) {
 
 // The appended restart keeps the command the upgrade set.
 func TestARestartInstallsItsCRDsAndThenStartsItsCommand(t *testing.T) {
-	t.Skip("enabled by the restart package")
 	f := upgradeFixture(t, "--bug=${systems.kube.namespace}")
 	got, err := upgradeCalls(t, f, plan.Upgrade{Binary: "/v2", Args: []string{"--version=2", "--ns=${systems.kube.namespace}"}, CRDs: []string{"/crds/a", "/crds/b"}})
 	if err != nil {
@@ -44,7 +43,6 @@ func TestARestartInstallsItsCRDsAndThenStartsItsCommand(t *testing.T) {
 }
 
 func TestARestartKeepsWhatItsUpgradeLeavesUnset(t *testing.T) {
-	t.Skip("enabled by the restart package")
 	for _, c := range []struct {
 		name       string
 		upgrade    plan.Upgrade
@@ -65,7 +63,6 @@ func TestARestartKeepsWhatItsUpgradeLeavesUnset(t *testing.T) {
 }
 
 func TestARestartWhoseInstallFailsLeavesTheControllerRunning(t *testing.T) {
-	t.Skip("enabled by the restart package")
 	f := upgradeFixture(t)
 	f.cluster.installErr = errors.New("no such CRD")
 	got, err := upgradeCalls(t, f, plan.Upgrade{CRDs: []string{"/crds"}})
@@ -77,8 +74,17 @@ func TestARestartWhoseInstallFailsLeavesTheControllerRunning(t *testing.T) {
 	}
 }
 
+func TestARestartWithAnUnknownKeyChangesNothing(t *testing.T) {
+	got, err := upgradeCalls(t, upgradeFixture(t), plan.Upgrade{Args: []string{"--url=${systems.cloud.url}"}, CRDs: []string{"/crds"}})
+	if err == nil || !strings.Contains(err.Error(), "systems.cloud.url") {
+		t.Errorf("Execute = %v, want an error that names the key", err)
+	}
+	if len(got) > 0 {
+		t.Errorf("calls = %q, want none", got)
+	}
+}
+
 func TestRunRefusesARestartWithAMissingPath(t *testing.T) {
-	t.Skip("enabled by the restart package")
 	for name, u := range map[string]plan.Upgrade{
 		"binary": {Binary: "/missing/toy-widget"},
 		"crds":   {CRDs: []string{"../../targets/toy-widget/crds/", "/missing/crds/"}},
@@ -98,7 +104,6 @@ func TestRunRefusesARestartWithAMissingPath(t *testing.T) {
 }
 
 func TestRunRefusesARestartArgWithAnUnknownKey(t *testing.T) {
-	t.Skip("enabled by the restart package")
 	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{{Do: plan.Create, Slot: "a"}, {Do: plan.Restart, Upgrade: plan.Upgrade{Args: []string{"--v2", "--url=${systems.cloud.url}"}}}}}}}
 	out := filepath.Join(t.TempDir(), "out")
 	_, err := Run(t.Context(), Options{ConfigPath: "../../targets/toy-widget/config.yaml", Plan: p, Out: out})

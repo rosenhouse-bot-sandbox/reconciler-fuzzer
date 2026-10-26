@@ -161,6 +161,9 @@ func Run(ctx context.Context, o Options) (check.Report, error) {
 	if err := p.ValidateKinds(cfg.ListedKinds()); err != nil {
 		return check.Report{}, err
 	}
+	if err := checkUpgrades(cfg, p); err != nil {
+		return check.Report{}, err
+	}
 	samples, err := loadSamples(cfg.Primaries)
 	if err != nil {
 		return check.Report{}, err
@@ -192,6 +195,28 @@ func Run(ctx context.Context, o Options) (check.Report, error) {
 		return check.Report{}, err
 	}
 	return report, nil
+}
+
+// checkUpgrades refuses a restart whose binary or crds path is missing, or
+// whose args hold a ${key} that the config's systems lack.
+func checkUpgrades(cfg *config.Config, p *plan.Plan) error {
+	for i, step := range p.Steps {
+		for j, a := range step.Actions {
+			paths := a.CRDs
+			if a.Binary != "" {
+				paths = append([]string{a.Binary}, a.CRDs...)
+			}
+			for _, path := range paths {
+				if _, err := os.Stat(path); err != nil {
+					return fmt.Errorf("steps[%d].actions[%d]: %w", i, j, err)
+				}
+			}
+			if err := cfg.CheckArgs(a.Args); err != nil {
+				return fmt.Errorf("steps[%d].actions[%d].%w", i, j, err)
+			}
+		}
+	}
+	return nil
 }
 
 // execute starts the fake services, the Kubernetes system, the models and
@@ -305,6 +330,8 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 		Select: func(ix *trace.Index, creator trace.Caller, target plan.Target, slot string, t time.Duration) (trace.Ref, error) {
 			return owner.New(ix, spec.Owners).Select(creator, target, slot, t)
 		},
+		Vars:       flatten(vars),
+		LaunchArgs: o.LaunchArgs,
 	}
 	if err := runner.Quiet(ctx); err != nil {
 		return err
