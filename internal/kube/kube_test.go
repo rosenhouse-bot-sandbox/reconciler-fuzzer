@@ -317,18 +317,20 @@ func TestObserverRetriesAKindItCouldNotMap(t *testing.T) {
 	}
 }
 
-// servesDeployments is a discovery client whose every group version serves
-// deployments.
-type servesDeployments struct{ discovery.DiscoveryInterface }
+// serves is a discovery client whose every group version serves resource.
+type serves struct {
+	discovery.DiscoveryInterface
+	resource string
+}
 
-func (servesDeployments) ServerResourcesForGroupVersion(string) (*metav1.APIResourceList, error) {
-	return &metav1.APIResourceList{APIResources: []metav1.APIResource{{Name: "deployments", Verbs: []string{"list", "watch"}}}}, nil
+func (s serves) ServerResourcesForGroupVersion(string) (*metav1.APIResourceList, error) {
+	return &metav1.APIResourceList{APIResources: []metav1.APIResource{{Name: s.resource, Verbs: []string{"list", "watch"}}}}, nil
 }
 
 func TestObserverCannotWatchAKindTheMapperFindsInAnotherGroup(t *testing.T) {
 	mapper := meta.NewDefaultRESTMapper(nil)
 	mapper.Add(schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}, meta.RESTScopeNamespace)
-	o := &observer{mapper: staticMapper{mapper}, discovery: servesDeployments{}}
+	o := &observer{mapper: staticMapper{mapper}, discovery: serves{resource: "deployments"}}
 	want := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 	if gvr, err := o.watchable(want.GroupResource()); gvr != want || err != nil {
 		t.Errorf("watchable(deployments.apps) = %v, %v, want %v", gvr, err, want)
@@ -360,7 +362,7 @@ func TestObserverWatchesKindsTogether(t *testing.T) {
 	var callers sync.WaitGroup
 	callers.Add(len(kinds))
 	// The server serves neither kind, so no informer starts.
-	o := &observer{mapper: gatheringMapper{staticMapper{mapper}, &callers}, discovery: servesDeployments{}, kinds: map[schema.GroupResource]schema.GroupVersionResource{}}
+	o := &observer{mapper: gatheringMapper{staticMapper{mapper}, &callers}, discovery: serves{resource: "deployments"}, kinds: map[schema.GroupResource]schema.GroupVersionResource{}}
 	done := make(chan struct{})
 	go func() {
 		o.watchAll(t.Context(), kinds)
@@ -545,31 +547,30 @@ func TestCheckCRDsRefusesAPathWithNoCRD(t *testing.T) {
 			t.Errorf("CheckCRDs(%s) = %v, want nil", path, err)
 		}
 	}
-	kustomize := t.TempDir()
-	if err := os.CopyFS(kustomize, os.DirFS("testdata/upgrade/v1")); err != nil {
+	crd, err := os.ReadFile("testdata/upgrade/v1/things.yaml")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Rename(filepath.Join(kustomize, "things.yaml"), filepath.Join(kustomize, "things.yaml.in")); err != nil {
-		t.Fatal(err)
+	noYAMLExtension, malformed := t.TempDir(), t.TempDir()
+	for path, data := range map[string][]byte{
+		filepath.Join(noYAMLExtension, "things.yaml.in"): crd,
+		filepath.Join(malformed, "things.yaml"):          crd,
+		filepath.Join(malformed, "bad.yaml"):             []byte("kind: [unclosed\n"),
+	} {
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	for _, path := range []string{kustomize, "testdata/objects.yaml"} {
+	for _, path := range []string{noYAMLExtension, "testdata/objects.yaml"} {
 		if err := CheckCRDs(path); err == nil || err.Error() != path+" holds no CustomResourceDefinition" {
 			t.Errorf("CheckCRDs(%s) = %v, want a refusal", path, err)
 		}
 	}
-	for _, path := range []string{"testdata/missing/", "testdata/objects.yaml/crds/"} {
+	for _, path := range []string{"testdata/missing/", "testdata/objects.yaml/crds/", malformed} {
 		if err := CheckCRDs(path); err == nil || !strings.Contains(err.Error(), path) {
 			t.Errorf("CheckCRDs(%s) = %v, want an error that names the path", path, err)
 		}
 	}
-}
-
-// servesConfigMaps is a discovery client whose every group version serves
-// configmaps.
-type servesConfigMaps struct{ discovery.DiscoveryInterface }
-
-func (servesConfigMaps) ServerResourcesForGroupVersion(string) (*metav1.APIResourceList, error) {
-	return &metav1.APIResourceList{APIResources: []metav1.APIResource{{Name: "configmaps", Verbs: []string{"list", "watch"}}}}, nil
 }
 
 func TestWatchAllStopsWaitingForTheFirstListsWithItsContext(t *testing.T) {
@@ -584,7 +585,7 @@ func TestWatchAllStopsWaitingForTheFirstListsWithItsContext(t *testing.T) {
 	o := newObserver()
 	o.ctx, o.cancel = context.WithCancel(context.Background())
 	defer o.cancel()
-	o.client, o.mapper, o.discovery = client, newStaticMapper(), servesConfigMaps{}
+	o.client, o.mapper, o.discovery = client, newStaticMapper(), serves{resource: "configmaps"}
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 	done := make(chan error, 1)

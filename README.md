@@ -379,7 +379,8 @@ restart installs new ones. A restart that names `binary`, `args` or `crds` tests
 - Every later start keeps the new `binary` and `args`: restarts, crash restarts, the start after
   a `kill`, and the appended restart. Env and RBAC do not change.
 - Paths resolve against the plan's directory. Before it starts, `run` refuses a `binary` that
-  is not an executable file, a `crds` path that holds no CRD, and an unknown key.
+  is not an executable file, a `crds` path that holds no CRD, and an unknown or unclosed
+  `${key}`. It checks `launch.upgrades` the same way.
 
 `launch.upgrades` lists later versions with the same keys:
 
@@ -390,8 +391,8 @@ launch:
 ```
 
 Each generated plan then restarts into each version once, in order, at the end of a random step.
-That step may hold a fault or come before a delete. `shrink` drops only the last upgrade, so the
-versions stay in order.
+That step may hold a fault or come before a delete. `shrink` and `hunt` drop upgrades from the
+last one back, so the versions stay in order.
 
 The checks judge an upgrade's step as they judge any restart's. So Restore fails a version that
 replaces or rewrites the old version's resources in a step that changes no CR. A generated
@@ -407,8 +408,8 @@ Upgrades have these limits:
 - The harness watches each kind at the API version it first used. A CRD that stops serving that
   version ends the kind's record. The harness's patches and deletes use the kind's preferred
   version, which new CRDs may change.
-- A property's `world` holds a kind that only the new CRDs serve only if an object of it exists
-  at some point in the run. Its list is then empty before the install.
+- A property's `world` lacks a kind that only the new CRDs serve, unless an object of it exists
+  during the run. The kind's list is then empty before the install.
 - A default that the new CRDs add to a kind the controller makes shows as a Restore change once
   the controller writes such an object.
 - A version that renames its resources fails Restore, even when it deletes the old ones.

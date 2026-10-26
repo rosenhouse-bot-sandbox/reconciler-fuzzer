@@ -5,6 +5,7 @@ package kube
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"testing"
@@ -75,5 +76,19 @@ func TestInstallCRDsUpdatesACRDAndWatchesANewOne(t *testing.T) {
 	things := schema.GroupVersionResource{Group: "upgrade.reconciler-fuzzer", Resource: "things"}
 	if gvr, err := k.Mapper().ResourceFor(things); err != nil || gvr.Version != "v2" {
 		t.Errorf("Things map to %v, %v after InstallCRDs; want version v2.", gvr, err)
+	}
+}
+
+func TestInstallCRDsStopsWaitingForANewKindsListWithItsContext(t *testing.T) {
+	ctx := context.Background()
+	k := New(Options{CRDs: []string{"testdata/upgrade/v1"}, RBAC: []string{toy + "rbac/role.yaml"}})
+	if _, err := k.Start(ctx, &system.Env{Record: (&events{}).record, Dir: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { k.Stop(ctx) })
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := k.InstallCRDs(canceled, []string{"testdata/upgrade/v2"}); !errors.Is(err, context.Canceled) {
+		t.Errorf("InstallCRDs = %v, want the context's error from the wait for the Gadgets' list.", err)
 	}
 }

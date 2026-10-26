@@ -27,7 +27,7 @@ const shortestPeriod = plan.Duration(500 * time.Millisecond)
 // valid, and its restarts upgrade to a prefix of p's versions, in order.
 func Candidates(p *plan.Plan, samples []map[string]any) []*plan.Plan {
 	var valid []*plan.Plan
-	versions := upgrades(p)
+	versions := upgrades(clone(p))
 	try := func(change func(c *plan.Plan)) {
 		c := clone(p)
 		change(c)
@@ -96,7 +96,8 @@ func Shrink(ctx context.Context, p *plan.Plan, samples []map[string]any, fails F
 	}
 }
 
-// upgrades lists the Upgrades of p's restarts, in order.
+// upgrades lists, in order, the Upgrades that p's restarts set. A plain
+// restart sets none.
 func upgrades(p *plan.Plan) []plan.Upgrade {
 	var found []plan.Upgrade
 	for _, step := range p.Steps {

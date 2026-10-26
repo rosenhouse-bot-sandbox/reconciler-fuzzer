@@ -579,7 +579,7 @@ func CheckCRDs(path string) error {
 	}
 	o := envtest.CRDInstallOptions{Paths: []string{path}}
 	if err := envtest.ReadCRDFiles(&o); err != nil {
-		return err
+		return fmt.Errorf("reading CRDs in %s: %w", path, err)
 	}
 	if len(o.CRDs) == 0 {
 		return fmt.Errorf("%s holds no CustomResourceDefinition", path)

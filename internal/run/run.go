@@ -198,10 +198,15 @@ func Run(ctx context.Context, o Options) (check.Report, error) {
 	return report, nil
 }
 
-// checkUpgrades refuses a restart whose binary is not an executable file,
-// whose crds path holds no CRD, or whose args hold a ${key} that the
-// config's systems lack.
+// checkUpgrades refuses an upgrade, in launch.upgrades or a restart of p,
+// whose binary is not an executable file or whose crds path holds no CRD. It
+// also refuses a restart arg that config.CheckArgs refuses.
 func checkUpgrades(cfg *config.Config, p *plan.Plan) error {
+	for i, u := range cfg.Launch.Upgrades {
+		if err := checkPaths(u); err != nil {
+			return fmt.Errorf("launch.upgrades[%d]: %w", i, err)
+		}
+	}
 	for i, step := range p.Steps {
 		for j, a := range step.Actions {
 			if err := checkPaths(a.Upgrade); err != nil {

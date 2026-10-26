@@ -2,6 +2,7 @@ package run
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -110,6 +111,36 @@ func TestRunRefusesARestartWithABadPath(t *testing.T) {
 				t.Errorf("Run made %s before it refused the plan: %v", out, err)
 			}
 		})
+	}
+}
+
+func TestRunRefusesALaunchUpgradeWithABadPath(t *testing.T) {
+	toyDir, err := filepath.Abs("../../targets/toy-widget")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	config := fmt.Sprintf(`launch:
+  binary: /bin/sh
+  rbac: [%[1]s/rbac/role.yaml]
+  upgrades: [{args: [--v2]}, {binary: %[1]s}]
+crds: [%[1]s/crds/]
+primary:
+  kind: toy.reconciler-fuzzer/v1/Widget
+  sample: %[1]s/widget.yaml
+  ready: "true"
+`, toyDir)
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{{Do: plan.Create, Slot: "a"}}}}}
+	out := filepath.Join(dir, "out")
+	_, err = Run(t.Context(), Options{ConfigPath: filepath.Join(dir, "config.yaml"), Plan: p, Out: out})
+	if err == nil || !strings.HasPrefix(err.Error(), "launch.upgrades[1]: ") || !strings.Contains(err.Error(), "is a directory") {
+		t.Errorf("Run = %v, want a refusal that names launch.upgrades[1].", err)
+	}
+	if _, err := os.Stat(out); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("Run made %s before it refused the config: %v", out, err)
 	}
 }
 

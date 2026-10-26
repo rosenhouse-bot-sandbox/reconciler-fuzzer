@@ -230,9 +230,9 @@ names its cause. A run that started leaves its partial trace in `--out`. Common 
 | `creating fixture ...` | Fix the fixture, or install the CRD it needs under `crds`. |
 | `creating fixture CustomResourceDefinition ...: ... already exists` | List the CRD under `crds` or under `fixtures`, not both. |
 | `mapping <group>/<version>, Kind=<kind>: no matches for kind ...` | Install the listed kind's CRD under `crds`. |
-| `steps[i].actions[j]: exec: "<path>": ...`, `steps[i].actions[j]: stat <path>: ...` or `steps[i].actions[j]: <path> holds no CustomResourceDefinition` | Point the restart's `binary` at an executable file and its `crds` at CRD files. A plan file's paths resolve against its directory, and `launch.upgrades` paths against the config's. |
+| `steps[i].actions[j]: ...` or `launch.upgrades[i]: ...` that names a `binary` or `crds` path | Point `binary` at an executable file and `crds` at valid CRD files. A plan file's paths resolve against its directory, and `launch.upgrades` paths against the config's. |
 | `installing CRDs: ...` | Fix the CRDs that a restart's `crds` names. |
-| `launch args[i]: ...`, `launch env <name>: ...`, `launch.upgrades[i].args[k]: ...` or `steps[i].actions[j].args[k]: ...` | Use only `${systems.kube.kubeconfig}`, `namespace` and `url`, and a fake's `${systems.<name>.url}`. |
+| `launch args[i]: ...`, `launch env <name>: ...`, `launch.upgrades[i].args[k]: ...` or `steps[i].actions[j].args[k]: ...` | Use only `${systems.kube.kubeconfig}`, `namespace` and `url`, and a fake's `${systems.<name>.url}`. Close each `${` with `}`. |
 | `fake <name> exited ...` | Read `<out>/<name>.log`. Fix the `systems[].process` command or the fake's own config. |
 | `create of slot "<s>" makes a <kind>, which primaries does not list` | List the kind under `primaries`, or make the object a fixture. |
 | `create of slot "<s>" makes an object without apiVersion or kind` | Give the create's `object` both. |

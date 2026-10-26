@@ -109,6 +109,20 @@ func TestCandidatesDropOnlyTheLastUpgrade(t *testing.T) {
 	}
 }
 
+func TestCandidatesDropOtherActionsAroundAnUpgrade(t *testing.T) {
+	for _, c := range []struct{ upgrade, version string }{
+		{`{"do":"restart","args":["--version=2"]}`, "--version=2"},
+		{`{"do":"restart","binary":"/v2","crds":[]}`, "/v2"},
+	} {
+		p := parsePlan(t, `{"steps":[{"actions":[`+create+`,{"do":"restart"}]},{"actions":[{"do":"kill"},`+c.upgrade+`]}]}`)
+		if !slices.ContainsFunc(encodedAll(t, Candidates(p, samples)), func(candidate string) bool {
+			return strings.Count(candidate, `"do":"restart"`) == 1 && strings.Contains(candidate, c.version) && strings.Contains(candidate, `{"do":"kill"}`)
+		}) {
+			t.Errorf("No candidate of %s drops the plain restart alone.", c.upgrade)
+		}
+	}
+}
+
 func TestCandidatesHalvePeriodsAndOffsetsDownToHalfASecond(t *testing.T) {
 	for _, testCase := range []struct{ period, at, wantPeriod, wantAt string }{
 		{"3s", "41ms", "1.5s", "20ms"},
