@@ -116,10 +116,11 @@ timeouts: {settle: 30s, stable: 3s}
 - `ready` is CEL over the CR. It must be true only once the controller has acted on the
   current spec, so compare an `observedGeneration` with `metadata.generation`.
 - `stable` is how long the controller must stay quiet before a step counts as settled.
-- `launch.rbac` also tells generation which requests a fault can pick. A generated `damage`
-  targets only kinds that `launch.rbac` lets the controller create. Faults and damage favor
-  the listed kinds and the kinds that `models:` and `owns` name, or, with neither, the core
-  kinds that the controller may create, such as Secrets.
+- `launch.rbac` also tells generation which requests a fault can pick. A generated `damage` of
+  a kube object targets an unlisted kind that `launch.rbac` lets the controller create. Faults
+  and damage favor the listed kinds, the `models:` kinds and the kube kinds that `owns` names.
+  Without models and kube `owns`, they favor the listed kinds and the core kinds that the
+  controller may create, such as Secrets.
 - `values` steers generated CRs: `overlay` narrows the CRD schema, `distinct` fields differ
   across a plan's CRs, `mutate` names the fields updates change, and `fixtures` names the
   fixture strings `changeFixture` sets.
@@ -358,9 +359,9 @@ cluster. The settle condition counts a held watch as looking only once the hold 
 The create waits until the deleted CR no longer exists. Once `period` has passed, the wait
 ends the hold, so that the controller can finish the delete.
 
-Generated plans draw it for kinds `launch.rbac` lets the controller watch, with the weights
-of other faults, in a step that deletes a CR and creates it again unchanged. About 1
-cert-manager seed in 12 holds Secrets this way, so a 20-seed `make hunt-cert-manager` usually,
+Generated plans draw it for kinds `launch.rbac` lets the controller watch, favoring the kinds
+other faults favor, in a step that deletes a CR and creates it again unchanged. About 1
+cert-manager seed in 11 holds Secrets this way, so a 20-seed `make hunt-cert-manager` usually,
 but not always, finds #63. A report notes a `holdWatch` while the controller had no watch of
 its kind, such as one with a misspelt resource.
 

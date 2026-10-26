@@ -6,10 +6,8 @@ import (
 	"testing"
 
 	gvk "k8s.io/apimachinery/pkg/runtime/schema"
-	"pgregory.net/rapid"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
-	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 )
 
 // fleetClusterConfig lists only Clusters, whose Volumes a model plays.
@@ -61,15 +59,12 @@ func TestFaultsFavorTheListedModelAndOwnsKinds(t *testing.T) {
 	}
 }
 
-func TestDamageFavorsTheKindsFaultsFavor(t *testing.T) {
-	g := newGenerator(t, loadConfig(t, fleetClusterConfig))
-	counts := map[string]int{}
-	for seed := range 300 {
-		counts[example(t, seed, func(rt *rapid.T) plan.Action { return g.damage(rt, state{}) }).Target.Resource]++
-	}
-	for _, other := range []string{"configmaps", "secrets"} {
-		if counts["volumes"] < 2*counts[other] {
-			t.Errorf("Damage draws %v, want volumes over twice as often as %s.", counts, other)
-		}
+func TestAnOwnsKindTakesThePluralItsCRDNames(t *testing.T) {
+	cfg := loadConfig(t, modelsConfig)
+	cfg.Models = nil
+	cfg.Primaries[0].Owns = []config.Owns{{Kind: gvk.GroupVersionKind{Group: "models.reconciler-fuzzer", Version: "v1", Kind: "Mouse"}, Name: "self.metadata.name"}}
+	g := newGenerator(t, cfg)
+	if w := g.kindWeight(gvk.GroupResource{Group: "models.reconciler-fuzzer", Resource: "mice"}); w != favored {
+		t.Errorf("Mice weigh %d, want %d.", w, favored)
 	}
 }

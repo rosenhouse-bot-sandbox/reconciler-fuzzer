@@ -133,9 +133,10 @@ Fill each key from the project:
   `${systems.kube.kubeconfig}`. Pass the kubeconfig as a flag if the controller does not read
   `KUBECONFIG`, as when it calls `clientcmd.BuildConfigFromFlags` with an empty path.
 - `launch.rbac`: the Roles and ClusterRoles the controller runs with. Generation draws faults
-  from the requests they grant, and damage from the kinds they let the controller create. Both
-  favor the listed, `models:` and `owns` kinds. For another namespace, use a ClusterRole, or a
-  Role with `metadata.namespace`.
+  from the requests they grant, and damage from the unlisted kinds they let the controller
+  create. Both favor the listed kinds, the `models:` kinds and the kube kinds that `owns` names.
+  Without models and kube `owns`, both favor the listed kinds and the core kinds the controller
+  may create. For another namespace, use a ClusterRole, or a Role with `metadata.namespace`.
 - `crds`: each listed kind's CRD, and the CRD of every other kind the controller watches or
   creates.
 - `primary` describes one kind. For several, write `primaries`, a list of such entries, and

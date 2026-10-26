@@ -83,7 +83,11 @@ func TestTheFirstCreateDrawsEachListedKindAboutEqually(t *testing.T) {
 // The RBAC grants no create on Users, and a config without it grants
 // nothing, so the controller makes no object such a damage could delete.
 func TestDamageTargetsTheUnlistedKindsTheRBACLetsTheControllerCreate(t *testing.T) {
-	for path, want := range map[string][]string{fleetConfig: {"configmaps", "secrets", "volumes"}, rulesConfig: nil} {
+	for path, want := range map[string][]string{
+		fleetConfig: {"configmaps", "secrets", "volumes"},
+		"../../examples/external-secrets/config.yaml": {"generatorstates", "pushsecrets", "secrets"},
+		rulesConfig: nil,
+	} {
 		damaged := map[string]bool{}
 		for _, a := range actions(plans(t, path, 200)) {
 			if a.Do == plan.Damage {

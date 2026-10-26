@@ -73,7 +73,7 @@ func TestAHoldWatchWithoutALiveCRComesWithACreate(t *testing.T) {
 	}
 }
 
-func TestHoldWatchesFavorThePrimaryAndTheCoreKindsTheControllerCreates(t *testing.T) {
+func TestHoldWatchesFavorThePrimaryAndTheOwnedKinds(t *testing.T) {
 	counts := map[string]int{}
 	for _, f := range faults(plans(t, "../../examples/cert-manager/config.yaml", 400)) {
 		if f.HoldWatch {
@@ -152,18 +152,6 @@ func TestEveryHoldWatchComesWithARecreateOrACreate(t *testing.T) {
 				t.Errorf("Seed %d holds a watch with %+v, want a recreate or a create.", p.Seed, a)
 			}
 		}
-	}
-}
-
-func TestHoldWatchesFavorThePrimaryAndTheOwnedKinds(t *testing.T) {
-	cfg := loadConfig(t, "../../examples/cert-manager/config.yaml")
-	g := newGenerator(t, cfg)
-	counts := map[string]int{}
-	for _, gr := range g.watchable {
-		counts[gr.Resource]++
-	}
-	if counts["secrets"] != favored || counts["certificates"] != favored || counts["orders"] != 1 {
-		t.Errorf("watchable = %v, want secrets and certificates %d times and orders once", counts, favored)
 	}
 }
 

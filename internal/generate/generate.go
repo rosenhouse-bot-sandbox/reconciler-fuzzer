@@ -100,7 +100,6 @@ func New(cfg *config.Config) (*Generator, error) {
 
 func build(cfg *config.Config) (*Generator, error) {
 	g := &Generator{listed: cfg.ListedKinds(), stable: cfg.Timeouts.Stable, granted: map[gvk.GroupResource][]string{}, modelFakes: map[string]bool{}, readOnly: map[string]bool{}}
-	var owned []gvk.GroupResource
 	for i, p := range cfg.Primaries {
 		k, err := newCRKind(cfg.CRDs, p)
 		if err != nil {
@@ -111,12 +110,6 @@ func build(cfg *config.Config) (*Generator, error) {
 		}
 		g.kinds = append(g.kinds, k)
 		g.resources = append(g.resources, k.resource)
-		for _, o := range p.Owns {
-			if o.System == "" {
-				gvr, _ := meta.UnsafeGuessKindToResource(o.Kind)
-				owned = append(owned, gvr.GroupResource())
-			}
-		}
 	}
 	if err := g.readFixtures(cfg); err != nil {
 		return nil, err
@@ -124,10 +117,12 @@ func build(cfg *config.Config) (*Generator, error) {
 	if err := g.readRBAC(cfg.Launch.RBAC); err != nil {
 		return nil, err
 	}
-	if err := g.readModels(cfg); err != nil {
-		return nil, err
+	crds, err := readManifests(cfg.CRDs)
+	if err != nil {
+		return nil, fmt.Errorf("reading the CRDs: %w", err)
 	}
-	g.favorKinds(owned)
+	g.readModels(cfg.Models, crds)
+	g.favorKinds(cfg.Primaries, crds)
 	g.addRequests()
 	for _, gr := range g.resources {
 		if g.grants(gr, "watch") {
@@ -334,34 +329,39 @@ func (g *Generator) readRBAC(paths []string) error {
 	return nil
 }
 
-// readModels reads each model kind's resource from its CRD, or guesses it,
-// and the longest dependency track.
-func (g *Generator) readModels(cfg *config.Config) error {
-	if len(cfg.Models) == 0 {
-		return nil
-	}
-	crds, err := readManifests(cfg.CRDs)
-	if err != nil {
-		return fmt.Errorf("reading the CRDs: %w", err)
-	}
-	for _, m := range cfg.Models {
-		gvr, _ := meta.UnsafeGuessKindToResource(m.Kind)
-		gr := gvr.GroupResource()
-		if plural := pluralOf(crds, m.Kind.GroupKind()); plural != "" {
-			gr.Resource = plural
-		}
-		g.models = append(g.models, gr)
+// readModels records each model kind's resource and the longest dependency
+// track.
+func (g *Generator) readModels(models []config.Model, crds []map[string]any) {
+	for _, m := range models {
+		g.models = append(g.models, resourceOf(crds, m.Kind))
 		if m.Dependency != nil {
 			g.track = max(g.track, m.Dependency.Track)
 		}
 	}
-	return nil
+}
+
+// resourceOf is the resource of kind: the plural its CRD names, or else a
+// guess.
+func resourceOf(crds []map[string]any, kind gvk.GroupVersionKind) gvk.GroupResource {
+	gvr, _ := meta.UnsafeGuessKindToResource(kind)
+	gr := gvr.GroupResource()
+	if plural := pluralOf(crds, kind.GroupKind()); plural != "" {
+		gr.Resource = plural
+	}
+	return gr
 }
 
 // favorKinds records the kinds that faults and damage favor, and the
 // resources that damage targets.
-func (g *Generator) favorKinds(owned []gvk.GroupResource) {
-	dealtWith := slices.Concat(g.models, owned)
+func (g *Generator) favorKinds(primaries []config.Primary, crds []map[string]any) {
+	dealtWith := slices.Clone(g.models)
+	for _, p := range primaries {
+		for _, o := range p.Owns {
+			if o.System == "" {
+				dealtWith = append(dealtWith, resourceOf(crds, o.Kind))
+			}
+		}
+	}
 	standIn := len(dealtWith) == 0
 	for _, gr := range g.unlisted() {
 		if g.grants(gr, "create") {
@@ -611,7 +611,8 @@ func (g *Generator) writable() []string {
 
 // damage deletes an object of a creatable resource, drawn by its
 // kindWeight, of a live slot when one is. With writable fakes, half the
-// draws, or all without a creatable resource, target one drawn uniformly.
+// draws, or all of them without a creatable resource, target a fake drawn
+// uniformly.
 func (g *Generator) damage(t *rapid.T, at state) plan.Action {
 	if fakes := g.writable(); len(fakes) > 0 && (len(g.creatable) == 0 || uniform(t, 2, "damage a fake") == 0) {
 		return g.damageOf(t, at, plan.Target{System: sampled(t, fakes, "fake")})
@@ -746,8 +747,8 @@ func (g *Generator) addRequests() {
 // fault draws a request and one of five request effects. With models, it
 // draws one of seven effects instead, and the last two are stuck and
 // slowDelete on a model kind drawn uniformly. With a watchable kind, two
-// more effects are a holdWatch of one drawn uniformly. With fakes, half the
-// draws are a fake fault instead.
+// more effects are a holdWatch of one drawn by its kindWeight. With fakes,
+// half the draws are a fake fault instead.
 func (g *Generator) fault(t *rapid.T) plan.Fault {
 	if len(g.fakes) > 0 && uniform(t, 2, "fault on a fake") == 0 {
 		return g.fakeFault(t)

@@ -428,14 +428,14 @@ in-process, rejects invalid ones. `Plan(seed)` draws 3 to 8 steps of 1 to 4
 actions and at most one fault each. A create draws its kind uniformly from
 `primaries`, and each CR takes its kind's `values`. Step 0 creates slot `a`.
 About 30% of steps hold one `restart`, `kill` or `damage`, so Restore has steps
-to judge. A kube fault draws its request from what `launch.rbac` grants, creates
-weighted most (§17, entry 20). 2 of 7 kube fault draws (of 9 with `models:`, 2
-of which are `stuck` or `slowDelete`) hold a kind `launch.rbac` lets the
-controller watch, with the traffic `holdTraffic` documents. `damage` deletes an
-object of a kind `launch.rbac` lets the controller create. Faults and `damage`
-favor the listed, model and `owns` kinds, or, without models and `owns`, the
-core kinds the controller may create. With fakes, half of the fault draws and of
-the `damage` draws name a fake: a request fault by verb alone, or a model fault
+to judge. A kube fault draws a request `launch.rbac` grants, creates weighted
+most (§17, entry 20). 2 of 7 kube fault draws (of 9 with `models:`, 2 of which
+are `stuck` or `slowDelete`) hold a kind `launch.rbac` lets the controller
+watch, with the traffic `holdTraffic` documents. A kube `damage` targets an
+unlisted kind `launch.rbac` lets the controller create. Faults and `damage`
+favor the listed, model and kube `owns` kinds. Without the last two, the core
+kinds the controller may create stand in for them. With fakes, half of the fault
+and `damage` draws name a fake: a request fault by verb alone, or a model fault
 on a `crud` fake, and a target by system alone. A read-only fake takes no damage
 and only read faults. `changeFixture` draws kube and system fixtures alike.
 
