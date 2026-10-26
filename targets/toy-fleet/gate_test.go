@@ -13,14 +13,16 @@ import (
 )
 
 const (
-	clusterConfig   = "cluster/config.yaml"
-	databaseConfig  = "database/config.yaml"
-	protectConfig   = "protect/config.yaml"
-	uninstallConfig = "uninstall/config.yaml"
+	clusterConfig           = "cluster/config.yaml"
+	databaseConfig          = "database/config.yaml"
+	protectConfig           = "protect/config.yaml"
+	uninstallConfig         = "uninstall/config.yaml"
+	upgradeConfig           = "upgrade/config.yaml"
+	upgradePropertiesConfig = "upgrade/properties/config.yaml"
 )
 
 // configs are the configs whose every plan B0 passes with no notes.
-var configs = []string{"config.yaml", databaseConfig, protectConfig}
+var configs = []string{"config.yaml", databaseConfig, protectConfig, upgradeConfig}
 
 type gateRow struct {
 	plan    string
@@ -47,6 +49,12 @@ func (g gateRow) planPath() string { return planPath(g.configPath(), g.plan) }
 // report.md must hold: its heading, its step and a detail line. An empty
 // finding means the bug must pass the plan.
 var gate = []gateRow{
+	// Each upgrade plan restarts the controller as version 2.
+	{plan: "delete", bug: 140, finding: "Converge: did not settle (clause 2)", step: 2, detail: "cluster is being deleted", config: upgradeConfig},
+	{plan: "update", bug: 141, finding: "Restore: replaced resources", step: 1, detail: "/cluster-data-0 (rule 1, slot a)", config: upgradeConfig},
+	{plan: "mid-provisioning", bug: 142, finding: "Converge: did not settle (clause 1)", step: 0, detail: "cluster is not ready", config: upgradeConfig},
+	{plan: "upgrade-and-update", bug: 141, finding: "Property: property volumes-go-first does not hold", step: 2, detail: "is false", config: upgradePropertiesConfig},
+	{plan: "upgrade-and-update", config: upgradePropertiesConfig},
 	{plan: "restart-cluster-delete", bug: 150, finding: "Converge: did not settle (clause 1)", step: 1, detail: "db is not ready", config: databaseConfig},
 	// The kill comes after the update that releases the Cluster, so B151
 	// never strips its Volumes' finalizers.

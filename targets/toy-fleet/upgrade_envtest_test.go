@@ -37,7 +37,6 @@ func runUpgrade(t *testing.T, name string) string {
 
 // The appended restart starts version 2 again.
 func TestARestartActionsArgsOutliveIt(t *testing.T) {
-	t.Skip("enabled by the toy-fleet package")
 	t.Parallel()
 	log, err := os.ReadFile(filepath.Join(runUpgrade(t, "delete"), "controller.log"))
 	if err != nil {
@@ -52,7 +51,6 @@ func TestARestartActionsArgsOutliveIt(t *testing.T) {
 // The server defaults the new CRD's spec.tier on the Cluster that version
 // 1 made.
 func TestARestartActionInstallsNewCRDs(t *testing.T) {
-	t.Skip("enabled by the toy-fleet package")
 	t.Parallel()
 	out := runUpgrade(t, "crds")
 	f, err := os.Open(filepath.Join(out, "trace.jsonl"))
