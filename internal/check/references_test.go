@@ -691,6 +691,39 @@ func TestHonestFailsACorrectedReadyWriteBeforeAnyLook(t *testing.T) {
 	requireFinding(t, honest(t, r), "Honest", 0, beforeSeeing, "kube/secrets", "slot b: secrets ns/pw not seen")
 }
 
+// A cache shows only what the controller saw, so a stale cache explains a
+// ready write only after a look, since the controller's last start, that let
+// the CR be ready.
+func TestHonestExcusesACorrectedReadyWriteOnlyAfterALookThatLetTheCRBeReady(t *testing.T) {
+	missing := func(r *tt.Script) { r.Call(ctl, "get", pw, 404) }
+	for name, c := range map[string]struct {
+		secret        map[string]any
+		before, after func(r *tt.Script)
+		fails         bool
+	}{
+		"seen ready, then deleted": {secret(true), func(r *tt.Script) { seenThenDeleted(r) }, nil, false},
+		"seen missing twice":       {nil, func(r *tt.Script) { missing(r.Call(ctl, "get", pw, 404)) }, nil, true},
+		"seen ready before a restart, then deleted": {secret(true), func(r *tt.Script) {
+			r.See(ctl, pw).Add(tt.Exit("signal: killed", true, "")).Tick(500 * ms).Add(tt.Start(2))
+			deletedSeen(r)
+		}, nil, true},
+		"seen missing, and ready only later": {nil, missing, func(r *tt.Script) {
+			r.Create(trace.Harness, pw, secret(true))
+			r.See(ctl, pw)
+		}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := secretRun(secretRef(), c.secret)
+			c.before(r)
+			readyB(r).Update(ctl, databaseB, database(false, "pw"))
+			if c.after != nil {
+				c.after(r)
+			}
+			requireHonest(t, r, c.fails)
+		})
+	}
+}
+
 func TestHonestGivesACorrectionStableAfterTheReadyWriteDespiteAnEarlierFailure(t *testing.T) {
 	r := secretRun(secretRef(), secret(true))
 	seenThenDeleted(r).Call(ctl, "update", databaseB, 409).UpdateInFlight(ctl, databaseB, database(true, "pw"), 500*ms).
@@ -1153,10 +1186,9 @@ func TestSettleStillWaitsForACRNoReferenceHoldsBack(t *testing.T) {
 	}
 }
 
-// A settled step ends with a CR not ready only if it halted or a reference
-// holds it back. Its controller stops on purpose, so Restore lets its
-// damaged resources stay gone.
-func TestRestoreLetsTheResourcesOfACRNotReadyStayGone(t *testing.T) {
+// A controller often stops reconciling a CR that waits for what it names. So,
+// while such a CR is not ready, Restore lets its damaged resources stay gone.
+func TestRestoreLetsTheResourcesOfAHeldBackCRStayGone(t *testing.T) {
 	child := tt.Ref("configmaps", "ns", "b-0")
 	for name, c := range map[string]struct {
 		readyB, unreadyAfterDamage, sharedWithC bool
@@ -1192,6 +1224,40 @@ func TestRestoreLetsTheResourcesOfACRNotReadyStayGone(t *testing.T) {
 				requireNone(t, findings)
 			} else {
 				requireFinding(t, findings, "Restore", 2, "did not restore damaged resources", "kube/configmaps", c.want)
+			}
+		})
+	}
+}
+
+// A controller that halts a CR stops on purpose too. A CR not ready for
+// another reason, as when its status changes after the settle condition's
+// last check, gets no excuse.
+func TestRestoreLetsTheResourcesOfAHaltedCRStayGone(t *testing.T) {
+	child := tt.Ref("configmaps", "ns", "b-0")
+	for name, halt := range map[string]bool{"halted": true, "not halted": false} {
+		t.Run(name, func(t *testing.T) {
+			r := fleetRun(2, databases)
+			r.Spec.References = []trace.Reference{secretRef()}
+			r.Spec.Primaries[0].Halted = "has(self.status.halted)"
+			r.Begin()
+			r.Create(trace.Harness, pw, secret(true))
+			uid := r.Create(trace.Harness, databaseB, database(false, "pw"))
+			r.Act("create", "b", &databaseB).Create(ctl, child, tt.OwnedBy(tt.Object("b-0"), uid, true))
+			readyB(r.See(ctl, pw)).EndFaults().Settle()
+			r.Begin().Delete(trace.Harness, child).Act("damage", "b", &child).Call(ctl, "get", child, 404).EndFaults()
+			r.Tick(2 * s).Add(tt.Phase(r.Step, trace.Settled))
+			body := database(false, "pw")
+			if halt {
+				dropped := tt.Call(ctl, "update", databaseB, 200, "")
+				dropped.Call.Injected = trace.DropResponse
+				r.Add(dropped)
+				body["status"].(map[string]any)["halted"] = true
+			}
+			r.Update(ctl, databaseB, body).Add(tt.Phase(r.Step, trace.Confirmed))
+			if findings := restore(t, r); halt {
+				requireNone(t, findings)
+			} else {
+				requireFinding(t, findings, "Restore", 1, "did not restore damaged resources", "kube/configmaps", "configmaps ns/b-0 (rule 1, slot b)")
 			}
 		})
 	}

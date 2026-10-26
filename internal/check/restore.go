@@ -43,14 +43,14 @@ func Restore(ix *trace.Index, s Spec) []Finding {
 				// A damaged group must be live again while its owner lives. Once
 				// its owner is gone, a CR made since from must own its kind and
 				// role under its root. A touched group that empties must leave
-				// its kind there. A group whose CRs are all not ready may stay
-				// empty: a settled step allows that only of a CR that halted or
-				// that a reference holds back, whose controller stops on purpose.
+				// its kind there. A group may stay empty while its CRs are all
+				// not ready but halted or held back, since their controller
+				// stops on purpose.
 				restored := kinds[group{kind: g.kind, root: g.root}]
 				if o, hit := damaged[g]; hit {
 					restored = !v.lives(o, to) && remade[group{kind: g.kind, root: g.root, role: g.role}]
 				}
-				if len(was) > 0 && len(is) == 0 && !restored && !v.notReady(v.w.Owner(was[0], from), to) {
+				if len(was) > 0 && len(is) == 0 && !restored && !v.stopped(v.w.Owner(was[0], from), to) {
 					missing[k] = append(missing[k], v.describeAll(was[:1], from)...)
 				}
 				continue
@@ -98,13 +98,15 @@ func (v *view) damaged(step int, t time.Duration) (map[group]owner.Owner, func(r
 	}
 }
 
-// notReady reports whether o names CRs, and each is not ready by its latest
-// body at t.
-func (v *view) notReady(o owner.Owner, t time.Duration) bool {
+// stopped reports whether o names CRs, and each, by its latest body at t, is
+// not ready but halted or held back by a reference, as the settle condition
+// allows.
+func (v *view) stopped(o owner.Owner, t time.Duration) bool {
 	return len(o.CRs) > 0 && !slices.ContainsFunc(o.CRs, func(uid string) bool {
 		cr, _ := v.w.Instance(uid)
 		p, _ := v.s.primary(cr.Ref)
-		return p.ready(v.w.Object(cr, t))
+		body := v.w.Object(cr, t)
+		return p.ready(body) || !halted(v.ix, p, trace.Version{Ref: cr.Ref, UID: uid}, body, t, v.s) && !v.s.heldBack(v.ix, cr.Ref, body, t)
 	})
 }
 

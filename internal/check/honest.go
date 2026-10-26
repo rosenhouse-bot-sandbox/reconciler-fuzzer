@@ -85,9 +85,8 @@ func crVersions(ix *trace.Index, s Spec) ([]string, map[string][]trace.Event) {
 // controller wrote that becomes ready, or raises observedGeneration while
 // ready. Only a CR of the first entry's kind needs a required dependency.
 // The version fails on an object it names that the controller's sight holds
-// back, or that the controller never looked at while it lived, unless the
-// controller wrote it soon after a look at the object and corrected it in
-// time.
+// back, or that the controller never looked at while it lived, unless a stale
+// cache explains the write and the controller corrected it in time.
 func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, deps []Model) {
 	requires := p.Kind == h.s.Primaries[0].Kind
 	wasReady, wasObserved := false, 0.0
@@ -116,7 +115,7 @@ func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, d
 		}
 		for _, n := range h.s.names(v.Ref, body) {
 			g := h.s.sight(h.ix, n, t0)
-			if g.allowsReady(h.s.References[n.ref].Required) || h.stale(g, t0) && h.corrected(p, versions[i+1:], n, due()) {
+			if g.allowsReady(h.s.References[n.ref].Required) || h.stale(n, g, t0) && h.corrected(p, versions[i+1:], n, due()) {
 				continue
 			}
 			summary := beforeSeeing
@@ -128,12 +127,15 @@ func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, d
 	}
 }
 
-// stale reports whether a reconcile that read the cache before the look at
-// an object could have written the CR ready at t0. The controller must have
-// looked, not started since, and sent the write within twice stable of the
-// look, stalls aside.
-func (h *honesty) stale(g sight, t0 time.Duration) bool {
-	return g.looked && !h.restarted(g.at, t0) && t0 <= until(g.at, 2*h.s.Stable, h.stalls)
+// stale reports whether a reconcile that read the cache before g's look at
+// n could have written the CR ready at t0. The controller must have sent the
+// write within twice stable of that look, stalls aside. An earlier look, with
+// no start since, must have shown n as it lets the CR be ready.
+func (h *honesty) stale(n named, g sight, t0 time.Duration) bool {
+	required := h.s.References[n.ref].Required
+	return t0 <= until(g.at, 2*h.s.Stable, h.stalls) && slices.ContainsFunc(h.ix.Looks(trace.Controller, n.object), func(look trace.Event) bool {
+		return look.At < g.at && !h.restarted(look.At, t0) && !h.s.shown(h.ix, n, look).holds(required)
+	})
 }
 
 // restarted reports whether the controller started in (from, to].

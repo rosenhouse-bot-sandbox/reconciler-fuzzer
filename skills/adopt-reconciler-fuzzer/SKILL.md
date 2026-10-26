@@ -341,7 +341,7 @@ controller:
 | Converge, clause 1, `the controller last saw … missing` or `not ready`, on an object that is ready now | Nothing, if the controller does not watch the named kind: it missed the change. | Report the bug (step 11). The controller should watch that kind and requeue the CRs that name the object. |
 | Clean | The controller keeps resources by design. | Set the entry's `retain`. |
 | Unique, on a fake | The CR owns several resources in one collection by design. | Set the system's `role`. |
-| Converge, with a CR that halted after a create of unknown outcome | The controller stops on purpose and waits for a person. | Set the entry's `halted` to CEL over its halted condition. |
+| Converge or Restore, with a CR that halted after a create of unknown outcome | The controller stops on purpose and waits for a person. | Set the entry's `halted` to CEL over its halted condition. |
 
 Every other finding is a bug in the controller. Never hide one to make a check pass, and ask
 the user when in doubt. On a finding, stop and report it (step 11).

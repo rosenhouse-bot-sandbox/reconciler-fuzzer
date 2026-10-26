@@ -189,9 +189,10 @@ references:
   `required`. Before any look, only a missing `required` object holds the CR back.
 - Honest fails a CR that the controller writes ready while a reference holds it back, or before
   the controller looked at a live named object. It passes a write sent within 2×`stable` of a
-  look, with no restart since, that the controller retracts within `stable` of the write's
-  response, by writing the CR not ready or naming another object, since a reconcile may read its
-  cache before the look reaches the cache. The retraction window starts again at a start in it,
+  look, after an earlier look that let the CR be ready, with no restart since, that the
+  controller retracts within `stable` of the write's response, by writing the CR not ready or
+  naming another object. A reconcile may read its cache before the look reaches the cache, and
+  the cache holds what an earlier look showed. The retraction window starts again at a start in it,
   since a restart loses the reconcile. A write of the CR, the ready write itself or one in the
   window, that failed or had an unknown outcome, such as a conflict, gives the controller the
   time the faults of the step that answered it lasted, at most `timeouts.backoffCap`, and
@@ -205,8 +206,8 @@ references:
   now would hold the CR back too. This starts once `stable`, and the time the step's faults
   lasted, at most `timeouts.backoffCap`, have passed since the faults ended. So a controller in
   retry backoff reacts first. If the controller does not watch the `to` kind, it misses the
-  object's return, and the step does not settle. Restore lets the resources of a CR that is not
-  ready at a settled step's end stay gone after a damage.
+  object's return, and the step does not settle. While such a CR is not ready, Restore lets its
+  damaged resources stay gone.
 - A response that the harness cannot decode, such as a watch of Tables, may show the named object.
   If one ends after the controller's last look, or is a watch still open since, the reference is
   **unknown**. Honest then passes the CR's ready writes, and the settle condition treats the CR as
