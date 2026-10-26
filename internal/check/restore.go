@@ -14,8 +14,9 @@ import (
 
 // Restore fails a settled step without a create, update, delete or fixture
 // change whose controller resources differ from the previous settled step's.
-// A damage touches each group under its root, so a damage under a CR that the
-// controller made touches that CR's owner too.
+// A step whose restart upgrades the controller may change them, but not
+// replace them. A damage touches each group under its root, so a damage under
+// a CR that the controller made touches that CR's owner too.
 func Restore(ix *trace.Index, s Spec) []Finding {
 	v := newView(ix, s)
 	var findings []Finding
@@ -24,6 +25,8 @@ func Restore(ix *trace.Index, s Spec) []Finding {
 			continue
 		}
 		from, to := v.steps[n-1].ConfirmEnd, step.ConfirmEnd
+		// A new version may rewrite the resources the old one made.
+		upgraded := slices.ContainsFunc(v.ix.Actions(step.Step), func(e trace.Event) bool { return e.Action.Upgrade })
 		damaged, touched := v.damaged(step.Step, from)
 		before, after := v.groups(from), v.groups(to)
 		// kinds holds each kind under a root, and remade each kind and role
@@ -56,7 +59,7 @@ func Restore(ix *trace.Index, s Spec) []Finding {
 			for _, i := range was {
 				if j := slices.IndexFunc(is, func(j owner.Instance) bool { return j.UID == i.UID }); j < 0 {
 					replaced[k] = append(replaced[k], v.describeAll([]owner.Instance{i}, from)...)
-				} else if paths := differ(v.w.Body(i, from), v.w.Body(is[j], to), v.s.modelled(i.Ref), v.s.Ignore[i.Ref.System], v.s.periodicPaths(i.Ref)); len(paths) > 0 {
+				} else if paths := differ(v.w.Body(i, from), v.w.Body(is[j], to), v.s.modelled(i.Ref), v.s.Ignore[i.Ref.System], v.s.periodicPaths(i.Ref)); len(paths) > 0 && !upgraded {
 					changed[k] = append(changed[k], v.describeAll([]owner.Instance{i}, from)[0]+": "+strings.Join(paths, ", "))
 				}
 			}

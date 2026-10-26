@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -132,6 +133,23 @@ func (o *observer) watchAll(ctx context.Context, grs []schema.GroupResource) err
 		})
 	}
 	watches.Wait()
+	return errors.Join(errs...)
+}
+
+// checkServed refuses CRDs that stop serving the version the observer
+// watches their kind at, since a watch cannot follow a kind to another
+// version.
+func (o *observer) checkServed(crds []*apiextensionsv1.CustomResourceDefinition) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	var errs []error
+	for _, crd := range crds {
+		gr := schema.GroupResource{Group: crd.Spec.Group, Resource: crd.Spec.Names.Plural}
+		watched := o.kinds[gr].Version
+		if watched != "" && !slices.ContainsFunc(crd.Spec.Versions, func(v apiextensionsv1.CustomResourceDefinitionVersion) bool { return v.Name == watched && v.Served }) {
+			errs = append(errs, fmt.Errorf("the %s CRD stops serving %s, which the harness watches", gr, watched))
+		}
+	}
 	return errors.Join(errs...)
 }
 

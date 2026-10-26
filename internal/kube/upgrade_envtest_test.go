@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,5 +91,23 @@ func TestInstallCRDsStopsWaitingForANewKindsListWithItsContext(t *testing.T) {
 	cancel()
 	if err := k.InstallCRDs(canceled, []string{"testdata/upgrade/v2"}); !errors.Is(err, context.Canceled) {
 		t.Errorf("InstallCRDs = %v, want the context's error from the wait for the Gadgets' list.", err)
+	}
+}
+
+// The observer cannot follow a kind to another version, so such an install
+// fails and changes nothing.
+func TestInstallCRDsRefusesCRDsThatStopServingAWatchedVersion(t *testing.T) {
+	ctx := context.Background()
+	k := New(Options{CRDs: []string{"testdata/upgrade/v1"}, RBAC: []string{toy + "rbac/role.yaml"}})
+	if _, err := k.Start(ctx, &system.Env{Record: (&events{}).record, Dir: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { k.Stop(ctx) })
+	err := k.InstallCRDs(ctx, []string{"testdata/upgrade/unserved"})
+	if want := "things.upgrade.reconciler-fuzzer CRD stops serving v1, which the harness watches"; err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("InstallCRDs = %v, want an error that says %q.", err, want)
+	}
+	if _, err := k.Create(ctx, map[string]any{"apiVersion": "upgrade.reconciler-fuzzer/v1", "kind": "Thing", "metadata": map[string]any{"name": "t"}}); err != nil {
+		t.Errorf("The refused install changed the CRD: %v", err)
 	}
 }

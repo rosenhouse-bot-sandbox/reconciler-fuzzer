@@ -297,27 +297,29 @@ const (
 	emptied    = "\x00emptied"
 )
 
-var dos = []Do{Create, Update, Delete, Restart, Kill, Damage, ChangeFixture, Stop}
-
 func (a Action) validate(names map[string]string) error {
-	if !slices.Contains(dos, a.Do) {
-		return fmt.Errorf("unknown do %q", a.Do)
-	}
 	if a.At < 0 {
 		return errors.New("at is negative")
 	}
-	if a.Target != nil && a.Do != Damage && a.Do != ChangeFixture {
-		return fmt.Errorf("%s takes no target", a.Do)
-	}
-	if (a.Binary != "" || a.Args != nil || a.CRDs != nil) && a.Do != Restart {
-		return fmt.Errorf("%s takes no binary, args or crds", a.Do)
+	if err := a.validateDo(names); err != nil {
+		return err
 	}
 	switch {
+	case a.Target != nil && a.Do != Damage && a.Do != ChangeFixture:
+		return fmt.Errorf("%s takes no target", a.Do)
+	case a.Upgrades() && a.Do != Restart:
+		return fmt.Errorf("%s takes no binary, args or crds", a.Do)
 	case a.Propagation != "" && a.Do != Delete:
 		return fmt.Errorf("%s takes no propagation", a.Do)
 	case a.Propagation != "" && a.Propagation != Foreground:
 		return fmt.Errorf("delete propagation %q is not %s", a.Propagation, Foreground)
 	}
+	return nil
+}
+
+// validateDo refuses an unknown Do, checks what a's Do needs, and records in
+// names the slots that creates fill and deletes empty.
+func (a Action) validateDo(names map[string]string) error {
 	switch a.Do {
 	case Create:
 		if a.Slot == "" {
@@ -356,6 +358,8 @@ func (a Action) validate(names map[string]string) error {
 		}
 	case Damage, ChangeFixture:
 		return a.validateChange(names)
+	default:
+		return fmt.Errorf("unknown do %q", a.Do)
 	}
 	return nil
 }

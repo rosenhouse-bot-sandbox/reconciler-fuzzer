@@ -11,12 +11,10 @@ import (
 
 const upgradesConfig = "testdata/upgrades/config.yaml"
 
-func isUpgrade(a plan.Action) bool { return a.Binary != "" || a.Args != nil || a.CRDs != nil }
-
 func upgrades(step plan.Step) []plan.Upgrade {
 	var found []plan.Upgrade
 	for _, a := range step.Actions {
-		if isUpgrade(a) {
+		if a.Upgrades() {
 			found = append(found, a.Upgrade)
 		}
 	}
@@ -41,7 +39,7 @@ func TestEveryPlanAppliesEachUpgradeOnceInOrder(t *testing.T) {
 				if first+j > 0 {
 					before = step.Actions[first+j-1].At
 				}
-				if a.Do != plan.Restart || !isUpgrade(a) || a.At < before || a.At > before+plan.Duration(cfg.Timeouts.Stable) {
+				if a.Do != plan.Restart || !a.Upgrades() || a.At < before || a.At > before+plan.Duration(cfg.Timeouts.Stable) {
 					t.Errorf("Seed %d's step %d ends with %+v after an action at %v, want a restart 0 to %v later.", i+1, n, a, before, cfg.Timeouts.Stable)
 				}
 			}
@@ -60,7 +58,7 @@ func TestUpgradeDelaysRunFromZeroToStable(t *testing.T) {
 	for _, p := range drawPlans(t, newGenerator(t, cfg), 50) {
 		for _, step := range p.Steps {
 			for j, a := range step.Actions {
-				if isUpgrade(a) {
+				if a.Upgrades() {
 					delays[a.At-step.Actions[j-1].At] = true
 				}
 			}
@@ -91,7 +89,7 @@ func TestSomeUpgradesComeInsideAFaultPeriod(t *testing.T) {
 	for _, p := range plans(t, upgradesConfig, 20) {
 		for _, step := range p.Steps {
 			for _, a := range step.Actions {
-				if isUpgrade(a) && len(step.Faults) > 0 && a.At < step.Period {
+				if a.Upgrades() && len(step.Faults) > 0 && a.At < step.Period {
 					inside++
 				}
 			}
@@ -112,7 +110,7 @@ func TestSomeUpgradesComeBeforeADelete(t *testing.T) {
 				if upgraded && a.Do == plan.Delete {
 					before++
 				}
-				upgraded = upgraded || isUpgrade(a)
+				upgraded = upgraded || a.Upgrades()
 			}
 		}
 	}
@@ -130,7 +128,7 @@ func TestUpgradesOnlyAddRestarts(t *testing.T) {
 	upgraded, plain := drawPlans(t, newGenerator(t, cfg), 20), drawPlans(t, newGenerator(t, &without), 20)
 	for i, p := range upgraded {
 		for n := range p.Steps {
-			p.Steps[n].Actions = slices.DeleteFunc(p.Steps[n].Actions, isUpgrade)
+			p.Steps[n].Actions = slices.DeleteFunc(p.Steps[n].Actions, plan.Action.Upgrades)
 		}
 		if !reflect.DeepEqual(p, plain[i]) {
 			t.Errorf("Seed %d's plan without its upgrades differs from the plan of the config without upgrades.", i+1)

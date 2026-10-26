@@ -44,6 +44,21 @@ func TestVersion2RenamesItsFinalizerAndPhaseButNotItsVolumes(t *testing.T) {
 	}
 }
 
+func TestVersion2LabelsTheVolumesVersion1Made(t *testing.T) {
+	f := version1Cluster(t, true)
+	for _, v := range f.listVolumes() {
+		if version, found := v.Labels[VersionLabel]; found {
+			t.Errorf("Version 1 labelled Volume %s as version %q.", v.Name, version)
+		}
+	}
+	f.as(2, 0).settle(f.clusters, "cluster")
+	for _, v := range f.listVolumes() {
+		if version := v.Labels[VersionLabel]; version != "2" {
+			t.Errorf("Volume %s is labelled version %q, want 2.", v.Name, version)
+		}
+	}
+}
+
 func TestVersion2TakesOverAVersion1ClusterAndDeletesIt(t *testing.T) {
 	f := version1Cluster(t, true).as(2, 0)
 	f.settle(f.clusters, "cluster")

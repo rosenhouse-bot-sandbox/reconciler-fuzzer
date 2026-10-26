@@ -226,7 +226,7 @@ func (s *stepRun) faultPeriod(ctx context.Context) error {
 			return err
 		}
 		ref, err := s.execution.act(ctx, a, s)
-		event := &trace.Action{Step: s.n, Index: i, Do: string(a.Do), Slot: a.Slot, Ref: ref}
+		event := &trace.Action{Step: s.n, Index: i, Do: string(a.Do), Slot: a.Slot, Ref: ref, Upgrade: a.Upgrades()}
 		if a.Do == plan.Stop {
 			event.Waited = s.waited
 		}

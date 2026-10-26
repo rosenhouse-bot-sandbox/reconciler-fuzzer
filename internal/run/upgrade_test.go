@@ -43,6 +43,25 @@ func TestARestartInstallsItsCRDsAndThenStartsItsCommand(t *testing.T) {
 	}
 }
 
+// Restore reads which restarts upgrade from their action events.
+func TestOnlyAnUpgradesActionEventSaysItUpgrades(t *testing.T) {
+	f := upgradeFixture(t)
+	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{{Do: plan.Restart}, {Do: plan.Restart, Upgrade: plan.Upgrade{Args: []string{"--v2"}}}}}}}
+	if err := f.runner.Execute(t.Context(), p); err != nil {
+		t.Fatal(err)
+	}
+	var upgrades []bool
+	for _, e := range f.rec.Events() {
+		if e.Action != nil && e.Action.Do == string(plan.Restart) {
+			upgrades = append(upgrades, e.Action.Upgrade)
+		}
+	}
+	// The appended restart keeps the new args but upgrades nothing.
+	if want := []bool{false, true, false}; !slices.Equal(upgrades, want) {
+		t.Errorf("The restarts' events say they upgrade: %v, want %v.", upgrades, want)
+	}
+}
+
 func TestARestartKeepsWhatItsUpgradeLeavesUnset(t *testing.T) {
 	for _, c := range []struct {
 		name       string

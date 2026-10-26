@@ -20,8 +20,12 @@ import (
 	storagev1 "github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/targets/toy-fleet/thirdparty/storage/v1"
 )
 
-// ClusterLabel names a Volume's Cluster.
-const ClusterLabel = "fleet.toy/cluster"
+// ClusterLabel names a Volume's Cluster. Version 2 also sets VersionLabel to
+// 2, as a release often labels its children with its version.
+const (
+	ClusterLabel = "fleet.toy/cluster"
+	VersionLabel = "fleet.toy/version"
+)
 
 // ClusterReconciler moves a Cluster through its phases and keeps its Volumes.
 type ClusterReconciler struct{ reconciler }
@@ -137,6 +141,9 @@ func (r *ClusterReconciler) syncVolumes(ctx context.Context, cluster *fleetv1.Cl
 				volume.Labels = map[string]string{}
 			}
 			volume.Labels[ClusterLabel] = cluster.Name
+			if r.Version == 2 {
+				volume.Labels[VersionLabel] = "2"
+			}
 			if r.Bug == B151 {
 				controllerutil.AddFinalizer(volume, VolumeFinalizer)
 			}

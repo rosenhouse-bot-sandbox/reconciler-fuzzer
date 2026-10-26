@@ -102,7 +102,7 @@ func upgrades(p *plan.Plan) []plan.Upgrade {
 	var found []plan.Upgrade
 	for _, step := range p.Steps {
 		for _, a := range step.Actions {
-			if !reflect.DeepEqual(a.Upgrade, plan.Upgrade{}) {
+			if a.Upgrades() {
 				found = append(found, a.Upgrade)
 			}
 		}

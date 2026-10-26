@@ -68,6 +68,33 @@ func TestRestoreFailsAChangedResource(t *testing.T) {
 	requireFinding(t, restore(t, r), "Restore", 1, "changed resources", "kube/configmaps", "configmaps ns/a-0 (rule 1, slot a): data")
 }
 
+// A new version may rewrite what the old one made, but must keep it.
+func TestRestoreJudgesAnUpgradeOnReplacedResourcesOnly(t *testing.T) {
+	childA1 := tt.Ref("configmaps", "ns", "a-1")
+	for name, c := range map[string]struct {
+		upgrade func(r *tt.Script)
+		want    string
+	}{
+		"a changed resource passes": {func(r *tt.Script) {
+			r.Update(ctl, childA, tt.OwnedBy(map[string]any{"metadata": map[string]any{"name": "a-0", "labels": map[string]any{"version": "2"}}}, r.UID(widgetA), true))
+		}, ""},
+		"a new resource fails":  {func(r *tt.Script) { r.Create(ctl, childA1, tt.OwnedBy(tt.Object("a-1"), r.UID(widgetA), true)) }, "configmaps ns/a-1"},
+		"a gone resource fails": {func(r *tt.Script) { r.Delete(ctl, childA) }, "configmaps ns/a-0"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := twoCRs()
+			r.Begin().Upgrade()
+			c.upgrade(r)
+			r.EndFaults().Settle()
+			if c.want == "" {
+				requireNone(t, restore(t, r))
+				return
+			}
+			requireFinding(t, restore(t, r), "Restore", 1, "replaced resources", "kube/configmaps", c.want)
+		})
+	}
+}
+
 func TestRestoreIgnoresMetadataEveryWriteChanges(t *testing.T) {
 	r := twoCRs()
 	r.Begin().Restart()

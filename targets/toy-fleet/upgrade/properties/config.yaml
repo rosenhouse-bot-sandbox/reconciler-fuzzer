@@ -1,5 +1,6 @@
 # This is cluster/config.yaml with a property that every Volume's Cluster
-# lives. Paths resolve against this file's directory.
+# lives until the Volume is being deleted. Paths resolve against this file's
+# directory.
 launch:
   binary: ../../../../bin/toy-fleet
   args:
@@ -31,4 +32,5 @@ properties:
   - name: volumes-go-first
     when: always
     expr: >-
-      world.kube['volumes.storage.thirdparty'].all(v, crs.exists(c, c.metadata.uid == v.metadata.ownerReferences[0].uid))
+      world.kube['volumes.storage.thirdparty'].all(v, has(v.metadata.deletionTimestamp)
+      || crs.exists(c, c.metadata.uid == v.metadata.ownerReferences[0].uid))
