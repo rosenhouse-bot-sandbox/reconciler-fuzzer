@@ -29,6 +29,7 @@ func Honest(ix *trace.Index, s Spec) []Finding {
 		return nil
 	}
 	h := &honesty{ix: ix, s: s, w: owner.New(ix, s.Owners), steps: ix.Steps(), deletes: controllerDeletes(ix), found: map[findingKey]*Finding{}}
+	h.faults, h.held = holds(ix, h.steps)
 	order, crs := crVersions(ix, s)
 	for _, uid := range order {
 		versions := crs[uid]
@@ -56,6 +57,8 @@ type honesty struct {
 	steps   []trace.StepSpan
 	deletes map[trace.Ref][]time.Duration
 	found   map[findingKey]*Finding
+	// faults and held are holds, as holds returns them.
+	faults, held []hold
 }
 
 type findingKey struct {
@@ -114,7 +117,7 @@ func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, d
 		}
 		for _, n := range h.s.names(v.Ref, body) {
 			g := h.s.sight(h.ix, n, t0)
-			if g.allowsReady(h.s.References[n.ref].Required) || g.looked && t0 <= h.after(g.at, 2*h.s.Stable) && h.corrected(p, versions[i+1:], n, due()) {
+			if g.allowsReady(h.s.References[n.ref].Required) || g.looked && t0 <= until(g.at, 2*h.s.Stable, h.faults) && h.corrected(p, versions[i+1:], n, due()) {
 				continue
 			}
 			summary := beforeSeeing
@@ -124,13 +127,6 @@ func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, d
 			h.add(t0, summary, kind(n.object), fmt.Sprintf("%s: %s %s", crName(h.w, uid), describe(n.object), g.describe()))
 		}
 	}
-}
-
-// after is d after t, or d after the hold of t's step ends if that is
-// later.
-func (h *honesty) after(t, d time.Duration) time.Duration {
-	step, _ := latestStep(h.ix, t)
-	return max(t, holdEnd(step)) + d
 }
 
 // corrected reports whether the controller sent a write of one of later,
@@ -151,13 +147,13 @@ func (h *honesty) corrected(p Primary, later []trace.Event, n named, due time.Du
 // that made the CR ready: stable after ready's response, since the CR's next
 // reconcile starts only once ready returns. A write of the CR sent by then
 // that failed or had an unknown outcome, such as a conflict from a cache
-// that lacks ready, moves it to stable after that write's response. Each
-// time counts from the end of its step's hold if that is later.
+// that lacks ready, moves it to stable after that write's response. A hold
+// that starts by then moves it to stable after the hold ends.
 func (h *honesty) correctionDue(ready trace.Event) time.Duration {
-	due := h.after(ready.At, h.s.Stable)
+	due := until(ready.At, h.s.Stable, h.held)
 	for _, e := range h.ix.Calls(trace.Controller, ready.At, math.MaxInt64) {
 		if c := e.Call; e.At-c.Latency <= due && trace.Mutating(c.Verb) && c.Object() == ready.Call.Object() && unconfirmed(*c) {
-			due = max(due, h.after(e.At, h.s.Stable))
+			due = until(e.At, h.s.Stable, h.held)
 		}
 	}
 	return due
@@ -165,6 +161,65 @@ func (h *honesty) correctionDue(ready trace.Event) time.Duration {
 
 // unconfirmed reports whether c failed or had an unknown outcome.
 func unconfirmed(c trace.Call) bool { return !succeeded(c) || c.Unknown() }
+
+// A hold is a time in which faults or a restart keep the controller from
+// acting on what it saw.
+type hold struct{ start, end time.Duration }
+
+// holds returns faults, the time from each step's first fault other than a
+// model fault until its faults end, and held, which adds the times that the
+// controller may then wait to retry or to start. A step whose faults made
+// the controller back off holds it until its backoff allowance has passed
+// since they ended. An exit holds it until the next start. Both are in order
+// of start.
+func holds(ix *trace.Index, steps []trace.StepSpan) (faults, held []hold) {
+	byStep := map[int]hold{}
+	for _, e := range ix.Events() {
+		if f := e.Fault; f != nil && f.Model == "" {
+			h, found := byStep[f.Step]
+			if !found {
+				h.start = e.At
+			}
+			h.end = e.At
+			byStep[f.Step] = h
+		}
+	}
+	for _, step := range steps {
+		h, found := byStep[step.Step]
+		if !found {
+			continue
+		}
+		faults = append(faults, h)
+		if slices.ContainsFunc(ix.Calls(trace.Controller, h.start, h.end), backsOff) {
+			h.end += step.Backoff
+		}
+		held = append(held, h)
+	}
+	procs := ix.Procs()
+	for i := 1; i < len(procs); i++ {
+		if procs[i-1].Proc.Event == trace.Exit {
+			held = append(held, hold{procs[i-1].At, procs[i].At})
+		}
+	}
+	slices.SortFunc(held, func(a, b hold) int { return cmp.Compare(a.start, b.start) })
+	return faults, held
+}
+
+// backsOff reports whether the controller retries the call e after a
+// backoff: e failed or had an unknown outcome, and did not kill it.
+func backsOff(e trace.Event) bool { return unconfirmed(*e.Call) && e.Call.Injected != trace.KillAfter }
+
+// until is d after t or, if later, d after the end of each hold that starts
+// by then. holds are in order of start.
+func until(t, d time.Duration, holds []hold) time.Duration {
+	end := t + d
+	for _, h := range holds {
+		if h.start <= end {
+			end = max(end, h.end+d)
+		}
+	}
+	return end
+}
 
 const (
 	beforeSeeing = "reported ready before seeing its dependency ready"

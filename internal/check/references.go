@@ -165,13 +165,9 @@ func (s Spec) heldBack(ix *trace.Index, cr trace.Ref, body map[string]any, t tim
 }
 
 // excuseStart is when the settle condition starts to excuse a CR that a
-// reference holds back in step: stable after the step's hold ends, so that
-// clause 7 sees a controller in backoff react to the step's create or
-// update.
+// reference holds back in step: once the step's backoff allowance and
+// stable have passed since its faults ended, so that clause 7 sees a
+// controller in backoff react to the step's create or update.
 func (s Spec) excuseStart(step trace.StepSpan) time.Duration {
-	return holdEnd(step) + s.Stable
+	return step.EndFaults + step.Backoff + s.Stable
 }
-
-// holdEnd is when step's faults, and the retry backoff that they cause, stop
-// holding the controller: its backoff allowance after its faults end.
-func holdEnd(step trace.StepSpan) time.Duration { return step.EndFaults + step.Backoff }

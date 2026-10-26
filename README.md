@@ -187,19 +187,21 @@ references:
   when a get, a list or the initial events of a watch show it missing. A reference **holds back**
   a CR while the controller's last look at the named object showed it not ready, or missing and
   `required`. Before any look, only a missing `required` object holds the CR back.
-- A step's faults, and the retry backoff that they cause, **hold** the controller until the time
-  that the faults lasted, at most `timeouts.backoffCap`, has passed since they ended.
 - Honest fails a CR that the controller writes ready while a reference holds it back, or before
   the controller looked at a live named object. It passes a write sent within 2×`stable` of a look
   if the controller writes the CR not ready, or naming another object, within `stable` of the
   write's response, since a reconcile may read its cache before the look reaches the cache. A
   failed or unknown-outcome write of the CR in that time, such as a conflict, extends it to
-  `stable` after its response. Each of these windows counts from the end of the step's hold if it
-  starts earlier. With `track: d`, Honest fails a CR that stays ready `d` after a look that held it
-  back.
+  `stable` after its response. If a step's faults, other than model faults, are under way in a
+  window, the window restarts when they end. For the `stable` window, faults in which a controller
+  request failed or had an unknown outcome, without killing the controller, count as under way
+  until the time that they lasted, at most `timeouts.backoffCap`, has passed since they ended. The
+  `stable` window also restarts when a controller that exits in it starts again. With `track: d`,
+  Honest fails a CR that stays ready `d` after a look that held it back.
 - The settle condition does not wait for a CR that a reference holds back, if the object as it is
-  now would hold the CR back too. This starts `stable` after the step's hold ends, so a controller
-  in retry backoff reacts first. If the controller does not watch the `to` kind, it misses the
+  now would hold the CR back too. This starts once `stable`, and the time the step's faults
+  lasted, at most `timeouts.backoffCap`, have passed since the faults ended. So a controller in
+  retry backoff reacts first. If the controller does not watch the `to` kind, it misses the
   object's return, and the step does not settle.
 - A response that the harness cannot decode, such as a watch of Tables, may show the named object.
   If one ends after the controller's last look, or is a watch still open since, the reference is
