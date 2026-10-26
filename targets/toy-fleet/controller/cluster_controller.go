@@ -106,10 +106,13 @@ func (r *ClusterReconciler) provisioning() fleetv1.Phase {
 	return fleetv1.Provisioning
 }
 
-// volumePrefix starts the names of the Volumes this version makes. B141
-// renames them, so it neither counts nor deletes version 1's.
+// renames says whether this version renames the Cluster's Volumes. B141
+// then sees only the Volumes it names, and misses version 1's.
+func (r *ClusterReconciler) renames() bool { return r.Version == 2 && r.Bug == B141 }
+
+// volumePrefix starts the names of the Volumes this version makes.
 func (r *ClusterReconciler) volumePrefix(cluster *fleetv1.Cluster) string {
-	if r.Version == 2 && r.Bug == B141 {
+	if r.renames() {
 		return cluster.Name + "-data-"
 	}
 	return cluster.Name + "-vol-"
@@ -227,7 +230,7 @@ func (r *ClusterReconciler) ownedVolumes(ctx context.Context, reader client.Read
 	}
 	var owned []storagev1.Volume
 	for _, v := range list.Items {
-		if metav1.IsControlledBy(&v, cluster) && strings.HasPrefix(v.Name, r.volumePrefix(cluster)) {
+		if metav1.IsControlledBy(&v, cluster) && (!r.renames() || strings.HasPrefix(v.Name, r.volumePrefix(cluster))) {
 			owned = append(owned, v)
 		}
 	}

@@ -51,7 +51,7 @@ func newFleet(t *testing.T, objects ...client.Object) *fleet { return newBuggyFl
 
 func newBuggyFleet(t *testing.T, bug Bug, objects ...client.Object) *fleet {
 	c := newClient(t, objects...)
-	base := reconciler{Client: c, APIReader: c, Scheme: c.Scheme(), Bug: bug}
+	base := reconciler{Client: c, APIReader: c, Scheme: c.Scheme(), Bug: bug, Version: 1}
 	return &fleet{t, c, &ClusterReconciler{base}, &DatabaseReconciler{base}, &UserReconciler{base}}
 }
 
