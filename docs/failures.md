@@ -160,7 +160,9 @@ that removes a child's finalizer only after the CR is gone.
 ### Restore
 
 The step changed no CR or fixture, but the controller's resources differ
-from the previous step's end.
+from the previous step's end. A restart changes no CR, even one that
+upgrades the controller. See [README Upgrading](../README.md#upgrading) for
+the findings an upgrade can cause.
 
 - `did not restore damaged resources`: a damaged resource was not
   recreated, or every resource of some kind under the damaged resource's
@@ -169,8 +171,9 @@ from the previous step's end.
   damaged one's kind and role under that root.
 - `replaced resources`: an undamaged resource was replaced, or a new one
   appeared.
-- `changed resources`: an undamaged resource's body changed. Each line
-  names the fields that differ.
+- `changed resources`: an undamaged resource's body changed in a step
+  whose restart did not upgrade the controller. Each line names the fields
+  that differ.
 
 Each line names its resource's owner as Clean does. `rule 1, unlisted
 owner` names the live object, such as a fixture, that owns the resource
@@ -231,6 +234,7 @@ names its cause. A run that started leaves its partial trace in `--out`. Common 
 | `creating fixture CustomResourceDefinition ...: ... already exists` | List the CRD under `crds` or under `fixtures`, not both. |
 | `mapping <group>/<version>, Kind=<kind>: no matches for kind ...` | Install the listed kind's CRD under `crds`. |
 | `steps[i].actions[j]: ...` or `launch.upgrades[i]: ...` that names a `binary` or `crds` path | Point `binary` at an executable file and `crds` at valid CRD files. A plan file's paths resolve against its directory, and `launch.upgrades` paths against the config's. |
+| `installing CRDs: the <resource> CRD stops serving <version>, which the harness watches` | Keep that version served in the restart's `crds`. |
 | `installing CRDs: ...` | Fix the CRDs that a restart's `crds` names. |
 | `launch args[i]: ...`, `launch env <name>: ...`, `launch.upgrades[i].args[k]: ...` or `steps[i].actions[j].args[k]: ...` | Use only `${systems.kube.kubeconfig}`, `namespace` and `url`, and a fake's `${systems.<name>.url}`. Close each `${` with `}`. |
 | `fake <name> exited ...` | Read `<out>/<name>.log`. Fix the `systems[].process` command or the fake's own config. |

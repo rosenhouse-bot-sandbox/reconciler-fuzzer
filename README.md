@@ -365,8 +365,8 @@ its kind, such as one with a misspelt resource.
 
 ### Upgrading
 
-A `restart` stops the controller with SIGTERM and starts it again with the same `launch.binary`,
-args and env. The harness installs `crds:` before step 0, and the CRDs stay fixed unless a
+A `restart` stops the controller with SIGTERM and starts it again with its current binary, args
+and env. The harness installs `crds:` before step 0, and the CRDs stay fixed unless a
 restart installs new ones. A restart that names `binary`, `args` or `crds` tests an upgrade:
 
 ```json
@@ -377,7 +377,8 @@ restart installs new ones. A restart that names `binary`, `args` or `crds` tests
 - `args` replace `launch.args`, and `[]` drops them. The `--launch-arg`s still come after the
   new args, and `${systems.<name>.<key>}` expands as in `launch.args`.
 - Every later start keeps the new `binary` and `args`: restarts, crash restarts, the start after
-  a `kill`, and the appended restart. Env and RBAC do not change.
+  a `kill`, and the appended restart. Env and RBAC do not change, so `launch.rbac` must grant
+  what both versions need.
 - Paths resolve against the plan's directory. Before it starts, `run` refuses a `binary` that
   is not an executable file, a `crds` path that holds no CRD, and an unknown or unclosed
   `${key}`. It checks `launch.upgrades` the same way.
@@ -394,27 +395,29 @@ Each generated plan then restarts into each version once, in order, at the end o
 That step may hold a fault or come before a delete. `shrink` and `hunt` drop upgrades from the
 last one back, so the versions stay in order.
 
-The checks judge an upgrade's step as they judge any restart's. So Restore fails a version that
-replaces or rewrites the old version's resources in a step that changes no CR. A generated
-upgrade lands in such a step on some seeds only.
+The checks judge an upgrade's step as they judge any restart's, except that Restore lets the new
+version change the old version's resources. Restore still fails a version that replaces them in
+a step that changes no CR. Restore judges a generated upgrade only when its step changes no CR.
+Only some seeds draw such a step.
 [targets/toy-fleet/upgrade](targets/toy-fleet/upgrade/config.yaml) upgrades toy-fleet to
-`--version=2`. Its bugs B140 to B142 mishandle the Clusters that version 1 made.
+`--version=2`, which labels each Volume with its version. Its bugs B140 to B142 mishandle the
+Clusters that version 1 made.
 
 Upgrades have these limits:
 
 - No conversion webhook runs, and the two versions never run at once.
 - For about a second after an install, the harness's watches still decode objects with the old
   schema. The trace keeps a version they record then until the object's next write.
-- The harness watches each kind at the API version it first used. A CRD that stops serving that
-  version ends the kind's record. The harness's patches and deletes use the kind's preferred
-  version, which new CRDs may change.
+- The harness watches each kind at the API version it first used. A restart whose CRDs stop
+  serving that version ends the run with exit 2. The harness's patches and deletes use the
+  kind's preferred version, which new CRDs may change.
 - A property's `world` lacks a kind that only the new CRDs serve, unless an object of it exists
-  during the run. The kind's list is then empty before the install.
-- A default that the new CRDs add to a kind the controller makes shows as a Restore change once
-  the controller writes such an object.
+  during the run. `world` then lists no objects of that kind before the install.
+- A default that the new CRDs add to a kind the controller makes shows as a Restore change if
+  the controller first writes such an object after the upgrade's step.
 - A version that renames its resources fails Restore, even when it deletes the old ones.
-- A plan that `run --seed`, `hunt` or `shrink` writes holds each upgrade's paths as absolute
-  paths. Make them relative before you commit the plan.
+- Every plan.json that `run`, `hunt` or `shrink` writes holds absolute upgrade paths. Make them
+  relative before you commit the plan.
 
 ### Uninstalling
 

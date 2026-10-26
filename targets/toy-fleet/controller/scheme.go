@@ -67,7 +67,7 @@ type reconciler struct {
 	Scheme    *runtime.Scheme
 	Bug       Bug
 	// Version is 1 or 2. Version 2 renames the Cluster finalizer and the
-	// phase Provisioning.
+	// phase Provisioning, and labels each Volume with its version.
 	Version int
 }
 

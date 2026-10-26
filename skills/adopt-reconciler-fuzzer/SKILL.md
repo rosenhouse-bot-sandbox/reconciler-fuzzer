@@ -289,8 +289,9 @@ Vault fixture, add a step that writes a new version, `{"do": "changeFixture", "t
 that deletes and creates slot `a` with `"faults": [{"match": {"resource": "secrets"},
 "holdWatch": true}]` tests how the controller acts on a stale cache. A last step
 `{"actions": [{"do": "delete", "slot": "a"}, {"do": "stop"}]}` tests an uninstall. To test an
-upgrade, build the previous release to `launch.binary` and the new one beside it, and add a step
-`{"actions": [{"do": "restart", "binary": "<new build>", "crds": ["<new CRDs>"]}]}`. The
+upgrade, build the previous release to `launch.binary` and the new one beside it. Point `crds`
+at the previous release's CRDs, and give `launch.rbac` the rules both versions need. Then add a
+step `{"actions": [{"do": "restart", "binary": "<new build>", "crds": ["<new CRDs>"]}]}`. The
 restart installs the CRDs first, and its paths resolve against the plan's directory. A report
 note that the `holdWatch` held no watch means the controller watches no such kind, or the match
 is wrong.
@@ -324,6 +325,8 @@ controller:
 | Clean | The controller keeps resources by design. | Set the entry's `retain`. |
 | Unique, on a fake | The CR owns several resources in one collection by design. | Set the system's `role`. |
 | Converge, with a CR that halted after a create of unknown outcome | The controller stops on purpose and waits for a person. | Set the entry's `halted` to CEL over its halted condition. |
+| Converge after an upgrade, with `forbidden` errors in `controller.log` | `launch.rbac` lacks a rule the new version needs. | Add the rule to `launch.rbac`. |
+| Restore after an upgrade, on a resource the new version renames or a field the new CRDs default | A limit that `<module>/README.md` lists under Upgrading. | Ask the user whether the change is intended. If so, move the restart into a step that also updates the CR. |
 
 Every other finding is a bug in the controller. Never hide one to make a check pass, and ask
 the user when in doubt. On a finding, stop and report it (step 11).

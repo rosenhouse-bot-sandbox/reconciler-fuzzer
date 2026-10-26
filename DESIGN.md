@@ -144,7 +144,8 @@ kind `launch.rbac` names that is not ignored (§10). These are the run event's
 `kinds`. It then watches any kind a listener records a call on, and records one
 `version` per (ref, resourceVersion). `InstallCRDs` creates or updates CRDs as
 admin, waits until discovery serves them, and watches their kinds, which the
-run event omits. The observer's watches see a new schema about a second later.
+run event omits. It refuses CRDs that stop serving a watched version. The
+observer's watches see a new schema about a second later.
 
 ## 7. Models and fake services
 
@@ -320,11 +321,11 @@ and those of an unlisted owner not at all. Summary: `left resources behind`.
 `changeFixture` action after a settled step, comparing the controller's
 resources at the two ends by group, without volatile fields (entries 21 and 40,
 the map's, and a CR kind's `periodic.paths`). Where no `damage` touched the
-root, each instance must stay, with no new one and an equal body:
-`replaced resources`, `changed resources`. Where one did, each group's kind
-must stay under the root. A damaged group must be live again while its owner
-lives, or else a CR made in the step must own its kind and role there:
-`did not restore damaged resources` (entries 22 and 82).
+root, each instance must stay, with no new one, and keep its body unless the
+step upgrades the controller: `replaced resources`, `changed resources`. Where
+one did, each group's kind must stay under the root. A damaged group must be
+live again while its owner lives, or else a CR made in the step must own its
+kind and role there: `did not restore damaged resources` (entries 22 and 82).
 
 **Unique.** At each settled step's end, a group holds at most one live
 controller instance. Summary: `duplicate resources`.
@@ -466,10 +467,9 @@ Cluster owns modelled third-party Volumes, a Database names a Cluster, and a
 User a Database. Its bugs start at B100. `config.yaml` lists all three kinds.
 The generated test fuzzes `cluster/`, which lists Clusters alone, `database/`,
 which lists Databases on a fixture Cluster, `protect/`, whose Volume model
-holds each Volume's deletion with its finalizer, and `upgrade/`, which is
-`cluster/` with an upgrade to `--version=2`. Only gate rows run
-`upgrade/properties/`, which adds an `always` property, and `uninstall/`, whose
-Database CRD is a fixture that a plan may delete.
+holds each Volume's deletion with its finalizer, and `upgrade/`, `cluster/`
+with an upgrade to `--version=2`. Only gate rows run `upgrade/properties/`,
+which adds a property, and `uninstall/`, whose Database CRD a plan may delete.
 
 Each config's `plans/` holds its gated bugs' and B0's plans. A toy's
 `gate_envtest_test.go` runs `gate_test.go`'s rows, and its `bugmatrix_test.go`
@@ -525,5 +525,5 @@ Each entry changes a check, exception, `System` interface or ignore list.
 80. A live unlisted owner, such as a fixture, keeps what it owns, directly or through the controller's live objects, from rules 2 to 4, so deleting a CR blames none of it (#128). An object the controller made is never an unlisted owner.
 81. `required` binds only the first entry's CRs, so the kinds that own no dependency pass.
 82. A `damage` touches each group under its root. An undamaged touched group may empty while its kind lives under that root, and a damaged one whose owner is gone while a CR made in the step owns its kind and role there. So a damage under a CR that the controller made touches that CR's owner, and the controller may remake that CR.
-83. Restore judges an upgrade's step as it judges any restart's, so a version that replaces or rewrites its resources fails (#137).
+83. At a step whose restart upgrades the controller, Restore allows changed resources but not replaced ones, since a release often rewrites its children's labels or templates (#137). A version that renames its resources still fails.
 85. A kube write's call records its answer's finalizers, for Finalizers (#133), since an update that empties a deleting object's finalizers deletes it and answers with the old version. The gc owns `foregroundDeletion` and `orphan`, which the API server adds for whoever deletes. A finalizer the harness wrote, from a sample, a fixture or a plan, may be the controller's own. Listeners record answers in no fixed order, so a version that overlapping writes of two callers carry may be either's. After an answer names a version the observer missed, the trace may lack a change, so the object's later writes pass. A CRD's status write keeps its metadata.
