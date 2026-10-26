@@ -252,7 +252,7 @@ func TestARestartExpandsItsArgsAndKeepsTheLaunchArgs(t *testing.T) {
 	dir := t.TempDir()
 	got := filepath.Join(dir, "got")
 	script := fmt.Sprintf(`echo "$0 $*" >> %s; exec sleep 60`, got)
-	config := fmt.Sprintf("launch: {binary: /bin/sh, args: [-c, '%[2]s', v1]}\ncrds: [%[1]s/crds/]\nprimary: {kind: toy.reconciler-fuzzer/v1/Widget, sample: %[1]s/widget.yaml, ready: \"true\"}\ntimeouts: {settle: 3s, stable: 1s}\n",
+	config := fmt.Sprintf("launch: {binary: /bin/sh, args: [-c, '%[2]s', v1]}\ncrds: [%[1]s/crds/]\nprimary: {kind: toy.reconciler-fuzzer/v1/Widget, sample: %[1]s/widget.yaml, ready: \"true\"}\ntimeouts: {settle: 1s, stable: 200ms}\n",
 		toyDir, script)
 	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
 		t.Fatal(err)
