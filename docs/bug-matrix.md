@@ -71,6 +71,8 @@ Each Cluster owns Volumes of a third party's kind, which a model sets ready. A D
 | B0 | The correct controller. | uninstall/recreate | none | |
 | B0 | The correct controller. | uninstall/stop-after-delete | none | |
 | B0 | The correct controller. | uninstall/stop-first | none | |
+| B116 | Removes every finalizer from a deleting Volume while its Cluster is deleted. | protect/b0 | Finalizers | 2 |
+| B116 | Removes every finalizer from a deleting Volume while its Cluster is deleted. | slow-delete | Finalizers | 1 |
 | B123 | Readies a Database on a Cluster that is not Ready. | create-together | Honest | 0 |
 | B124 | Readies a Database without checking its Secret. | secret-late | Honest | 0 |
 | B125 | Keeps a Ready Database ready after its Secret is deleted. | secret-deleted-while-down | Honest | 1 |

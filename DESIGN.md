@@ -305,7 +305,7 @@ from the config, or else the run event.
 
 ## 12. Checks
 
-Every check is `func(*trace.Index, Spec) []Finding`. A finding's signature is
+Most checks are `func(*trace.Index, Spec) []Finding`. A finding's signature is
 its check, summary and `kind` (`system/group/resource`). `check.Judge` runs
 every check, and notes each action error, each request fault that picked no
 request, each `holdWatch` while the controller had no watch of its kind, each
@@ -367,7 +367,7 @@ missing and `required`. An opaque response after the last look leaves it
 **unknown**. Honest fails a `ready` write, as above, of a CR that a known
 reference holds back, or that names a live object the controller has not looked
 at, unless the controller looked at the object and retracts the write in time
-(entry 85): `reported ready with no dependency` if missing, else `reported ready
+(entry 86): `reported ready with no dependency` if missing, else `reported ready
 before seeing its dependency ready`. With `track: d`, a CR fails that stays
 `ready`, naming the object, `d` after a look that held it back: `stayed ready
 after seeing its dependency not ready`. Each finding takes the `to` kind.
@@ -379,6 +379,10 @@ object's rule 1 to 3 CR. When the object is no CR and has no such CR, any CR's
 new generation breaks it. With `n` CRs live, it fails when each gap between
 calls `5n + 1` to `10n + 1` is under 100 ms: `retried a failing request in a
 tight loop`. It skips 409s on a held kind until `stable / 4` after the hold.
+
+**Finalizers.** A controller `update` or `patch` of an object, or of a built-in
+kind's `status`, fails when its answer drops a finalizer that a model or the gc
+added (entry 85): `removed another caller's finalizer`.
 
 **Property.** A `step` property is judged at each settled step's end, and an
 `always` one at each `version` event. Its CEL sees `crs`, the live CRs' bodies,
@@ -561,13 +565,8 @@ Each entry changes a check, exception, `System` interface or ignore list.
 48. A restart, exit, or failed or delayed CR write excuses `track`.
 52. A `delete` may be `Foreground` (B29). `Orphan` would fail Clean.
 64. `holdWatch` holds whole streams of one kind and delivers them in order, so it reorders nothing (#63).
-65. An API map reads response headers and may show partial objects, for S3.
-66. The `vault` and `s3` maps number incarnations, since paths and names are reused.
-67. Emulators list through their own API (`fake.Lister`), and take no model faults.
-68. moto, not MinIO, emulates S3: MinIO's downloads are blocked, and ACK needs no more.
 69. Properties judge settled step ends; `firstWrittenUnder` follows a value across instances, for #63.
 70. `primary.periodic` lets a timer's CR writes pass clause 7, for an external-secrets rotation.
-71. Fakes start before kube, so kube fixtures can name their urls.
 72. Clause 5 holds `stable` after a polling controller's look, for ACK's repair.
 73. A held watch looks only `stable` after its hold, and Backoff allows its 409s until `stable / 4` after.
 74. A fake's write without a resourceVersion is a change only if the observer saw one, for ACK.
@@ -581,4 +580,5 @@ Each entry changes a check, exception, `System` interface or ignore list.
 82. A `damage` touches each group under its root. An undamaged touched group may empty while its kind lives under that root, and a damaged one whose owner is gone while a CR made in the step owns its kind and role there. So a damage under a CR that the controller made touches that CR's owner, and the controller may remake that CR.
 83. Converge accepts a CR that is not ready while a reference holds it back, where a `ready` write would fail Honest (#126). A look then must hold it back too, so a controller that misses the object's return does not settle. A look need not follow the controller's own write of the object, since a controller writes the status of the kinds it serves. The excuse waits `backoff + stable` after `endFaults`, so a step does not settle before a controller in retry backoff reacts to a held-back CR that it creates or updates.
 84. A 2xx kube list that is not `Partial` and lacks an object shows it missing, as does the `k8s.io/initial-events-end` bookmark of such a watch, since client-go's informers open a watch with `sendInitialEvents` instead of a list. So a restart or a dropped watch counts. Kube listeners ask for JSON of Seen kinds, so built-in kinds' lists and watches decode.
-85. Honest excuses a `ready` write that the controller sends within 2×`stable` of a look, with no `start` since, and retracts within `stable` of the write's response, by writing the CR not `ready` or naming another object. A reconcile may read its cache before the look reaches the cache, and the CR's next reconcile starts only once the write returns. Neither window counts time in which a step's faults stall the controller, or between an exit and its next start. A step's faults stall it only if a fault altered one of the controller's requests in them, so a model fault, such as `stuck`, and a held watch stall it not at all. The retraction window starts again at a `start`, since a restart loses the reconcile, and a write of the CR that failed or had an unknown outcome, the `ready` write itself or one in the window, such as a conflict from a cache that lacks the `ready` write, gives the controller the `backoff` of the step that answered it and `stable` from its response. A killed write gives none, since the controller starts again with an empty backoff.
+85. A kube write's call records its answer's finalizers, for Finalizers (#133), since an update that empties a deleting object's finalizers deletes it and answers with the old version. The gc owns `foregroundDeletion` and `orphan`, which the API server adds for whoever deletes. A finalizer the harness wrote, from a sample, a fixture or a plan, may be the controller's own. Listeners record answers in no fixed order, so a version that overlapping writes of two callers carry may be either's. After an answer names a version the observer missed, the trace may lack a change, so the object's later writes pass. A CRD's status write keeps its metadata.
+86. Honest excuses a `ready` write that the controller sends within 2×`stable` of a look, with no `start` since, and retracts within `stable` of the write's response, by writing the CR not `ready` or naming another object. A reconcile may read its cache before the look reaches the cache, and the CR's next reconcile starts only once the write returns. Neither window counts time in which a step's faults stall the controller, or between an exit and its next start. A step's faults stall it only if a fault altered one of the controller's requests in them, so a model fault, such as `stuck`, and a held watch stall it not at all. The retraction window starts again at a `start`, since a restart loses the reconcile, and a write of the CR that failed or had an unknown outcome, the `ready` write itself or one in the window, such as a conflict from a cache that lacks the `ready` write, gives the controller the `backoff` of the step that answered it and `stable` from its response. A killed write gives none, since the controller starts again with an empty backoff.
