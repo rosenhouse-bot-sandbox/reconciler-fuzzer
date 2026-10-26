@@ -965,6 +965,30 @@ func TestHonestWithTrackFailsACRThatReactsTooLate(t *testing.T) {
 	requireFinding(t, honest(t, r), "Honest", 0, stayedReady, "kube/secrets", "slot b: secrets ns/pw seen not ready at")
 }
 
+// A delay that holds another CR's reconcile holds this CR's in the queue,
+// so track counts no time in which a step's faults stall the controller.
+func TestHonestWithTrackCountsNoTimeInWhichTheControllerStalls(t *testing.T) {
+	tracked := secretRef()
+	tracked.Track = 500 * ms
+	for name, late := range map[string]time.Duration{"track after the look, stalls aside": 0, "later": tt.Tick} {
+		t.Run(name, func(t *testing.T) {
+			var end time.Duration
+			r := secretGoes(tracked, func(r *tt.Script) {
+				r.Add(tt.Fault(r.Step, 0, false, databasesDelay))
+				deletedSeen(r)
+				end = r.Tick(2 * s).Now
+				r.Add(tt.Fault(r.Step, 0, true, databasesDelay)).Add(delayedGet(databaseB))
+			})
+			r.Tick(end+tracked.Track+late-r.Now).Update(ctl, databaseB, database(false, "pw"))
+			if findings := honest(t, r); late > 0 {
+				requireFinding(t, findings, "Honest", 0, stayedReady, "kube/secrets", "slot b: secrets ns/pw seen missing at")
+			} else {
+				requireNone(t, findings)
+			}
+		})
+	}
+}
+
 func TestHonestWithTrackJudgesOnlyLooksWhileTheCRLives(t *testing.T) {
 	tracked := secretRef()
 	tracked.Track = 500 * ms

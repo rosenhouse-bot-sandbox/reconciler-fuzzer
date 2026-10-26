@@ -352,25 +352,25 @@ observedGeneration while `ready`, its last `seen` of each dependency must show
 its last write's version or a later one, which its `ready` accepts: `reported
 ready before seeing its dependency ready`. With `required`, a CR of the first
 `primaries` entry needs a dependency of each kind: `reported ready with no
-dependency` (entry 81). With `track: d`, a CR fails that stays `ready` `d` after
-the controller saw a dependency not ready: `stayed ready after seeing its
-dependency not ready`.
+dependency` (entry 81). With `track: d`, a CR fails that stays `ready` `d`,
+stalls aside (entry 86), after the controller saw a dependency not ready:
+`stayed ready after seeing its dependency not ready`.
 
 A CR **names** the `to` object of each value at its kind's references' `name`,
 in the namespace at `namespace` or else the CR's own if `to` is namespaced. A
 cluster-scoped CR without a `namespace` value names no namespaced object. The
 controller's **looks** at it are its seens of it, and its calls and ends of a
-watch's initial events that showed it missing (`Index.Looks`). A reference
-**holds back** the CR at `t` while the last look by `t` shows the object
-missing, with `required`, or not `ready`, or, with no look, while the object is
-missing and `required`. An opaque response after the last look leaves it
-**unknown**. Honest fails a `ready` write, as above, of a CR that a known
-reference holds back, or that names a live object the controller has not looked
-at, unless the controller looked at the object and retracts the write in time
-(entry 86): `reported ready with no dependency` if missing, else `reported ready
-before seeing its dependency ready`. With `track: d`, a CR fails that stays
-`ready`, naming the object, `d` after a look that held it back: `stayed ready
-after seeing its dependency not ready`. Each finding takes the `to` kind.
+watch's initial events that showed it missing. A reference **holds back** the CR
+at `t` while the last look by `t` shows the object missing, with `required`, or
+not `ready`, or, with no look, while the object is missing and `required`. An
+opaque response after the last look leaves it **unknown**. Honest fails a
+`ready` write, as above, of a CR that a known reference holds back, or that
+names a live object the controller has not looked at, unless the controller
+looked at the object and retracts the write in time (entry 86): `reported ready
+with no dependency` if missing, else `reported ready before seeing its
+dependency ready`. With `track: d`, a CR fails that stays `ready`, naming the
+object, `d`, stalls aside, after a look that held it back: `stayed ready after
+seeing its dependency not ready`. Each finding takes the `to` kind.
 
 **Backoff.** Failing controller calls with one system, verb, object,
 subresource and status form a **run**; a create's object is its `requestName`.
@@ -581,4 +581,4 @@ Each entry changes a check, exception, `System` interface or ignore list.
 83. Converge accepts a CR that is not ready while a reference holds it back, where a `ready` write would fail Honest (#126). A look then must hold it back too, so a controller that misses the object's return does not settle. A look need not follow the controller's own write of the object, since a controller writes the status of the kinds it serves. The excuse waits `backoff + stable` after `endFaults`, so a step does not settle before a controller in retry backoff reacts to a held-back CR that it creates or updates.
 84. A 2xx kube list that is not `Partial` and lacks an object shows it missing, as does the `k8s.io/initial-events-end` bookmark of such a watch, since client-go's informers open a watch with `sendInitialEvents` instead of a list. So a restart or a dropped watch counts. Kube listeners ask for JSON of Seen kinds, so built-in kinds' lists and watches decode.
 85. A kube write's call records its answer's finalizers, for Finalizers (#133), since an update that empties a deleting object's finalizers deletes it and answers with the old version. The gc owns `foregroundDeletion` and `orphan`, which the API server adds for whoever deletes. A finalizer the harness wrote, from a sample, a fixture or a plan, may be the controller's own. Listeners record answers in no fixed order, so a version that overlapping writes of two callers carry may be either's. After an answer names a version the observer missed, the trace may lack a change, so the object's later writes pass. A CRD's status write keeps its metadata.
-86. Honest excuses a `ready` write that the controller sends within 2×`stable` of a look, with no `start` since, and retracts within `stable` of the write's response, by writing the CR not `ready` or naming another object. A reconcile may read its cache before the look reaches the cache, and the CR's next reconcile starts only once the write returns. Neither window counts time in which a step's faults stall the controller, or between an exit and its next start. A step's faults stall it only if a fault altered one of the controller's requests in them, so a model fault, such as `stuck`, and a held watch stall it not at all. The retraction window starts again at a `start`, since a restart loses the reconcile, and a write of the CR that failed or had an unknown outcome, the `ready` write itself or one in the window, such as a conflict from a cache that lacks the `ready` write, gives the controller the `backoff` of the step that answered it and `stable` from its response. A killed write gives none, since the controller starts again with an empty backoff.
+86. Honest excuses a `ready` write that the controller sends within 2×`stable` of a look, with no `start` since, and retracts within `stable` of the write's response, by writing the CR not `ready` or naming another object. A reconcile may read its cache before the look reaches the cache, and the CR's next reconcile starts only once the write returns. Neither window, nor a `track`, counts time in which a step's faults stall the controller, or between an exit and its next start, since a reconcile that a fault holds keeps the CRs queued behind it waiting. A step's faults stall it only if a fault altered one of the controller's requests in them, so a model fault, such as `stuck`, and a held watch stall it not at all. The retraction window starts again at a `start`, since a restart loses the reconcile, and a write of the CR that failed or had an unknown outcome, the `ready` write itself or one in the window, such as a conflict from a cache that lacks the `ready` write, gives the controller the `backoff` of the step that answered it and `stable` from its response. A killed write gives none, since the controller starts again with an empty backoff.

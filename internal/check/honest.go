@@ -395,9 +395,9 @@ func (h *honesty) ready(seen trace.Event, m Model) bool {
 	return found && !seen.Seen.Deleted && satisfies(m.Ready, decode(v.Body))
 }
 
-// judgeTrack fails a CR, of p's kind, that stays ready for track after the
-// controller saw one of its dependencies not ready, and saw nothing better
-// since.
+// judgeTrack fails a CR, of p's kind, that stays ready for track, stalls
+// aside, after the controller saw one of its dependencies not ready, and saw
+// nothing better since.
 func (h *honesty) judgeTrack(uid string, p Primary, versions []trace.Event, deps []Model, end time.Duration) {
 	for _, m := range deps {
 		d := m.Dependency.Track
@@ -406,7 +406,7 @@ func (h *honesty) judgeTrack(uid string, p Primary, versions []trace.Event, deps
 		}
 		for _, dep := range h.allOf(m) {
 			for _, seen := range h.ix.Seen(trace.Controller, dep.UID) {
-				at := seen.At + d
+				at := until(seen.At, d, h.stalls)
 				if at > end || h.ready(seen, m) || seen.Seen.Deleted || h.seenDeleting(seen) ||
 					!h.streak(dep, m, seen.At, at) || !through(versions, seen.At, at, p.ready) || h.excused(uid, seen.At, at) ||
 					h.ix.Opaque(trace.Controller, dep.Ref, seen.At, at) {
@@ -467,8 +467,8 @@ func (h *honesty) streak(dep owner.Instance, m Model, from, to time.Duration) bo
 }
 
 // judgeReferenceTrack fails a CR, of p's kind, that stays ready, naming an
-// object, for its reference's track after a look at the object, while that
-// look and every later one held the CR back.
+// object, for its reference's track, stalls aside, after a look at the
+// object, while that look and every later one held the CR back.
 func (h *honesty) judgeReferenceTrack(uid string, p Primary, versions []trace.Event, end time.Duration) {
 	cr := versions[0].Version.Ref
 	var objects []named
@@ -485,7 +485,7 @@ func (h *honesty) judgeReferenceTrack(uid string, p Primary, versions []trace.Ev
 		holds := func(look trace.Event) bool { return h.s.shown(h.ix, n, look).holds(r.Required) }
 		readyNaming := func(body map[string]any) bool { return p.ready(body) && slices.Contains(h.s.names(cr, body), n) }
 		for i, look := range looks {
-			at := look.At + r.Track
+			at := until(look.At, r.Track, h.stalls)
 			if at > end || slices.ContainsFunc(looks[i:], func(e trace.Event) bool { return e.At <= at && !holds(e) }) ||
 				!through(versions, look.At, at, readyNaming) || h.excused(uid, look.At, at) || h.ix.Opaque(trace.Controller, n.object, look.At, at) {
 				continue

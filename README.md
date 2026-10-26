@@ -191,15 +191,16 @@ references:
   the controller looked at a live named object. It passes a write sent within 2×`stable` of a
   look, with no restart since, that the controller retracts within `stable` of the write's
   response, by writing the CR not ready or naming another object, since a reconcile may read its
-  cache before the look reaches the cache. Neither window counts time in which a step's faults
-  stall the controller, or between an exit and its next start. A step's faults stall it only if a
-  fault altered one of the controller's requests in them, so a model fault and a held watch stall
-  it not at all. The retraction window starts again at a start in it, since a restart loses the
-  reconcile. A write of the CR, the ready write itself or one in the window, that failed or had
-  an unknown outcome, such as a conflict, gives the controller the time the faults of the step
-  that answered it lasted, at most `timeouts.backoffCap`, and `stable` from its response, since
-  it retries after a backoff. A killed write gives none, since the controller starts again. With
-  `track: d`, Honest fails a CR that stays ready `d` after a look that held it back.
+  cache before the look reaches the cache. The retraction window starts again at a start in it,
+  since a restart loses the reconcile. A write of the CR, the ready write itself or one in the
+  window, that failed or had an unknown outcome, such as a conflict, gives the controller the
+  time the faults of the step that answered it lasted, at most `timeouts.backoffCap`, and
+  `stable` from its response, since it retries after a backoff. A killed write gives none, since
+  the controller starts again. With `track: d`, Honest fails a CR that stays ready `d` after a
+  look that held it back. None of these windows counts time in which the controller **stalls**:
+  while a step's faults last, or between an exit and its next start. A step's faults stall it
+  only if a fault altered one of the controller's requests in them, so a model fault and a held
+  watch stall it not at all.
 - The settle condition does not wait for a CR that a reference holds back, if the object as it is
   now would hold the CR back too. This starts once `stable`, and the time the step's faults
   lasted, at most `timeouts.backoffCap`, have passed since the faults ended. So a controller in
@@ -267,7 +268,8 @@ models:
   ownerReference, `owns` or `owner`. Honest then fails a CR that reports ready before the controller saw its
   Gadget ready. `required` (the default)
   also fails one with no Gadget. `track: d` fails a CR that stays ready longer than `d` after
-  the controller saw its Gadget not ready.
+  the controller saw its Gadget not ready, not counting time in which the controller stalls, as
+  References defines.
 - Generated plans then draw two model faults. `stuck` keeps Gadgets not ready, and `slowDelete`
   holds their deletion. Each ends with the fault period. A create that waits until a deleted CR
   no longer exists ends them once `period` has passed. A plan step writes one as

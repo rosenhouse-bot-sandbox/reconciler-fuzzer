@@ -458,6 +458,28 @@ func TestHonestWithTrackExcuses(t *testing.T) {
 	}
 }
 
+// A step's faults that start after the controller saw the dependency not
+// ready, and delay its reads, stall it, so track counts no time in them.
+func TestHonestWithTrackCountsNoTimeInWhichTheControllerStallsAfterItsSight(t *testing.T) {
+	const widgetsDelay = "delay(2s) on resource=widgets"
+	for name, late := range map[string]time.Duration{"track after the sight, stalls aside": 0, "later": tt.Tick} {
+		t.Run(name, func(t *testing.T) {
+			r := degrade(true)
+			seen := r.Now - tt.Tick
+			begin := r.Now
+			r.Add(tt.Fault(r.Step, 0, false, widgetsDelay))
+			end := r.Tick(2 * s).Now
+			r.Add(tt.Fault(r.Step, 0, true, widgetsDelay)).Add(delayedGet(widgetA))
+			r.Tick(seen+500*ms+(end-begin)+late-r.Now).Update(ctl, widgetA, tt.CR("a", false))
+			if findings := honest(t, r); late > 0 {
+				requireFinding(t, findings, "Honest", 0, stayedReady, "kube/toy/gadgets", "slot a", "gadgets.toy ns/a")
+			} else {
+				requireNone(t, findings)
+			}
+		})
+	}
+}
+
 func TestHonestWithTrackPassesASeenReadyAtTheDeadline(t *testing.T) {
 	r := degrade(true)
 	seen := r.Now - tt.Tick

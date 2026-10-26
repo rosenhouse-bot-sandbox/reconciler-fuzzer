@@ -206,7 +206,8 @@ dependency:
 - `reported ready with no dependency`: under `dependency.required`, the
   CR owned none that counts.
 - `stayed ready after seeing its dependency not ready`: the CR stayed
-  ready longer than `track`.
+  ready longer than `track`, not counting time in which the controller
+  stalled (README.md, References).
 
 A `references` entry's findings take the same summaries. Each line names
 the CR and the object that its field names. The finding takes the object's
@@ -220,7 +221,8 @@ kind:
   means the controller never looked at the live object.
 - `stayed ready after seeing its dependency not ready`: the CR stayed
   ready, naming the object, for `track` after the look at the time the
-  line gives, and each later look by then held it back.
+  line gives, not counting time in which the controller stalled, and each
+  later look by then held it back.
 
 ### Backoff: retried a failing request in a tight loop
 
