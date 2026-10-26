@@ -194,9 +194,8 @@ An action's `do` is `create`, `update`, `delete` (optionally `Foreground`),
 `restart`, `kill` (the controller stays down until the fault period ends or a
 slot wait restarts it, §9), `stop` (for good), `damage` (of an instance the
 controller created), `changeFixture` (of a fixture, on any system) or
-`createFixture` (of a kube fixture that an earlier `changeFixture` deleted).
-After a `stop`, actions may only `delete` and `changeFixture`. `plan.go`
-documents each.
+`createFixture` (of a kube fixture that a `changeFixture` deleted). After a
+`stop`, actions may only `delete` and `changeFixture`. `plan.go` documents each.
 
 A `target` has `system` (default `kube`), `group`, `resource`, `namespace`,
 `name`, `role` and `nth` (default 1). Empty fields match anything.
@@ -340,7 +339,8 @@ controller's resources at the two ends by group, without volatile fields
 equal body: `replaced resources`, `changed resources`. Where one did, each
 group's kind must stay under the root. A damaged group must be live again
 while its owner lives, or else a CR made in the step must own its kind and
-role there: `did not restore damaged resources` (entries 22 and 82).
+role there: `did not restore damaged resources` (entries 22 and 82). A group
+whose CRs are all not ready may empty (entry 83).
 
 **Unique.** At each settled step's end, a group holds at most one live
 controller instance. Summary: `duplicate resources`.
@@ -578,7 +578,7 @@ Each entry changes a check, exception, `System` interface or ignore list.
 80. A live unlisted owner, such as a fixture, keeps what it owns, directly or through the controller's live objects, from rules 2 to 4, so deleting a CR blames none of it (#128). An object the controller made is never an unlisted owner.
 81. `required` binds only the first entry's CRs, so the kinds that own no dependency pass.
 82. A `damage` touches each group under its root. An undamaged touched group may empty while its kind lives under that root, and a damaged one whose owner is gone while a CR made in the step owns its kind and role there. So a damage under a CR that the controller made touches that CR's owner, and the controller may remake that CR.
-83. Converge accepts a CR that is not ready while a reference holds it back, where a `ready` write would fail Honest (#126). A look then must hold it back too, so a controller that misses the object's return does not settle. A look need not follow the controller's own write of the object, since a controller writes the status of the kinds it serves. The excuse waits `backoff + stable` after `endFaults`, so a step does not settle before a controller in retry backoff reacts to a held-back CR that it creates or updates.
+83. Converge accepts a CR that is not ready while a reference holds it back, where a `ready` write would fail Honest (#126). A look then must hold it back too, so a controller that misses the object's return does not settle. A look need not follow the controller's own write of the object, since a controller writes the status of the kinds it serves. The excuse waits `backoff + stable` after `endFaults`, so a step does not settle before a controller in retry backoff reacts to a held-back CR that it creates or updates. Restore lets a group empty while its CRs are all not ready, since a settled step ends with a CR not ready only if it halted or a reference holds it back, and then its controller stops on purpose.
 84. A 2xx kube list that is not `Partial` and lacks an object shows it missing, as does the `k8s.io/initial-events-end` bookmark of such a watch, since client-go's informers open a watch with `sendInitialEvents` instead of a list. So a restart or a dropped watch counts. Kube listeners ask for JSON of Seen kinds, so built-in kinds' lists and watches decode.
 85. A kube write's call records its answer's finalizers, for Finalizers (#133), since an update that empties a deleting object's finalizers deletes it and answers with the old version. The gc owns `foregroundDeletion` and `orphan`, which the API server adds for whoever deletes. A finalizer the harness wrote, from a sample, a fixture or a plan, may be the controller's own. Listeners record answers in no fixed order, so a version that overlapping writes of two callers carry may be either's. After an answer names a version the observer missed, the trace may lack a change, so the object's later writes pass. A CRD's status write keeps its metadata.
 86. Honest excuses a `ready` write that the controller sends within 2×`stable` of a look, with no `start` since, and retracts within `stable` of the write's response, by writing the CR not `ready` or naming another object. A reconcile may read its cache before the look reaches the cache, and the CR's next reconcile starts only once the write returns. Neither window, nor a `track`, counts time in which a step's faults stall the controller, or between an exit and its next start, since a reconcile that a fault holds keeps the CRs queued behind it waiting. A step's faults stall it only if a fault altered one of the controller's requests in them, so a model fault, such as `stuck`, and a held watch stall it not at all. The retraction window starts again at a `start`, since a restart loses the reconcile, and a write of the CR that failed or had an unknown outcome, the `ready` write itself or one in the window, such as a conflict from a cache that lacks the `ready` write, gives the controller the `backoff` of the step that answered it and `stable` from its response. A killed write gives none, since the controller starts again with an empty backoff.

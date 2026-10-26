@@ -1153,6 +1153,50 @@ func TestSettleStillWaitsForACRNoReferenceHoldsBack(t *testing.T) {
 	}
 }
 
+// A settled step ends with a CR not ready only if it halted or a reference
+// holds it back. Its controller stops on purpose, so Restore lets its
+// damaged resources stay gone.
+func TestRestoreLetsTheResourcesOfACRNotReadyStayGone(t *testing.T) {
+	child := tt.Ref("configmaps", "ns", "b-0")
+	for name, c := range map[string]struct {
+		readyB, unreadyAfterDamage, sharedWithC bool
+		want                                    string
+	}{
+		"not ready while its Secret is missing": {},
+		"ready while its Secret is missing":     {readyB: true, want: "configmaps ns/b-0 (rule 1, slot b)"},
+		"not ready since the damage":            {readyB: true, unreadyAfterDamage: true},
+		"sharing it with a ready CR":            {sharedWithC: true, want: "configmaps ns/b-0 (rule 4, slot b, slot c)"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := fleetRun(3, databases)
+			r.Spec.References = []trace.Reference{secretRef()}
+			r.Begin()
+			r.Create(trace.Harness, pw, secret(true))
+			body := tt.OwnedBy(tt.Object("b-0"), r.Create(trace.Harness, databaseB, database(false, "pw")), true)
+			r.Act("create", "b", &databaseB)
+			if c.sharedWithC {
+				r.Create(trace.Harness, databaseC, tt.CR("c", true))
+				r.Act("create", "c", &databaseC)
+				body = tt.Object("b-0")
+			}
+			r.Create(ctl, child, body)
+			readyB(r.See(ctl, pw)).EndFaults().Settle()
+			r.Begin().Delete(trace.Harness, pw).Act("changeFixture", "", &pw).SeeDeleted(ctl, pw)
+			r.Update(ctl, databaseB, database(c.readyB, "pw")).EndFaults().Tick(1500 * ms).Settle()
+			r.Begin().Delete(trace.Harness, child).Act("damage", "b", &child).Call(ctl, "get", child, 404)
+			if c.unreadyAfterDamage {
+				r.Update(ctl, databaseB, database(false, "pw"))
+			}
+			r.EndFaults().Settle()
+			if findings := restore(t, r); c.want == "" {
+				requireNone(t, findings)
+			} else {
+				requireFinding(t, findings, "Restore", 2, "did not restore damaged resources", "kube/configmaps", c.want)
+			}
+		})
+	}
+}
+
 func TestClause5HoldsTheControllerToLookingAtACreatedFixture(t *testing.T) {
 	requireUnmet(t, damagedAt1200ms("createFixture"), 3200*ms, "has not looked at configmaps ns/c since the createFixture at 1.2s")
 }

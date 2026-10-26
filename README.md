@@ -205,7 +205,8 @@ references:
   now would hold the CR back too. This starts once `stable`, and the time the step's faults
   lasted, at most `timeouts.backoffCap`, have passed since the faults ended. So a controller in
   retry backoff reacts first. If the controller does not watch the `to` kind, it misses the
-  object's return, and the step does not settle.
+  object's return, and the step does not settle. Restore lets the resources of a CR that is not
+  ready at a settled step's end stay gone after a damage.
 - A response that the harness cannot decode, such as a watch of Tables, may show the named object.
   If one ends after the controller's last look, or is a watch still open since, the reference is
   **unknown**. Honest then passes the CR's ready writes, and the settle condition treats the CR as
@@ -331,7 +332,8 @@ collections:
   `{"system": "cloud", "match": {"verb": "create", "resource": "buckets"}, "nth": 1, "dropResponse": true}`,
   and `stuck` or `slowDelete`. `damage` takes `"target": {"system": "cloud"}`.
 - An entry's `halted` is CEL over its CR. It counts a CR as done after a request of unknown
-  outcome, for a controller that stops on purpose. [targets/toy-bucket/halted](targets/toy-bucket/halted/config.yaml)
+  outcome, for a controller that stops on purpose. While such a CR is not ready, Restore lets its
+  damaged resources stay gone. [targets/toy-bucket/halted](targets/toy-bucket/halted/config.yaml)
   uses it.
 - Any program can be a fake. The harness runs it in the config's directory and sets
   `RECONCILER_FUZZER_ADDR`, where it serves its API and the fake contract: `GET /_fake/resources`

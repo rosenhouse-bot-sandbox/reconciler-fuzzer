@@ -43,12 +43,14 @@ func Restore(ix *trace.Index, s Spec) []Finding {
 				// A damaged group must be live again while its owner lives. Once
 				// its owner is gone, a CR made since from must own its kind and
 				// role under its root. A touched group that empties must leave
-				// its kind there.
+				// its kind there. A group whose CRs are all not ready may stay
+				// empty: a settled step allows that only of a CR that halted or
+				// that a reference holds back, whose controller stops on purpose.
 				restored := kinds[group{kind: g.kind, root: g.root}]
 				if o, hit := damaged[g]; hit {
 					restored = !v.lives(o, to) && remade[group{kind: g.kind, root: g.root, role: g.role}]
 				}
-				if len(was) > 0 && len(is) == 0 && !restored {
+				if len(was) > 0 && len(is) == 0 && !restored && !v.notReady(v.w.Owner(was[0], from), to) {
 					missing[k] = append(missing[k], v.describeAll(was[:1], from)...)
 				}
 				continue
@@ -94,6 +96,16 @@ func (v *view) damaged(step int, t time.Duration) (map[group]owner.Owner, func(r
 	return groups, func(root string) bool {
 		return keys[root] || slices.ContainsFunc(v.roots[root].CRs, func(uid string) bool { return crs[uid] })
 	}
+}
+
+// notReady reports whether o names CRs, and each is not ready by its latest
+// body at t.
+func (v *view) notReady(o owner.Owner, t time.Duration) bool {
+	return len(o.CRs) > 0 && !slices.ContainsFunc(o.CRs, func(uid string) bool {
+		cr, _ := v.w.Instance(uid)
+		p, _ := v.s.primary(cr.Ref)
+		return p.ready(v.w.Object(cr, t))
+	})
 }
 
 // lives reports whether o names no CR, or a CR live at t.
