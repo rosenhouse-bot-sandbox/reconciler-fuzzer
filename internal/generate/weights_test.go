@@ -59,6 +59,14 @@ func TestFaultsFavorTheListedModelAndOwnsKinds(t *testing.T) {
 	}
 }
 
+func TestAFakesOwnsEntryKeepsTheCoreKindsTheControllerMayCreateFavored(t *testing.T) {
+	cfg := loadConfig(t, systemsConfig)
+	cfg.Primaries[0].Owns = []config.Owns{{System: "vault", Collection: "secret", Name: "self.metadata.name"}}
+	if w := newGenerator(t, cfg).kindWeight(gvk.GroupResource{Resource: "configmaps"}); w != favored {
+		t.Errorf("ConfigMaps weigh %d, want %d.", w, favored)
+	}
+}
+
 func TestAnOwnsKindTakesThePluralItsCRDNames(t *testing.T) {
 	cfg := loadConfig(t, modelsConfig)
 	cfg.Models = nil

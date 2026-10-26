@@ -80,8 +80,10 @@ func TestTheFirstCreateDrawsEachListedKindAboutEqually(t *testing.T) {
 	}
 }
 
-// The RBAC grants no create on Users, and a config without it grants
-// nothing, so the controller makes no object such a damage could delete.
+// toy-fleet's Role grants no create on Users, and a config without RBAC
+// grants nothing, so the controller makes no object such a damage could
+// delete. external-secrets' Role lets it create the listed ExternalSecrets,
+// which `delete` actions cover.
 func TestDamageTargetsTheUnlistedKindsTheRBACLetsTheControllerCreate(t *testing.T) {
 	for path, want := range map[string][]string{
 		fleetConfig: {"configmaps", "secrets", "volumes"},

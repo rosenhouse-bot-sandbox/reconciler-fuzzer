@@ -429,10 +429,10 @@ actions and at most one fault each. A create draws its kind uniformly from
 `primaries`, and each CR takes its kind's `values`. Step 0 creates slot `a`.
 About 30% of steps hold one `restart`, `kill` or `damage`, so Restore has steps
 to judge. A kube fault draws a request `launch.rbac` grants, creates weighted
-most (§17, entry 20). 2 of 7 kube fault draws (of 9 with `models:`, 2 of which
-are `stuck` or `slowDelete`) hold a kind `launch.rbac` lets the controller
-watch, with the traffic `holdTraffic` documents. A kube `damage` targets an
-unlisted kind `launch.rbac` lets the controller create. Faults and `damage`
+most (entry 20). 2 of 7 kube fault draws (of 9 with `models:`, 2 of which are
+`stuck` or `slowDelete`) hold a kind `launch.rbac` lets the controller watch,
+with the traffic `holdTraffic` documents. A kube `damage` deletes an object of
+an unlisted kind `launch.rbac` lets the controller create. Faults and `damage`
 favor the listed, model and kube `owns` kinds. Without the last two, the core
 kinds the controller may create stand in for them. With fakes, half of the fault
 and `damage` draws name a fake: a request fault by verb alone, or a model fault
