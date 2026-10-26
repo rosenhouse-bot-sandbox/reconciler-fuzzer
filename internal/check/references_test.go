@@ -320,7 +320,7 @@ func TestHonestGivesNoTimeForAnEarlierRestart(t *testing.T) {
 	r := secretRun(secretRef(), secret(true))
 	r.Add(tt.Exit("signal: killed", true, "")).Tick(2 * s).Add(tt.Start(2))
 	readyB(seenThenDeleted(r))
-	requireHonest(t, r.Tick(r.Now+1*s-tt.Tick-r.Now).Update(ctl, databaseB, database(false, "pw")), false)
+	requireHonest(t, r.Tick(1*s-tt.Tick).Update(ctl, databaseB, database(false, "pw")), false)
 }
 
 // A crash within a step's faults holds the controller no longer than they
@@ -417,22 +417,91 @@ func TestHonestKeepsTheBackoffAcrossAStartWithinIt(t *testing.T) {
 	}
 }
 
-// Each failed write of the CR is retried after the backoff of its own step.
-func TestHonestGivesTheBackoffOfAFailedWritesOwnStep(t *testing.T) {
-	for name, late := range map[string]time.Duration{"the next step's backoff after a write in it": 0, "later": tt.Tick} {
+// Each failed write of the CR is retried after the backoff of the step that
+// answered it, since that step's faults fail its retries too.
+func TestHonestGivesTheBackoffOfTheStepThatAnsweredAFailedWrite(t *testing.T) {
+	for name, latency := range map[string]time.Duration{"a write of that step": 0, "a write sent in the step before": 400 * ms} {
+		for when, late := range map[string]time.Duration{"the backoff and stable after the answer": 0, "later": tt.Tick} {
+			t.Run(name+", "+when, func(t *testing.T) {
+				const backoff = 100 * ms
+				r := secretRun(secretRef(), secret(true))
+				readyB(seenThenDeleted(r))
+				ready := r.Now - tt.Tick
+				timesOut(r, 3*s, ready+200*ms)
+				conflict := tt.Call(ctl, "update", databaseB, 409, "")
+				conflict.Call.Latency = latency
+				r.Tick(ready + 500*ms - r.Now).Add(conflict)
+				answered := r.Now - tt.Tick
+				endFaults(r, backoff)
+				due := answered + backoff + r.Spec.Stable
+				requireHonest(t, r.Tick(due+late-r.Now).Update(ctl, databaseB, database(false, "pw")), late > 0)
+			})
+		}
+	}
+}
+
+// A later failed write of the CR does not cut short the allowance of an
+// earlier one, whose step's faults lasted longer.
+func TestHonestKeepsTheLongestAllowanceOfFailedWritesOfTheCR(t *testing.T) {
+	for name, late := range map[string]time.Duration{"the first write's backoff and stable": 0, "later": tt.Tick} {
 		t.Run(name, func(t *testing.T) {
-			const backoff = 100 * ms
+			const backoff = 3 * s
 			r := secretRun(secretRef(), secret(true))
 			readyB(seenThenDeleted(r))
 			ready := r.Now - tt.Tick
-			timesOut(r, 3*s, ready+200*ms)
-			r.Tick(ready+500*ms-r.Now).Call(ctl, "update", databaseB, 409)
-			sent := r.Now - tt.Tick
-			endFaults(r, backoff)
-			due := sent + backoff + r.Spec.Stable
+			r.Tick(ready+100*ms-r.Now).Call(ctl, "update", databaseB, 409)
+			first := r.Now - tt.Tick
+			timesOut(r, backoff, ready+200*ms)
+			r.Tick(ready+1*s-r.Now).Call(ctl, "update", databaseB, 409)
+			endFaults(r, 100*ms)
+			due := first + backoff + r.Spec.Stable
 			requireHonest(t, r.Tick(due+late-r.Now).Update(ctl, databaseB, database(false, "pw")), late > 0)
 		})
 	}
+}
+
+// A kill is no backoff: a controller killed as it wrote the CR reconciles
+// again as soon as it starts.
+func TestHonestGivesNoBackoffAfterAKilledWriteOfTheCR(t *testing.T) {
+	for name, late := range map[string]time.Duration{"stable after the start": 0, "later": tt.Tick} {
+		t.Run(name, func(t *testing.T) {
+			r := secretRun(secretRef(), secret(true))
+			readyB(seenThenDeleted(r)).Tick(500 * ms).Add(injected("update", databaseB, 200, trace.KillAfter))
+			r.Add(tt.Exit("signal: killed", true, ""))
+			start := r.Tick(500 * ms).Now
+			r.Add(tt.Start(2))
+			endFaults(r, 2*s)
+			requireHonest(t, r.Tick(start+1*s+late-r.Now).Update(ctl, databaseB, database(false, "pw")), late > 0)
+		})
+	}
+}
+
+// The ready write's own response can be lost, and the controller retries it
+// after a backoff before the reconcile that would correct it.
+func TestHonestGivesTheBackoffAfterAnUnknownReadyWrite(t *testing.T) {
+	for name, late := range map[string]time.Duration{"the backoff and stable after it": 0, "later": tt.Tick} {
+		t.Run(name, func(t *testing.T) {
+			const backoff = 1 * s
+			r := secretRun(secretRef(), secret(true))
+			lost(readyB(seenThenDeleted(r)))
+			ready := r.Now - tt.Tick
+			endFaults(r, backoff)
+			due := ready + backoff + r.Spec.Stable
+			requireHonest(t, r.Tick(due+late-r.Now).Update(ctl, databaseB, database(false, "pw")), late > 0)
+		})
+	}
+}
+
+// lost marks r's last call as one whose response a dropResponse fault lost.
+func lost(r *tt.Script) *tt.Script {
+	events := r.Events()
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Call != nil {
+			events[i].Call.Injected = trace.DropResponse
+			return r
+		}
+	}
+	panic("no call to lose")
 }
 
 // A step can time out just after the ready write. The next step's faults
@@ -476,7 +545,7 @@ func TestHonestGivesNoTimeForAFaultThatHoldsNoRequest(t *testing.T) {
 			return tt.HoldFault(step, 0, ended, tt.Ref("configmaps", "ns", ""))
 		},
 		"a fault that altered no request": func(step int, ended bool) trace.Event {
-			return tt.Fault(step, 0, ended, "error(500) on resource=volumes")
+			return tt.Fault(step, 0, ended, volumesFail)
 		},
 	} {
 		for when, late := range map[string]time.Duration{"stable after the ready write": 0, "later": tt.Tick} {

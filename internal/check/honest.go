@@ -29,7 +29,7 @@ func Honest(ix *trace.Index, s Spec) []Finding {
 		return nil
 	}
 	h := &honesty{ix: ix, s: s, w: owner.New(ix, s.Owners), steps: ix.Steps(), deletes: controllerDeletes(ix), found: map[findingKey]*Finding{}}
-	h.holds = holds(ix)
+	h.stalls = stalls(ix)
 	order, crs := crVersions(ix, s)
 	for _, uid := range order {
 		versions := crs[uid]
@@ -57,7 +57,7 @@ type honesty struct {
 	steps   []trace.StepSpan
 	deletes map[trace.Ref][]time.Duration
 	found   map[findingKey]*Finding
-	holds   []hold
+	stalls  []stall
 }
 
 type findingKey struct {
@@ -131,9 +131,9 @@ func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, d
 // stale reports whether a reconcile that read the cache before the look at
 // an object could have written the CR ready at t0. The controller must have
 // looked, not started since, and sent the write within twice stable of the
-// look, holds aside.
+// look, stalls aside.
 func (h *honesty) stale(g sight, t0 time.Duration) bool {
-	return g.looked && !h.restarted(g.at, t0) && t0 <= until(g.at, 2*h.s.Stable, h.holds)
+	return g.looked && !h.restarted(g.at, t0) && t0 <= until(g.at, 2*h.s.Stable, h.stalls)
 }
 
 // restarted reports whether the controller started in (from, to].
@@ -161,94 +161,104 @@ func (h *honesty) corrected(p Primary, later []trace.Event, n named, due time.Du
 // that made the CR ready. The window is stable from ready's response, since
 // the CR's next reconcile starts only once ready returns. A start in it
 // gives the controller stable from that start, since a restart loses the
-// reconcile. A write of the CR in it that failed or had an unknown outcome,
-// such as a conflict from a cache that lacks ready, gives it that write's
-// step's backoff allowance and stable from the write's response, since the
-// controller retries after a backoff.
+// reconcile. A write of the CR that failed or had an unknown outcome, ready
+// itself or one in the window, gives it retryDue.
 func (h *honesty) correctionDue(ready trace.Event) time.Duration {
-	due := until(ready.At, h.s.Stable, h.holds)
+	due := until(ready.At, h.s.Stable, h.stalls)
+	if retried(*ready.Call, ready) {
+		due = max(due, h.retryDue(ready))
+	}
 	for _, e := range h.ix.EventsIn(ready.At, math.MaxInt64) {
 		switch {
 		case e.Proc != nil && e.Proc.Event == trace.Start && e.At <= due:
-			due = max(due, until(e.At, h.s.Stable, h.holds))
+			due = max(due, until(e.At, h.s.Stable, h.stalls))
 		case e.Call != nil && e.At-e.Call.Latency <= due && retried(*e.Call, ready):
-			step, _ := latestStep(h.ix, e.At)
-			due = max(due, until(e.At, step.Backoff+h.s.Stable, h.holds))
+			due = max(due, h.retryDue(e))
 		}
 	}
 	return due
 }
 
+// retryDue is when a correction must have come after the controller's write
+// e of the CR failed or had an unknown outcome, such as a conflict from a
+// cache that lacks ready: the backoff allowance of the step that answered e,
+// whose faults fail its retries too, and stable from e's response.
+func (h *honesty) retryDue(e trace.Event) time.Duration {
+	step, _ := latestStep(h.ix, e.At)
+	return until(e.At, step.Backoff+h.s.Stable, h.stalls)
+}
+
 // retried reports whether the controller must retry c, its write of the
 // object that the write ready wrote, which failed or had an unknown
-// outcome.
+// outcome. A killed write is none, since the controller starts again and
+// reconciles with an empty backoff.
 func retried(c trace.Call, ready trace.Event) bool {
 	return c.Caller == trace.Controller && trace.Mutating(c.Verb) &&
-		c.Object() == ready.Call.Object() && unconfirmed(c)
+		c.Object() == ready.Call.Object() && unconfirmed(c) && c.Injected != trace.KillAfter
 }
 
 // unconfirmed reports whether c failed or had an unknown outcome.
 func unconfirmed(c trace.Call) bool { return !succeeded(c) || c.Unknown() }
 
-// A hold is a time in which the controller cannot act on what it saw.
-type hold struct{ start, end time.Duration }
+// A stall is a time in which the controller cannot act on what it saw.
+type stall struct{ start, end time.Duration }
 
-// holds returns the run's holds, merged and in order of start. A step's
-// faults hold the controller from their first event until their last, if
-// they altered one of its requests. An exit holds it until the next start.
-func holds(ix *trace.Index) []hold {
-	byStep := map[int]hold{}
+// stalls returns the run's stalls, merged and in order of start. A step's
+// fault events stall the controller from the first until the last, if a
+// fault altered one of its requests. An exit stalls it until the next start.
+func stalls(ix *trace.Index) []stall {
+	byStep := map[int]stall{}
 	for _, e := range ix.Events() {
 		if f := e.Fault; f != nil && f.Model == "" && f.Hold == nil {
-			h, found := byStep[f.Step]
+			s, found := byStep[f.Step]
 			if !found {
-				h.start = e.At
+				s.start = e.At
 			}
-			h.end = e.At
-			byStep[f.Step] = h
+			s.end = e.At
+			byStep[f.Step] = s
 		}
 	}
-	var held []hold
-	for _, h := range byStep {
-		if altered(ix, h) {
-			held = append(held, h)
+	var all []stall
+	for _, s := range byStep {
+		if altered(ix, s) {
+			all = append(all, s)
 		}
 	}
 	procs := ix.Procs()
 	for i := 1; i < len(procs); i++ {
 		if procs[i-1].Proc.Event == trace.Exit {
-			held = append(held, hold{procs[i-1].At, procs[i].At})
+			all = append(all, stall{procs[i-1].At, procs[i].At})
 		}
 	}
-	slices.SortFunc(held, func(a, b hold) int { return cmp.Compare(a.start, b.start) })
-	var merged []hold
-	for _, h := range held {
-		if last := len(merged) - 1; last >= 0 && h.start <= merged[last].end {
-			merged[last].end = max(merged[last].end, h.end)
+	slices.SortFunc(all, func(a, b stall) int { return cmp.Compare(a.start, b.start) })
+	var merged []stall
+	for _, s := range all {
+		if last := len(merged) - 1; last >= 0 && s.start <= merged[last].end {
+			merged[last].end = max(merged[last].end, s.end)
 			continue
 		}
-		merged = append(merged, h)
+		merged = append(merged, s)
 	}
 	return merged
 }
 
-// altered reports whether a fault altered a request of the controller that h
-// holds: one answered after h began and sent before it ended. A model fault
-// and a held watch alter none.
-func altered(ix *trace.Index, h hold) bool {
-	return slices.ContainsFunc(ix.Calls(trace.Controller, h.start, math.MaxInt64), func(e trace.Event) bool {
-		return e.Call.Injected != "" && e.At-e.Call.Latency <= h.end
+// altered reports whether a fault altered a request of the controller that
+// s covers: one answered after s began and sent before it ended. A model
+// fault and a held watch alter none.
+func altered(ix *trace.Index, s stall) bool {
+	return slices.ContainsFunc(ix.Calls(trace.Controller, s.start, math.MaxInt64), func(e trace.Event) bool {
+		return e.Call.Injected != "" && e.At-e.Call.Latency <= s.end
 	})
 }
 
 // until is when a window of d from t closes: d after t, and the time after t
-// in which the holds that start by then hold the controller. holds are
+// in which the stalls that start by then stall the controller. stalls are
 // disjoint and in order of start.
-func until(t, d time.Duration, holds []hold) time.Duration {
+func until(t, d time.Duration, stalls []stall) time.Duration {
 	end := t + d
-	for _, h := range holds {
-		if h.start <= end && h.end > t {
-			end += h.end - max(h.start, t)
+	for _, s := range stalls {
+		if s.start <= end && s.end > t {
+			end += s.end - max(s.start, t)
 		}
 	}
 	return end
