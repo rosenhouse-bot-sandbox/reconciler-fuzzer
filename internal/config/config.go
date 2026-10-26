@@ -661,7 +661,7 @@ func (c *Config) CheckArgs(args []string) error {
 }
 
 // checkVars refuses a ${key} in value that names no system or no key of
-// one. where names value in the error.
+// one, and a ${ with no closing }. where names value in the error.
 func (c *Config) checkVars(where, value string) error {
 	vars := map[string]string{}
 	for _, key := range launchVars["kube"] {
@@ -675,7 +675,8 @@ func (c *Config) checkVars(where, value string) error {
 			vars["systems."+f.Name+".token"] = ""
 		}
 	}
-	for _, key := range keys(value) {
+	found, closed := keys(value)
+	for _, key := range found {
 		if _, known := vars[key]; known {
 			continue
 		}
@@ -689,20 +690,23 @@ func (c *Config) checkVars(where, value string) error {
 			return fmt.Errorf("%s: system %s has no %s", where, system, rest)
 		}
 	}
+	if !closed {
+		return fmt.Errorf("%s: ${ has no closing }", where)
+	}
 	return nil
 }
 
-// keys returns each ${key} in s.
-func keys(s string) []string {
+// keys returns each ${key} in s, and false if a ${ has no closing }.
+func keys(s string) ([]string, bool) {
 	var found []string
 	for {
 		_, rest, ok := strings.Cut(s, "${")
 		if !ok {
-			return found
+			return found, true
 		}
 		key, after, closed := strings.Cut(rest, "}")
 		if !closed {
-			return found
+			return found, false
 		}
 		found, s = append(found, key), after
 	}

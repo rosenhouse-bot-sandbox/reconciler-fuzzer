@@ -378,8 +378,8 @@ restart installs new ones. A restart that names `binary`, `args` or `crds` tests
   new args, and `${systems.<name>.<key>}` expands as in `launch.args`.
 - Every later start keeps the new `binary` and `args`: restarts, crash restarts, the start after
   a `kill`, and the appended restart. Env and RBAC do not change.
-- Paths resolve against the plan's directory. `run` refuses a missing path or an unknown key
-  before it starts.
+- Paths resolve against the plan's directory. Before it starts, `run` refuses a `binary` that
+  is not an executable file, a `crds` path that holds no CRD, and an unknown key.
 
 `launch.upgrades` lists later versions with the same keys:
 
@@ -390,10 +390,12 @@ launch:
 ```
 
 Each generated plan then restarts into each version once, in order, at the end of a random step.
-That step may hold a fault or come before a delete.
+That step may hold a fault or come before a delete. `shrink` drops only the last upgrade, so the
+versions stay in order.
 
-The checks judge an upgrade's step as they judge any restart's. So Restore fails a version that replaces or
-rewrites the old version's resources in a step that changes no CR.
+The checks judge an upgrade's step as they judge any restart's. So Restore fails a version that
+replaces or rewrites the old version's resources in a step that changes no CR. A generated
+upgrade lands in such a step on some seeds only.
 [targets/toy-fleet/upgrade](targets/toy-fleet/upgrade/config.yaml) upgrades toy-fleet to
 `--version=2`. Its bugs B140 to B142 mishandle the Clusters that version 1 made.
 
@@ -401,10 +403,12 @@ Upgrades have these limits:
 
 - No conversion webhook runs, and the two versions never run at once.
 - For about a second after an install, the harness's watches still decode objects with the old
-  schema.
+  schema. The trace keeps a version they record then until the object's next write.
 - The harness watches each kind at the API version it first used. A CRD that stops serving that
-  version ends the kind's record.
-- A property sees a kind that only the new CRDs serve as missing until an object of it exists.
+  version ends the kind's record. The harness's patches and deletes use the kind's preferred
+  version, which new CRDs may change.
+- A property's `world` holds a kind that only the new CRDs serve only if an object of it exists
+  at some point in the run. Its list is then empty before the install.
 - A default that the new CRDs add to a kind the controller makes shows as a Restore change once
   the controller writes such an object.
 - A version that renames its resources fails Restore, even when it deletes the old ones.

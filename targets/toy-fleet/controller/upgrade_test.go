@@ -98,6 +98,16 @@ func TestB141MakesVersion2VolumesBesideVersion1Ones(t *testing.T) {
 	}
 }
 
+// A version without B141 counts every Volume the Cluster controls.
+func TestAFixedVersionDeletesTheVolumesB141Made(t *testing.T) {
+	f := version1Cluster(t, true).as(2, B141)
+	f.settle(f.clusters, "cluster")
+	f.as(2, 0).settle(f.clusters, "cluster")
+	if got := f.sortedVolumes(); !slices.Equal(got, []string{"cluster-vol-0 small", "cluster-vol-1 small"}) {
+		t.Errorf("The Volumes are %q, want only those version 2 names.", got)
+	}
+}
+
 func TestB142ReadiesAClusterThatVersion2Made(t *testing.T) {
 	f := newFleet(t, clusterObj()).as(2, B142)
 	f.settle(f.clusters, "cluster")

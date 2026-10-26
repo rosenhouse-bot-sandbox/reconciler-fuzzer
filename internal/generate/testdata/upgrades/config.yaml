@@ -1,4 +1,4 @@
-# toy-widget with three later versions. Nothing launches this target.
+# This config gives toy-widget three later versions. Nothing launches it.
 launch:
   binary: none
   args: [--bug=0]

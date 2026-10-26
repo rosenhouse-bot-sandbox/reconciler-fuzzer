@@ -230,7 +230,7 @@ names its cause. A run that started leaves its partial trace in `--out`. Common 
 | `creating fixture ...` | Fix the fixture, or install the CRD it needs under `crds`. |
 | `creating fixture CustomResourceDefinition ...: ... already exists` | List the CRD under `crds` or under `fixtures`, not both. |
 | `mapping <group>/<version>, Kind=<kind>: no matches for kind ...` | Install the listed kind's CRD under `crds`. |
-| `steps[i].actions[j]: stat <path>: no such file or directory` | Fix the restart's `binary` or `crds`. Paths resolve against the plan's directory. |
+| `steps[i].actions[j]: exec: "<path>": ...`, `steps[i].actions[j]: stat <path>: ...` or `steps[i].actions[j]: <path> holds no CustomResourceDefinition` | Point the restart's `binary` at an executable file and its `crds` at CRD files. A plan file's paths resolve against its directory, and `launch.upgrades` paths against the config's. |
 | `installing CRDs: ...` | Fix the CRDs that a restart's `crds` names. |
 | `launch args[i]: ...`, `launch env <name>: ...`, `launch.upgrades[i].args[k]: ...` or `steps[i].actions[j].args[k]: ...` | Use only `${systems.kube.kubeconfig}`, `namespace` and `url`, and a fake's `${systems.<name>.url}`. |
 | `fake <name> exited ...` | Read `<out>/<name>.log`. Fix the `systems[].process` command or the fake's own config. |

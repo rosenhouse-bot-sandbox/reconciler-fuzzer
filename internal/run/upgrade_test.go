@@ -84,17 +84,27 @@ func TestARestartWithAnUnknownKeyChangesNothing(t *testing.T) {
 	}
 }
 
-func TestRunRefusesARestartWithAMissingPath(t *testing.T) {
-	for name, u := range map[string]plan.Upgrade{
-		"binary": {Binary: "/missing/toy-widget"},
-		"crds":   {CRDs: []string{"../../targets/toy-widget/crds/", "/missing/crds/"}},
+func TestRunRefusesARestartWithABadPath(t *testing.T) {
+	notExecutable := filepath.Join(t.TempDir(), "toy-widget")
+	if err := os.WriteFile(notExecutable, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct {
+		upgrade plan.Upgrade
+		want    string
+	}{
+		"missing binary":        {plan.Upgrade{Binary: "/missing/toy-widget"}, "/missing/toy-widget"},
+		"directory binary":      {plan.Upgrade{Binary: "../../targets/toy-widget/"}, "is a directory"},
+		"non-executable binary": {plan.Upgrade{Binary: notExecutable}, "permission denied"},
+		"missing crds":          {plan.Upgrade{CRDs: []string{"../../targets/toy-widget/crds/", "/missing/crds/"}}, "/missing/crds/"},
+		"crds without a CRD":    {plan.Upgrade{CRDs: []string{"../../targets/toy-widget/plans/"}}, "plans/ holds no CustomResourceDefinition"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{{Do: plan.Create, Slot: "a"}}}, {Actions: []plan.Action{{Do: plan.Restart, Upgrade: u}}}}}
+			p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{{Do: plan.Create, Slot: "a"}}}, {Actions: []plan.Action{{Do: plan.Restart, Upgrade: c.upgrade}}}}}
 			out := filepath.Join(t.TempDir(), "out")
 			_, err := Run(t.Context(), Options{ConfigPath: "../../targets/toy-widget/config.yaml", Plan: p, Out: out})
-			if err == nil || !strings.Contains(err.Error(), "steps[1].actions[0]") || !strings.Contains(err.Error(), "/missing/") {
-				t.Errorf("Run = %v, want a refusal that names the action and the path.", err)
+			if err == nil || !strings.Contains(err.Error(), "steps[1].actions[0]: ") || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("Run = %v, want a refusal that names the action and contains %q.", err, c.want)
 			}
 			if _, err := os.Stat(out); !errors.Is(err, fs.ErrNotExist) {
 				t.Errorf("Run made %s before it refused the plan: %v", out, err)

@@ -68,8 +68,9 @@ type seenKey struct {
 }
 
 // watch starts watching gr unless the observer already does, and waits for
-// the initial list. A kind it cannot map is tried again on the next call.
-func (o *observer) watch(gr schema.GroupResource) error {
+// the initial list until ctx is done. A kind it cannot map is tried again on
+// the next call.
+func (o *observer) watch(ctx context.Context, gr schema.GroupResource) error {
 	o.mu.Lock()
 	if _, found := o.kinds[gr]; found {
 		o.mu.Unlock()
@@ -111,8 +112,8 @@ func (o *observer) watch(gr schema.GroupResource) error {
 		defer o.wg.Done()
 		informer.RunWithContext(o.ctx)
 	}()
-	if !cache.WaitForCacheSync(o.ctx.Done(), registration.HasSynced) {
-		return fmt.Errorf("listing %s: %w", gr, o.ctx.Err())
+	if !cache.WaitForCacheSync(ctx.Done(), registration.HasSynced) {
+		return fmt.Errorf("listing %s: %w", gr, ctx.Err())
 	}
 	return nil
 }
@@ -120,12 +121,12 @@ func (o *observer) watch(gr schema.GroupResource) error {
 // watchAll watches each of grs, and waits for their initial lists. The
 // watches run together, since the first list of a new CRD can take a second.
 // It returns their errors, except for a kind the server does not serve.
-func (o *observer) watchAll(grs []schema.GroupResource) error {
+func (o *observer) watchAll(ctx context.Context, grs []schema.GroupResource) error {
 	errs := make([]error, len(grs))
 	var watches sync.WaitGroup
 	for i, gr := range grs {
 		watches.Go(func() {
-			if err := o.watch(gr); !meta.IsNoMatchError(err) {
+			if err := o.watch(ctx, gr); !meta.IsNoMatchError(err) {
 				errs[i] = err
 			}
 		})
@@ -182,7 +183,7 @@ func (o *observer) heard(c trace.Call) {
 	_, found := o.kinds[gr]
 	o.mu.Unlock()
 	if !found {
-		go o.watch(gr)
+		go o.watch(o.ctx, gr)
 	}
 }
 

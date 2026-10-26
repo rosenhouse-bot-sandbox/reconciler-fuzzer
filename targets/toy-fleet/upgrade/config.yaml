@@ -1,5 +1,5 @@
-# cluster/config.yaml, plus an upgrade to version 2, whose args replace
-# launch.args. Paths resolve against this file's directory.
+# This is cluster/config.yaml with an upgrade to version 2, whose args
+# replace launch.args. Paths resolve against this file's directory.
 launch:
   binary: ../../../bin/toy-fleet
   args:

@@ -67,6 +67,8 @@ func TestCheckArgsNamesTheArgAndItsKey(t *testing.T) {
 		{[]string{"--a", "${systems.clod.url}"}, "args[1]: no system clod"},
 		{[]string{"${other}"}, "args[0]: unknown key other"},
 		{[]string{"${other}", "${systems.clod.url}"}, "args[0]: unknown key other"},
+		{[]string{"--kubeconfig=${systems.kube.kubeconfig"}, "args[0]: ${ has no closing }"},
+		{[]string{"${other}${systems.kube.url"}, "args[0]: unknown key other"},
 	} {
 		if err := c.CheckArgs(tc.args); err == nil || err.Error() != tc.want {
 			t.Errorf("CheckArgs(%q) = %v, want %q", tc.args, err, tc.want)
