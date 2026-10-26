@@ -415,7 +415,8 @@ Upgrades have these limits:
   during the run. `world` then lists no objects of that kind before the install.
 - A default that the new CRDs add to a kind the controller makes shows as a Restore change if
   the controller first writes such an object after the upgrade's step.
-- A version that renames its resources fails Restore, even when it deletes the old ones.
+- Restore reports `replaced resources` for a resource that a new version adds or renames, even
+  when the version deletes the old one.
 - Every plan.json that `run`, `hunt` or `shrink` writes holds absolute upgrade paths. Make them
   relative before you commit the plan.
 

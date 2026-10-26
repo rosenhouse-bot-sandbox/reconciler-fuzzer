@@ -5,11 +5,16 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"sigs.k8s.io/yaml"
 
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/check"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/owner"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
+	tt "github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace/tracetest"
 )
 
 func TestAConfigCanDeclareAnUpgrade(t *testing.T) {
@@ -89,5 +94,47 @@ func TestTheUpgradeCRDOnlyAddsSpecTier(t *testing.T) {
 	delete(fields, "tier")
 	if !reflect.DeepEqual(installed, upgraded) {
 		t.Errorf("Without spec.tier, upgrade/crds/%s differs from crds/%s.", name, name)
+	}
+}
+
+// The harness may hear a Cluster's delete before its last Volume's, so
+// volumes-go-first must pass a Volume that is being deleted then.
+func TestVolumesGoFirstPassesOnlyAVolumeBeingDeletedWhenItsClusterGoes(t *testing.T) {
+	c, err := config.Load(upgradePropertiesConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster := trace.Ref{System: "kube", Group: "toy.reconciler-fuzzer", Resource: "clusters", Namespace: "ns", Name: "cluster"}
+	volume := trace.Ref{System: "kube", Group: "storage.thirdparty", Resource: "volumes", Namespace: "ns", Name: "cluster-vol-0"}
+	for name, want := range map[string]struct {
+		deleting bool
+		findings int
+	}{
+		"a Volume being deleted passes":    {true, 0},
+		"a Volume not being deleted fails": {false, 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := tt.NewScript(trace.Kind{Group: cluster.Group, Resource: cluster.Resource}, 2, time.Second)
+			r.BodyUIDs, r.Spec.Properties = true, owner.Properties(c)
+			r.Begin()
+			uid := r.CreateCR("a", cluster)
+			r.Create(trace.Controller, volume, tt.OwnedBy(tt.Object(volume.Name), uid, true))
+			r.Ready(cluster).EndFaults().Settle()
+			r.Begin()
+			if want.deleting {
+				body := tt.OwnedBy(tt.Object(volume.Name), uid, true)
+				body["metadata"].(map[string]any)["deletionTimestamp"] = "2026-10-26T00:00:00Z"
+				r.Update(trace.Controller, volume, body)
+			}
+			r.DeleteCR("a", cluster).Delete(trace.Controller, volume).EndFaults().Settle()
+			ix := r.Index()
+			spec, err := check.SpecFor(nil, ix)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if findings := check.Property(ix, spec); len(findings) != want.findings {
+				t.Errorf("findings = %+v, want %d.", findings, want.findings)
+			}
+		})
 	}
 }

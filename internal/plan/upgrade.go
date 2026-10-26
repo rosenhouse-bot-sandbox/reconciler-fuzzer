@@ -6,7 +6,7 @@ package plan
 type Upgrade struct {
 	Binary string   `json:"binary,omitempty"`
 	Args   []string `json:"args,omitzero"`
-	CRDs   []string `json:"crds,omitempty"`
+	CRDs   []string `json:"crds,omitzero"`
 }
 
 // Upgrades reports whether u sets a binary, args or crds. Empty args or crds

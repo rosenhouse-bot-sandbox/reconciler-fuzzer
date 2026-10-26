@@ -60,10 +60,10 @@ func TestARestartTakesAnUpgrade(t *testing.T) {
 	}
 }
 
-// Empty args drop the launch's args, so a saved plan keeps them apart from
-// unset ones.
-func TestARestartsEmptyArgsSurviveASave(t *testing.T) {
-	for _, body := range []string{`{"do":"restart"}`, `{"do":"restart","args":[]}`} {
+// Empty args drop the launch's args, and empty crds still make the restart
+// an upgrade, so a saved plan keeps both apart from unset ones.
+func TestARestartsEmptyArgsAndCRDsSurviveASave(t *testing.T) {
+	for _, body := range []string{`{"do":"restart"}`, `{"do":"restart","args":[]}`, `{"do":"restart","crds":[]}`} {
 		var a Action
 		if err := json.Unmarshal([]byte(body), &a); err != nil {
 			t.Fatal(err)
