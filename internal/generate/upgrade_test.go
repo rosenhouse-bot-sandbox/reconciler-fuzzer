@@ -52,8 +52,8 @@ func TestEveryPlanAppliesEachUpgradeOnceInOrder(t *testing.T) {
 	}
 }
 
-// An upgrade may meet the controller as it starts on the action before
-// it, or once that action had stable to settle.
+// An upgrade may come as the controller starts on the action before it,
+// or a full stable later.
 func TestUpgradeDelaysRunFromZeroToStable(t *testing.T) {
 	cfg := loadConfig(t, upgradesConfig)
 	delays := map[plan.Duration]bool{}
@@ -124,8 +124,8 @@ func TestUpgradesOnlyAddRestarts(t *testing.T) {
 	}
 }
 
-// A plan shares no slice with the config, so a change to one plan leaves
-// later plans as they were.
+// A plan shares no slice with the config. A change to one plan changes no
+// later plan.
 func TestChangingAPlansUpgradeLeavesTheConfig(t *testing.T) {
 	cfg := loadConfig(t, upgradesConfig)
 	for _, step := range drawPlans(t, newGenerator(t, cfg), 1)[0].Steps {
