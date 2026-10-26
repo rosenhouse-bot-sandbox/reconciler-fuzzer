@@ -301,6 +301,15 @@ func (s Spec) poll(system string) time.Duration {
 	return s.Stable
 }
 
+// longestPoll is the longest of Stable and every fake's poll interval.
+func (s Spec) longestPoll() time.Duration {
+	longest := s.Stable
+	for _, p := range s.Polls {
+		longest = max(longest, p)
+	}
+	return longest
+}
+
 // covers reports whether ref is of m's kind: on m's system, and of its
 // resource when Kind sets one.
 func (m Model) covers(ref trace.Ref) bool {

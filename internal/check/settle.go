@@ -80,7 +80,7 @@ func runClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 		unmets = append(unmets, unmet{3, "", fmt.Sprintf("the controller has run for %v, less than stable %v", t-since, s.Stable)})
 	}
 	if !slices.ContainsFunc(ix.Calls(trace.Controller, since, t), func(e trace.Event) bool {
-		return judged(e) && succeeded(*e.Call) && !e.Call.Unknown() && e.At-e.Call.Latency >= since
+		return judged(e) && !unconfirmed(*e.Call) && e.At-e.Call.Latency >= since
 	}) {
 		unmets = append(unmets, unmet{4, "", fmt.Sprintf("the controller has made no successful request since it started at %v", since)})
 	}
@@ -222,11 +222,7 @@ func halted(ix *trace.Index, p Primary, cr trace.Version, body map[string]any, t
 func quietClauses(ix *trace.Index, t time.Duration, s Spec, crs int) []unmet {
 	var changed []trace.Event
 	reads, writes := map[string]int{}, map[string]int{}
-	window := s.Stable
-	for _, poll := range s.Polls {
-		window = max(window, poll)
-	}
-	for _, e := range ix.Calls(trace.Controller, t-window, math.MaxInt64) {
+	for _, e := range ix.Calls(trace.Controller, t-s.longestPoll(), math.MaxInt64) {
 		if !judged(e) {
 			continue
 		}
@@ -320,11 +316,7 @@ func FirstSettled(ix *trace.Index, from, to time.Duration, s Spec) (time.Duratio
 			}
 		}
 	}
-	longest := s.Stable
-	for _, poll := range s.Polls {
-		longest = max(longest, poll)
-	}
-	for _, e := range ix.EventsIn(from-longest-1, to) {
+	for _, e := range ix.EventsIn(from-s.longestPoll()-1, to) {
 		times := []time.Duration{e.At, e.At + s.Stable}
 		if e.Call != nil {
 			times = append(times, e.At+s.poll(e.Call.Ref.System))

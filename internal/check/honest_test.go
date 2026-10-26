@@ -41,7 +41,10 @@ func gadget(r *tt.Script, ready bool) map[string]any {
 
 func honest(t *testing.T, r *tt.Script) []check.Finding {
 	t.Helper()
-	return judgeWith(t, r.EndFaults().Settle(), check.Honest)
+	if step, _ := r.Index().Step(r.Step); !step.Reached[trace.EndFaults] {
+		r.EndFaults()
+	}
+	return judgeWith(t, r.Settle(), check.Honest)
 }
 
 func TestHonestPassesACRReadyAfterSeeingItsDependencyReady(t *testing.T) {

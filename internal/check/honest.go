@@ -7,6 +7,7 @@ import (
 	"maps"
 	"math"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/owner"
@@ -83,8 +84,8 @@ func crVersions(ix *trace.Index, s Spec) ([]string, map[string][]trace.Event) {
 // ready. Only a CR of the first entry's kind needs a required dependency.
 // The version fails on an object it names that the controller's sight holds
 // back, or that the controller never looked at while it lived, unless the
-// controller wrote it within twice stable of a look at the object and
-// corrected it in time.
+// controller wrote it soon after a look at the object and corrected it in
+// time.
 func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, deps []Model) {
 	requires := p.Kind == h.s.Primaries[0].Kind
 	wasReady, wasObserved := false, 0.0
@@ -99,6 +100,7 @@ func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, d
 		}
 		call, _ := h.ix.WriteCall(v.Ref, v.RV)
 		t0 := call.At - call.Call.Latency
+		due := sync.OnceValue(func() time.Duration { return h.correctionDue(call) })
 		for _, m := range deps {
 			owned := h.dependencies(uid, m, t0)
 			if len(owned) == 0 && m.Dependency.Required && requires {
@@ -112,7 +114,7 @@ func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, d
 		}
 		for _, n := range h.s.names(v.Ref, body) {
 			g := h.s.sight(h.ix, n, t0)
-			if g.allowsReady(h.s.References[n.ref].Required) || g.looked && t0 <= g.at+2*h.s.Stable && h.corrected(p, call, versions[i+1:], n) {
+			if g.allowsReady(h.s.References[n.ref].Required) || g.looked && t0 <= h.after(g.at, 2*h.s.Stable) && h.corrected(p, versions[i+1:], n, due()) {
 				continue
 			}
 			summary := beforeSeeing
@@ -124,11 +126,16 @@ func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, d
 	}
 }
 
+// after is d after t, or d after the hold of t's step ends if that is
+// later.
+func (h *honesty) after(t, d time.Duration) time.Duration {
+	step, _ := latestStep(h.ix, t)
+	return max(t, holdEnd(step)) + d
+}
+
 // corrected reports whether the controller sent a write of one of later,
-// the CR's later versions, that is not ready or does not name n, by the
-// correctionDue of ready, the write that made the CR ready.
-func (h *honesty) corrected(p Primary, ready trace.Event, later []trace.Event, n named) bool {
-	due := h.correctionDue(ready)
+// the CR's later versions, that is not ready or does not name n, by due.
+func (h *honesty) corrected(p Primary, later []trace.Event, n named, due time.Duration) bool {
 	return slices.ContainsFunc(later, func(e trace.Event) bool {
 		v := e.Version
 		call, found := h.ix.WriteCall(v.Ref, v.RV)
@@ -140,35 +147,23 @@ func (h *honesty) corrected(p Primary, ready trace.Event, later []trace.Event, n
 	})
 }
 
-// correctionDue is when the controller must correct ready. A reconcile that
-// read its cache before a look may write ready after it, and the CR's next
-// reconcile starts only once that write returns. So the controller has
-// stable after the latest of ready's response, the response of each write
-// of the CR sent by then that failed, as one from a cache that lacks ready
-// does, or had an unknown outcome, and its first start after each exit by
-// then.
+// correctionDue is when the controller must have corrected ready, the write
+// that made the CR ready: stable after ready's response, since the CR's next
+// reconcile starts only once ready returns. A write of the CR sent by then
+// that failed or had an unknown outcome, such as a conflict from a cache
+// that lacks ready, moves it to stable after that write's response. Each
+// time counts from the end of its step's hold if that is later.
 func (h *honesty) correctionDue(ready trace.Event) time.Duration {
-	latest := ready.At
-	for {
-		due := latest + h.s.Stable
-		for _, e := range h.ix.Calls(trace.Controller, ready.At, math.MaxInt64) {
-			if c := e.Call; e.At-c.Latency <= due && trace.Mutating(c.Verb) && c.Object() == ready.Call.Object() && unconfirmed(*c) {
-				latest = max(latest, e.At)
-			}
-		}
-		procs := h.ix.Procs()
-		for i := 1; i < len(procs); i++ {
-			if exit := procs[i-1]; exit.Proc.Event == trace.Exit && exit.At <= due {
-				latest = max(latest, procs[i].At)
-			}
-		}
-		if latest+h.s.Stable == due {
-			return due
+	due := h.after(ready.At, h.s.Stable)
+	for _, e := range h.ix.Calls(trace.Controller, ready.At, math.MaxInt64) {
+		if c := e.Call; e.At-c.Latency <= due && trace.Mutating(c.Verb) && c.Object() == ready.Call.Object() && unconfirmed(*c) {
+			due = max(due, h.after(e.At, h.s.Stable))
 		}
 	}
+	return due
 }
 
-// unconfirmed reports whether c, a write, failed or had an unknown outcome.
+// unconfirmed reports whether c failed or had an unknown outcome.
 func unconfirmed(c trace.Call) bool { return !succeeded(c) || c.Unknown() }
 
 const (

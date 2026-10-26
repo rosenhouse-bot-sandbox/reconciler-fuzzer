@@ -233,7 +233,7 @@ func TestClause5LapsesAfterTheLongestPollOfTheChangedSystems(t *testing.T) {
 
 func TestFirstSettledIsAFakeCallPlusItsPoll(t *testing.T) {
 	sp := spec
-	sp.Polls = map[string]time.Duration{"cloud": 4 * s}
+	sp.Polls = map[string]time.Duration{"cloud": 4 * s, "slow": 8 * s}
 	b := settledAt3s()
 	b.At(1100*ms).Add(tt.Call(ctl, "get", bucketA, 404, ""), tt.Call(ctl, "get", bucketA, 404, ""), tt.Call(ctl, "get", bucketA, 404, ""))
 	if got, ok := check.FirstSettled(b.Index(), 4*s, 20*s, sp); !ok || got != 5100*ms {
