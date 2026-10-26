@@ -80,7 +80,7 @@ type Action struct {
 	// Propagation is a delete's propagation policy. Empty is the server's
 	// default.
 	Propagation Propagation `json:"propagation,omitempty"`
-	// Upgrade is a restart's.
+	// Upgrade holds a restart's new binary, args and crds.
 	Upgrade
 }
 
