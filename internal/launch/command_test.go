@@ -6,7 +6,6 @@ import (
 )
 
 func TestSetCommandChangesLaterStartsAndRestarts(t *testing.T) {
-	t.Skip("enabled by the restart package")
 	b, h, log := newBinary(t, "echo one; "+forever)
 	mustStart(t, b)
 	eventually(t, "the first command runs", func() bool { return log.String() == "one\n" })
@@ -29,7 +28,6 @@ func TestSetCommandChangesLaterStartsAndRestarts(t *testing.T) {
 }
 
 func TestSetCommandKeepsWhatItIsNotGiven(t *testing.T) {
-	t.Skip("enabled by the restart package")
 	b, h, log := newBinary(t, "echo sh")
 	for i, args := range [][]string{nil, nil, {}} {
 		path := "/bin/echo"
