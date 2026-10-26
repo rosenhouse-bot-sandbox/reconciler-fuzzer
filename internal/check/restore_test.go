@@ -80,6 +80,9 @@ func TestRestoreJudgesAnUpgradeOnReplacedResourcesOnly(t *testing.T) {
 		}, ""},
 		"a new resource fails":  {func(r *tt.Script) { r.Create(ctl, childA1, tt.OwnedBy(tt.Object("a-1"), r.UID(widgetA), true)) }, "configmaps ns/a-1"},
 		"a gone resource fails": {func(r *tt.Script) { r.Delete(ctl, childA) }, "configmaps ns/a-0"},
+		"a resource with another owner fails": {func(r *tt.Script) {
+			r.Update(ctl, childA, tt.OwnedBy(tt.Object("a-0"), r.UID(widgetB), true))
+		}, "configmaps ns/a-0 (rule 1, slot b)"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := twoCRs()

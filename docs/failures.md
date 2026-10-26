@@ -169,7 +169,7 @@ the findings an upgrade can cause.
   root (DESIGN.md §11) is gone. Once a damaged resource's owner is gone, a
   CR that the controller made in the step must own a resource of the
   damaged one's kind and role under that root.
-- `replaced resources`: an undamaged resource was replaced or disappeared,
+- `replaced resources`: an undamaged resource disappeared or changed owner,
   or a new one appeared.
 - `changed resources`: an undamaged resource's body changed in a step
   whose restart did not upgrade the controller. Each line names the fields

@@ -57,7 +57,7 @@ var gate = []gateRow{
 	{plan: "mid-provisioning", bug: 142, finding: "Converge: did not settle (clause 1)", step: 0, detail: "cluster is not ready", config: upgradeConfig},
 	{plan: "upgrade-and-update", bug: 141, finding: "Property: property volumes-go-first does not hold", step: 2, detail: "is false", config: upgradePropertiesConfig},
 	// The slowDelete keeps each Volume being deleted for 2 s before its
-	// Cluster is deleted, so this row does not race the two kinds' watches.
+	// Cluster is gone, so this row does not race the two kinds' watches.
 	{plan: "upgrade-and-update", config: upgradePropertiesConfig},
 	{plan: "restart-cluster-delete", bug: 150, finding: "Converge: did not settle (clause 1)", step: 1, detail: "db is not ready", config: databaseConfig},
 	// The kill comes after the update that releases the Cluster, so B151
