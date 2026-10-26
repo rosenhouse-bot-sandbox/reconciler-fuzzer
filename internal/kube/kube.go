@@ -557,7 +557,15 @@ func (k *Kube) Subscribe(hear func(trace.Version)) {
 // directories, waits until discovery serves them, and has the observer
 // watch their kinds. Kinds and StatusKinds stay as Start left them.
 func (k *Kube) InstallCRDs(ctx context.Context, paths []string) error {
-	return errors.New("InstallCRDs is not implemented")
+	crds, err := envtest.InstallCRDs(k.admin, envtest.CRDInstallOptions{Paths: paths, ErrorIfPathMissing: true})
+	if err != nil {
+		return fmt.Errorf("installing CRDs: %w", err)
+	}
+	var grs []schema.GroupResource
+	for _, crd := range crds {
+		grs = append(grs, schema.GroupResource{Group: crd.Spec.Group, Resource: crd.Spec.Names.Plural})
+	}
+	return k.observer.watchAll(grs)
 }
 
 // Kinds names each kind the observer watches from the start, by a ref with

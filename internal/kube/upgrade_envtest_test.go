@@ -20,7 +20,6 @@ import (
 )
 
 func TestInstallCRDsUpdatesACRDAndWatchesANewOne(t *testing.T) {
-	t.Skip("enabled by the restart package")
 	ctx := context.Background()
 	recorded := &events{}
 	k := New(Options{CRDs: []string{"testdata/upgrade/v1"}, RBAC: []string{toy + "rbac/role.yaml"}})
