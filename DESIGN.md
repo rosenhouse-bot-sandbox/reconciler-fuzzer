@@ -144,7 +144,7 @@ kind `launch.rbac` names that is not ignored (§10). These are the run event's
 `kinds`. It then watches any kind a listener records a call on, and records one
 `version` per (ref, resourceVersion). `InstallCRDs` creates or updates CRDs as
 admin, waits until discovery serves them, and watches their kinds, which the
-run event omits. A served CRD's new schema applies about a second later.
+run event omits. The observer's watches see a new schema about a second later.
 
 ## 7. Models and fake services
 
