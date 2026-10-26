@@ -53,17 +53,26 @@ func readCRD(t *testing.T, path string) map[string]any {
 	return crd
 }
 
+// at walks m down the keys through nested maps. A key that holds anything
+// else gives nil.
+func at(m map[string]any, keys ...string) map[string]any {
+	for _, key := range keys {
+		m, _ = m[key].(map[string]any)
+	}
+	return m
+}
+
 // specFields are the spec fields the CRD's one version describes.
 func specFields(t *testing.T, crd map[string]any) map[string]any {
 	t.Helper()
-	versions, _ := crd["spec"].(map[string]any)["versions"].([]any)
+	versions, _ := at(crd, "spec")["versions"].([]any)
 	if len(versions) != 1 {
 		t.Fatalf("The CRD describes %d versions, want 1.", len(versions))
 	}
-	schema, _ := versions[0].(map[string]any)["schema"].(map[string]any)["openAPIV3Schema"].(map[string]any)
-	fields, ok := schema["properties"].(map[string]any)["spec"].(map[string]any)["properties"].(map[string]any)
-	if !ok {
-		t.Fatalf("The CRD describes no spec fields: %v", schema["properties"])
+	version, _ := versions[0].(map[string]any)
+	fields := at(version, "schema", "openAPIV3Schema", "properties", "spec", "properties")
+	if len(fields) == 0 {
+		t.Fatal("The CRD describes no spec fields.")
 	}
 	return fields
 }

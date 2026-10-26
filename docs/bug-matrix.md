@@ -72,10 +72,10 @@ Each Cluster owns Volumes of a third party's kind, which a model sets ready. A D
 | B0 | The correct controller. | uninstall/stop-after-delete | none | |
 | B0 | The correct controller. | uninstall/stop-first | none | |
 | B0 | The correct controller. | upgrade/properties/upgrade-and-update | none | |
-| B140 | Under version 2, keeps the version 1 finalizer, so a deleted Cluster stays. | upgrade/delete | Converge | 2 |
-| B141 | Under version 2, names its Volumes <cluster>-data-<i> and sees only those, so it makes new ones beside version 1's. | upgrade/properties/upgrade-and-update | Property | 2 |
-| B141 | Under version 2, names its Volumes <cluster>-data-<i> and sees only those, so it makes new ones beside version 1's. | upgrade/update | Restore | 1 |
-| B142 | Under version 2, leaves a Cluster that version 1 was provisioning in the phase Provisioning. | upgrade/mid-provisioning | Converge | 0 |
+| B140 | Under version 2, keeps the version 1 finalizer, so a deleted Cluster is never removed. | upgrade/delete | Converge | 2 |
+| B141 | Under version 2, names its Volumes `<cluster>-data-<i>` and sees only those, so it makes new ones and leaves version 1's. | upgrade/properties/upgrade-and-update | Property | 2 |
+| B141 | Under version 2, names its Volumes `<cluster>-data-<i>` and sees only those, so it makes new ones and leaves version 1's. | upgrade/update | Restore | 1 |
+| B142 | Under version 2, leaves a Cluster in the version 1 phase Provisioning. | upgrade/mid-provisioning | Converge | 0 |
 | B150 | Strips its finalizers from deleting CRs when it shuts down. | database/restart-cluster-delete | Converge | 1 |
 | B151 | Puts a finalizer on each Volume, and releases a deleted Cluster before its Volumes, whose finalizers it strips only afterwards. | uninstall/kill-recreate | Converge | 1 |
 | B151 | Puts a finalizer on each Volume, and releases a deleted Cluster before its Volumes, whose finalizers it strips only afterwards. | uninstall/stop-after-delete | Clean | 1 |

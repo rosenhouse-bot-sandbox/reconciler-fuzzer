@@ -49,7 +49,7 @@ func (g gateRow) planPath() string { return planPath(g.configPath(), g.plan) }
 // report.md must hold: its heading, its step and a detail line. An empty
 // finding means the bug must pass the plan.
 var gate = []gateRow{
-	// Each upgrade plan restarts the controller as version 2.
+	// Each plan under upgrade/ restarts the controller as version 2.
 	{plan: "delete", bug: 140, finding: "Converge: did not settle (clause 2)", step: 2, detail: "cluster is being deleted", config: upgradeConfig},
 	{plan: "update", bug: 141, finding: "Restore: replaced resources", step: 1, detail: "/cluster-data-0 (rule 1, slot a)", config: upgradeConfig},
 	{plan: "mid-provisioning", bug: 142, finding: "Converge: did not settle (clause 1)", step: 0, detail: "cluster is not ready", config: upgradeConfig},
