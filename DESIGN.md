@@ -140,12 +140,11 @@ name, and `update` otherwise.
 `kube.Start` starts envtest, the run namespace, the controller's identity, both
 listeners and the observer, and creates the fixtures. Fixtures expand
 `${systems.<fake>.<key>}`. `Vars` holds `kubeconfig`, `namespace` and `url`.
-Harness actions return once the observer has recorded their effect. The
-observer list-watches cluster-wide each installed CRD, each served kind the
-config or a fixture names, and each served kind `launch.rbac` names that is not
-ignored (§10). These are the run event's `kinds`. It then watches any kind a
-listener records a call on, and records one `version` per
-(ref, resourceVersion).
+Harness actions return once the observer has recorded their effect. The observer
+list-watches cluster-wide each installed CRD, each served kind the config or a
+fixture names, and each served kind `launch.rbac` names that is not ignored
+(§10). These are the run event's `kinds`. It then watches any kind a listener
+records a call on, and records one `version` per (ref, resourceVersion).
 
 ## 7. Models and fake services
 
@@ -294,12 +293,12 @@ from the config, or else the run event.
 
 Most checks are `func(*trace.Index, Spec) []Finding`. A finding's signature is
 its check, summary and `kind` (`system/group/resource`). `check.Judge` runs
-every check, and notes each action error, each request fault that picked no
-request, each `holdWatch` while the controller had no watch of its kind, each
-stage-model fault that held no object, and each distinct unmapped (system,
-method, path). `Spec` comes from the config, or else the run event. A step's
-**end** is its `confirmed` time. Clean, Restore and Unique judge only settled
-steps (§17, entry 15).
+every check, and notes each action error, each stop that sent SIGKILL, each
+request fault that picked no request, each `holdWatch` while the controller had
+no watch of its kind, each stage-model fault that held no object, and each
+distinct unmapped (system, method, path). `Spec` comes from the config, or else
+the run event. A step's **end** is its `confirmed` time. Clean, Restore and
+Unique judge only settled steps (§17, entry 15).
 
 **Converge.** The settle condition holds by the deadline, and still holds at
 `t* + stable`. The summary names the first unmet clause, such as `did not
@@ -381,6 +380,7 @@ launch:
   args: [--bug=0]
   env: {CLOUD_ENDPOINT: "${systems.cloud.url}"}   # KUBECONFIG defaults to ${systems.kube.kubeconfig}
   rbac: [rbac/role.yaml]
+  gracePeriod: 5s                           # default; SIGKILL follows SIGTERM after it
 crds: [crds/]
 primaries:                                  # every kind the controller serves
   - kind: toy.reconciler-fuzzer/v1/Bucket

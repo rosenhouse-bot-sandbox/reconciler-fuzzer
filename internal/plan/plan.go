@@ -44,7 +44,8 @@ const (
 	Update Do = "update"
 	// Delete deletes the slot's CR.
 	Delete Do = "delete"
-	// Restart stops the controller with SIGTERM and starts it again.
+	// Restart stops the controller and starts it again. A stop sends SIGTERM,
+	// then SIGKILL once launch.gracePeriod passes.
 	Restart Do = "restart"
 	// Kill sends SIGKILL. The controller stays down until the fault period
 	// ends, or until a create's or a stop's wait for a deleted CR restarts
@@ -58,10 +59,10 @@ const (
 	// deletes it when Patch is empty.
 	ChangeFixture Do = "changeFixture"
 	// Stop waits until the CRs that deletes removed are gone, as a create's
-	// wait for its slot does, and then stops the controller with SIGTERM for
-	// good. A CR is gone once its name is free or another CR holds it. After
-	// a stop, a plan's only actions are deletes and fixture changes, and the
-	// runner appends no steps.
+	// wait for its slot does, and then stops the controller for good, as
+	// Restart does. A CR is gone once its name is free or another CR holds
+	// it. After a stop, a plan's only actions are deletes and fixture
+	// changes, and the runner appends no steps.
 	Stop Do = "stop"
 )
 

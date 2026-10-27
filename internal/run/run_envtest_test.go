@@ -296,6 +296,9 @@ timeouts: {settle: 3s, stable: 1s}
 	if restart < 0 || exit < 0 {
 		t.Fatal("the trace holds no step 1 or no exit")
 	}
+	if p := events[exit].Proc; p.Exit != "signal: killed" || !p.Stopped {
+		t.Errorf("the first exit is %+v, want a stop's SIGKILL", *p)
+	}
 	if took := events[exit].At - events[restart].At; took < 500*time.Millisecond || took >= 3*time.Second {
 		t.Errorf("the controller exited %v into the restart step, want just after the 500ms grace period", took)
 	}

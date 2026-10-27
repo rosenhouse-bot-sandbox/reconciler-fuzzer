@@ -117,6 +117,8 @@ timeouts: {settle: 30s, stable: 3s}
   current spec, so compare an `observedGeneration` with `metadata.generation`.
 - `stable` is how long the controller must stay quiet before a step counts as settled.
 - `launch.rbac` also tells generation which requests a fault can pick.
+- `launch.gracePeriod`, 5s by default, is how long a stop of the controller waits after
+  SIGTERM before it sends SIGKILL. The report notes each stop that sent SIGKILL.
 - `values` steers generated CRs: `overlay` narrows the CRD schema, `distinct` fields differ
   across a plan's CRs, `mutate` names the fields updates change, and `fixtures` names the
   fixture strings `changeFixture` sets.
