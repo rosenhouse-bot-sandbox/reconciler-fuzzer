@@ -91,6 +91,10 @@ timeouts: {settle: 10s, stable: 1s}
 	}
 }
 
+// widgetLister is a controller that only lists widgets, which the toy's RBAC
+// allows.
+const widgetLister = `while true; do curl -sf ${systems.kube.url}/apis/toy.reconciler-fuzzer/v1/widgets >/dev/null; sleep 1; done`
+
 // TestAPropertyOverAnInstalledCRDWithNoObjectHolds runs a property over the
 // toy's grants CRD, which the run event in trace.jsonl lists in kinds. The
 // controller only lists widgets, so no Grant exists.
@@ -102,7 +106,7 @@ func TestAPropertyOverAnInstalledCRDWithNoObjectHolds(t *testing.T) {
 	dir := t.TempDir()
 	config := fmt.Sprintf(`launch:
   binary: /bin/sh
-  args: [-c, 'while true; do curl -sf ${systems.kube.url}/apis/toy.reconciler-fuzzer/v1/widgets >/dev/null; sleep 1; done']
+  args: [-c, '%[2]s']
   rbac: [%[1]s/rbac/role.yaml]
 crds: [%[1]s/crds/]
 primary:
@@ -113,7 +117,7 @@ timeouts: {settle: 10s, stable: 1s}
 properties:
   - name: no-stuck-grants
     expr: "world.kube['grants.toy.reconciler-fuzzer'].all(g, !has(g.metadata.deletionTimestamp))"
-`, toyDir)
+`, toyDir, widgetLister)
 	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -223,8 +227,14 @@ func TestTheControllerGetsTheHarnessKubeconfigByDefault(t *testing.T) {
 	}
 	dir := t.TempDir()
 	got := filepath.Join(dir, "got")
-	config := fmt.Sprintf("launch: {binary: /bin/sh, args: [-c, 'echo \"$KUBECONFIG\" > %[2]s; exec sleep 60']}\ncrds: [%[1]s/crds/]\nprimary: {kind: toy.reconciler-fuzzer/v1/Widget, sample: %[1]s/widget.yaml, ready: \"true\"}\ntimeouts: {settle: 3s, stable: 1s}\n",
-		toyDir, got)
+	config := fmt.Sprintf(`launch:
+  binary: /bin/sh
+  args: [-c, 'echo "$KUBECONFIG" > %[2]s; %[3]s']
+  rbac: [%[1]s/rbac/role.yaml]
+crds: [%[1]s/crds/]
+primary: {kind: toy.reconciler-fuzzer/v1/Widget, sample: %[1]s/widget.yaml, ready: "true"}
+timeouts: {settle: 3s, stable: 1s}
+`, toyDir, got, widgetLister)
 	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
 		t.Fatal(err)
 	}

@@ -18,10 +18,15 @@ const (
 	// B152 errors when a dependent kind is not served, as after its CRD is
 	// deleted, so the parent's deletion never ends.
 	B152 Bug = 152
+	// B170 leaves the fleet's kinds out of the scheme, so setup fails before
+	// the manager starts.
+	B170 Bug = 170
+	// B171 ignores KUBECONFIG and dials localhost:8080.
+	B171 Bug = 171
 )
 
 // bugs holds every seeded bug ID.
-var bugs = map[Bug]bool{B116: true, B150: true, B151: true, B152: true}
+var bugs = map[Bug]bool{B116: true, B150: true, B151: true, B152: true, B170: true, B171: true}
 
 // ParseBug converts a --bug value into a Bug.
 func ParseBug(id int) (Bug, error) {

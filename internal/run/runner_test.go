@@ -19,6 +19,7 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/system"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace/tracetest"
 )
 
 var timeouts = config.Timeouts{Settle: 300 * time.Millisecond, Stable: 50 * time.Millisecond, BackoffCap: time.Second}
@@ -1461,12 +1462,55 @@ func TestQuietWaitsUntilTheControllerSettles(t *testing.T) {
 
 func TestQuietGivesUpAfterTheSettleTimeout(t *testing.T) {
 	f := newFixture(t, func(*trace.Index, time.Duration, time.Duration) (time.Duration, bool) { return 0, false })
+	f.rec.Record(tracetest.Start(1))
+	f.rec.Record(tracetest.Call(trace.Controller, "list", tracetest.Ref("widgets", "ns", ""), 200, "1"))
+	f.rec.Record(tracetest.Exit("exit status 2", false, "panic: boom\n"))
 	start := time.Now()
 	if err := f.runner.Quiet(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if waited := time.Since(start); waited < timeouts.Settle || waited > timeouts.Settle+3*PollInterval {
 		t.Errorf("Quiet waited %v, want the settle timeout %v", waited, timeouts.Settle)
+	}
+}
+
+func TestQuietFailsAControllerThatNeverStarted(t *testing.T) {
+	lease := trace.Ref{System: "kube", Group: "coordination.k8s.io", Resource: "leases", Namespace: "ns", Name: "toy"}
+	tried := []trace.Event{
+		tracetest.Start(1),
+		tracetest.Call(trace.Controller, "get", trace.Ref{System: "kube"}, 200, ""),
+		tracetest.Call(trace.Controller, "get", lease, 200, "1"),
+		tracetest.Call(trace.Controller, "list", tracetest.Ref("widgets", "ns", ""), 403, ""),
+	}
+	never := "the controller never started: it made no successful request in the 300ms before step 0 (timeouts.settle)"
+	for name, c := range map[string]struct {
+		events []trace.Event
+		want   string
+	}{
+		"exited": {
+			slices.Concat(tried, []trace.Event{tracetest.Exit("exit status 1", false, "toy: forbidden\n"), tracetest.Start(2), tracetest.Exit("exit status 2", false, "toy: again\n")}),
+			never + "\nfirst exit: exit status 1\noutput tail:\ntoy: forbidden\nsee controller.log",
+		},
+		"exited silently": {
+			slices.Concat(tried, []trace.Event{tracetest.Exit("exit status 1", false, "")}),
+			never + "\nfirst exit: exit status 1\nsee controller.log",
+		},
+		"still running": {tried, never + ", and it did not exit; see controller.log"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, func(*trace.Index, time.Duration, time.Duration) (time.Duration, bool) { return 0, false })
+			for _, e := range c.events {
+				f.rec.Record(e)
+			}
+			start := time.Now()
+			err := f.runner.Quiet(context.Background())
+			if err == nil || err.Error() != c.want {
+				t.Errorf("Quiet = %v, want %q", err, c.want)
+			}
+			if waited := time.Since(start); waited < timeouts.Settle {
+				t.Errorf("Quiet gave up after %v, want the settle timeout %v", waited, timeouts.Settle)
+			}
+		})
 	}
 }
 
