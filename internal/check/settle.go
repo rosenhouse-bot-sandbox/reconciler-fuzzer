@@ -79,12 +79,18 @@ func runClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 	case t-since < s.Stable:
 		unmets = append(unmets, unmet{3, "", fmt.Sprintf("the controller has run for %v, less than stable %v", t-since, s.Stable)})
 	}
-	if !slices.ContainsFunc(ix.Calls(trace.Controller, since, t), func(e trace.Event) bool {
-		return judged(e) && succeeded(*e.Call) && !e.Call.Unknown() && e.At-e.Call.Latency >= since
-	}) {
+	if !Requested(ix, since, t) {
 		unmets = append(unmets, unmet{4, "", fmt.Sprintf("the controller has made no successful request since it started at %v", since)})
 	}
 	return append(unmets, lookClauses(ix, t, s)...)
+}
+
+// Requested says whether the controller sent a judged request in [since, t]
+// and saw it succeed.
+func Requested(ix *trace.Index, since, t time.Duration) bool {
+	return slices.ContainsFunc(ix.Calls(trace.Controller, since, t), func(e trace.Event) bool {
+		return judged(e) && succeeded(*e.Call) && !e.Call.Unknown() && e.At-e.Call.Latency >= since
+	})
 }
 
 // lookClauses holds the controller to looking at each object that the

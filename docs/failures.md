@@ -117,10 +117,6 @@ The controller exited without the harness stopping it. The summary counts
 the exits in the step. The details hold the first exit status and the tail
 of its output, often a panic.
 
-A Crash before step 0 whose output is a flag or usage error means the
-controller never started. Fix `launch.args` or `launch.env`. Converge
-clause 4 findings follow from it.
-
 ### Clean: left resources behind
 
 A controller resource outlived its owning CR. Each line names the
@@ -221,6 +217,7 @@ names its cause. A run that started leaves its partial trace in `--out`. Common 
 | --- | --- |
 | `starting envtest: ... etcd: no such file or directory` | Set `KUBEBUILDER_ASSETS` to `$(make -s assets-path)`. |
 | `starting <binary>: ... no such file or directory` | Build the controller to `launch.binary`. |
+| `the controller never started: ...` | Read the output tail and `controller.log`. Fix `launch.args`, `launch.env` or `launch.rbac`. Raise `timeouts.settle` for a controller that starts slowly. |
 | `creating fixture ...` | Fix the fixture, or install the CRD it needs under `crds`. |
 | `launch args: ...` or `launch env <name>: ...` | Use only `${systems.kube.kubeconfig}`, `namespace` and `url`, and a fake's `${systems.<name>.url}`. |
 | `fake <name> exited ...` | Read `<out>/<name>.log`. Fix the `systems[].process` command or the fake's own config. |

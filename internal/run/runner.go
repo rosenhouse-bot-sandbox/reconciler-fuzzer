@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/check"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/kube"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/owner"
@@ -51,7 +53,7 @@ func (r *Runner) Execute(ctx context.Context, p *plan.Plan) error {
 
 // Quiet waits until the settle condition holds, or for at most the settle
 // timeout, so that what the controller makes at startup precedes the first
-// CR.
+// CR. It fails if the controller made no successful request by then.
 func (r *Runner) Quiet(ctx context.Context) error {
 	ix := trace.NewIndex(nil)
 	deadline := r.Recorder.Now() + r.Config.Timeouts.Settle
@@ -60,8 +62,14 @@ func (r *Runner) Quiet(ctx context.Context) error {
 	for {
 		now := r.Recorder.Now()
 		ix.Append(r.Recorder.EventsSince(ix.Len())...)
-		if _, ok := r.FirstSettled(ix, 0, now); ok || now >= deadline {
+		if _, ok := r.FirstSettled(ix, 0, now); ok {
 			return nil
+		}
+		if now >= deadline {
+			if check.Requested(ix, 0, now) {
+				return nil
+			}
+			return neverStarted(ix, r.Config.Timeouts.Settle)
 		}
 		select {
 		case <-ctx.Done():
@@ -502,4 +510,20 @@ func sleepUntil(ctx context.Context, t time.Time) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+// neverStarted is the error for a controller that made no successful request
+// in the settle wait before step 0. It quotes the first exit, as Crash does.
+func neverStarted(ix *trace.Index, settle time.Duration) error {
+	msg := fmt.Sprintf("the controller never started: it made no successful request in the %v before step 0 (timeouts.settle)", settle)
+	i := slices.IndexFunc(ix.Procs(), func(e trace.Event) bool { return e.Proc.Event == trace.Exit })
+	if i < 0 {
+		return errors.New(msg + ", and it did not exit; see controller.log")
+	}
+	exit := ix.Procs()[i].Proc
+	msg += "\nfirst exit: " + exit.Exit
+	if tail := strings.TrimRight(exit.StderrTail, "\n"); tail != "" {
+		msg += "\noutput tail:\n" + tail
+	}
+	return errors.New(msg + "\nsee controller.log")
 }
