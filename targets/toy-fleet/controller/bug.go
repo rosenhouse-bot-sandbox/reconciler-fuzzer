@@ -18,10 +18,15 @@ const (
 	// B152 errors when a dependent kind is not served, as after its CRD is
 	// deleted, so the parent's deletion never ends.
 	B152 Bug = 152
+	// B160 gives Volumes no owner, and releases a deleted Cluster before it
+	// deletes them. A kill between the two leaks them.
+	B160 Bug = 160
+	// B161 finalizes only Clusters whose deletion this process started.
+	B161 Bug = 161
 )
 
 // bugs holds every seeded bug ID.
-var bugs = map[Bug]bool{B116: true, B150: true, B151: true, B152: true}
+var bugs = map[Bug]bool{B116: true, B150: true, B151: true, B152: true, B160: true, B161: true}
 
 // ParseBug converts a --bug value into a Bug.
 func ParseBug(id int) (Bug, error) {

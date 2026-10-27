@@ -52,7 +52,7 @@ func newFleet(t *testing.T, objects ...client.Object) *fleet { return newBuggyFl
 func newBuggyFleet(t *testing.T, bug Bug, objects ...client.Object) *fleet {
 	c := newClient(t, objects...)
 	base := reconciler{Client: c, APIReader: c, Scheme: c.Scheme(), Bug: bug}
-	return &fleet{t, c, &ClusterReconciler{base}, &DatabaseReconciler{base}, &UserReconciler{base}}
+	return &fleet{t, c, &ClusterReconciler{reconciler: base}, &DatabaseReconciler{base}, &UserReconciler{base}}
 }
 
 func (f *fleet) reconcileOnce(r reconcile.Reconciler, name string) {
@@ -325,6 +325,67 @@ func TestB116StripsTheFinalizersOfVolumesOnlyWhileTheClusterIsDeleted(t *testing
 	}
 }
 
+// A kill between B160's release of the Cluster and its Volume deletes leaks
+// the Volumes, since no ownerReference lets gc collect them.
+func TestB160ReleasesTheClusterBeforeDeletingItsUnownedVolumes(t *testing.T) {
+	for bug, want := range map[Bug][]string{
+		0:    {"delete cluster-vol-0", "delete cluster-vol-1", "update cluster"},
+		B160: {"update cluster", "delete cluster-vol-0", "delete cluster-vol-1"},
+	} {
+		f := newBuggyFleet(t, bug, clusterObj())
+		f.settle(f.clusters, "cluster")
+		for _, v := range f.listVolumes() {
+			if owned := metav1.GetControllerOf(&v) != nil; owned != (bug == 0) {
+				t.Errorf("B%d: Volume %s has a controller: %v.", bug, v.Name, owned)
+			}
+		}
+		var writes []string
+		f.clusters.Client = interceptor.NewClient(f.c, interceptor.Funcs{
+			Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				writes = append(writes, "update "+obj.GetName())
+				return c.Update(ctx, obj, opts...)
+			},
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				writes = append(writes, "delete "+obj.GetName())
+				return c.Delete(ctx, obj, opts...)
+			},
+		})
+		f.delete(f.cluster())
+		f.settle(f.clusters, "cluster")
+		if !slices.Equal(writes, want) {
+			t.Errorf("B%d: the deleted Cluster's controller writes %q, want %q.", bug, writes, want)
+		}
+	}
+}
+
+// B161 keeps in memory the deletions that its process started.
+func TestB161ForgetsAPendingDeletionAfterARestart(t *testing.T) {
+	for _, c := range []struct {
+		bug           Bug
+		restart, gone bool
+	}{{0, true, true}, {B161, false, true}, {B161, true, false}} {
+		f := newBuggyFleet(t, c.bug, clusterObj())
+		f.settle(f.clusters, "cluster")
+		f.holdVolumes()
+		f.delete(f.cluster())
+		f.settle(f.clusters, "cluster")
+		r := f.clusters
+		if c.restart {
+			r = &ClusterReconciler{reconciler: r.reconciler}
+		}
+		for _, v := range f.listVolumes() {
+			v.Finalizers = nil
+			if err := f.c.Update(t.Context(), &v); err != nil {
+				t.Fatal(err)
+			}
+		}
+		f.settle(r, "cluster")
+		if gone := apierrors.IsNotFound(f.get("cluster", &fleetv1.Cluster{})); gone != c.gone {
+			t.Errorf("B%d, restart %v: once its Volumes are gone, the deleted Cluster is gone %v.", c.bug, c.restart, gone)
+		}
+	}
+}
+
 func TestDatabaseWaitsForItsClusterAndHoldsDeletionForUsers(t *testing.T) {
 	elsewhere := &fleetv1.User{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "bob"}, Spec: fleetv1.UserSpec{DatabaseRef: "other"}}
 	f := newFleet(t, databaseObj(), userObj(), elsewhere)
@@ -499,7 +560,7 @@ func TestReconcileOfAMissingCRSucceeds(t *testing.T) {
 }
 
 func TestParseBugAcceptsOnlyKnownBugs(t *testing.T) {
-	for _, id := range []int{0, 116, 150, 151, 152} {
+	for _, id := range []int{0, 116, 150, 151, 152, 160, 161} {
 		if b, err := ParseBug(id); int(b) != id || err != nil {
 			t.Errorf("ParseBug(%d) = %v, %v", id, b, err)
 		}

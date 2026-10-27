@@ -65,7 +65,7 @@ Each Cluster owns Volumes of a third party's kind, which a model sets ready. A D
 
 | Bug | Description | Plan | Check | Step |
 |---|---|---|---|---|
-| B0 | The correct controller. | all 14 plans of config.yaml, database/config.yaml, protect/config.yaml | none | |
+| B0 | The correct controller. | all 17 plans of config.yaml, database/config.yaml, protect/config.yaml | none | |
 | B0 | The correct controller. | uninstall/crd-first-stop | none | |
 | B0 | The correct controller. | uninstall/kill-recreate | none | |
 | B0 | The correct controller. | uninstall/recreate | none | |
@@ -77,3 +77,6 @@ Each Cluster owns Volumes of a third party's kind, which a model sets ready. A D
 | B151 | Puts a finalizer on each Volume, and releases a deleted Cluster before its Volumes, whose finalizers it strips only afterwards. | uninstall/kill-recreate | Converge | 1 |
 | B151 | Puts a finalizer on each Volume, and releases a deleted Cluster before its Volumes, whose finalizers it strips only afterwards. | uninstall/stop-after-delete | Clean | 1 |
 | B152 | Errors when a dependent kind is not served, as after its CRD is deleted, so the parent's deletion never ends. | uninstall/crd-first-stop | Converge | 2 |
+| B160 | Gives Volumes no owner, and releases a deleted Cluster before it deletes them. A kill between the two leaks them. | kill-finalize | Clean | 1 |
+| B161 | Finalizes only Clusters whose deletion this process started. | foreground-kill | Converge | 1 |
+| B161 | Finalizes only Clusters whose deletion this process started. | restart-deleting | Converge | 1 |

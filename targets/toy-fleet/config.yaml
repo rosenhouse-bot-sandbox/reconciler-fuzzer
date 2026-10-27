@@ -27,6 +27,9 @@ models:
     stages: readyCondition
     after: 300ms
     dependency: {track: 1s}
+systems:
+  - name: kube
+    owner: "self.metadata.labels['fleet.toy/cluster']"   # a Volume without an ownerReference, as under B160
 timeouts:
   settle: 10s
   stable: 2s
