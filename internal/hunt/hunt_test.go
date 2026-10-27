@@ -212,10 +212,11 @@ func TestHuntRecordsASeedsHarnessErrorAndGoesOn(t *testing.T) {
 	fake := &fakeRun{out: t.TempDir(), finds: always(clean)}
 	found, err := Hunt(context.Background(), Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1, 2}), Out: fake.out,
 		Run: func(ctx context.Context, p *plan.Plan, out string) (check.Report, error) {
+			report, err := fake.run(ctx, p, out)
 			if filepath.Base(out) == "seed-1" {
 				return check.Report{}, boom
 			}
-			return fake.run(ctx, p, out)
+			return report, err
 		}})
 	if err == nil || !strings.Contains(err.Error(), "1 of 2 seeds failed") || len(found) != 1 || found[0].Seed != 2 {
 		t.Fatalf("Hunt = %+v, %v; want seed 2's finding and an error for seed 1.", found, err)
@@ -224,6 +225,7 @@ func TestHuntRecordsASeedsHarnessErrorAndGoesOn(t *testing.T) {
 	if !strings.Contains(string(summary), "- seed 1: boom") {
 		t.Errorf("summary.md does not name seed 1's error:\n%s", summary)
 	}
+	wantKept(t, fake.out, map[string]bool{"seed-1/trace.jsonl": true})
 }
 
 func TestHuntCountsAFailedReplayOrCandidateAsNotFailing(t *testing.T) {
@@ -269,6 +271,7 @@ func TestHuntWritesTheSummaryOfTheSeedsBeforeACancel(t *testing.T) {
 	if !strings.Contains(string(summary), "over 1 seeds") || !strings.Contains(string(summary), "| 1 | Clean |") {
 		t.Errorf("summary.md is:\n%s", summary)
 	}
+	wantKept(t, fake.out, map[string]bool{"seed-2/trace.jsonl": true})
 }
 
 func TestHuntCountsASeedWhoseRunEndedBeforeTheCancel(t *testing.T) {
@@ -286,6 +289,7 @@ func TestHuntCountsASeedWhoseRunEndedBeforeTheCancel(t *testing.T) {
 	if !errors.Is(err, context.Canceled) || !strings.Contains(string(summary), "over 2 seeds") {
 		t.Errorf("Hunt returned %v and wrote:\n%s", err, summary)
 	}
+	wantKept(t, fake.out, map[string]bool{"seed-1": true, "seed-2": false})
 }
 
 func TestHuntReturnsTheCancelWithTheErrorOfTheRunItEnded(t *testing.T) {

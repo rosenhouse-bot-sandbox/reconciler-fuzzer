@@ -97,6 +97,11 @@ func Hunt(ctx context.Context, o Options) ([]Found, error) {
 		dir := filepath.Join(o.Out, fmt.Sprintf("seed-%d", seed))
 		more, err := h.investigate(ctx, p, dir, fmt.Sprintf("seed %d", seed))
 		found = append(found, more...)
+		if err == nil && len(more) == 0 {
+			if err := os.RemoveAll(dir); err != nil {
+				return found, err
+			}
+		}
 		if ctx.Err() != nil {
 			// The seed counts unless the cancel ended the run of its plan.
 			if err == nil || len(more) > 0 {
@@ -110,10 +115,6 @@ func Hunt(ctx context.Context, o Options) ([]Found, error) {
 		seeds++
 		if err != nil {
 			failed = append(failed, fmt.Sprintf("seed %d: %v", seed, err))
-		} else if len(more) == 0 {
-			if err := os.RemoveAll(dir); err != nil {
-				return found, err
-			}
 		}
 		if err := writeSummary(o.Out, fmt.Sprintf("%d seeds", seeds), found, failed); err != nil {
 			return found, err
