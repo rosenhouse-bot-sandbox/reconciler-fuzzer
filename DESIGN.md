@@ -190,8 +190,8 @@ slot wait restarts it, §9), `stop` (for good), `damage` (of an instance the
 controller created) or `changeFixture` (of a fixture, on any system). After a
 `stop`, actions may only `delete` and `changeFixture`. `plan.go` documents each.
 
-A `target` has `system` (default `kube`), `group`, `resource`, `namespace`,
-`name`, `role` and `nth` (default 1). Empty fields match anything.
+A `target` has `system` (default `kube`), `group` (`kube` only), `resource`,
+`namespace`, `name`, `role` and `nth` (default 1). Empty fields match anything.
 `owner.World.Select` resolves it when the action runs: the `nth` live instance,
 in creation order, that the controller (for `damage`) or the harness created,
 whose root (§11) holds the slot's newest live CR when a slot is set. A target
@@ -202,7 +202,7 @@ Actions run in order, each at its optional `at` offset. A fault sets one
 effect: a request fault or `holdWatch` (§5), or a model fault (§7) with no
 verb, subresource or `nth`. A fault's `system` defaults to `kube`; the runner
 refuses an unknown one. On `kube`, a model fault and a target need a
-`resource`; on a fake, an empty one matches every collection, and a target
+`resource`; on a fake, an empty one matches every collection, and a fault
 takes no `group`. `plan.Load` decodes strictly and validates the plan
 (`plan.go`). Two slots' CRs clash only with equal group, kind, namespace and
 name. `run.Run` refuses a create of an unlisted kind (`ValidateKinds`).

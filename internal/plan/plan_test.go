@@ -169,6 +169,8 @@ func TestValidate(t *testing.T) {
 		"malformed system":        {[]Step{{Faults: []Fault{{System: "No such", Drop: true}}}}, "steps[0].faults[0]: system \"No such\" is not a system name"},
 		"kube stuck no resource":  {[]Step{{Faults: []Fault{{System: "kube", Stuck: true}}}}, "stuck needs a match with a resource"},
 		"fake stuck with verb":    {[]Step{{Faults: []Fault{{System: "cloud", Stuck: true, Match: Match{Verb: "get"}}}}}, "stuck matches objects"},
+		"fake fault with group":   {[]Step{{Faults: []Fault{{System: "cloud", Error: &Error{Code: 503}, Match: Match{Group: "x", Resource: "buckets"}}}}}, "steps[0].faults[0]: a fault on cloud takes no group"},
+		"fake stuck with group":   {[]Step{{Faults: []Fault{{System: "vault", Stuck: true, Match: Match{Group: "x"}}}}}, "a fault on vault takes no group"},
 		"kube target no resource": {[]Step{{Actions: []Action{{Do: Damage, Target: &Target{System: "kube"}}}}}, "damage needs a target with a resource"},
 		"fake target with group":  {[]Step{{Actions: []Action{{Do: Damage, Target: &Target{System: "cloud", Group: "x"}}}}}, "steps[0].actions[0]: damage target on cloud takes no group"},
 		"fake fixture with group": {[]Step{{Actions: []Action{{Do: ChangeFixture, Target: &Target{System: "vault", Group: "x", Resource: "secret", Name: "token"}}}}}, "changeFixture target on vault takes no group"},

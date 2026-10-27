@@ -425,7 +425,8 @@ func isObject(raw json.RawMessage) bool {
 // Validate requires exactly one effect, an error code from 400 to 599, a
 // system name and a non-negative nth. A model fault takes no verb,
 // subresource or nth, and on kube needs a resource. A holdWatch acts on
-// kube, needs a resource and takes only a group besides.
+// kube, needs a resource and takes only a group besides. Only a fault on
+// kube takes a group.
 func (f Fault) Validate() error {
 	effects := 0
 	for _, set := range []bool{f.Error != nil, f.Delay != nil, f.Drop, f.DropResponse, f.KillAfter, f.Stuck, f.SlowDelete, f.HoldWatch} {
@@ -445,6 +446,9 @@ func (f Fault) Validate() error {
 		case f.Match.Verb != "" || f.Match.Subresource != "" || f.Match.Name != "" || f.Nth != 0:
 			return errors.New("holdWatch takes no verb, subresource, name or nth")
 		}
+	}
+	if !onKube(f.System) && f.Match.Group != "" {
+		return fmt.Errorf("a fault on %s takes no group, since only kube objects have one", f.System)
 	}
 	if f.ModelFault() {
 		switch effect := f.Effect(); {

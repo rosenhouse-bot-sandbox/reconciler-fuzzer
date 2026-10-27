@@ -313,8 +313,6 @@ func TestJudgeNotesAFaultPeriodOfZero(t *testing.T) {
 	watchOpensAndCloses := []trace.Event{watch, {WatchEnd: &trace.WatchEnd{Caller: ctl, System: "kube", Stream: 7}}}
 	nextStep := []trace.Event{tt.FaultPeriod(2, 0)}
 	watchOpensInNextStep := []trace.Event{watch, tt.EndFaults(2, 10*s, false)}
-	// The fault starts at 2s and ends lasted later. before is at 1.6s,
-	// during halfway, after 1s past the fault's end, and later 1s past after.
 	for name, c := range map[string]struct {
 		phase                        trace.Event
 		fault                        func(ended bool) trace.Event
