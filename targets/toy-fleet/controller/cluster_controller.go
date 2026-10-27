@@ -37,11 +37,18 @@ func (r *ClusterReconciler) SetupWithManager(m ctrl.Manager) error {
 			return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: o.GetNamespace(), Name: o.(*fleetv1.Database).Spec.ClusterRef}}}
 		}))
 	if r.Bug == B160 {
-		return b.Watches(&storagev1.Volume{}, handler.EnqueueRequestsFromMapFunc(func(_ context.Context, o client.Object) []reconcile.Request {
-			return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: o.GetNamespace(), Name: o.GetLabels()[ClusterLabel]}}}
-		})).Complete(r)
+		return b.Watches(&storagev1.Volume{}, handler.EnqueueRequestsFromMapFunc(clusterOfVolume)).Complete(r)
 	}
 	return b.Owns(&storagev1.Volume{}).Complete(r)
+}
+
+// clusterOfVolume maps a Volume to the Cluster its label names.
+func clusterOfVolume(_ context.Context, o client.Object) []reconcile.Request {
+	name := o.GetLabels()[ClusterLabel]
+	if name == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: o.GetNamespace(), Name: name}}}
 }
 
 func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -179,7 +186,10 @@ func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Clust
 			}
 		}
 	}
-	if len(volumes) > 0 && r.Bug != B151 {
+	switch {
+	case r.Bug == B160:
+		return nil // It released the Cluster above.
+	case len(volumes) > 0 && r.Bug != B151:
 		return nil // A Volume's deletion requeues the Cluster.
 	}
 	controllerutil.RemoveFinalizer(cluster, fleetv1.ClusterFinalizer)

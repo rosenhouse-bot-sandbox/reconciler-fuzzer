@@ -453,10 +453,11 @@ func (g *Generator) step(t *rapid.T, at state) plan.Step {
 	return step
 }
 
-// restartMidDelete adds, to half the model-fault steps that delete a CR and
-// have room for an action, a restart or kill 300 ms or more after the
-// delete and before Period ends. The fault holds the deletion or the CR's
-// dependencies, so the next process must resume the deletion.
+// restartMidDelete adds a restart or kill to half the model-fault steps that
+// delete and hold fewer than maxActions actions. It comes 300 ms or more
+// after the first delete and before Period ends, while the fault may still
+// hold the deletion, so a new process may have to finish it. It directly
+// follows that delete, so no action between them delays it.
 func restartMidDelete(t *rapid.T, step plan.Step) []plan.Action {
 	del := slices.IndexFunc(step.Actions, func(a plan.Action) bool { return a.Do == plan.Delete })
 	if del < 0 || len(step.Actions) == maxActions || !rapid.Bool().Draw(t, "restart mid-delete") {
@@ -465,7 +466,8 @@ func restartMidDelete(t *rapid.T, step plan.Step) []plan.Action {
 	const after, tick = 300 * time.Millisecond, 100 * time.Millisecond
 	from := time.Duration(step.Actions[del].At) + after
 	at := from + time.Duration(uniform(t, int((time.Duration(step.Period)-from)/tick), "at"))*tick
-	return append(step.Actions, plan.Action{At: plan.Duration(at), Do: sampled(t, []plan.Do{plan.Restart, plan.Kill}, "restart mid-delete")})
+	late := plan.Action{At: plan.Duration(at), Do: sampled(t, []plan.Do{plan.Restart, plan.Kill}, "restart or kill")}
+	return slices.Insert(step.Actions, del+1, late)
 }
 
 // burst puts a delete then a create of one slot's kind, or two updates,

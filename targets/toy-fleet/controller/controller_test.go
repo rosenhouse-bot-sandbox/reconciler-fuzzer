@@ -328,11 +328,18 @@ func TestB116StripsTheFinalizersOfVolumesOnlyWhileTheClusterIsDeleted(t *testing
 // A kill between B160's release of the Cluster and its Volume deletes leaks
 // the Volumes, since no ownerReference lets gc collect them.
 func TestB160ReleasesTheClusterBeforeDeletingItsUnownedVolumes(t *testing.T) {
-	for bug, want := range map[Bug][]string{
-		0:    {"delete cluster-vol-0", "delete cluster-vol-1", "update cluster"},
-		B160: {"update cluster", "delete cluster-vol-0", "delete cluster-vol-1"},
+	for _, row := range []struct {
+		bug     Bug
+		volumes int32
+		want    []string
+	}{
+		{0, 2, []string{"delete cluster-vol-0", "delete cluster-vol-1", "update cluster"}},
+		{B160, 2, []string{"update cluster", "delete cluster-vol-0", "delete cluster-vol-1"}},
+		{B160, 0, []string{"update cluster"}},
 	} {
-		f := newBuggyFleet(t, bug, clusterObj())
+		bug, cluster := row.bug, clusterObj()
+		cluster.Spec.Volumes = row.volumes
+		f := newBuggyFleet(t, bug, cluster)
 		f.settle(f.clusters, "cluster")
 		for _, v := range f.listVolumes() {
 			if owned := metav1.GetControllerOf(&v) != nil; owned != (bug == 0) {
@@ -352,9 +359,20 @@ func TestB160ReleasesTheClusterBeforeDeletingItsUnownedVolumes(t *testing.T) {
 		})
 		f.delete(f.cluster())
 		f.settle(f.clusters, "cluster")
-		if !slices.Equal(writes, want) {
-			t.Errorf("B%d: the deleted Cluster's controller writes %q, want %q.", bug, writes, want)
+		if !slices.Equal(writes, row.want) {
+			t.Errorf("B%d, %d Volumes: the deleted Cluster's controller writes %q, want %q.", bug, row.volumes, writes, row.want)
 		}
+	}
+}
+
+func TestB160MapsAVolumeToTheClusterItsLabelNames(t *testing.T) {
+	labeled := &storagev1.Volume{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "cluster-vol-0", Labels: map[string]string{ClusterLabel: "cluster"}}}
+	want := []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: ns, Name: "cluster"}}}
+	if got := clusterOfVolume(t.Context(), labeled); !slices.Equal(got, want) {
+		t.Errorf("A labeled Volume maps to %v, want %v.", got, want)
+	}
+	if got := clusterOfVolume(t.Context(), &storagev1.Volume{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "other"}}); got != nil {
+		t.Errorf("An unlabeled Volume maps to %v, want none.", got)
 	}
 }
 

@@ -137,9 +137,9 @@ func TestSomeRestartsOrKillsComeWhileADeleteIsFinalizing(t *testing.T) {
 	}
 }
 
-// A restart or kill at an offset lands while a model fault holds the delete
-// before it.
-func TestARestartOrKillAtAnOffsetComesWhileAModelFaultHoldsADelete(t *testing.T) {
+// A restart or kill at an offset directly follows the step's first delete,
+// so no action between them delays it past the model fault.
+func TestARestartOrKillAtAnOffsetFollowsTheFirstDeleteWhileAModelFaultLasts(t *testing.T) {
 	drawn := map[plan.Do]int{}
 	for _, p := range plans(t, modelsConfig, 400) {
 		for _, step := range p.Steps {
@@ -148,8 +148,8 @@ func TestARestartOrKillAtAnOffsetComesWhileAModelFaultHoldsADelete(t *testing.T)
 					continue
 				}
 				drawn[a.Do]++
-				del := slices.IndexFunc(step.Actions[:i], func(a plan.Action) bool { return a.Do == plan.Delete })
-				if del < 0 || len(step.Faults) == 0 || !step.Faults[0].ModelFault() || time.Duration(a.At-step.Actions[del].At) < 300*time.Millisecond || a.At >= step.Period {
+				del := slices.IndexFunc(step.Actions, func(a plan.Action) bool { return a.Do == plan.Delete })
+				if del < 0 || del != i-1 || len(step.Faults) == 0 || !step.Faults[0].ModelFault() || time.Duration(a.At-step.Actions[del].At) < 300*time.Millisecond || a.At >= step.Period {
 					t.Errorf("Seed %d draws a %s at %v, with faults %v, actions %+v and period %v.", p.Seed, a.Do, time.Duration(a.At), step.Faults, step.Actions, time.Duration(step.Period))
 				}
 			}
@@ -160,16 +160,24 @@ func TestARestartOrKillAtAnOffsetComesWhileAModelFaultHoldsADelete(t *testing.T)
 	}
 }
 
-// Half the model-fault steps that delete leave the deletion to one process.
-func TestSomeModelFaultStepsOnlyDelete(t *testing.T) {
+// The other half leave the deletion to one process.
+func TestHalfTheModelFaultStepsThatDeleteAndHaveRoomRestartOrKillMidDelete(t *testing.T) {
+	var room, late int
 	for _, p := range plans(t, modelsConfig, 400) {
 		for _, step := range p.Steps {
-			if len(step.Faults) == 1 && step.Faults[0].ModelFault() && len(step.Actions) == 1 && step.Actions[0].Do == plan.Delete {
-				return
+			drawn := slices.DeleteFunc(slices.Clone(step.Actions), func(a plan.Action) bool { return a.At > 0 })
+			if len(step.Faults) == 0 || !step.Faults[0].ModelFault() || len(drawn) == maxActions || !slices.ContainsFunc(drawn, func(a plan.Action) bool { return a.Do == plan.Delete }) {
+				continue
+			}
+			room++
+			if len(drawn) < len(step.Actions) {
+				late++
 			}
 		}
 	}
-	t.Error("No model-fault step over 400 plans holds a delete alone.")
+	if late*100 < room*35 || late*100 > room*65 {
+		t.Errorf("%d of %d model-fault steps that delete and have room restart or kill mid-delete, want about half.", late, room)
+	}
 }
 
 func TestTheGadgetToyDrawsBothModelFaultsOnGadgets(t *testing.T) {
