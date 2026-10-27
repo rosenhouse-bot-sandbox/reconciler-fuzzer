@@ -392,10 +392,13 @@ func TestACancelKeepsAFindWhoseShrunkPlanFailedToSave(t *testing.T) {
 func TestACancelCutsShortEachFindingLeftToShrink(t *testing.T) {
 	unreproduced := check.Finding{Check: "Converge", Summary: "a Widget never settles", Kind: "toy.reconciler-fuzzer/widgets"}
 	fake := &fakeRun{out: t.TempDir(), finds: func(dir string, _ *plan.Plan) []check.Finding {
-		if dir == "seed-1" {
+		switch dir {
+		case "seed-1":
 			return []check.Finding{clean, unreproduced, unique}
+		case "seed-1/replay-1":
+			return []check.Finding{clean, unique}
 		}
-		return []check.Finding{clean, unique}
+		return []check.Finding{clean}
 	}}
 	ctx, run := cancelAt(t, fake, "shrink-1-1")
 	found, _ := Hunt(ctx, Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1}), Out: fake.out, Run: run})

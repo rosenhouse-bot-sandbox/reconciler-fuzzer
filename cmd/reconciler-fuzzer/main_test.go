@@ -245,6 +245,17 @@ func TestShrinkExits2WhenItsPlanFailsToRun(t *testing.T) {
 	}
 }
 
+func TestShrinkExits0WhenItsPlanFindsNothing(t *testing.T) {
+	runPlan = func(_ context.Context, o run.Options) (check.Report, error) {
+		return check.Report{}, os.MkdirAll(o.Out, 0o755)
+	}
+	t.Cleanup(func() { runPlan = run.Run })
+	code, stdout, stderr := cliOutput("shrink", "--config", toyConfig, "--plan", "../../targets/toy-widget/plans/b13.json", "--out", t.TempDir())
+	if code != 0 || stdout != "No findings over 1 plan.\n" {
+		t.Errorf("cli = %d, stdout %q, stderr %q; want 0 and a summary with no findings", code, stdout, stderr)
+	}
+}
+
 func TestJudgeHarnessErrors(t *testing.T) {
 	code, _, stderr := cliOutput("judge", "--config", toyConfig, "--trace", filepath.Join(t.TempDir(), "missing.jsonl"))
 	if code != 2 || !strings.Contains(stderr, "missing.jsonl") {
