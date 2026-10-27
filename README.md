@@ -361,7 +361,7 @@ ends the hold, so that the controller can finish the delete.
 
 Generated plans draw it for kinds `launch.rbac` lets the controller watch, favoring the kinds
 other faults favor, in a step that deletes a CR and creates it again unchanged. About 1
-cert-manager seed in 11 holds Secrets this way, so a 20-seed `make hunt-cert-manager` usually,
+cert-manager seed in 12 holds Secrets this way, so a 20-seed `make hunt-cert-manager` usually,
 but not always, finds #63. A report notes a `holdWatch` while the controller had no watch of
 its kind, such as one with a misspelt resource.
 

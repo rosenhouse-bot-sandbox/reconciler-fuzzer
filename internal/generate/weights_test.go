@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	gvk "k8s.io/apimachinery/pkg/runtime/schema"
+	"pgregory.net/rapid"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
 )
@@ -64,6 +65,19 @@ func TestAFakesOwnsEntryKeepsTheCoreKindsTheControllerMayCreateFavored(t *testin
 	cfg.Primaries[0].Owns = []config.Owns{{System: "vault", Collection: "secret", Name: "self.metadata.name"}}
 	if w := newGenerator(t, cfg).kindWeight(gvk.GroupResource{Resource: "configmaps"}); w != favored {
 		t.Errorf("ConfigMaps weigh %d, want %d.", w, favored)
+	}
+}
+
+func TestWeightedDrawsEachElementInProportionToItsWeight(t *testing.T) {
+	weights := map[string]int{"light": 1, "heavy": 3}
+	counts := map[string]int{}
+	for seed := range 400 {
+		counts[example(t, seed, func(rt *rapid.T) string {
+			return weighted(rt, []string{"light", "heavy"}, func(e string) int { return weights[e] }, "element")
+		})]++
+	}
+	if counts["light"] < 70 || counts["light"] > 130 {
+		t.Errorf("400 draws give %v, want about 100 light.", counts)
 	}
 }
 
