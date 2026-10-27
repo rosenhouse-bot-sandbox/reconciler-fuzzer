@@ -57,7 +57,7 @@ type Found struct {
 	Reproduced int
 	// Shrunk is the smallest plan that still fails. It is saved at
 	// ShrunkPath. It is nil when no replay reproduced the finding, or when
-	// an error ended the hunt before its shrink.
+	// an error came before its shrink.
 	Shrunk     *plan.Plan
 	ShrunkPath string
 	// CutShort says an error, such as an interrupt, ended the shrink early.
@@ -174,8 +174,8 @@ func (h *hunter) logf(format string, args ...any) {
 // into dir/shrink-<c>-<r>, and saves the result in dir. It removes each
 // candidate run that did not fail. A replay or candidate whose run fails
 // counts as not failing. Only the run of p itself returns its error. When
-// the context ends, it returns the findings so far with the error. A shrink
-// that an error cuts short saves its smallest failing plan so far.
+// the context ends, it returns the findings so far with the error. When an
+// error cuts a shrink short, it saves the smallest failing plan so far.
 func (h *hunter) investigate(ctx context.Context, p *plan.Plan, dir, name string) ([]Found, error) {
 	report, err := h.run(ctx, p, dir)
 	if err != nil {
