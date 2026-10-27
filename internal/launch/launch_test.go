@@ -221,17 +221,17 @@ func TestStopEscalatesToSIGKILL(t *testing.T) {
 
 func TestAnExitReapedAfterTheGracePeriodDidNotOutliveIt(t *testing.T) {
 	// The background sleep holds the output pipe, so the reap waits 500ms
-	// after the shell exits on SIGTERM.
-	b, h, _ := newBinary(t, "trap 'exit 3' TERM; sleep 1 & "+forever, func(o *launch.Options) { o.GracePeriod = 100 * time.Millisecond })
+	// after SIGTERM ends the shell.
+	b, h, _ := newBinary(t, "sleep 1 & "+forever, func(o *launch.Options) { o.GracePeriod = 100 * time.Millisecond })
 	mustStart(t, b)
-	time.Sleep(50 * time.Millisecond) // The trap must be set and the sleep started.
+	time.Sleep(50 * time.Millisecond) // The sleep must start.
 
 	if err := b.Stop(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 
-	if exit := h.lastExit(); exit.Status != "exit status 3" || exit.GracePeriodPassed {
-		t.Errorf("Exit is %+v, want exit status 3 within the grace period.", exit)
+	if exit := h.lastExit(); exit.Status != "signal: terminated" || exit.GracePeriodPassed {
+		t.Errorf("Exit is %+v, want SIGTERM's exit within the grace period.", exit)
 	}
 }
 

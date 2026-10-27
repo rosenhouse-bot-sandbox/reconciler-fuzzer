@@ -304,6 +304,14 @@ func TestJudgeNotesAStopThatSentSIGKILL(t *testing.T) {
 	restart := restartRun(killed).Events()
 	// interrupted ends at the restart's exit, before step 1's faults end.
 	interrupted := restart[:slices.IndexFunc(restart, func(e trace.Event) bool { return e.Proc != nil && e.Proc.Event == trace.Exit })+1]
+	// cut ends in step 1's settle wait, as after a harness error, with the
+	// run's stop.
+	cut := createStep()
+	cut.At(3500*ms).Add(tt.Phase(0, trace.Settled)).
+		At(5500*ms).Add(tt.Phase(0, trace.Confirmed), tt.Phase(1, trace.FaultPeriod)).
+		At(5600*ms).Add(killed).
+		At(5700*ms).Add(tt.Start(2), tt.EndFaults(1, 20*s, false)).
+		At(7 * s).Add(killed)
 	run := tt.Run("toy", "widgets")
 	run.Run.Primaries[0].Kind = widgets
 	var early tt.Builder
@@ -317,8 +325,9 @@ func TestJudgeNotesAStopThatSentSIGKILL(t *testing.T) {
 		"a restart's stop in an interrupted run": {interrupted, []string{"Step 1, at 5.6s: " + sentSIGKILL}},
 		"the run's stop":                         {cleanRun().At(10 * s).Add(killed).Events(), []string{"After the last step, at 10s: " + sentSIGKILL}},
 		"the run's stop after a timed-out step":  {churn(false).At(11 * s).Add(killed).Events(), []string{"After the last step, at 11s: " + sentSIGKILL}},
-		"the run's stop during a settle wait": {createStep().At(3 * s).Add(killed).Events(), []string{
-			"After the last step, at 3s: " + sentSIGKILL, "Step 0 is not judged: the trace ends at 3s, before its deadline 10s.",
+		"both stops of a run cut short": {cut.Events(), []string{
+			"Step 1, at 5.6s: " + sentSIGKILL, "After the last step, at 7s: " + sentSIGKILL,
+			"Step 1 is not judged: the trace ends at 7s, before its deadline 20s.",
 		}},
 		"a kill": {cleanRun().At(10 * s).Add(kill).Events(), nil},
 	} {

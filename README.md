@@ -118,7 +118,8 @@ timeouts: {settle: 30s, stable: 3s}
 - `stable` is how long the controller must stay quiet before a step counts as settled.
 - `launch.rbac` also tells generation which requests a fault can pick.
 - `launch.gracePeriod`, 5s by default, is how long a stop of the controller waits after
-  SIGTERM before it sends SIGKILL. The report notes each stop that sent SIGKILL.
+  SIGTERM before it sends SIGKILL. The report notes each stop that sent SIGKILL. After an
+  interrupt, such as Ctrl-C, a stop sends SIGKILL at once.
 - `values` steers generated CRs: `overlay` narrows the CRD schema, `distinct` fields differ
   across a plan's CRs, `mutate` names the fields updates change, and `fixtures` names the
   fixture strings `changeFixture` sets.

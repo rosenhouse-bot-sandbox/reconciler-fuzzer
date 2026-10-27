@@ -268,9 +268,8 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 		l.SetKill(controller.Kill)
 		listeners[name] = l
 	}
-	defer func() {
-		err = errors.Join(err, controller.Supervise(false), controller.Stop(context.WithoutCancel(ctx)))
-	}()
+	// The stop takes ctx, so an interrupt sends SIGKILL at once.
+	defer func() { err = errors.Join(err, controller.Supervise(false), controller.Stop(ctx)) }()
 	if err := controller.Supervise(true); err != nil {
 		return err
 	}

@@ -329,7 +329,7 @@ A note that the harness sent SIGKILL means the controller did not exit within
 `launch.gracePeriod`, 5s by default, of SIGTERM. Set it above the controller's shutdown time,
 or tell the user if the controller ignores SIGTERM.
 
-**Exit 0**: no findings. Go on.
+**Exit 0**: no findings. Act on any notes as above, then go on.
 
 If five runs in a row make no progress, stop and report what you tried.
 
