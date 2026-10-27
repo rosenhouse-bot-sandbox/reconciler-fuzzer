@@ -269,8 +269,40 @@ func TestHuntKeepsAFindWhoseReplaysWereCutShort(t *testing.T) {
 			return fake.run(ctx, p, out)
 		}})
 	summary, _ := os.ReadFile(filepath.Join(fake.out, "summary.md"))
-	if !errors.Is(err, context.Canceled) || len(found) != 1 || !strings.Contains(string(summary), "| 1 | Clean |") {
+	if !errors.Is(err, context.Canceled) || len(found) != 1 || !strings.Contains(string(summary), "over 1 seed") ||
+		!strings.Contains(string(summary), "| 1 | Clean |") {
 		t.Errorf("Hunt = %+v, %v, and wrote:\n%s", found, err, summary)
+	}
+}
+
+// A hunt cut short while shrinking, as by a CI timeout, keeps the smallest
+// failing plan so far and counts the seed that found it.
+func TestHuntKeepsTheShrinkSoFarOnACancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var smallest *plan.Plan
+	fake := &fakeRun{out: t.TempDir(), finds: func(dir string, p *plan.Plan) []check.Finding {
+		if dir == "seed-4/shrink-2-1" {
+			smallest = p
+		}
+		return []check.Finding{clean}
+	}}
+	found, err := Hunt(ctx, Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{4}), Out: fake.out,
+		Run: func(ctx context.Context, p *plan.Plan, out string) (check.Report, error) {
+			if filepath.Base(out) == "shrink-3-1" {
+				cancel()
+				return check.Report{}, ctx.Err()
+			}
+			return fake.run(ctx, p, out)
+		}})
+	summary, _ := os.ReadFile(filepath.Join(fake.out, "summary.md"))
+	shrunk := filepath.Join(fake.out, "seed-4", "shrunk.json")
+	if !errors.Is(err, context.Canceled) || len(found) != 1 || !found[0].CutShort || found[0].ShrunkPath != shrunk ||
+		!strings.Contains(string(summary), "over 1 seed") || !strings.Contains(string(summary), "| 5/5 | "+shrunk+" (cut short) |") {
+		t.Errorf("Hunt = %+v, %v, and wrote:\n%s", found, err, summary)
+	}
+	if saved, err := plan.Load(shrunk); err != nil || encoded(t, saved) != encoded(t, smallest) {
+		t.Errorf("shrunk.json holds %s, %v; want the last failing candidate, %s.", encoded(t, saved), err, encoded(t, smallest))
 	}
 }
 
@@ -331,6 +363,29 @@ func TestShrinkPlanRunsReplaysAndShrinksAPlanFile(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(out, "summary.md")); err != nil {
 		t.Error(err)
+	}
+}
+
+func TestShrinkPlanReportsTheShrinkSoFarOnACancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	out := t.TempDir()
+	path := filepath.Join(t.TempDir(), "plan.json")
+	if err := plan.Save(path, parsePlan(t, `{"steps":[{"actions":[`+create+`]},{"actions":[{"do":"restart"}]}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeRun{out: out, finds: always(clean)}
+	found, err := ShrinkPlan(ctx, ShrinkOptions{ConfigPath: toyConfig, PlanPath: path, Out: out,
+		Run: func(ctx context.Context, p *plan.Plan, dir string) (check.Report, error) {
+			if filepath.Base(dir) == "shrink-1-1" {
+				cancel()
+				return check.Report{}, ctx.Err()
+			}
+			return fake.run(ctx, p, dir)
+		}})
+	summary, _ := os.ReadFile(filepath.Join(out, "summary.md"))
+	if !errors.Is(err, context.Canceled) || len(found) != 1 || !strings.Contains(string(summary), "| 5/5 | "+filepath.Join(out, "shrunk.json")+" (cut short) |") {
+		t.Errorf("ShrinkPlan = %+v, %v, and wrote:\n%s", found, err, summary)
 	}
 }
 

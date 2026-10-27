@@ -59,6 +59,7 @@ type Found struct {
 	// ShrunkPath. It is nil when no replay reproduced the finding.
 	Shrunk     *plan.Plan
 	ShrunkPath string
+	CutShort   bool
 }
 
 // Hunt runs each seed's plan into <Out>/seed-<n>. For each finding whose

@@ -160,9 +160,11 @@ func TestHuntExits1WhenASeedFindsAndAnotherFails(t *testing.T) {
 	}
 }
 
-func TestHuntCutShortByAnInterruptStillReportsItsFinds(t *testing.T) {
+// interruptAt fakes runs that find something, until the run into a
+// directory named dir. That run interrupts this process.
+func interruptAt(t *testing.T, dir string) {
 	runPlan = func(ctx context.Context, o run.Options) (check.Report, error) {
-		if filepath.Base(o.Out) == "seed-2" {
+		if filepath.Base(o.Out) == dir {
 			if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
 				return check.Report{}, err
 			}
@@ -172,6 +174,10 @@ func TestHuntCutShortByAnInterruptStillReportsItsFinds(t *testing.T) {
 		return check.Report{Findings: []check.Finding{{Check: "Clean"}}}, os.MkdirAll(o.Out, 0o755)
 	}
 	t.Cleanup(func() { runPlan = run.Run })
+}
+
+func TestHuntCutShortByAnInterruptStillReportsItsFinds(t *testing.T) {
+	interruptAt(t, "seed-2")
 	code, stdout, stderr := cliOutput("hunt", "--config", toyConfig, "--seeds", "3", "--out", t.TempDir())
 	if code != 1 || !strings.Contains(stdout, "over 1 seeds") || !strings.Contains(stderr, "context canceled") {
 		t.Errorf("cli = %d, stdout %q, stderr %q; want 1 and the find of seed 1", code, stdout, stderr)
@@ -212,6 +218,26 @@ func TestShrinkWritesTheShrunkPlan(t *testing.T) {
 	}
 	if len(shrunk.Steps) != 2 {
 		t.Errorf("b13 shrinks to %+v, want its create and delete.", shrunk)
+	}
+}
+
+func TestShrinkCutShortByAnInterruptPrintsTheShrinkSoFar(t *testing.T) {
+	interruptAt(t, "shrink-1-1")
+	out := t.TempDir()
+	code, stdout, stderr := cliOutput("shrink", "--config", toyConfig, "--plan", "../../targets/toy-widget/plans/b13.json", "--out", out)
+	if code != 1 || !strings.Contains(stdout, filepath.Join(out, "shrunk.json")+" (cut short)") || !strings.Contains(stderr, "context canceled") {
+		t.Errorf("cli = %d, stdout %q, stderr %q; want 1 and the shrink so far", code, stdout, stderr)
+	}
+}
+
+func TestShrinkExits2WhenItsPlanFailsToRun(t *testing.T) {
+	runPlan = func(context.Context, run.Options) (check.Report, error) {
+		return check.Report{}, errors.New("no controller")
+	}
+	t.Cleanup(func() { runPlan = run.Run })
+	code, stdout, stderr := cliOutput("shrink", "--config", toyConfig, "--plan", "../../targets/toy-widget/plans/b13.json", "--out", t.TempDir())
+	if code != 2 || stdout != "" || !strings.Contains(stderr, "no controller") {
+		t.Errorf("cli = %d, stdout %q, stderr %q; want 2 and the error", code, stdout, stderr)
 	}
 }
 
