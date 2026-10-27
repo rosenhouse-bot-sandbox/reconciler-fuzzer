@@ -369,7 +369,7 @@ func TestJudgeNotesNoHeldObjectForAFakesModelFault(t *testing.T) {
 	sp.Polls = map[string]time.Duration{"cloud": s}
 	for model, noted := range map[string]bool{"cloud": false, "model:gadgets.toy": true} {
 		b := createStep()
-		b.At(2*s).Add(tt.Phase(1, trace.FaultPeriod), tt.ModelFault(1, 0, false, "stuck", model)).
+		b.At(2*s).Add(tt.FaultPeriod(1, s), tt.ModelFault(1, 0, false, "stuck", model)).
 			At(3 * s).Add(tt.ModelFault(1, 0, true, "stuck", model))
 		if got := slices.Contains(check.Judge(b.Index(), sp).Notes, "Step 1, fault 0 (stuck) held no object."); got != noted {
 			t.Errorf("%s: noted = %v", model, got)
@@ -397,7 +397,7 @@ func TestJudgeNotesAFakeRequestFaultThatPickedNoRequest(t *testing.T) {
 		"picked on kube": {onKube, true},
 	} {
 		b := createStep()
-		b.At(2*s).Add(tt.Phase(1, trace.FaultPeriod), cloudFault(false)).
+		b.At(2*s).Add(tt.FaultPeriod(1, s), cloudFault(false)).
 			At(2100 * ms).Add(c.call).
 			At(3 * s).Add(cloudFault(true))
 		if got := slices.Contains(check.Judge(b.Index(), spec).Notes, "Step 1, fault 0 ("+what+") picked no request."); got != c.noted {

@@ -89,6 +89,11 @@ func Phase(step int, name trace.PhaseName) trace.Event {
 	return trace.Event{Phase: &trace.Phase{Step: step, Name: name}}
 }
 
+// FaultPeriod starts the fault period of step, whose period is period.
+func FaultPeriod(step int, period time.Duration) trace.Event {
+	return trace.Event{Phase: &trace.Phase{Step: step, Name: trace.FaultPeriod, Period: period}}
+}
+
 // EndFaults marks the end of step's fault period.
 func EndFaults(step int, deadline time.Duration, backoffBound bool) trace.Event {
 	return trace.Event{Phase: &trace.Phase{Step: step, Name: trace.EndFaults, Deadline: deadline, BackoffBound: backoffBound}}

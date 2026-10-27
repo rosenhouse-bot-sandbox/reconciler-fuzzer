@@ -266,6 +266,18 @@ func TestModelFaults(t *testing.T) {
 	}
 }
 
+func TestTargetString(t *testing.T) {
+	for target, want := range map[Target]string{
+		{Resource: "configmaps"}: "resource=configmaps",
+		{System: "cloud"}:        "system=cloud",
+		{System: "kube", Group: "g", Resource: "secrets", Namespace: "ns", Name: "n", Role: "r", Nth: 2}: "system=kube group=g resource=secrets namespace=ns name=n role=r nth=2",
+	} {
+		if got := target.String(); got != want {
+			t.Errorf("String() = %q, want %q", got, want)
+		}
+	}
+}
+
 func TestFaultString(t *testing.T) {
 	delay := Duration(1500 * time.Millisecond)
 	for f, want := range map[*Fault]string{

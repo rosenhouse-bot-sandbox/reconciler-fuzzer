@@ -1152,6 +1152,9 @@ func TestExecuteHonoursOffsetsAndPeriod(t *testing.T) {
 	if period := end.At - start.At; period < 300*time.Millisecond {
 		t.Errorf("fault period lasted %v, want 300ms", period)
 	}
+	if start.Phase.Period != 300*time.Millisecond {
+		t.Errorf("fault period phase records period %v, want 300ms", start.Phase.Period)
+	}
 }
 
 func TestExecuteEndsFaultsBeforeEndFaults(t *testing.T) {

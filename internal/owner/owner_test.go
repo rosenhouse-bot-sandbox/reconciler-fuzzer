@@ -2,6 +2,7 @@ package owner_test
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -282,6 +283,45 @@ func TestSelectPicksTheNthMatchInCreationOrder(t *testing.T) {
 		if (err == nil) != (c.want != "") || ref.Name != c.want {
 			t.Errorf("Select(%s, %+v, %q) = %+v, %v; want %q", c.creator, c.target, c.slot, ref, err, c.want)
 		}
+	}
+}
+
+func TestSelectSaysWhyNoInstanceMatches(t *testing.T) {
+	w := owner.New(children().Index(), owner.Rules{})
+	crd := plan.Target{Group: "apiextensions.k8s.io", Resource: "customresourcedefinitions", Name: "widgets.toy"}
+	for _, c := range []struct {
+		creator trace.Caller
+		target  plan.Target
+		slot    string
+		want    string
+	}{
+		{ctl, plan.Target{Resource: "configmaps", Nth: 4}, "", "resource=configmaps nth=4: the controller's live configmaps are ns/a-0, ns/a-1, ns/b-0"},
+		{ctl, plan.Target{Resource: "configmaps", Nth: 2}, "b", "resource=configmaps nth=2: the controller's live configmaps in slot b are ns/b-0"},
+		{ctl, plan.Target{Resource: "configmaps"}, "z", "resource=configmaps: slot z holds no live CR"},
+		{ctl, plan.Target{Resource: "secrets"}, "a", "resource=secrets: the controller has no live secrets in slot a"},
+		{ctl, plan.Target{Group: "apps", Resource: "configmaps"}, "", "group=apps resource=configmaps: the controller has no live configmaps.apps"},
+		{ctl, plan.Target{System: "vault", Resource: "configmaps"}, "", "system=vault resource=configmaps: the controller has no live vault configmaps"},
+		{trace.Harness, plan.Target{Resource: "configmaps", Namespace: "other"}, "", "resource=configmaps namespace=other: the harness's live configmaps are ns/fixture"},
+		{trace.Harness, crd, "", "group=apiextensions.k8s.io resource=customresourcedefinitions name=widgets.toy: " +
+			"the harness has no live customresourcedefinitions.apiextensions.k8s.io; a CRD from crds is not a fixture"},
+	} {
+		_, err := w.Select(c.creator, c.target, c.slot, 10*s)
+		if want := "no instance matches " + c.want; !errors.Is(err, owner.ErrNoMatch) || err.Error() != want {
+			t.Errorf("Select(%s, %+v, %q) = %v, want %q", c.creator, c.target, c.slot, err, want)
+		}
+	}
+}
+
+func TestSelectNamesFiveLiveInstancesOfTheKind(t *testing.T) {
+	tl := twoWidgets()
+	for i := range 7 {
+		ref := tt.Ref("configmaps", "ns", fmt.Sprintf("c-%d", i))
+		tl.At(3*s, tt.Create(ctl, ref, ref.Name, "1"), tt.Version(ref, ref.Name, "1", tt.Object(ref.Name)))
+	}
+	_, err := owner.New(tl.Index(), owner.Rules{}).Select(ctl, plan.Target{Resource: "configmaps", Name: "x"}, "", 4*s)
+	want := "no instance matches resource=configmaps name=x: the controller's live configmaps are ns/c-0, ns/c-1, ns/c-2, ns/c-3, ns/c-4 and 2 more"
+	if err == nil || err.Error() != want {
+		t.Errorf("Select = %v, want %q", err, want)
 	}
 }
 
