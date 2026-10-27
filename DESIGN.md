@@ -283,8 +283,8 @@ from the config, or else the run event.
   instance with no CR is **shared**. Its **root** is its owner, or, when that
   names one CR that the controller created, that CR's root.
 - Its **role** is its system's `role` CEL over its first body. Without
-  one, a kube instance's is its `generateName`, or else its name, and a
-  fake's is empty.
+  one, or where it fails or yields `""`, a kube instance's is its
+  `generateName`, or else its name, and a fake's is empty.
 - The **controller's resources** at `t` are its live instances, minus
   ignored kinds (§10).
 - A **group** is a (system, group, resource, namespace, owning CRs or
@@ -294,12 +294,12 @@ from the config, or else the run event.
 
 Most checks are `func(*trace.Index, Spec) []Finding`. A finding's signature is
 its check, summary and `kind` (`system/group/resource`). `check.Judge` runs
-every check, and notes each action error, each request fault that picked no
-request, each `holdWatch` while the controller had no watch of its kind, each
-stage-model fault that held no object, and each distinct unmapped (system,
-method, path). `Spec` comes from the config, or else the run event. A step's
-**end** is its `confirmed` time. Clean, Restore and Unique judge only settled
-steps (§17, entry 15).
+every check, and notes each action error, request fault that picked no request,
+`holdWatch` while the controller had no watch of its kind, stage-model fault
+that held no object, distinct unmapped (system, method, path), and kind whose
+`role` failed on every resource the controller created. `Spec` comes from the
+config, or else the run event. A step's **end** is its `confirmed` time. Clean,
+Restore and Unique judge only settled steps (§17, entry 15).
 
 **Converge.** The settle condition holds by the deadline, and still holds at
 `t* + stable`. The summary names the first unmet clause, such as `did not
@@ -329,8 +329,8 @@ must stay under the root. A damaged group must be live again while its owner
 lives, or else a CR made in the step must own its kind and role there:
 `did not restore damaged resources` (entries 22 and 82).
 
-**Unique.** At each settled step's end, a group holds at most one live
-controller instance. Summary: `duplicate resources`.
+**Unique.** At each settled step's end, a group holds at most one live controller
+instance. Each detail line names its role. Summary: `duplicate resources`.
 
 **Honest** and Backoff judge the whole run (`honest.go`, `backoff.go`). A CR's
 dependencies are the dependency instances it owns by rules 1 to 3 (entries 47
@@ -393,7 +393,7 @@ primaries:                                  # every kind the controller serves
 values: {fixtures: {kv.yaml: [value]}}              # with primaries, only fixtures
 models: [{kind: toy.reconciler-fuzzer/v1/Gadget, after: 200ms, dependency: {track: 1s}}]
 systems:
-  - {name: kube, owner: "self.metadata.labels['widget-uid']"}   # kube takes only owner
+  - {name: kube, owner: "self.metadata.labels['widget-uid']"}   # kube takes only owner and role
   - name: cloud
     process: {command: [../../bin/crudfake, --config, cloud.yaml]}
     api: crud

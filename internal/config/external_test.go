@@ -32,10 +32,10 @@ func TestEmulatorSystems(t *testing.T) {
 func TestEmulatorSystemsRefuseMistakes(t *testing.T) {
 	for systems, want := range map[string]string{
 		"[{name: s3, api: rest, process: {command: [x]}}]": `systems[0].api "rest": want crud, vault or s3`,
-		"[{name: kube, token: x}]":                         "systems[0]: kube takes only name and owner",
+		"[{name: kube, token: x}]":                         "systems[0]: kube takes only name, owner and role",
 		"[{name: v, api: vault, process: {command: [x]}}]": "systems[0].token is required with api vault",
 		"[" + with("access: write") + "]":                  `systems[0].access "write": want read, or none`,
-		"[{name: kube, access: read}]":                     "systems[0]: kube takes only name and owner",
+		"[{name: kube, access: read}]":                     "systems[0]: kube takes only name, owner and role",
 		"[" + with("fixtures: [missing.yaml]") + "]":       "systems[0].fixtures",
 	} {
 		_, err := config.Load(writeConfig(t, minimal(t)+"systems: "+systems+"\n"))

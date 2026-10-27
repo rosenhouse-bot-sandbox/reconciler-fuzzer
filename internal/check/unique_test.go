@@ -29,7 +29,7 @@ func generatedChildren(names ...string) *tt.Script {
 
 func TestUniqueFailsTwoInstancesOfOneRole(t *testing.T) {
 	requireFinding(t, judgeWith(t, generatedChildren("dropped", "a-x2"), check.Unique), "Unique", 0, "duplicate resources",
-		"kube/configmaps", "configmaps ns/dropped (rule 1, slot a), configmaps ns/a-x2 (rule 1, slot a)")
+		"kube/configmaps", `role "a-": configmaps ns/dropped (rule 1, slot a), configmaps ns/a-x2 (rule 1, slot a)`)
 }
 
 func TestUniquePassesOneInstancePerGroup(t *testing.T) {

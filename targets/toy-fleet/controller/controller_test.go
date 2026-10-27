@@ -52,7 +52,7 @@ func newFleet(t *testing.T, objects ...client.Object) *fleet { return newBuggyFl
 func newBuggyFleet(t *testing.T, bug Bug, objects ...client.Object) *fleet {
 	c := newClient(t, objects...)
 	base := reconciler{Client: c, APIReader: c, Scheme: c.Scheme(), Bug: bug}
-	return &fleet{t, c, &ClusterReconciler{base}, &DatabaseReconciler{base}, &UserReconciler{base}}
+	return &fleet{t, c, &ClusterReconciler{reconciler: base}, &DatabaseReconciler{base}, &UserReconciler{base}}
 }
 
 func (f *fleet) reconcileOnce(r reconcile.Reconciler, name string) {
@@ -325,6 +325,30 @@ func TestB116StripsTheFinalizersOfVolumesOnlyWhileTheClusterIsDeleted(t *testing
 	}
 }
 
+// A restarted B135 makes a second set of Volumes and deletes only its own
+// surplus ones. A restarted B0 keeps the first set.
+func TestB135MakesASecondSetOfVolumesAfterARestart(t *testing.T) {
+	for bug, want := range map[Bug][]string{
+		0:    {"cluster-vol-0 small"},
+		B135: {"cluster-vol-0-one small", "cluster-vol-0-two small", "cluster-vol-1-one small"},
+	} {
+		f := newBuggyFleet(t, bug, clusterObj())
+		f.clusters.suffix = "one"
+		f.settle(f.clusters, "cluster")
+		restarted := &ClusterReconciler{reconciler: f.clusters.reconciler, suffix: "two"}
+		f.settle(restarted, "cluster")
+		c := f.cluster()
+		c.Spec.Volumes = 1
+		if err := f.c.Update(t.Context(), c); err != nil {
+			t.Fatal(err)
+		}
+		f.settle(restarted, "cluster")
+		if got := f.volumes(); !slices.Equal(got, want) {
+			t.Errorf("B%d: after a restart and a change to 1 Volume, the Volumes are %q, want %q.", bug, got, want)
+		}
+	}
+}
+
 func TestDatabaseWaitsForItsClusterAndHoldsDeletionForUsers(t *testing.T) {
 	elsewhere := &fleetv1.User{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "bob"}, Spec: fleetv1.UserSpec{DatabaseRef: "other"}}
 	f := newFleet(t, databaseObj(), userObj(), elsewhere)
@@ -499,7 +523,7 @@ func TestReconcileOfAMissingCRSucceeds(t *testing.T) {
 }
 
 func TestParseBugAcceptsOnlyKnownBugs(t *testing.T) {
-	for _, id := range []int{0, 116, 150, 151, 152} {
+	for _, id := range []int{0, 116, 135, 150, 151, 152} {
 		if b, err := ParseBug(id); int(b) != id || err != nil {
 			t.Errorf("ParseBug(%d) = %v, %v", id, b, err)
 		}

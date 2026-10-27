@@ -204,26 +204,29 @@ func listedKinds(primaries []trace.Primary) []string {
 	return kinds
 }
 
-// addSystems sets Polls and Ignore, and adds a Model for each dependency
-// fake.
-func (s *Spec) addSystems(fakes []trace.System) error {
+// addSystems sets Polls and Ignore from the fakes among systems, and adds a
+// Model for each dependency fake.
+func (s *Spec) addSystems(systems []trace.System) error {
 	s.Polls = map[string]time.Duration{}
-	for _, fake := range fakes {
-		s.Polls[fake.Name] = fake.Poll
-		if len(fake.Ignore) > 0 {
+	for _, system := range systems {
+		if system.Name == "kube" {
+			continue
+		}
+		s.Polls[system.Name] = system.Poll
+		if len(system.Ignore) > 0 {
 			if s.Ignore == nil {
 				s.Ignore = map[string][]string{}
 			}
-			s.Ignore[fake.Name] = fake.Ignore
+			s.Ignore[system.Name] = system.Ignore
 		}
-		if fake.Dependency == nil {
+		if system.Dependency == nil {
 			continue
 		}
-		ready, err := config.CompileReady(fake.Ready)
+		ready, err := config.CompileReady(system.Ready)
 		if err != nil {
-			return fmt.Errorf("ready of %s: %w", fake.Name, err)
+			return fmt.Errorf("ready of %s: %w", system.Name, err)
 		}
-		s.Models = append(s.Models, Model{System: fake.Name, Ready: ready, Dependency: fake.Dependency})
+		s.Models = append(s.Models, Model{System: system.Name, Ready: ready, Dependency: system.Dependency})
 	}
 	return nil
 }
@@ -341,7 +344,37 @@ func Judge(ix *trace.Index, s Spec) Report {
 	findings = append(findings, Finalizers(ix, s)...)
 	findings = append(findings, Property(ix, s)...)
 	notes = append(append(append(actionErrors(ix), unpicked(ix, s)...), notes...), unmapped(ix)...)
-	return Report{Findings: findings, Notes: notes}
+	return Report{Findings: findings, Notes: append(notes, failedRoles(ix, s)...)}
+}
+
+// failedRoles notes each kind whose role CEL failed on every resource the
+// controller created, with the first error. A role guarded by kind fails on
+// the kinds it describes, so one note per system would miss it.
+func failedRoles(ix *trace.Index, s Spec) []string {
+	w := owner.New(ix, s.Owners)
+	failed, worked := map[trace.Ref]error{}, map[trace.Ref]bool{}
+	var kinds []trace.Ref
+	for _, i := range w.All() {
+		if !controllerResource(i) {
+			continue
+		}
+		k := i.Ref
+		k.Namespace, k.Name = "", ""
+		switch err := w.RoleError(i); {
+		case err == nil:
+			worked[k] = true
+		case failed[k] == nil:
+			failed[k] = err
+			kinds = append(kinds, k)
+		}
+	}
+	var notes []string
+	for _, k := range kinds {
+		if !worked[k] {
+			notes = append(notes, fmt.Sprintf("%s: the role failed on every resource of this kind the controller created: %v", kind(k), failed[k]))
+		}
+	}
+	return notes
 }
 
 // unmapped notes each distinct request of the controller that its system's

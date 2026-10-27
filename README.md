@@ -173,7 +173,7 @@ primary:                                   # or a primaries entry
     - {kind: rbac.authorization.k8s.io/v1/ClusterRole, name: "self.metadata.name + '-reader'"}
     - {kind: v1/Secret, name: self.spec.secretName, namespace: "'shared'"}
 systems:
-  - name: kube                             # takes only owner
+  - name: kube                             # takes only owner and role
     owner: self.metadata.labels['example.com/owner-uid']   # a label on the child names the CR
 ```
 
@@ -185,7 +185,32 @@ systems:
 - Without either, Clean blames such a child on every CR that lived when it was created, except
   those that the controller created. It fails only once all of them are gone. A child made while
   none lived is shared, and fails only if the run ends with more shared children of its kind and
-  role than the first create saw.
+  [role](#roles) than the first create saw.
+
+### Roles
+
+A child's role is the part it plays for its CR. Clean, Restore and Unique group children by
+kind, owner and role. Unique fails two live children of one group. Restore counts a damaged
+child as restored once a child of its group lives again, whatever its name.
+
+A kube child's role is its `generateName`, or else its name. A controller that ends each child's
+name with a suffix that each process picks needs a `role` on the kube entry. That CEL runs over
+every kube object, so guard it by kind. The config of the sample controller in
+[targets/toy-fleet](targets/toy-fleet/config.yaml), whose Cluster CRs own Volumes, drops such a
+suffix from each Volume's name:
+
+```yaml
+systems:
+  - name: kube
+    role: >-                               # cluster-vol-0-x7k2p plays cluster-vol-0
+      self.kind == 'Volume' && self.metadata.name.matches('-vol-[0-9]+-[^-]+$')
+      ? self.metadata.name.substring(0, self.metadata.name.lastIndexOf('-')) : ''
+```
+
+Where the CEL fails or yields `''`, a child keeps its `generateName` or name. When it fails on
+every object of a kind the controller created, `report.md` notes the first error. A fake takes
+`role` too, and a fake resource without one has an empty role. A `damage` target's `role` picks
+a child of that role.
 
 ### Objects another controller sets ready
 
