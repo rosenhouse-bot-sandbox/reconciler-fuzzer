@@ -295,6 +295,7 @@ func TestSelectSaysWhyNoInstanceMatches(t *testing.T) {
 		want    string
 	}{
 		{ctl, plan.Target{Resource: "configmaps", Nth: 4}, "", "resource=configmaps nth=4: the controller's live configmaps are ns/a-0, ns/a-1, ns/b-0"},
+		{ctl, plan.Target{Resource: "configmaps", Role: "x"}, "", "resource=configmaps role=x: the controller's live configmaps are ns/a-0, ns/a-1, ns/b-0"},
 		{ctl, plan.Target{Resource: "configmaps", Nth: 2}, "b", "resource=configmaps nth=2: the controller's live configmaps in slot b are ns/b-0"},
 		{ctl, plan.Target{Resource: "configmaps"}, "z", "resource=configmaps: slot z holds no live CR"},
 		{ctl, plan.Target{Resource: "secrets"}, "a", "resource=secrets: the controller has no live secrets in slot a"},

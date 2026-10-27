@@ -268,7 +268,7 @@ collections:
   `slowDelete`. The step
   `{"period": "2s", "faults": [{"system": "cloud", "match": {"verb": "create", "resource": "buckets"}, "nth": 1, "dropResponse": true}], "actions": [{"do": "create", "slot": "a"}]}`
   drops the response to the first bucket create. Without its `period`, the fault would end as
-  the CR's create returns, before the controller creates the bucket. `damage` takes
+  the CR's create returns, usually before the controller creates the bucket. `damage` takes
   `"target": {"system": "cloud"}`.
 - An entry's `halted` is CEL over its CR. It counts a CR as done after a request of unknown
   outcome, for a controller that stops on purpose. [targets/toy-bucket/halted](targets/toy-bucket/halted/config.yaml)
