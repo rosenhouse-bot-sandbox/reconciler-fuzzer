@@ -187,8 +187,8 @@ systems:
   none lived is shared, and fails only if the run ends with more shared children of its kind and
   role than the first create saw.
 - `role` takes CEL over the child that yields its role, such as its name without a per-process
-  suffix. Unique and Restore group children by role. Without it, or where it fails, a child's
-  role is its `generateName`, or else its name.
+  suffix. Without it, or where it fails or yields `''`, a child's role is its `generateName`, or
+  else its name. The checks group children by role, and a damage target's `role` matches it.
 
 ### Objects another controller sets ready
 

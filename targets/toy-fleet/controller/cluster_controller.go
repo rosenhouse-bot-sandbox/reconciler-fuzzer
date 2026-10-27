@@ -104,7 +104,7 @@ func (r *ClusterReconciler) syncVolumes(ctx context.Context, cluster *fleetv1.Cl
 		}
 	}
 	for i := range volumes {
-		if v := &volumes[i]; !want[v.Name] && r.knows(v) && v.DeletionTimestamp.IsZero() {
+		if v := &volumes[i]; !want[v.Name] && r.mine(v) && v.DeletionTimestamp.IsZero() {
 			if err := r.Delete(ctx, v); client.IgnoreNotFound(err) != nil {
 				return 0, fmt.Errorf("deleting Volume %s: %w", v.Name, err)
 			}
@@ -122,9 +122,9 @@ func (r *ClusterReconciler) volumeName(cluster *fleetv1.Cluster, i int32) string
 	return name
 }
 
-// knows says whether this process counts the Volume as its own. B135 counts
+// mine says whether this process counts the Volume as its own. B135 counts
 // only the Volumes with its suffix.
-func (r *ClusterReconciler) knows(v *storagev1.Volume) bool {
+func (r *ClusterReconciler) mine(v *storagev1.Volume) bool {
 	return r.Bug != B135 || strings.HasSuffix(v.Name, "-"+r.suffix)
 }
 

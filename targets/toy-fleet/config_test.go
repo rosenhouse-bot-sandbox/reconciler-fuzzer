@@ -40,7 +40,7 @@ func TestReadyNeedsTheCurrentGenerationInPhaseReady(t *testing.T) {
 }
 
 // The kube role drops a suffix after a Volume's index, so that Unique finds
-// two Volumes of one index. Other names are their own role.
+// two Volumes of one index. Other objects get no role from it.
 func TestTheKubeRoleDropsASuffixAfterAVolumesIndex(t *testing.T) {
 	c, err := config.Load("config.yaml")
 	if err != nil {
@@ -53,15 +53,14 @@ func TestTheKubeRoleDropsASuffixAfterAVolumesIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, want := range map[string]string{
-		"cluster-vol-0":       "cluster-vol-0",
-		"cluster-vol-1-ab2cd": "cluster-vol-1",
-		"a-vol-1-b-vol-0":     "a-vol-1-b-vol-0",
-		"db-db":               "db-db",
-		"alice-credentials":   "alice-credentials",
+	for _, o := range []struct{ kind, name, want string }{
+		{"Volume", "cluster-vol-1-ab2cd", "cluster-vol-1"},
+		{"Volume", "cluster-vol-0", ""},
+		{"Volume", "a-vol-1-b-vol-0", ""},
+		{"Secret", "alice-vol-0-ab2cd", ""},
 	} {
-		if got, err := role(map[string]any{"metadata": map[string]any{"name": name}}); got != want || err != nil {
-			t.Errorf("The role of %s is %q, %v; want %q.", name, got, err, want)
+		if got, err := role(map[string]any{"kind": o.kind, "metadata": map[string]any{"name": o.name}}); got != o.want || err != nil {
+			t.Errorf("The role of %s %s is %q, %v; want %q.", o.kind, o.name, got, err, o.want)
 		}
 	}
 }

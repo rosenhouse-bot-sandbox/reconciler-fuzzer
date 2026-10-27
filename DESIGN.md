@@ -283,8 +283,8 @@ from the config, or else the run event.
   instance with no CR is **shared**. Its **root** is its owner, or, when that
   names one CR that the controller created, that CR's root.
 - Its **role** is its system's `role` CEL over its first body. Without
-  one, or where it fails, a kube instance's is its `generateName`, or else
-  its name, and a fake's is empty.
+  one, or where it fails or yields `""`, a kube instance's is its
+  `generateName`, or else its name, and a fake's is empty.
 - The **controller's resources** at `t` are its live instances, minus
   ignored kinds (§10).
 - A **group** is a (system, group, resource, namespace, owning CRs or

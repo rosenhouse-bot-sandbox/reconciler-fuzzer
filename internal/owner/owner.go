@@ -32,8 +32,8 @@ type Instance struct {
 	// carried UID, or trace.Cluster.
 	Creator trace.Caller
 	// Role is its system's role CEL over its first body. Without one, or
-	// where it fails, a kube instance's is its generateName prefix, or else
-	// its name.
+	// where it fails or yields "", a kube instance's is its generateName
+	// prefix, or else its name.
 	Role string
 }
 
@@ -323,26 +323,23 @@ func names(c trace.Call, ref trace.Ref) bool {
 	return c.Ref == ref && c.ResultName == ref.Name
 }
 
-// role is the system's role CEL over v. Without one, or where it fails, a
-// kube object's role is its generateName or name, and a fake's is empty.
+// role is the system's role CEL over v. Without one, or where it fails or
+// yields "", a kube object's role is its generateName or name, and a fake's
+// is empty.
 func (w *World) role(v *trace.Version) string {
+	var self map[string]any
+	_ = json.Unmarshal(v.Body, &self)
 	if eval := w.rules.Roles[v.Ref.System]; eval != nil {
-		var self map[string]any
-		_ = json.Unmarshal(v.Body, &self)
-		if role, err := eval(self); err == nil {
+		if role, err := eval(self); err == nil && role != "" {
 			return role
 		}
 	}
 	if v.Ref.System != "kube" {
 		return ""
 	}
-	var body struct {
-		Metadata struct {
-			GenerateName string `json:"generateName"`
-		} `json:"metadata"`
-	}
-	if json.Unmarshal(v.Body, &body) == nil && body.Metadata.GenerateName != "" {
-		return body.Metadata.GenerateName
+	metadata, _ := self["metadata"].(map[string]any)
+	if generateName, _ := metadata["generateName"].(string); generateName != "" {
+		return generateName
 	}
 	return v.Ref.Name
 }

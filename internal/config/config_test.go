@@ -520,8 +520,6 @@ func TestSystems(t *testing.T) {
 	}
 }
 
-// A kube role groups children whose names carry a per-process suffix, so
-// that Unique sees two of one role.
 func TestKubeTakesARole(t *testing.T) {
 	const role = "self.metadata.labels['index']"
 	c, err := config.Load(writeConfig(t, minimal(t)+"systems: [{name: kube, role: \""+role+"\"}]\n"))

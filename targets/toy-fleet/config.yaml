@@ -28,12 +28,12 @@ models:
     after: 300ms
     dependency: {track: 1s}
 systems:
-  # A Volume's role is its name without a suffix after its index, so that
-  # Unique finds two Volumes of one index.
+  # A Volume's role drops a suffix after its index, so that Unique finds two
+  # Volumes of one index. Other objects keep their default role.
   - name: kube
     role: >-
-      self.metadata.name.matches('-vol-[0-9]+-[^-]+$')
-      ? self.metadata.name.substring(0, self.metadata.name.lastIndexOf('-')) : self.metadata.name
+      self.kind == 'Volume' && self.metadata.name.matches('-vol-[0-9]+-[^-]+$')
+      ? self.metadata.name.substring(0, self.metadata.name.lastIndexOf('-')) : ''
 timeouts:
   settle: 10s
   stable: 2s
