@@ -211,7 +211,7 @@ func backoffTime(e trace.Event) time.Duration {
 }
 
 // holdWatches says whether a holdWatch fault on ref's kind is active at t,
-// or ended less than stable/4 before it, while the controller's cache
+// or ended at most stable/4 before it, while the controller's cache
 // catches up. A hold with no end has End math.MaxInt64.
 func holdWatches(ix *trace.Index, stable time.Duration) func(ref trace.Ref, t time.Duration) bool {
 	return func(ref trace.Ref, t time.Duration) bool {

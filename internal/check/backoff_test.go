@@ -430,6 +430,26 @@ func TestBackoffAllowsA409OrANoOpWriteOnAHeldKindUntilStableOver4AfterTheHold(t 
 	}
 }
 
+// A holdWatch on Gadgets lasts from 1s to 2s. The controller sends 21 no-op
+// writes 10ms apart. Only the one at a bound of the hold's window is held.
+func TestBackoffAllowsANoOpWriteAtABoundOfTheHold(t *testing.T) {
+	for name, first := range map[string]time.Duration{
+		"the last at the hold's start":     1*s - 200*ms,
+		"the first stable/4 after its end": 2*s + spec.Stable/4,
+	} {
+		var tl tt.Timeline
+		tl.At(0, tt.Run("toy", "widgets"), tt.Version(gadgetA, "ug", "2", gadgetBody(false)))
+		tl.At(1*s, tt.HoldFault(0, 0, false, tt.Ref("toy/gadgets", "", "")))
+		tl.At(2*s, tt.HoldFault(0, 0, true, tt.Ref("toy/gadgets", "", "")))
+		for _, start := range every(10*ms, 21) {
+			tl.At(first-10*ms+start, tt.Call(ctl, "patch", gadgetA, 200, "2"))
+		}
+		if findings := check.Backoff(tl.Index(), spec); len(findings) != 0 {
+			t.Errorf("%s: findings = %+v", name, findings)
+		}
+	}
+}
+
 // TestBackoffCountsAWriteThatDeletesItsObjectAsAChange has the controller
 // write slot a's Gadget 21 times. Each answers at the Gadget's version 2.
 func TestBackoffCountsAWriteThatDeletesItsObjectAsAChange(t *testing.T) {
