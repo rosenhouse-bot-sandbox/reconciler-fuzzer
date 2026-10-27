@@ -91,12 +91,20 @@ func TestWeightedDrawsEachElementInProportionToItsWeight(t *testing.T) {
 	}
 }
 
-func TestAnOwnsKindTakesThePluralItsCRDNames(t *testing.T) {
-	cfg := loadConfig(t, modelsConfig)
-	cfg.Models = nil
-	cfg.Primaries[0].Owns = []config.Owns{{Kind: gvk.GroupVersionKind{Group: "models.reconciler-fuzzer", Version: "v1", Kind: "Mouse"}, Name: "self.metadata.name"}}
-	g := newGenerator(t, cfg)
-	if w := g.kindWeight(gvk.GroupResource{Group: "models.reconciler-fuzzer", Resource: "mice"}); w != favored {
-		t.Errorf("Mice weigh %d, want %d.", w, favored)
+func TestAnOwnedKindTakesThePluralItsCRDNames(t *testing.T) {
+	mouse := gvk.GroupVersionKind{Group: "models.reconciler-fuzzer", Version: "v1", Kind: "Mouse"}
+	owns := loadConfig(t, modelsConfig)
+	owns.Models = nil
+	owns.Primaries[0].Owns = []config.Owns{{Kind: mouse, Name: "self.metadata.name"}}
+	for _, c := range []struct {
+		name string
+		cfg  *config.Config
+	}{
+		{"an owns entry", owns},
+		{"a dependency model", loadConfig(t, modelsConfig)},
+	} {
+		if w := newGenerator(t, c.cfg).kindWeight(gvk.GroupResource{Group: mouse.Group, Resource: "mice"}); w != favored {
+			t.Errorf("%s: mice weigh %d, want %d.", c.name, w, favored)
+		}
 	}
 }
