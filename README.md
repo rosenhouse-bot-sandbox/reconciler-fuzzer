@@ -186,8 +186,9 @@ systems:
   those that the controller created. It fails only once all of them are gone. A child made while
   none lived is shared, and fails only if the run ends with more shared children of its kind and
   role than the first create saw.
-- `role` takes CEL over the child, such as its name without a per-process suffix. Unique and
-  Restore group children by role. Without it, a child's role is its `generateName`, or else its name.
+- `role` takes CEL over the child that yields its role, such as its name without a per-process
+  suffix. Unique and Restore group children by role. Without it, or where it fails, a child's
+  role is its `generateName`, or else its name.
 
 ### Objects another controller sets ready
 
