@@ -404,8 +404,6 @@ func TestShrinkPlanRunsReplaysAndShrinksAPlanFile(t *testing.T) {
 }
 
 func TestShrinkPlanReportsTheShrinkSoFarOnACancel(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	out := t.TempDir()
 	path := filepath.Join(t.TempDir(), "plan.json")
 	if err := plan.Save(path, parsePlan(t, `{"steps":[{"actions":[`+create+`]},{"actions":[{"do":"restart"}]}]}`)); err != nil {
