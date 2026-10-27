@@ -99,8 +99,12 @@ func New(cfg *config.Config) (*Generator, error) {
 
 func build(cfg *config.Config) (*Generator, error) {
 	g := &Generator{listed: cfg.ListedKinds(), stable: cfg.Timeouts.Stable, granted: map[gvk.GroupResource][]string{}, modelFakes: map[string]bool{}, readOnly: map[string]bool{}}
+	crds, err := readManifests(cfg.CRDs)
+	if err != nil {
+		return nil, fmt.Errorf("reading the CRDs: %w", err)
+	}
 	for i, p := range cfg.Primaries {
-		k, err := newCRKind(cfg.CRDs, p)
+		k, err := newCRKind(crds, p)
 		if err != nil {
 			if len(cfg.Primaries) > 1 {
 				err = fmt.Errorf("primaries[%d]: %w", i, err)
@@ -115,10 +119,6 @@ func build(cfg *config.Config) (*Generator, error) {
 	}
 	if err := g.readRBAC(cfg.Launch.RBAC); err != nil {
 		return nil, err
-	}
-	crds, err := readManifests(cfg.CRDs)
-	if err != nil {
-		return nil, fmt.Errorf("reading the CRDs: %w", err)
 	}
 	g.readModels(cfg.Models, crds)
 	g.favorKinds(cfg, crds)
@@ -142,7 +142,7 @@ func build(cfg *config.Config) (*Generator, error) {
 
 // newCRKind reads one entry's CRD rules and schema, its sample, and the
 // fields and distinct paths its values name.
-func newCRKind(crds []string, p config.Primary) (*crKind, error) {
+func newCRKind(crds []map[string]any, p config.Primary) (*crKind, error) {
 	crd, plural, err := primaryCRD(crds, p.Kind)
 	if err != nil {
 		return nil, err

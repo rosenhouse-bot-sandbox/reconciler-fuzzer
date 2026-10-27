@@ -173,7 +173,6 @@ func TestAWildcardVerbLetsTheControllerCreate(t *testing.T) {
 	t.Error("No damage targets secrets, which the RBAC grants with *.")
 }
 
-// A damage deletes only what the controller made.
 func TestWithoutAKindTheControllerMayCreateEachDamageNamesAFake(t *testing.T) {
 	cfg := loadConfig(t, systemsConfig)
 	cfg.Launch.RBAC = []string{"testdata/systems/read-role.yaml"}

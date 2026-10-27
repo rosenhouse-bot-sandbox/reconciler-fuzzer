@@ -429,15 +429,15 @@ actions and at most one fault each. A create draws its kind uniformly from
 `primaries`, and each CR takes its kind's `values`. Step 0 creates slot `a`.
 About 30% of steps hold one `restart`, `kill` or `damage`, for Restore to judge.
 A kube fault draws a request `launch.rbac` grants, creates weighted most (§17,
-entry 20), or holds a kind it lets the controller watch, with the traffic
-`holdTraffic` documents. A kube `damage` deletes an object of an unlisted kind
-`launch.rbac` lets the controller create. Faults favor the listed kinds. Faults
-and `damage` favor the kinds the CRs own: kube `owns` kinds and model kinds with
-a `dependency`. Without owned kinds, the core kinds the controller may create
-stand in. With fakes, half of the fault draws name a fake. So do half of the
-`damage` draws, or all when no unlisted kind is creatable. A read-only fake
-takes no damage and only read faults. `changeFixture` draws kube and system
-fixtures alike. `generate.go` documents the weights, bursts and fault periods.
+entry 20), holds a kind it lets the controller watch, with the traffic
+`holdTraffic` documents, or is a model fault (§7). A kube `damage` deletes an
+object of an unlisted kind `launch.rbac` lets the controller create. Faults
+favor the listed kinds. Faults and `damage` favor the kinds the CRs own: kube
+`owns` kinds and model kinds with a `dependency`. Without owned kinds, the core
+kinds the controller may create stand in. With fakes, half of the fault draws
+name a fake. So do half of the `damage` draws, or all when no unlisted kind is
+creatable. A read-only fake takes no damage and only read faults. `generate.go`
+documents the weights, bursts and fault periods.
 
 **Hunt.** `hunt.Hunt` runs each seed, keeps runs with a new signature, replays
 each 5 times and shrinks it (`shrink.go`), trying at most 16 candidates.
