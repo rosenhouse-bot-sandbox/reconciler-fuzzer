@@ -195,8 +195,8 @@ A `target` has `system` (default `kube`), `group`, `resource`, `namespace`,
 `owner.World.Select` resolves it when the action runs: the `nth` live instance,
 in creation order, that the controller (for `damage`) or the harness created,
 whose root (§11) holds the slot's newest live CR when a slot is set. A target
-that matches nothing records the error `no instance matches`, which names the
-target and the slot's object if not a CR, or else live instances of its kind.
+that matches nothing records the error `no instance matches`. The error names
+the target and says what the slot holds or which instances of the kind live.
 
 Actions run in order, each at its optional `at` offset. A fault sets one
 effect: a request fault or `holdWatch` (§5), or a model fault (§7) with no

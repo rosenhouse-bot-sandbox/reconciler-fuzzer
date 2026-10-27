@@ -399,7 +399,7 @@ func unpicked(ix *trace.Index, s Spec) []string {
 // by the time its last action returns.
 func faultNote(ix *trace.Index, f trace.Fault, nothing string, lasted time.Duration) string {
 	note := fmt.Sprintf("%s, fault %d (%s) %s", stepName(ix, f.Step), f.Index, f.What, nothing)
-	if step, _ := ix.Step(f.Step); step.Period == 0 {
+	if step, _ := ix.Step(f.Step); step.Period != nil && *step.Period == 0 {
 		return fmt.Sprintf("%s: it lasted %v, as the step has no period. Set one to keep faults on after the last action returns.", note, lasted.Round(time.Millisecond))
 	}
 	return note + "."

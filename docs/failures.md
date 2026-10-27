@@ -51,8 +51,7 @@ not fail a run. A fault that picked no request tested nothing, so a plan
 with such notes may need a different fault. A step without a `period`
 ends its faults by the time its last action returns, and its fault notes
 say how long each fault lasted. The note of a target that matches nothing
-names the target and the live objects of its kind that the action could
-pick.
+names the target and lists live objects of its kind.
 
 `the slot's name is still taken after the create waited 37s` means that
 a create gave up waiting until its slot's previous CR no longer existed.

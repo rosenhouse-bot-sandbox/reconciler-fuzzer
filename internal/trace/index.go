@@ -257,12 +257,13 @@ func (ix *Index) Run() (Run, bool) {
 	return *ix.run, true
 }
 
-// StepSpan collects the phase times and the period of one step. A phase the
-// trace has not reached yet is zero, and Reached says which phases it has.
+// StepSpan collects the phase times of one step. A phase the trace has not
+// reached yet is zero, and Reached says which phases it has. Period is the
+// step's period, or nil when the trace lacks it.
 type StepSpan struct {
 	Step         int
 	Start        time.Duration
-	Period       time.Duration
+	Period       *time.Duration
 	EndFaults    time.Duration
 	Deadline     time.Duration
 	BackoffBound bool

@@ -297,34 +297,24 @@ func TestJudgeNotesAFailedAction(t *testing.T) {
 // A step without a period ends its faults as its last action returns, so
 // a fault meant for the controller's next request never acts.
 func TestJudgeNotesAFaultPeriodOfZero(t *testing.T) {
-	const what = "killAfter on verb=update resource=clusters nth=2"
-	b := createStep()
-	b.At(2*s).Add(tt.Phase(1, trace.FaultPeriod), trace.Event{Fault: &trace.Fault{Step: 1, What: what}}).
-		At(2 * s).Add(trace.Event{Fault: &trace.Fault{Step: 1, Ended: true, What: what}})
-	notes := check.Judge(b.Index(), spec).Notes
-	want := "Step 1, fault 0 (" + what + ") picked no request: it lasted 0s, as the step has no period. Set one to keep faults on after the last action returns."
-	if !slices.Contains(notes, want) {
-		t.Fatalf("Want a note that the fault picked no request in a 0s period and that the step needs a period, got %q.", notes)
-	}
-}
-
-func TestJudgeNotesHowLongAFaultOfAStepWithoutAPeriodLasted(t *testing.T) {
-	const what, hint = "error(500) on verb=create resource=configmaps", ", as the step has no period. Set one to keep faults on after the last action returns."
+	const what, hint = "killAfter on verb=update resource=clusters nth=2", ", as the step has no period. Set one to keep faults on after the last action returns."
 	request := func(ended bool) trace.Event { return tt.Fault(1, 0, ended, what) }
 	model := func(ended bool) trace.Event { return tt.ModelFault(1, 0, ended, "stuck", "model:gadgets.toy") }
 	for name, c := range map[string]struct {
+		phase  trace.Event
 		fault  func(ended bool) trace.Event
-		period time.Duration
+		lasted time.Duration
 		want   string
 	}{
-		"a request fault": {request, 0, "Step 1, fault 0 (" + what + ") picked no request: it lasted 1.235s" + hint},
-		"a model fault":   {model, 0, "Step 1, fault 0 (stuck) held no object: it lasted 1.235s" + hint},
-		"a request fault of a step with a period": {request, s, "Step 1, fault 0 (" + what + ") picked no request."},
-		"a model fault of a step with a period":   {model, s, "Step 1, fault 0 (stuck) held no object."},
+		"a request fault":                       {tt.FaultPeriod(1, 0), request, 0, "Step 1, fault 0 (" + what + ") picked no request: it lasted 0s" + hint},
+		"a longer request fault":                {tt.FaultPeriod(1, 0), request, 1234567 * time.Microsecond, "Step 1, fault 0 (" + what + ") picked no request: it lasted 1.235s" + hint},
+		"a model fault":                         {tt.FaultPeriod(1, 0), model, s, "Step 1, fault 0 (stuck) held no object: it lasted 1s" + hint},
+		"a request fault of a step with period": {tt.FaultPeriod(1, s), request, s, "Step 1, fault 0 (" + what + ") picked no request."},
+		"a model fault of a step with period":   {tt.FaultPeriod(1, s), model, s, "Step 1, fault 0 (stuck) held no object."},
+		"a trace that lacks the period":         {tt.Phase(1, trace.FaultPeriod), request, 0, "Step 1, fault 0 (" + what + ") picked no request."},
 	} {
 		b := createStep()
-		b.At(2*s).Add(tt.FaultPeriod(1, c.period), c.fault(false)).
-			At(2*s + 1234567*time.Microsecond).Add(c.fault(true))
+		b.At(2*s).Add(c.phase, c.fault(false)).At(2*s + c.lasted).Add(c.fault(true))
 		notes := slices.DeleteFunc(check.Judge(b.Index(), spec).Notes, func(n string) bool { return !strings.HasPrefix(n, "Step 1, fault") })
 		if !slices.Equal(notes, []string{c.want}) {
 			t.Errorf("%s: fault notes = %q, want %q", name, notes, c.want)
@@ -350,7 +340,7 @@ func TestJudgeNotesAFaultThatPickedNoRequest(t *testing.T) {
 		"held past the fault":    {picked, 0},
 	} {
 		b := createStep()
-		b.At(2*s).Add(tt.FaultPeriod(1, s), fault(false))
+		b.At(2*s).Add(tt.Phase(1, trace.FaultPeriod), fault(false))
 		switch name {
 		case "picked after the fault":
 			b.At(2100 * ms).Add(fault(true)).At(2200 * ms).Add(tc.call)
@@ -611,7 +601,7 @@ func TestJudgeNotesAModelFaultThatHeldNoObject(t *testing.T) {
 		"a stuck for slowDelete":   {"slowDelete", model, stuck, true},
 	} {
 		b := createStep()
-		b.At(2*s).Add(tt.FaultPeriod(1, s), tt.ModelFault(1, 0, false, c.what, string(model)))
+		b.At(2*s).Add(tt.Phase(1, trace.FaultPeriod), tt.ModelFault(1, 0, false, c.what, string(model)))
 		if c.writer != "" {
 			b.At(2500*ms).Add(tt.Call(c.writer, "patch", gadgetA, 200, "9"), tt.Version(gadgetA, "ug", "9", c.body))
 		}

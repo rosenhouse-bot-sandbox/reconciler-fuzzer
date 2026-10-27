@@ -663,28 +663,31 @@ func (w *World) Select(creator trace.Caller, target plan.Target, slot string, t 
 		}
 		cr = held.UID
 	}
-	var ofKind []Instance
-	for _, i := range w.instances {
-		if i.Live(t) && i.Creator == creator && i.Ref.System == system && matches(target.Resource, i.Ref.Resource) &&
-			matches(target.Group, i.Ref.Group) && (cr == "" || slices.Contains(w.Root(w.Owner(i, t), t).CRs, cr)) {
-			ofKind = append(ofKind, i)
-		}
+	ofKind := func(i Instance) bool {
+		return i.Live(t) && i.Creator == creator && i.Ref.System == system && matches(target.Resource, i.Ref.Resource) && matches(target.Group, i.Ref.Group)
 	}
+	inSlot := func(i Instance) bool { return cr == "" || slices.Contains(w.Root(w.Owner(i, t), t).CRs, cr) }
 	nth := max(target.Nth, 1)
-	for _, i := range ofKind {
-		if !matches(target.Namespace, i.Ref.Namespace) || !matches(target.Name, i.Ref.Name) || !matches(target.Role, i.Role) {
+	for _, i := range w.instances {
+		if !ofKind(i) || !matches(target.Namespace, i.Ref.Namespace) || !matches(target.Name, i.Ref.Name) || !matches(target.Role, i.Role) || !inSlot(i) {
 			continue
 		}
 		if nth--; nth == 0 {
 			return i.Ref, nil
 		}
 	}
-	return trace.Ref{}, fmt.Errorf("%w %s: %s", ErrNoMatch, target, candidates(creator, target, slot, ofKind))
+	var live []Instance
+	for _, i := range w.instances {
+		if ofKind(i) && inSlot(i) {
+			live = append(live, i)
+		}
+	}
+	return trace.Ref{}, fmt.Errorf("%w %s: %s", ErrNoMatch, target, candidates(creator, target, slot, live))
 }
 
-// candidates names up to five of the live instances of target's kind that
-// creator made, in slot if set.
-func candidates(creator trace.Caller, target plan.Target, slot string, ofKind []Instance) string {
+// candidates names up to five live instances of target's kind that creator
+// made, in slot if set.
+func candidates(creator trace.Caller, target plan.Target, slot string, live []Instance) string {
 	kind := target.Resource
 	if target.Group != "" {
 		kind += "." + target.Group
@@ -698,27 +701,28 @@ func candidates(creator trace.Caller, target plan.Target, slot string, ofKind []
 	if slot != "" {
 		kind += " in slot " + slot
 	}
-	said := fmt.Sprintf("the %s has no live %s", creator, kind)
-	if len(ofKind) > 0 {
-		const shown = 5
-		var names []string
-		for _, i := range ofKind[:min(len(ofKind), shown)] {
-			name := i.Ref.Name
-			if i.Ref.Namespace != "" {
-				name = i.Ref.Namespace + "/" + name
-			}
-			if target.Resource == "" {
-				name = i.Ref.Resource + "/" + name
-			}
-			names = append(names, name)
+	if len(live) == 0 {
+		said := fmt.Sprintf("the %s has no live %s", creator, kind)
+		if creator == trace.Harness && target.Resource == "customresourcedefinitions" {
+			said += "; a CRD from crds is not a fixture"
 		}
-		said = fmt.Sprintf("the %s's live %s are %s", creator, kind, strings.Join(names, ", "))
-		if len(ofKind) > shown {
-			said += fmt.Sprintf(" and %d more", len(ofKind)-shown)
-		}
+		return said
 	}
-	if creator == trace.Harness && target.Resource == "customresourcedefinitions" {
-		said += "; a CRD from crds is not a fixture"
+	const shown = 5
+	var names []string
+	for _, i := range live[:min(len(live), shown)] {
+		name := i.Ref.Name
+		if i.Ref.Namespace != "" {
+			name = i.Ref.Namespace + "/" + name
+		}
+		if target.Resource == "" {
+			name = i.Ref.Resource + "/" + name
+		}
+		names = append(names, name)
+	}
+	said := fmt.Sprintf("the %s's live %s are %s", creator, kind, strings.Join(names, ", "))
+	if len(live) > shown {
+		said += fmt.Sprintf(" and %d more", len(live)-shown)
 	}
 	return said
 }

@@ -314,13 +314,18 @@ func TestSelectSaysACRDFromCRDsIsNoFixture(t *testing.T) {
 	withGadgets := children()
 	withGadgets.At(500*time.Millisecond, tt.Create(trace.Harness, gadgets, "u-crd", "0"), tt.Version(gadgets, "u-crd", "0", tt.Object("gadgets.toy")))
 	target := plan.Target{Group: "apiextensions.k8s.io", Resource: "customresourcedefinitions", Name: "widgets.toy"}
-	const kind = "no instance matches group=apiextensions.k8s.io resource=customresourcedefinitions name=widgets.toy: the harness"
-	for tl, want := range map[*tt.Timeline]string{
-		children():  kind + " has no live customresourcedefinitions.apiextensions.k8s.io; a CRD from crds is not a fixture",
-		withGadgets: kind + "'s live customresourcedefinitions.apiextensions.k8s.io are gadgets.toy; a CRD from crds is not a fixture",
+	const crds = "no instance matches group=apiextensions.k8s.io resource=customresourcedefinitions name=widgets.toy: the "
+	for _, c := range []struct {
+		tl      *tt.Timeline
+		creator trace.Caller
+		want    string
+	}{
+		{children(), trace.Harness, crds + "harness has no live customresourcedefinitions.apiextensions.k8s.io; a CRD from crds is not a fixture"},
+		{withGadgets, trace.Harness, crds + "harness's live customresourcedefinitions.apiextensions.k8s.io are gadgets.toy"},
+		{children(), ctl, crds + "controller has no live customresourcedefinitions.apiextensions.k8s.io"},
 	} {
-		if _, err := owner.New(tl.Index(), owner.Rules{}).Select(trace.Harness, target, "", 10*s); err == nil || err.Error() != want {
-			t.Errorf("Select = %v, want %q", err, want)
+		if _, err := owner.New(c.tl.Index(), owner.Rules{}).Select(c.creator, target, "", 10*s); err == nil || err.Error() != c.want {
+			t.Errorf("Select(%s) = %v, want %q", c.creator, err, c.want)
 		}
 	}
 }
