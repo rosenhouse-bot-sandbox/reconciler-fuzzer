@@ -301,6 +301,7 @@ func TestJudgeNotesAStopThatSentSIGKILL(t *testing.T) {
 	const sentSIGKILL = "the controller did not exit within launch.gracePeriod of SIGTERM, so the harness sent SIGKILL."
 	killed := trace.Proc{Event: trace.Exit, Exit: "signal: killed", HarnessCaused: true, GracePeriodPassed: true}
 	restart := restartRun(trace.Event{Proc: &killed}).Events()
+	// interrupted ends at the restart's exit, before step 1's settle wait.
 	interrupted := restart[:slices.IndexFunc(restart, func(e trace.Event) bool { return e.Proc != nil && e.Proc.Event == trace.Exit })+1]
 	atEnd := func(exit trace.Proc) []trace.Event {
 		return cleanRun().At(10 * s).Add(trace.Event{Proc: &exit}).Events()
