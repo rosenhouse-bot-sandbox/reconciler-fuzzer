@@ -43,13 +43,12 @@ type Generator struct {
 	requests []request
 	fixtures []fixture
 	// watchable are the resources the RBAC lets the controller watch,
-	// which holdWatch faults hold. A kind appears once per unit of its
-	// kindWeight.
+	// which holdWatch faults hold.
 	watchable []gvk.GroupResource
 	// favors holds the kinds the controller deals with, which faults and
-	// damage favor: the listed kinds, the model kinds and the kube kinds the
-	// entries' owns name. Without model or owns kinds, the core kinds the
-	// RBAC lets the controller create stand in for those.
+	// damage favor: the listed kinds and the kinds their CRs own. Without
+	// owned kinds, the core kinds the RBAC lets the controller create stand
+	// in for those.
 	favors map[gvk.GroupResource]bool
 	// creatable are the unlisted resources the RBAC lets the controller
 	// create, which damage targets. A damage deletes only what the
@@ -122,13 +121,11 @@ func build(cfg *config.Config) (*Generator, error) {
 		return nil, fmt.Errorf("reading the CRDs: %w", err)
 	}
 	g.readModels(cfg.Models, crds)
-	g.favorKinds(cfg.Primaries, crds)
+	g.favorKinds(cfg, crds)
 	g.addRequests()
 	for _, gr := range g.resources {
 		if g.grants(gr, "watch") {
-			for range g.kindWeight(gr) {
-				g.watchable = append(g.watchable, gr)
-			}
+			g.watchable = append(g.watchable, gr)
 		}
 	}
 	for _, f := range cfg.Fakes() {
@@ -353,28 +350,40 @@ func resourceOf(crds []map[string]any, kind gvk.GroupVersionKind) gvk.GroupResou
 
 // favorKinds records the kinds that faults and damage favor, and the
 // resources that damage targets.
-func (g *Generator) favorKinds(primaries []config.Primary, crds []map[string]any) {
-	dealtWith := slices.Clone(g.models)
-	for _, p := range primaries {
-		for _, o := range p.Owns {
-			if o.System == "" {
-				dealtWith = append(dealtWith, resourceOf(crds, o.Kind))
-			}
-		}
+func (g *Generator) favorKinds(cfg *config.Config, crds []map[string]any) {
+	owned := ownedKinds(cfg, crds)
+	g.favors = map[gvk.GroupResource]bool{}
+	for _, gr := range slices.Concat(g.resources[:len(g.kinds)], owned) {
+		g.favors[gr] = true
 	}
-	standIn := len(dealtWith) == 0
 	for _, gr := range g.unlisted() {
 		if g.grants(gr, "create") {
 			g.creatable = append(g.creatable, gr)
-			if standIn && gr.Group == "" {
-				dealtWith = append(dealtWith, gr)
+			if len(owned) == 0 && gr.Group == "" {
+				g.favors[gr] = true
 			}
 		}
 	}
-	g.favors = map[gvk.GroupResource]bool{}
-	for _, gr := range slices.Concat(g.resources[:len(g.kinds)], dealtWith) {
-		g.favors[gr] = true
+}
+
+// ownedKinds are the kinds the listed CRs own: the kube kinds that owns
+// entries name, and the model kinds that are dependencies. A model without
+// a dependency can serve a fixture instead.
+func ownedKinds(cfg *config.Config, crds []map[string]any) []gvk.GroupResource {
+	var owned []gvk.GroupResource
+	for _, p := range cfg.Primaries {
+		for _, o := range p.Owns {
+			if o.System == "" {
+				owned = append(owned, resourceOf(crds, o.Kind))
+			}
+		}
 	}
+	for _, m := range cfg.Models {
+		if m.Dependency != nil {
+			owned = append(owned, resourceOf(crds, m.Kind))
+		}
+	}
+	return owned
 }
 
 // grants says whether the RBAC grants the verb on the resource.
@@ -764,7 +773,7 @@ func (g *Generator) fault(t *rapid.T) plan.Fault {
 	}
 	switch effect := uniform(t, effects, "effect"); {
 	case effect >= effects-2 && len(g.watchable) > 0:
-		gr := sampled(t, g.watchable, "hold")
+		gr := weighted(t, g.watchable, g.kindWeight, "hold")
 		return plan.Fault{Match: plan.Match{Group: gr.Group, Resource: gr.Resource}, HoldWatch: true}
 	case effect == 0:
 		f.Error = &plan.Error{Code: sampled(t, []int{500, 503, 429}, "code")}

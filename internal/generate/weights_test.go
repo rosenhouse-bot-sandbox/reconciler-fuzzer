@@ -11,29 +11,39 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
 )
 
-// fleetClusterConfig lists only Clusters, whose Volumes a model plays.
-const fleetClusterConfig = "../../targets/toy-fleet/cluster/config.yaml"
+const (
+	// fleetClusterConfig lists only Clusters, whose Volumes a dependency
+	// model plays.
+	fleetClusterConfig = "../../targets/toy-fleet/cluster/config.yaml"
+	// fleetDatabaseConfig lists only Databases. Its Volume model serves the
+	// fixture Cluster, so it has no dependency.
+	fleetDatabaseConfig = "../../targets/toy-fleet/database/config.yaml"
+)
 
-// fleetOwning is fleetConfig with an owns entry on each kind: a Cluster owns
-// a Volume, and a Database a ConfigMap.
-func fleetOwning(t *testing.T) *config.Config {
-	cfg := loadConfig(t, fleetConfig)
-	cfg.Primaries[0].Owns = []config.Owns{{Kind: gvk.GroupVersionKind{Group: "storage.thirdparty", Version: "v1", Kind: "Volume"}, Name: "self.metadata.name"}}
-	cfg.Primaries[1].Owns = []config.Owns{{Kind: gvk.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}, Name: "self.metadata.name"}}
+var (
+	volume    = gvk.GroupVersionKind{Group: "storage.thirdparty", Version: "v1", Kind: "Volume"}
+	configMap = gvk.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
+)
+
+// owning gives entry i of cfg an owns entry of the kube kind.
+func owning(cfg *config.Config, i int, kind gvk.GroupVersionKind) *config.Config {
+	cfg.Primaries[i].Owns = append(cfg.Primaries[i].Owns, config.Owns{Kind: kind, Name: "self.metadata.name"})
 	return cfg
 }
 
-func TestFaultsFavorTheListedModelAndOwnsKinds(t *testing.T) {
+func TestFaultsFavorTheListedAndOwnedKinds(t *testing.T) {
 	for _, c := range []struct {
 		name    string
 		cfg     *config.Config
 		favored []string
 	}{
-		{"a model", loadConfig(t, fleetClusterConfig), []string{"clusters", "volumes"}},
-		{"owns in each entry", fleetOwning(t), []string{"clusters", "databases", "volumes", "configmaps"}},
-		// Without either, the core kinds the RBAC lets the controller create
-		// stand in for them.
+		{"a dependency model", loadConfig(t, fleetClusterConfig), []string{"clusters", "volumes"}},
+		{"owns in each entry", owning(owning(loadConfig(t, fleetConfig), 0, volume), 1, configMap), []string{"clusters", "databases", "volumes", "configmaps"}},
+		{"a dependency model and owns", owning(loadConfig(t, fleetClusterConfig), 0, configMap), []string{"clusters", "volumes", "configmaps"}},
+		// Without owned kinds, the core kinds the RBAC lets the controller
+		// create stand in for them.
 		{"neither", loadConfig(t, fleetConfig), []string{"clusters", "databases", "configmaps", "secrets"}},
+		{"a model without a dependency", loadConfig(t, fleetDatabaseConfig), []string{"databases", "configmaps", "secrets"}},
 	} {
 		g := newGenerator(t, c.cfg)
 		weight := func(resource string) int {
@@ -49,13 +59,13 @@ func TestFaultsFavorTheListedModelAndOwnsKinds(t *testing.T) {
 		}
 		holds, want := map[string]int{}, map[string]int{}
 		for _, gr := range g.watchable {
-			holds[gr.Resource]++
+			holds[gr.Resource] += g.kindWeight(gr)
 		}
 		for _, resource := range []string{"clusters", "databases", "users", "volumes", "configmaps", "secrets"} {
 			want[resource] = weight(resource)
 		}
 		if !maps.Equal(holds, want) {
-			t.Errorf("%s: holds are %v, want %v.", c.name, holds, want)
+			t.Errorf("%s: holds weigh %v, want %v.", c.name, holds, want)
 		}
 	}
 }
