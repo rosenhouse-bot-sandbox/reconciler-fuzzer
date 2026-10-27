@@ -91,16 +91,15 @@ func TestWeightedDrawsEachElementInProportionToItsWeight(t *testing.T) {
 	}
 }
 
-func TestAnOwnedKindTakesThePluralItsCRDNames(t *testing.T) {
+func TestAnOwnedKindIsFavoredUnderThePluralItsCRDNames(t *testing.T) {
 	mouse := gvk.GroupVersionKind{Group: "models.reconciler-fuzzer", Version: "v1", Kind: "Mouse"}
-	owns := loadConfig(t, modelsConfig)
-	owns.Models = nil
-	owns.Primaries[0].Owns = []config.Owns{{Kind: mouse, Name: "self.metadata.name"}}
+	withoutModels := loadConfig(t, modelsConfig)
+	withoutModels.Models = nil
 	for _, c := range []struct {
 		name string
 		cfg  *config.Config
 	}{
-		{"an owns entry", owns},
+		{"an owns entry", owning(withoutModels, 0, mouse)},
 		{"a dependency model", loadConfig(t, modelsConfig)},
 	} {
 		if w := newGenerator(t, c.cfg).kindWeight(gvk.GroupResource{Group: mouse.Group, Resource: "mice"}); w != favored {
