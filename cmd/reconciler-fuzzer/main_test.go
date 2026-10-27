@@ -235,9 +235,13 @@ func TestShrinkExits2WhenItsPlanFailsToRun(t *testing.T) {
 		return check.Report{}, errors.New("no controller")
 	}
 	t.Cleanup(func() { runPlan = run.Run })
-	code, stdout, stderr := cliOutput("shrink", "--config", toyConfig, "--plan", "../../targets/toy-widget/plans/b13.json", "--out", t.TempDir())
+	out := t.TempDir()
+	if err := os.WriteFile(filepath.Join(out, "summary.md"), []byte("an earlier run's summary\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr := cliOutput("shrink", "--config", toyConfig, "--plan", "../../targets/toy-widget/plans/b13.json", "--out", out)
 	if code != 2 || stdout != "" || !strings.Contains(stderr, "no controller") {
-		t.Errorf("cli = %d, stdout %q, stderr %q; want 2 and the error", code, stdout, stderr)
+		t.Errorf("cli = %d, stdout %q, stderr %q; want 2 and only the error", code, stdout, stderr)
 	}
 }
 
