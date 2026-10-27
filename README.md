@@ -118,9 +118,10 @@ timeouts: {settle: 30s, stable: 3s}
 - `stable` is how long the controller must stay quiet before a step counts as settled.
 - `launch.rbac` also tells generation which requests a fault can pick. A generated `damage` of
   a kube object targets an unlisted kind that `launch.rbac` lets the controller create. Faults
-  and damage favor the listed kinds, the `models:` kinds and the kube kinds that `owns` names.
-  Without models and kube `owns`, they favor the listed kinds and the core kinds that the
-  controller may create, such as Secrets.
+  favor the listed kinds. Faults and damage favor the kinds the CRs own: the kube kinds that
+  `owns` names and the `models:` kinds with a `dependency`. Without owned kinds, the core kinds
+  that the controller may create, such as Secrets, stand in for them. An owned kind ends that
+  stand-in, even for a core kind that the controller also writes.
 - `values` steers generated CRs: `overlay` narrows the CRD schema, `distinct` fields differ
   across a plan's CRs, `mutate` names the fields updates change, and `fixtures` names the
   fixture strings `changeFixture` sets.
@@ -390,7 +391,9 @@ findings, and a negative control, where one exists, must fail.
   `bugs/` plan holds the Secret watch across a recreate, and `fresh-key` finds
   [a real bug](docs/findings/cert-manager-secret-write-back.md): the new Certificate gets the
   deleted one's key. `make test-example-cert-manager` needs it in 1 of 3 runs, and
-  `make repro-cert-manager` prints its reproduction rate.
+  `make repro-cert-manager` prints its reproduction rate. A hunt can report a false Restore
+  finding on a CertificateRequest that a `damage` deleted after issuance, since cert-manager
+  rightly leaves it gone.
 - [examples/external-secrets](examples/external-secrets/config.yaml) runs external-secrets
   with its Vault provider against a Vault dev server. Its `bugs/` plan finds
   [a real bug](docs/findings/external-secrets-onchange-stale-failure.md): after a lost Secret
