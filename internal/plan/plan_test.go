@@ -268,8 +268,9 @@ func TestModelFaults(t *testing.T) {
 
 func TestTargetString(t *testing.T) {
 	for target, want := range map[Target]string{
-		{Resource: "configmaps"}: "resource=configmaps",
-		{System: "cloud"}:        "system=cloud",
+		{Resource: "configmaps"}:         "resource=configmaps",
+		{Resource: "configmaps", Nth: 1}: "resource=configmaps nth=1",
+		{System: "cloud"}:                "system=cloud",
 		{System: "kube", Group: "g", Resource: "secrets", Namespace: "ns", Name: "n", Role: "r", Nth: 2}: "system=kube group=g resource=secrets namespace=ns name=n role=r nth=2",
 	} {
 		if got := target.String(); got != want {
