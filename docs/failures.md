@@ -21,7 +21,10 @@ something new, and `summary.md`. Each seed directory holds a run's files,
 `replay-<i>` runs, the failing `shrink-<c>-<r>` candidates, and
 `shrunk.json`. `summary.md` has one row per distinct finding: seed, check,
 summary, replays that reproduced it, and the shrunk plan. It also lists
-seeds whose run failed.
+seeds whose run failed. When an interrupt or a harness error cuts a
+finding's replays or shrink short, its row says `(cut short)`. The row names
+the smallest failing plan so far, if the hunt saved one. Run `shrink` on
+that plan, or on the seed's `plan.json`, to finish.
 
 ## report.md
 
@@ -252,4 +255,4 @@ Shrink a failing plan to a smaller plan that gives the same finding:
 reconciler-fuzzer shrink --config config.yaml --plan <out>/plan.json --out shrink
 ```
 
-`shrink` writes `shrunk.json` and `summary.md` under `--out`.
+`shrink` writes `shrunk.json` and a `summary.md` like `hunt`'s under `--out`.

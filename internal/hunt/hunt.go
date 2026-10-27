@@ -30,8 +30,8 @@ const (
 	ShrinkCandidates = 16
 )
 
-// errShrinkCut ends a shrink after ShrinkCandidates candidates.
-var errShrinkCut = errors.New("the shrink tried ShrinkCandidates candidates")
+// errCandidateLimit ends a shrink after ShrinkCandidates candidates.
+var errCandidateLimit = errors.New("the shrink tried ShrinkCandidates candidates")
 
 // RunPlan runs one plan into out and returns its report. run.Run implements
 // it in production.
@@ -56,9 +56,14 @@ type Found struct {
 	// again.
 	Reproduced int
 	// Shrunk is the smallest plan that still fails. It is saved at
-	// ShrunkPath. It is nil when no replay reproduced the finding.
+	// ShrunkPath. Both are unset when no replay reproduced the finding, or
+	// when an error kept its shrink from being saved.
 	Shrunk     *plan.Plan
 	ShrunkPath string
+	// CutShort says an error, such as an interrupt, left the finding's
+	// replays or shrink unfinished. Shrunk is then the smallest failing plan
+	// so far, if any.
+	CutShort bool
 }
 
 // Hunt runs each seed's plan into <Out>/seed-<n>. For each finding whose
@@ -92,16 +97,24 @@ func Hunt(ctx context.Context, o Options) ([]Found, error) {
 		dir := filepath.Join(o.Out, fmt.Sprintf("seed-%d", seed))
 		more, err := h.investigate(ctx, p, dir, fmt.Sprintf("seed %d", seed))
 		found = append(found, more...)
+		if err == nil && len(more) == 0 {
+			if err := os.RemoveAll(dir); err != nil {
+				return found, err
+			}
+		}
 		if ctx.Err() != nil {
-			return found, errors.Join(ctx.Err(), writeSummary(o.Out, fmt.Sprintf("%d seeds", seeds), found, failed))
+			// The seed counts unless the cancel ended the run of its plan.
+			if err == nil || len(more) > 0 {
+				seeds++
+			}
+			if !errors.Is(err, ctx.Err()) {
+				err = errors.Join(ctx.Err(), err)
+			}
+			return found, errors.Join(err, writeSummary(o.Out, fmt.Sprintf("%d seeds", seeds), found, failed))
 		}
 		seeds++
 		if err != nil {
 			failed = append(failed, fmt.Sprintf("seed %d: %v", seed, err))
-		} else if len(more) == 0 {
-			if err := os.RemoveAll(dir); err != nil {
-				return found, err
-			}
 		}
 		if err := writeSummary(o.Out, fmt.Sprintf("%d seeds", seeds), found, failed); err != nil {
 			return found, err
@@ -124,7 +137,8 @@ type ShrinkOptions struct {
 }
 
 // ShrinkPlan runs the plan into Out, then replays and shrinks each of its
-// findings as Hunt does. It writes summary.md under Out.
+// findings as Hunt does. It writes summary.md under Out unless an error
+// leaves no findings to list.
 func ShrinkPlan(ctx context.Context, o ShrinkOptions) ([]Found, error) {
 	cfg, err := config.Load(o.ConfigPath)
 	if err != nil {
@@ -140,10 +154,10 @@ func ShrinkPlan(ctx context.Context, o ShrinkOptions) ([]Found, error) {
 	}
 	h := &hunter{run: o.Run, samples: samples, log: o.Log, seen: map[string]bool{}}
 	found, err := h.investigate(ctx, p, o.Out, "plan")
-	if err != nil {
+	if err != nil && len(found) == 0 {
 		return nil, err
 	}
-	return found, writeSummary(o.Out, "1 plan", found, nil)
+	return found, errors.Join(err, writeSummary(o.Out, "1 plan", found, nil))
 }
 
 // hunter investigates plans and remembers the signatures they found.
@@ -163,9 +177,12 @@ func (h *hunter) logf(format string, args ...any) {
 // investigate runs p into dir. For each finding whose signature is not yet
 // seen, it replays p into dir/replay-<i>, shrinks it with candidate runs
 // into dir/shrink-<c>-<r>, and saves the result in dir. It removes each
-// candidate run that did not fail. A replay or candidate whose run fails
-// counts as not failing. Only the run of p itself returns its error. When
-// the context ends, it returns the findings so far, unshrunk.
+// candidate run that did not fail, and the replay or candidate run that a
+// cancel cut. A replay or candidate whose run fails counts as not failing.
+// Only the run of p itself returns its error. When a cancel, or a failed
+// cleanup or save, ends it after that run, it returns the findings with the
+// error and marks each one left unfinished. A shrink cut short saves the
+// smallest failing plan so far.
 func (h *hunter) investigate(ctx context.Context, p *plan.Plan, dir, name string) ([]Found, error) {
 	report, err := h.run(ctx, p, dir)
 	if err != nil {
@@ -184,9 +201,13 @@ func (h *hunter) investigate(ctx context.Context, p *plan.Plan, dir, name string
 		return nil, nil
 	}
 	for i := 1; i <= Replays; i++ {
-		replay, err := h.run(ctx, p, filepath.Join(dir, fmt.Sprintf("replay-%d", i)))
+		out := filepath.Join(dir, fmt.Sprintf("replay-%d", i))
+		replay, err := h.run(ctx, p, out)
 		if ctx.Err() != nil {
-			return found, ctx.Err()
+			for j := range found {
+				found[j].CutShort = true
+			}
+			return found, errors.Join(ctx.Err(), os.RemoveAll(out))
 		}
 		reproduced := 0
 		for j := range found {
@@ -214,14 +235,14 @@ func (h *hunter) investigate(ctx context.Context, p *plan.Plan, dir, name string
 		tried := 0
 		fails := func(ctx context.Context, c *plan.Plan) (bool, error) {
 			if tried++; tried > ShrinkCandidates {
-				return false, errShrinkCut
+				return false, errCandidateLimit
 			}
 			candidates++
 			for r := 1; r <= k; r++ {
 				out := filepath.Join(dir, fmt.Sprintf("shrink-%d-%d", candidates, r))
 				report, err := h.run(ctx, c, out)
 				if ctx.Err() != nil {
-					return false, ctx.Err()
+					return false, errors.Join(ctx.Err(), os.RemoveAll(out))
 				}
 				if err == nil && gives(report, f.Finding) {
 					h.logf("%s, shrink candidate %d: fails", name, candidates)
@@ -234,23 +255,26 @@ func (h *hunter) investigate(ctx context.Context, p *plan.Plan, dir, name string
 			h.logf("%s, shrink candidate %d: passes", name, candidates)
 			return false, nil
 		}
-		if f.Shrunk, err = Shrink(ctx, p, h.samples, fails); errors.Is(err, errShrinkCut) {
+		shrunk, shrinkErr := Shrink(ctx, p, h.samples, fails)
+		if errors.Is(shrinkErr, errCandidateLimit) {
 			h.logf("%s: shrink stopped after %d candidates", name, ShrinkCandidates)
-			err = nil
+			shrinkErr = nil
 		}
-		if err != nil {
-			f.Shrunk = nil
-			return found, err
-		}
-		f.ShrunkPath = filepath.Join(dir, "shrunk.json")
+		path := filepath.Join(dir, "shrunk.json")
 		if j > 0 {
-			f.ShrunkPath = filepath.Join(dir, fmt.Sprintf("shrunk-%d.json", j+1))
+			path = filepath.Join(dir, fmt.Sprintf("shrunk-%d.json", j+1))
 		}
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return nil, err
+		saveErr := plan.Save(path, shrunk)
+		if saveErr == nil {
+			f.Shrunk, f.ShrunkPath = shrunk, path
 		}
-		if err := plan.Save(f.ShrunkPath, f.Shrunk); err != nil {
-			return nil, err
+		if err := errors.Join(shrinkErr, saveErr); err != nil {
+			h.logf("%s: shrink cut short", name)
+			// This shrink and each one still to come are cut short.
+			for i := j; i < len(found); i++ {
+				found[i].CutShort = found[i].Reproduced > 0
+			}
+			return found, err
 		}
 	}
 	return found, nil
@@ -288,6 +312,9 @@ func Summary(over string, found []Found, failed []string) string {
 		b.WriteString("| Seed | Check | Finding | Reproduced | Shrunk plan |\n| --- | --- | --- | --- | --- |\n")
 		for _, f := range found {
 			shrunk := cmp.Or(f.ShrunkPath, "not shrunk")
+			if f.CutShort {
+				shrunk += " (cut short)"
+			}
 			// A plan's seed 0 means it has none, as in plan.json.
 			seed := "-"
 			if f.Seed != 0 {

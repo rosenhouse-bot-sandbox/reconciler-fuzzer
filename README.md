@@ -413,7 +413,7 @@ reconciler-fuzzer shrink --config targets/toy-widget/config.yaml \
 ## CI
 
 Every command exits 0 with no findings, 1 with findings, and 2 on a usage or harness error.
-`hunt` exits 1 on any find, even after a failed seed.
+`hunt` and `shrink` exit 1 on any find, even after a failed seed or an interrupt.
 A minimal GitHub Actions job:
 
 ```yaml
