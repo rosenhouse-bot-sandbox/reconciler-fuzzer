@@ -264,6 +264,17 @@ func (b *Binary) Running() bool {
 	return b.running != nil
 }
 
+// Tail is the last TailBytes of the running process's output, or "" when
+// none runs.
+func (b *Binary) Tail() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.running == nil {
+		return ""
+	}
+	return b.running.tail.String()
+}
+
 // Supervise sets whether an exit the harness did not cause starts the
 // process again after the backoff. It is off until called. Turning it on
 // starts a process that is down at once.

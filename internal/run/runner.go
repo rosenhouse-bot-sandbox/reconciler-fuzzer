@@ -69,7 +69,7 @@ func (r *Runner) Quiet(ctx context.Context) error {
 			if check.Requested(ix, 0, now) {
 				return nil
 			}
-			return neverStarted(ix, r.Config.Timeouts.Settle)
+			return neverStarted(ix, r.Config.Timeouts.Settle, r.Process.Tail())
 		}
 		select {
 		case <-ctx.Done():
@@ -513,16 +513,19 @@ func sleepUntil(ctx context.Context, t time.Time) error {
 }
 
 // neverStarted is the error for a controller that made no successful request
-// in the settle wait before step 0. It quotes the first exit, as Crash does.
-func neverStarted(ix *trace.Index, settle time.Duration) error {
+// in the settle wait before step 0. It quotes the first exit, as Crash does,
+// or else the running controller's output tail.
+func neverStarted(ix *trace.Index, settle time.Duration, running string) error {
 	msg := fmt.Sprintf("the controller never started: it made no successful request in the %v before step 0 (timeouts.settle)", settle)
-	i := slices.IndexFunc(ix.Procs(), func(e trace.Event) bool { return e.Proc.Event == trace.Exit })
-	if i < 0 {
-		return errors.New(msg + ", and it did not exit; see controller.log")
+	tail := running
+	if i := slices.IndexFunc(ix.Procs(), func(e trace.Event) bool { return e.Proc.Event == trace.Exit }); i < 0 {
+		msg += ", and it did not exit"
+	} else {
+		exit := ix.Procs()[i].Proc
+		msg += "\nfirst exit: " + exit.Exit
+		tail = exit.StderrTail
 	}
-	exit := ix.Procs()[i].Proc
-	msg += "\nfirst exit: " + exit.Exit
-	if tail := strings.TrimRight(exit.StderrTail, "\n"); tail != "" {
+	if tail = strings.TrimRight(tail, "\n"); tail != "" {
 		msg += "\noutput tail:\n" + tail
 	}
 	return errors.New(msg + "\nsee controller.log")

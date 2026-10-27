@@ -41,6 +41,7 @@ type Process interface {
 	Stop(ctx context.Context) error
 	Kill(ctx context.Context) error
 	Supervise(on bool) error
+	Tail() string
 }
 
 // Cluster applies CR actions as the harness. *kube.Kube implements it.
