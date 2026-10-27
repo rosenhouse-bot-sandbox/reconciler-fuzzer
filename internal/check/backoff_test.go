@@ -230,7 +230,6 @@ func TestBackoffRunBreaksAtAGapOf100ms(t *testing.T) {
 	}
 }
 
-// Under load, B162's loop paused once and went on.
 func TestBackoffFailsATightLoopAfterASlowGap(t *testing.T) {
 	starts := every(10*ms, 21)
 	for i := 10; i < len(starts); i++ {

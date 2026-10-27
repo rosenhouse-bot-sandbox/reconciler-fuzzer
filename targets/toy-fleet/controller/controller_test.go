@@ -351,6 +351,26 @@ func TestB162DeletesHeldVolumesOnEachReconcileAndRequeuesAfter1ms(t *testing.T) 
 	}
 }
 
+func TestB162DoesNotRequeueAClusterThatADatabaseNames(t *testing.T) {
+	f := newBuggyFleet(t, B162, clusterObj(), databaseObj())
+	f.settle(f.clusters, "cluster")
+	f.delete(f.cluster())
+	result, err := f.clusters.Reconcile(t.Context(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "cluster"}})
+	if err != nil || result.RequeueAfter != 0 {
+		t.Errorf("B162 reconciles a deleted Cluster that a Database names to %+v, %v; want no requeue.", result, err)
+	}
+}
+
+func TestB162ReleasesTheClusterOnceItsVolumesAreGone(t *testing.T) {
+	f := newBuggyFleet(t, B162, clusterObj())
+	f.settle(f.clusters, "cluster")
+	f.delete(f.cluster())
+	f.settle(f.clusters, "cluster")
+	if err := f.get("cluster", &fleetv1.Cluster{}); !apierrors.IsNotFound(err) {
+		t.Errorf("Getting the deleted Cluster gives %v, want NotFound.", err)
+	}
+}
+
 func TestDatabaseWaitsForItsClusterAndHoldsDeletionForUsers(t *testing.T) {
 	elsewhere := &fleetv1.User{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "bob"}, Spec: fleetv1.UserSpec{DatabaseRef: "other"}}
 	f := newFleet(t, databaseObj(), userObj(), elsewhere)
