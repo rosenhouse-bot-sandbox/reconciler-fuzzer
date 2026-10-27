@@ -439,7 +439,7 @@ func TestDamageNamesALiveSlot(t *testing.T) {
 	t.Error("No damage names a slot.")
 }
 
-func TestFaultsFavorThePrimaryAndTheCoreKindsTheControllerCreates(t *testing.T) {
+func TestFaultsFavorThePrimaryAndTheOwnedKinds(t *testing.T) {
 	counts := map[string]int{}
 	for _, f := range faults(plans(t, "../../examples/cert-manager/config.yaml", 200)) {
 		if !f.HoldWatch {

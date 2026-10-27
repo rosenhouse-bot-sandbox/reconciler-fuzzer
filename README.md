@@ -116,7 +116,12 @@ timeouts: {settle: 30s, stable: 3s}
 - `ready` is CEL over the CR. It must be true only once the controller has acted on the
   current spec, so compare an `observedGeneration` with `metadata.generation`.
 - `stable` is how long the controller must stay quiet before a step counts as settled.
-- `launch.rbac` also tells generation which requests a fault can pick.
+- `launch.rbac` also tells generation which requests a fault can pick. A generated `damage` of
+  a kube object targets an unlisted kind that `launch.rbac` lets the controller create. Faults
+  favor the listed kinds. Faults and damage favor the kinds the CRs own: the kube kinds that
+  `owns` names and the `models:` kinds with a `dependency`. Without owned kinds, the core kinds
+  that the controller may create, such as Secrets, stand in for them. An owned kind ends that
+  stand-in, even for a core kind that the controller also writes.
 - `values` steers generated CRs: `overlay` narrows the CRD schema, `distinct` fields differ
   across a plan's CRs, `mutate` names the fields updates change, and `fixtures` names the
   fixture strings `changeFixture` sets.
@@ -355,8 +360,8 @@ cluster. The settle condition counts a held watch as looking only once the hold 
 The create waits until the deleted CR no longer exists. Once `period` has passed, the wait
 ends the hold, so that the controller can finish the delete.
 
-Generated plans draw it for kinds `launch.rbac` lets the controller watch, the listed and
-`owns` kinds most, in a step that deletes a CR and creates it again unchanged. About 1
+Generated plans draw it for kinds `launch.rbac` lets the controller watch, favoring the kinds
+other faults favor, in a step that deletes a CR and creates it again unchanged. About 1
 cert-manager seed in 11 holds Secrets this way, so a 20-seed `make hunt-cert-manager` usually,
 but not always, finds #63. A report notes a `holdWatch` while the controller had no watch of
 its kind, such as one with a misspelt resource.
@@ -386,7 +391,9 @@ findings, and a negative control, where one exists, must fail.
   `bugs/` plan holds the Secret watch across a recreate, and `fresh-key` finds
   [a real bug](docs/findings/cert-manager-secret-write-back.md): the new Certificate gets the
   deleted one's key. `make test-example-cert-manager` needs it in 1 of 3 runs, and
-  `make repro-cert-manager` prints its reproduction rate.
+  `make repro-cert-manager` prints its reproduction rate. A hunt can report a false Restore
+  finding on a CertificateRequest that a `damage` deleted after issuance, since cert-manager
+  rightly leaves it gone.
 - [examples/external-secrets](examples/external-secrets/config.yaml) runs external-secrets
   with its Vault provider against a Vault dev server. Its `bugs/` plan finds
   [a real bug](docs/findings/external-secrets-onchange-stale-failure.md): after a lost Secret

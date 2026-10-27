@@ -83,12 +83,8 @@ func overlaid(root map[string]any, overlays map[string]map[string]any) (*schema,
 }
 
 // primaryCRD finds kind's openAPIV3Schema and plural among crds.
-func primaryCRD(crds []string, kind gvk.GroupVersionKind) (map[string]any, string, error) {
-	documents, err := readManifests(crds)
-	if err != nil {
-		return nil, "", fmt.Errorf("reading the CRDs: %w", err)
-	}
-	for _, document := range documents {
+func primaryCRD(crds []map[string]any, kind gvk.GroupVersionKind) (map[string]any, string, error) {
+	for _, document := range crds {
 		spec, _ := document["spec"].(map[string]any)
 		names, _ := spec["names"].(map[string]any)
 		if spec["group"] != kind.Group || names["kind"] != kind.Kind {

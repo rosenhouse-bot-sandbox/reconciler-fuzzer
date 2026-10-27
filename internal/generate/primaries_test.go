@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	gvk "k8s.io/apimachinery/pkg/runtime/schema"
 	"pgregory.net/rapid"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
@@ -81,44 +80,25 @@ func TestTheFirstCreateDrawsEachListedKindAboutEqually(t *testing.T) {
 	}
 }
 
-func TestDamageTargetsNoListedKind(t *testing.T) {
-	damaged := map[string]bool{}
-	for _, a := range actions(plans(t, fleetConfig, 200)) {
-		if a.Do == plan.Damage {
-			damaged[a.Target.Resource] = true
+// toy-fleet's Role grants no create on Users, and a config without RBAC
+// grants nothing, so the controller makes no object such a damage could
+// delete. external-secrets' Role lets it create the listed ExternalSecrets,
+// which `delete` actions cover.
+func TestDamageTargetsTheUnlistedKindsTheRBACLetsTheControllerCreate(t *testing.T) {
+	for path, want := range map[string][]string{
+		fleetConfig: {"configmaps", "secrets", "volumes"},
+		"../../examples/external-secrets/config.yaml": {"generatorstates", "pushsecrets", "secrets"},
+		rulesConfig: nil,
+	} {
+		damaged := map[string]bool{}
+		for _, a := range actions(plans(t, path, 200)) {
+			if a.Do == plan.Damage {
+				damaged[a.Target.Resource] = true
+			}
 		}
-	}
-	if got, want := slices.Sorted(maps.Keys(damaged)), []string{"configmaps", "secrets", "users", "volumes"}; !slices.Equal(got, want) {
-		t.Errorf("Damage targets %v, want %v.", got, want)
-	}
-}
-
-func TestFaultsFavorEveryListedKind(t *testing.T) {
-	g := newGenerator(t, loadConfig(t, fleetConfig))
-	requests, holds := map[string]int{}, map[string]int{}
-	for _, r := range g.requests {
-		requests[r.match.Resource] += r.weight
-	}
-	for _, gr := range g.watchable {
-		holds[gr.Resource]++
-	}
-	for _, listed := range []string{"clusters", "databases"} {
-		if requests[listed] != favored*requests["users"] || holds[listed] != favored*holds["users"] {
-			t.Errorf("Request weights are %v and holds %v, want %s favored over users.", requests, holds, listed)
+		if got := slices.Sorted(maps.Keys(damaged)); !slices.Equal(got, want) {
+			t.Errorf("%s: damage targets %v, want %v.", path, got, want)
 		}
-	}
-}
-
-func TestHoldsFavorTheKubeKindsEachEntryOwns(t *testing.T) {
-	cfg := loadConfig(t, fleetConfig)
-	cfg.Primaries[1].Owns = []config.Owns{{Kind: gvk.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}, Name: "self.metadata.name"}}
-	holds := map[string]int{}
-	for _, gr := range newGenerator(t, cfg).watchable {
-		holds[gr.Resource]++
-	}
-	want := map[string]int{"clusters": favored, "databases": favored, "configmaps": favored, "users": 1, "volumes": 1, "secrets": 1}
-	if !maps.Equal(holds, want) {
-		t.Errorf("Holds are %v, want %v.", holds, want)
 	}
 }
 
@@ -165,6 +145,25 @@ func TestARequestFaultOnAListedKindComesWithAnUpdateOfThatKind(t *testing.T) {
 		got := firstActions(t, c.at, func(t *rapid.T, at state) []plan.Action { return []plan.Action{g.traffic(t, at, f)} })
 		if !slices.Equal(got, c.want) {
 			t.Errorf("A fault on %s with slots %v comes with %v, want %v.", c.resource, slices.Sorted(maps.Keys(c.at)), got, c.want)
+		}
+	}
+}
+
+// A damage makes the controller write the kind again, but it can delete only
+// what the controller made. A restart makes the controller read every kind.
+func TestARequestFaultOnAnUnlistedKindComesWithADamageOnlyIfTheControllerMayCreateIt(t *testing.T) {
+	g := newGenerator(t, loadConfig(t, fleetConfig))
+	for _, c := range []struct {
+		group, resource string
+		want            []string
+	}{
+		{"storage.thirdparty", "volumes", []string{"damage"}},
+		{"toy.reconciler-fuzzer", "users", []string{"restart"}},
+	} {
+		f := plan.Fault{Match: plan.Match{Verb: "get", Group: c.group, Resource: c.resource}, Drop: true}
+		got := firstActions(t, fleetState(g), func(t *rapid.T, at state) []plan.Action { return []plan.Action{g.traffic(t, at, f)} })
+		if !slices.Equal(got, c.want) {
+			t.Errorf("A fault on %s comes with %v, want %v.", c.resource, got, c.want)
 		}
 	}
 }
