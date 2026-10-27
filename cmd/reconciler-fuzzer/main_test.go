@@ -129,11 +129,16 @@ func TestACommandsHelpDescribesEachFlagOfItsUsageLine(t *testing.T) {
 	}
 }
 
-func TestHelpShowsTheDefaultOfAFlag(t *testing.T) {
+func TestHelpShowsTheDefaultOfAFlagThatHasOne(t *testing.T) {
 	_, stdout, _ := cliOutput("hunt", "--help")
 	for flag, value := range map[string]string{"from": "1", "replays": "5", "candidates": "16"} {
 		if !regexp.MustCompile(`(?m)^  --` + flag + `  .*\(default ` + value + `\)$`).MatchString(stdout) {
 			t.Errorf("hunt --help does not give --%s a default of %s:\n%s", flag, value, stdout)
+		}
+	}
+	for _, flag := range []string{"config", "seeds"} {
+		if regexp.MustCompile(`(?m)^  --` + flag + `  .*\(default`).MatchString(stdout) {
+			t.Errorf("hunt --help gives --%s a default:\n%s", flag, stdout)
 		}
 	}
 }
@@ -159,8 +164,9 @@ func TestPlanPrintsThePlanThatRunDrawsWithoutRunningIt(t *testing.T) {
 }
 
 func TestPlanExits2WhenTheConfigDoesNotLoad(t *testing.T) {
-	if code, stdout, stderr := cliOutput("plan", "--config", filepath.Join(t.TempDir(), "missing.yaml"), "--seed", "1"); code != 2 || stdout != "" || !strings.Contains(stderr, "missing.yaml") {
-		t.Errorf("cli = %d, stdout %q, stderr %q; want 2 naming the config", code, stdout, stderr)
+	code, stdout, stderr := cliOutput("plan", "--config", filepath.Join(t.TempDir(), "missing.yaml"), "--seed", "1")
+	if code != 2 || stdout != "" || !strings.Contains(stderr, "missing.yaml") || strings.Contains(stderr, usage) {
+		t.Errorf("cli = %d, stdout %q, stderr %q; want 2 naming the config, without the usage", code, stdout, stderr)
 	}
 }
 
@@ -176,7 +182,7 @@ func TestHuntAndShrinkTryTheGivenReplaysAndCandidates(t *testing.T) {
 		{"shrink", "--config", toyConfig, "--plan", "../../targets/toy-widget/plans/b13.json"},
 	} {
 		runs = nil
-		cliOutput(append(args, "--out", t.TempDir(), "--replays", "2", "--candidates", "2")...)
+		cliOutput(append(args, "--out", t.TempDir(), "--replays", "2", "--candidates", "1")...)
 		replays, candidates := 0, 0
 		for _, name := range runs {
 			if strings.HasPrefix(name, "replay-") {
@@ -187,8 +193,8 @@ func TestHuntAndShrinkTryTheGivenReplaysAndCandidates(t *testing.T) {
 				candidates++
 			}
 		}
-		if replays != 2 || candidates != 2 {
-			t.Errorf("%s ran %d replays and %d candidates, want 2 of each: %q", args[0], replays, candidates, runs)
+		if replays != 2 || candidates != 1 {
+			t.Errorf("%s ran %d replays and %d candidates, want 2 and 1: %q", args[0], replays, candidates, runs)
 		}
 	}
 }
