@@ -502,7 +502,7 @@ func (rec *recorder) readResult(encoding string) {
 	var meta metav1.ObjectMeta
 	var err error
 	if media(rec.Header().Get("Content-Type")) == protobufType {
-		meta, err = protobufMeta(body)
+		meta, err = protobufMeta(body, rec.call.Verb == "deletecollection")
 	} else {
 		var object struct {
 			Metadata metav1.ObjectMeta `json:"metadata"`
@@ -674,8 +674,9 @@ const protobufType = "application/vnd.kubernetes.protobuf"
 var protobufMagic = []byte("k8s\x00")
 
 // protobufMeta decodes the metadata of a Kubernetes protobuf object, which
-// is field 1 of every object inside the runtime.Unknown envelope.
-func protobufMeta(body io.Reader) (metav1.ObjectMeta, error) {
+// is field 1 of every object inside the runtime.Unknown envelope. A list's
+// metadata is a ListMeta, so of a list it returns only the resourceVersion.
+func protobufMeta(body io.Reader, list bool) (metav1.ObjectMeta, error) {
 	data, err := io.ReadAll(body)
 	if err != nil {
 		return metav1.ObjectMeta{}, err
@@ -697,7 +698,14 @@ func protobufMeta(body io.Reader) (metav1.ObjectMeta, error) {
 	if m <= 0 || uint64(len(raw[n+m:])) < size {
 		return meta, errors.New("truncated metadata")
 	}
-	return meta, meta.Unmarshal(raw[n+m : n+m+int(size)])
+	field := raw[n+m : n+m+int(size)]
+	if list {
+		var listMeta metav1.ListMeta
+		err := listMeta.Unmarshal(field)
+		meta.ResourceVersion = listMeta.ResourceVersion
+		return meta, err
+	}
+	return meta, meta.Unmarshal(field)
 }
 
 func (rec *recorder) record() {

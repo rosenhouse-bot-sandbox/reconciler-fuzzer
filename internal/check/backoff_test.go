@@ -170,10 +170,21 @@ func TestBackoffPassesATightLoopOfWritesThatChangeTheObject(t *testing.T) {
 	requireNone(t, check.Backoff(tl.Index(), spec))
 }
 
-// A deletecollection's answer names no object, so it counts as a change.
-func TestBackoffPassesATightLoopOfDeleteCollections(t *testing.T) {
-	tl := repeat(tt.Call(ctl, "deletecollection", tt.Ref("toy/gadgets", "ns", ""), 200, "2"), every(10*ms, 21), nil)
-	tl.At(0, tt.Version(gadgetA, "ug", "2", gadgetBody(true, "x")))
+// A deletecollection answers at the resourceVersion of its list, which
+// repeats only while nothing in the cluster changes. The first answer at a
+// resourceVersion is a change.
+func TestBackoffFailsATightLoopOfNoOpDeleteCollections(t *testing.T) {
+	gadgets := tt.Ref("toy/gadgets", "ns", "")
+	findings := check.Backoff(repeat(tt.Call(ctl, "deletecollection", gadgets, 200, "7"), every(10*ms, 22), nil).Index(), spec)
+	requireFinding(t, findings, "Backoff", 0, noOpLoop, "kube/toy/gadgets", "deletecollection gadgets.toy ns/: 200, 21 calls from 20ms to 220ms")
+
+	var tl tt.Timeline
+	tl.At(0, tt.Run("toy", "widgets"), tt.Phase(0, trace.FaultPeriod))
+	for n, start := range every(10*ms, 22) {
+		deleteAll := tt.Call(ctl, "deletecollection", gadgets, 200, strconv.Itoa(n+7))
+		deleteAll.Call.Latency = 2 * ms
+		tl.At(start+2*ms, deleteAll)
+	}
 	requireNone(t, check.Backoff(tl.Index(), spec))
 }
 
