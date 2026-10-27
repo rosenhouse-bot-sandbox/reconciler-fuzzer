@@ -41,7 +41,8 @@ type Options struct {
 	Env map[string]string
 	// Log receives stdout and stderr through one pipe.
 	Log io.Writer
-	// GracePeriod is how long Stop waits after SIGTERM before SIGKILL.
+	// GracePeriod is how long Stop waits after SIGTERM before SIGKILL. Zero
+	// sends SIGKILL at once.
 	GracePeriod time.Duration
 	// OnStart and OnExit hear every start and exit, including restarts.
 	OnStart func(pid int)
@@ -55,8 +56,9 @@ type Exit struct {
 	Status string
 	// HarnessCaused says Stop or Kill ended the process.
 	HarnessCaused bool
-	// Stopped says Stop ended it.
-	Stopped bool
+	// GracePeriodPassed says Stop sent SIGKILL because the process outlived
+	// the grace period.
+	GracePeriodPassed bool
 	// Tail is the last TailBytes of the process's output.
 	Tail string
 }
@@ -77,9 +79,11 @@ type Binary struct {
 type process struct {
 	cmd  *exec.Cmd
 	tail *ring
-	// harness is set before Stop or Kill signals the process, and stopped
-	// before Stop does.
-	harness, stopped bool
+	// harness is set before Stop or Kill signals the process.
+	harness bool
+	// gracePeriodPassed is set before Stop sends SIGKILL once the grace period
+	// passes.
+	gracePeriodPassed bool
 	// announced closes once OnStart has run, so OnExit never comes first.
 	announced chan struct{}
 	// done closes once OnExit has run.
@@ -154,7 +158,7 @@ func (b *Binary) reap(p *process) {
 	}
 
 	b.mu.Lock()
-	exit := Exit{PID: p.cmd.Process.Pid, Status: status, HarnessCaused: p.harness, Stopped: p.stopped, Tail: p.tail.String()}
+	exit := Exit{PID: p.cmd.Process.Pid, Status: status, HarnessCaused: p.harness, GracePeriodPassed: p.gracePeriodPassed, Tail: p.tail.String()}
 	var delay time.Duration
 	if b.running == p {
 		b.running = nil
@@ -191,13 +195,13 @@ func (b *Binary) restart() {
 	b.announce(p)
 }
 
-// claim marks the running process as ended by the harness, and by Stop when
-// stopped, and returns it, or nil when none runs.
-func (b *Binary) claim(stopped bool) *process {
+// claim marks the running process as ended by the harness and returns it,
+// or nil when none runs.
+func (b *Binary) claim() *process {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.running != nil {
-		b.running.harness, b.running.stopped = true, stopped
+		b.running.harness = true
 	}
 	return b.running
 }
@@ -207,7 +211,7 @@ func (b *Binary) claim(stopped bool) *process {
 func (b *Binary) Stop(ctx context.Context) error {
 	b.ops.Lock()
 	defer b.ops.Unlock()
-	p := b.claim(true)
+	p := b.claim()
 	if p == nil {
 		return nil
 	}
@@ -220,6 +224,9 @@ func (b *Binary) Stop(ctx context.Context) error {
 	case <-p.done:
 		return nil
 	case <-grace.C:
+		b.mu.Lock()
+		p.gracePeriodPassed = true
+		b.mu.Unlock()
 	case <-ctx.Done():
 	}
 	return b.kill(p)
@@ -229,7 +236,7 @@ func (b *Binary) Stop(ctx context.Context) error {
 func (b *Binary) Kill(ctx context.Context) error {
 	b.ops.Lock()
 	defer b.ops.Unlock()
-	p := b.claim(false)
+	p := b.claim()
 	if p == nil {
 		return nil
 	}

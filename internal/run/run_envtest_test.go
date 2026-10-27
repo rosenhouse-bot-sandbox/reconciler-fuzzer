@@ -281,9 +281,9 @@ timeouts: {settle: 3s, stable: 1s}
 			killed = append(killed, note)
 		}
 	}
-	// Step 1 restarts, step 3 restarts, and the run ends with a stop.
-	if len(report.Findings) > 0 || len(killed) != 3 || !strings.HasPrefix(killed[0], "Step 1, at ") {
-		t.Errorf("findings %+v, notes %q, want no findings and a SIGKILL note for each of 3 stops", report.Findings, report.Notes)
+	if len(report.Findings) > 0 || len(killed) != 3 || !strings.HasPrefix(killed[0], "Step 1, at ") ||
+		!strings.HasPrefix(killed[1], "Step 3 (restart), at ") || !strings.HasPrefix(killed[2], "After the last step, at ") {
+		t.Errorf("findings %+v, notes %q, want no findings and a SIGKILL note for each restart and the run's stop", report.Findings, report.Notes)
 	}
 	events, err := trace.Load(filepath.Join(out, "trace.jsonl"))
 	if err != nil {
@@ -296,8 +296,8 @@ timeouts: {settle: 3s, stable: 1s}
 	if restart < 0 || exit < 0 {
 		t.Fatal("the trace holds no step 1 or no exit")
 	}
-	if p := events[exit].Proc; p.Exit != "signal: killed" || !p.Stopped {
-		t.Errorf("the first exit is %+v, want a stop's SIGKILL", *p)
+	if p := events[exit].Proc; p.Exit != "signal: killed" || !p.GracePeriodPassed {
+		t.Errorf("the first exit is %+v, want a SIGKILL once the grace period passed", *p)
 	}
 	if took := events[exit].At - events[restart].At; took < 500*time.Millisecond || took >= 3*time.Second {
 		t.Errorf("the controller exited %v into the restart step, want just after the 500ms grace period", took)

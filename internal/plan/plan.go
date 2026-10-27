@@ -44,8 +44,8 @@ const (
 	Update Do = "update"
 	// Delete deletes the slot's CR.
 	Delete Do = "delete"
-	// Restart stops the controller and starts it again. A stop sends SIGTERM,
-	// then SIGKILL once launch.gracePeriod passes.
+	// Restart stops the controller and starts it again. The stop sends
+	// SIGTERM, and SIGKILL if the controller outlives launch.gracePeriod.
 	Restart Do = "restart"
 	// Kill sends SIGKILL. The controller stays down until the fault period
 	// ends, or until a create's or a stop's wait for a deleted CR restarts

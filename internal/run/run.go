@@ -261,9 +261,7 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 	launchOptions.OnStart = func(pid int) {
 		rec.Record(trace.Event{Proc: &trace.Proc{Event: trace.Start, PID: pid}})
 	}
-	launchOptions.OnExit = func(e launch.Exit) {
-		rec.Record(trace.Event{Proc: &trace.Proc{Event: trace.Exit, PID: e.PID, Exit: e.Status, HarnessCaused: e.HarnessCaused, Stopped: e.Stopped, StderrTail: e.Tail}})
-	}
+	launchOptions.OnExit = func(e launch.Exit) { rec.Record(trace.Event{Proc: procExit(e)}) }
 	controller := launch.New(launchOptions)
 	listeners := map[string]FaultTarget{}
 	for name, l := range controllerListeners {
@@ -421,6 +419,10 @@ func primaryKinds(primaries []config.Primary) []schema.GroupVersionKind {
 		}
 	}
 	return kinds
+}
+
+func procExit(e launch.Exit) *trace.Proc {
+	return &trace.Proc{Event: trace.Exit, PID: e.PID, Exit: e.Status, HarnessCaused: e.HarnessCaused, GracePeriodPassed: e.GracePeriodPassed, StderrTail: e.Tail}
 }
 
 // expandLaunch expands ${systems.<name>.<key>} in the launch args, with

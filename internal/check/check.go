@@ -433,16 +433,32 @@ func actionErrors(ix *trace.Index) []string {
 	return notes
 }
 
-// killedStops notes each stop of the controller that ended in SIGKILL.
+// killedStops notes each stop of the controller that SIGKILL ended once
+// launch.gracePeriod passed.
 func killedStops(ix *trace.Index) []string {
 	var notes []string
 	steps := ix.Steps()
 	for _, e := range ix.Procs() {
-		if p := e.Proc; p.Stopped && p.Exit == "signal: killed" {
-			notes = append(notes, fmt.Sprintf("%s, at %v: the controller did not exit within launch.gracePeriod of SIGTERM, so the harness sent SIGKILL.", stepName(ix, stepAt(steps, e.At)), e.At))
+		if p := e.Proc; !p.GracePeriodPassed || p.Exit != "signal: killed" {
+			continue
 		}
+		when := stepName(ix, stepAt(steps, e.At))
+		if afterSteps(steps, e.At) {
+			when = "After the last step"
+		}
+		notes = append(notes, fmt.Sprintf("%s, at %v: the controller did not exit within launch.gracePeriod of SIGTERM, so the harness sent SIGKILL.", when, e.At))
 	}
 	return notes
+}
+
+// afterSteps says t is after the last step's settle wait ended. The harness
+// stops the controller only in fault periods and at the run's end.
+func afterSteps(steps []trace.StepSpan, t time.Duration) bool {
+	if len(steps) == 0 {
+		return false
+	}
+	last := steps[len(steps)-1]
+	return last.WaitEnd > 0 && t > last.WaitEnd
 }
 
 // stepName names a step, and says which steps the runner appended.

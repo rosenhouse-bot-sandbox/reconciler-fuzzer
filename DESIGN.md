@@ -380,7 +380,7 @@ launch:
   args: [--bug=0]
   env: {CLOUD_ENDPOINT: "${systems.cloud.url}"}   # KUBECONFIG defaults to ${systems.kube.kubeconfig}
   rbac: [rbac/role.yaml]
-  gracePeriod: 5s                           # default; SIGKILL follows SIGTERM after it
+  gracePeriod: 5s                           # default; a stop sends SIGKILL this long after SIGTERM
 crds: [crds/]
 primaries:                                  # every kind the controller serves
   - kind: toy.reconciler-fuzzer/v1/Bucket

@@ -331,8 +331,8 @@ type Proc struct {
 	Exit string `json:"exit,omitempty"`
 	// HarnessCaused says the harness stopped or killed the process.
 	HarnessCaused bool `json:"harnessCaused,omitempty"`
-	// Stopped says the harness stopped it: SIGTERM, then SIGKILL once
-	// launch.gracePeriod passed.
-	Stopped    bool   `json:"stopped,omitempty"`
-	StderrTail string `json:"stderrTail,omitempty"`
+	// GracePeriodPassed says the process outlived launch.gracePeriod after
+	// SIGTERM, so the harness sent SIGKILL.
+	GracePeriodPassed bool   `json:"gracePeriodPassed,omitempty"`
+	StderrTail        string `json:"stderrTail,omitempty"`
 }

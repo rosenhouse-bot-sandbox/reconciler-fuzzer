@@ -182,8 +182,22 @@ func TestStopTerminatesAndIsHarnessCaused(t *testing.T) {
 	if _, exits := h.counts(); exits != 1 {
 		t.Fatalf("Heard %d exits by the time Stop returned, want 1.", exits)
 	}
-	if exit := h.lastExit(); exit.Status != "exit status 3" || !exit.HarnessCaused || !exit.Stopped {
-		t.Errorf("Exit is %+v, want exit status 3 from a Stop.", exit)
+	if exit := h.lastExit(); exit.Status != "exit status 3" || !exit.HarnessCaused || exit.GracePeriodPassed {
+		t.Errorf("Exit is %+v, want exit status 3 within the grace period.", exit)
+	}
+}
+
+func TestStopWaitsTheGracePeriodForASlowExit(t *testing.T) {
+	b, h, _ := newBinary(t, "trap 'sleep 0.3; exit 3' TERM; "+forever, func(o *launch.Options) { o.GracePeriod = time.Second })
+	mustStart(t, b)
+	time.Sleep(50 * time.Millisecond)
+
+	if err := b.Stop(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	if exit := h.lastExit(); exit.Status != "exit status 3" || exit.GracePeriodPassed {
+		t.Errorf("Exit is %+v, want exit status 3 within the grace period.", exit)
 	}
 }
 
@@ -200,8 +214,8 @@ func TestStopEscalatesToSIGKILL(t *testing.T) {
 	if elapsed := time.Since(start); elapsed < 200*time.Millisecond || elapsed > time.Second {
 		t.Errorf("Stop returned after %v, want just after the 200ms grace period.", elapsed)
 	}
-	if exit := h.lastExit(); exit.Status != "signal: killed" || !exit.HarnessCaused || !exit.Stopped {
-		t.Errorf("Exit is %+v, want a SIGKILL from a Stop.", exit)
+	if exit := h.lastExit(); exit.Status != "signal: killed" || !exit.HarnessCaused || !exit.GracePeriodPassed {
+		t.Errorf("Exit is %+v, want a SIGKILL once the grace period passed.", exit)
 	}
 }
 
@@ -216,8 +230,8 @@ func TestStopEscalatesWhenTheContextEnds(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if exit := h.lastExit(); exit.Status != "signal: killed" {
-		t.Errorf("Exit is %+v, want a SIGKILL.", exit)
+	if exit := h.lastExit(); exit.Status != "signal: killed" || exit.GracePeriodPassed {
+		t.Errorf("Exit is %+v, want a SIGKILL before the grace period passed.", exit)
 	}
 }
 
@@ -232,8 +246,8 @@ func TestKillIsHarnessCaused(t *testing.T) {
 	if b.Running() {
 		t.Error("Running is true after Kill.")
 	}
-	if exit := h.lastExit(); exit.Status != "signal: killed" || !exit.HarnessCaused || exit.Stopped {
-		t.Errorf("Exit is %+v, want a harness-caused SIGKILL that no Stop sent.", exit)
+	if exit := h.lastExit(); exit.Status != "signal: killed" || !exit.HarnessCaused || exit.GracePeriodPassed {
+		t.Errorf("Exit is %+v, want a harness-caused SIGKILL without a grace period.", exit)
 	}
 }
 

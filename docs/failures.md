@@ -66,11 +66,12 @@ places only `/<collection>` and `/<collection>/<id>` (DESIGN.md §5). Serve
 the API at those paths, or put it behind another fake service.
 
 `Step 1, at 8.6s: the controller did not exit within launch.gracePeriod of
-SIGTERM, so the harness sent SIGKILL.` means that a stop of the controller,
-for a `restart`, a `stop` or the run's end, waited `launch.gracePeriod`
-after SIGTERM and then killed it. That stop tested a crash, not a clean
-shutdown. Raise `launch.gracePeriod`, 5s by default, if the controller needs
-longer to shut down.
+SIGTERM, so the harness sent SIGKILL.` means that a stop of the controller
+for a `restart` or a `stop` waited `launch.gracePeriod` after SIGTERM and
+then killed it. Such a stop tested a crash, not a clean shutdown. A note
+that begins `After the last step` names the stop at the run's end. Raise
+`launch.gracePeriod`, 5s by default, if the controller needs longer to shut
+down.
 
 Hunt and shrink match findings by check, summary and kind, so a replay
 need not fail at the same step or on the same names.
