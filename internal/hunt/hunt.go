@@ -26,8 +26,8 @@ import (
 // ShrinkCandidates how many candidates a shrink of one finding tries, so
 // that one slow shrink leaves time for the other seeds.
 const (
-	Replays          = 5
-	ShrinkCandidates = 16
+	DefaultReplays    = 5
+	DefaultCandidates = 16
 )
 
 // errShrinkCut ends a shrink after ShrinkCandidates candidates.
@@ -45,7 +45,8 @@ type Options struct {
 	Out   string
 	Run   RunPlan
 	// Log hears one line for each run. It may be nil.
-	Log io.Writer
+	Log                 io.Writer
+	Replays, Candidates int
 }
 
 // Found is one distinct finding of a hunt.
@@ -54,7 +55,7 @@ type Found struct {
 	Seed    uint64
 	// Reproduced counts the replays, of Replays, that found the signature
 	// again.
-	Reproduced int
+	Reproduced, Replays int
 	// Shrunk is the smallest plan that still fails. It is saved at
 	// ShrunkPath. It is nil when no replay reproduced the finding.
 	Shrunk     *plan.Plan
@@ -116,11 +117,12 @@ func Hunt(ctx context.Context, o Options) ([]Found, error) {
 
 // ShrinkOptions configure the shrink of one plan file.
 type ShrinkOptions struct {
-	ConfigPath string
-	PlanPath   string
-	Out        string
-	Run        RunPlan
-	Log        io.Writer
+	ConfigPath          string
+	PlanPath            string
+	Out                 string
+	Run                 RunPlan
+	Log                 io.Writer
+	Replays, Candidates int
 }
 
 // ShrinkPlan runs the plan into Out, then replays and shrinks each of its
@@ -183,7 +185,7 @@ func (h *hunter) investigate(ctx context.Context, p *plan.Plan, dir, name string
 	if len(found) == 0 {
 		return nil, nil
 	}
-	for i := 1; i <= Replays; i++ {
+	for i := 1; i <= DefaultReplays; i++ {
 		replay, err := h.run(ctx, p, filepath.Join(dir, fmt.Sprintf("replay-%d", i)))
 		if ctx.Err() != nil {
 			return found, ctx.Err()
@@ -208,12 +210,12 @@ func (h *hunter) investigate(ctx context.Context, p *plan.Plan, dir, name string
 			continue
 		}
 		k := 2
-		if 2*f.Reproduced < Replays {
+		if 2*f.Reproduced < DefaultReplays {
 			k = 4
 		}
 		tried := 0
 		fails := func(ctx context.Context, c *plan.Plan) (bool, error) {
-			if tried++; tried > ShrinkCandidates {
+			if tried++; tried > DefaultCandidates {
 				return false, errShrinkCut
 			}
 			candidates++
@@ -235,7 +237,7 @@ func (h *hunter) investigate(ctx context.Context, p *plan.Plan, dir, name string
 			return false, nil
 		}
 		if f.Shrunk, err = Shrink(ctx, p, h.samples, fails); errors.Is(err, errShrinkCut) {
-			h.logf("%s: shrink stopped after %d candidates", name, ShrinkCandidates)
+			h.logf("%s: shrink stopped after %d candidates", name, DefaultCandidates)
 			err = nil
 		}
 		if err != nil {
@@ -294,7 +296,7 @@ func Summary(over string, found []Found, failed []string) string {
 				seed = fmt.Sprint(f.Seed)
 			}
 			fmt.Fprintf(&b, "| %s | %s | %s | %d/%d | %s |\n", seed, f.Finding.Check,
-				strings.ReplaceAll(f.Finding.Summary, "|", `\|`), f.Reproduced, Replays, shrunk)
+				strings.ReplaceAll(f.Finding.Summary, "|", `\|`), f.Reproduced, DefaultReplays, shrunk)
 		}
 	}
 	if len(failed) > 0 {
