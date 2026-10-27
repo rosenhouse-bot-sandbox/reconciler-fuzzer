@@ -427,9 +427,9 @@ sample, and the fixtures. rapid draws values, and the CRD's own validation, run
 in-process, rejects invalid ones. `Plan(seed)` draws 3 to 8 steps of 1 to 4
 actions and at most one fault each. A create draws its kind uniformly from
 `primaries`, and each CR takes its kind's `values`. Step 0 creates slot `a`.
-About 30% of steps hold one `restart`, `kill` or `damage`, so Restore has steps
-to judge. Some model-fault steps that delete also restart or kill 300 ms or
-more later. A kube fault draws its request from what `launch.rbac` grants,
+About 30% of steps hold one `restart`, `kill` or `damage`, for Restore to judge.
+Most model-fault steps that delete also restart or kill 300 ms or more later.
+That delays later actions. A kube fault draws a request `launch.rbac` grants,
 creates weighted most (§17, entry 20). 2 of 7 kube fault draws (of 9 with
 `models:`, 2 of which are `stuck` or `slowDelete`) hold a kind `launch.rbac`
 lets the controller watch, the listed and `owns` kinds weighted most, with the
