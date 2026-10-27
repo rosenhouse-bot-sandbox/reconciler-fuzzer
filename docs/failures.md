@@ -199,6 +199,14 @@ names the verb, the object, the status and the calls. Retry through a rate
 limiter, such as controller-runtime's default, rather than a short
 `RequeueAfter`.
 
+### Backoff: repeated a no-op write in a tight loop
+
+The controller repeated a write that changed nothing, with gaps under 100 ms.
+The line names the verb, the object, the status and the calls. A delete of an
+object that is already being deleted is such a write. Skip a write that the
+cached object already shows, and wait for a watch event rather than a short
+`RequeueAfter`.
+
 ### Finalizers: removed another caller's finalizer
 
 A controller update or patch dropped a finalizer that a model added. Each

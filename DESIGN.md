@@ -248,16 +248,15 @@ to the CRs the stop waited for (§9).
    the change, it needs `stable` since the first request that looked; a
    held watch, `stable` since its `holdWatch` ended.
 6. No model or fake has work pending at `t` (`Index.Pending`).
-7. No changed write, not ignored, ended in `(t - stable, t]` or was in
-   flight at `t`. Over each system's poll interval up to `t`, the
-   controller made at most `reads × max(1, live CRs)` gets and lists and
-   at most `writes × max(1, live CRs)` mutating requests of that system,
-   no-op writes included. Kube's poll interval is `stable`. A controller
-   write of a CR that changes only its kind's `periodic.paths`, and comes at
-   least `every / 2` after the previous one of that CR, is not a changed
-   write; the budgets still count it. A path's `[*]` names every list item.
-   A fake's write without a resourceVersion is changed only if the
-   observer records a new version within 200 ms (`Index.Changed`).
+7. No changed write, not ignored, ended in `(t - stable, t]` or was in flight at
+   `t`. Over each system's poll interval up to `t`, the controller made at most
+   `reads × max(1, live CRs)` gets and lists and at most `writes × max(1, live
+   CRs)` mutating requests of that system, no-op writes included. Kube's poll
+   interval is `stable`. A controller write of a CR that changes only its kind's
+   `periodic.paths`, and comes at least `every / 2` after the previous one of
+   that CR, is not a changed write; the budgets still count it. A path's `[*]`
+   names every list item. A fake's write without a resourceVersion is changed
+   only if the observer records a new version within 200 ms (`Index.Changed`).
 
 `ready` and `halted` are CEL over `self`, the CR; an error fails clause 1. No
 check counts what `trace.Ignored` lists: Events, Leases, TokenReview, access
@@ -343,13 +342,15 @@ dependency` (entry 81). With `track: d`, a CR fails that stays `ready` `d` after
 the controller saw a dependency not ready: `stayed ready after seeing its
 dependency not ready`.
 
-**Backoff.** Failing controller calls with one system, verb, object,
-subresource and status form a **run**; a create's object is its `requestName`.
-A success breaks it. So does a new generation of its object, or of the
-object's rule 1 to 3 CR. When the object is no CR and has no such CR, any CR's
-new generation breaks it. With `n` CRs live, it fails when each gap between
-calls `5n + 1` to `10n + 1` is under 100 ms: `retried a failing request in a
-tight loop`. It skips 409s on a held kind until `stable / 4` after the hold.
+**Backoff.** A controller call is **futile** when it fails, or writes and
+`Index.Changed` finds no change. Futile calls with one system, verb, object,
+subresource and status form a **run**; a create's object is its `requestName`. A
+call of its verb, object and subresource that is not futile breaks it, as does a
+new generation of its object, of the object's rule 1 to 3 CR, or, when the
+object is no CR and has no such CR, of any CR. With `n` CRs live, it fails when
+each gap between calls `5n + 1` to `10n + 1` is under 100 ms: `retried a failing
+request in a tight loop`, or `repeated a no-op write in a tight loop` for 2xx
+calls. It skips 409s on a held kind until `stable / 4` after the hold.
 
 **Finalizers.** A controller `update` or `patch` of an object, or of a built-in
 kind's `status`, fails when its answer drops a finalizer that a model or the gc
@@ -367,8 +368,7 @@ rules 1 to 3, or `""`; a finding's details say where such values came from. The
 string and base64 CEL extensions apply. Summaries: `property <name> does not
 hold`, `could not be evaluated`.
 
-**Corpus.** `check/testdata/corpus/` holds traces of known bugs and false
-positives (`corpus_test.go`).
+**Corpus.** `check/testdata/corpus/` holds traces of bugs and false positives.
 
 ## 13. Config
 
@@ -507,7 +507,6 @@ Each entry changes a check, exception, `System` interface or ignore list.
 39. A model fault's end writes a fresh status, for a controller without a watch.
 40. Restore ignores a model kind's `status`, which the model writes.
 41. A model fault that held no object gets a note, as a request fault does.
-43. Backoff allows 409s on a kind a `holdWatch` holds, as #114 defines.
 44. Converge names an unmodelled kind only with an instance that has no status.
 47. Honest skips a deleting dependency, and counts a gone one last seen live, and one the controller saw before the observer did.
 48. A restart, exit or failed CR write excuses `track`.
@@ -527,3 +526,4 @@ Each entry changes a check, exception, `System` interface or ignore list.
 81. `required` binds only the first entry's CRs, so the kinds that own no dependency pass.
 82. A `damage` touches each group under its root. An undamaged touched group may empty while its kind lives under that root, and a damaged one whose owner is gone while a CR made in the step owns its kind and role there. So a damage under a CR that the controller made touches that CR's owner, and the controller may remake that CR.
 85. A kube write's call records its answer's finalizers, for Finalizers (#133), since an update that empties a deleting object's finalizers deletes it and answers with the old version. The gc owns `foregroundDeletion` and `orphan`, which the API server adds for whoever deletes. A finalizer the harness wrote, from a sample, a fixture or a plan, may be the controller's own. Listeners record answers in no fixed order, so a version that overlapping writes of two callers carry may be either's. After an answer names a version the observer missed, the trace may lack a change, so the object's later writes pass. A CRD's status write keeps its metadata.
+88. Backoff counts a no-op write, such as a delete of an object already being deleted, as futile, so a tight loop of them fails (#139). A no-op write breaks no run of failing calls.

@@ -45,7 +45,11 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !cluster.DeletionTimestamp.IsZero() {
-		return r.finalize(ctx, cluster)
+		err := r.finalize(ctx, cluster)
+		if err == nil && r.Bug == B162 {
+			return ctrl.Result{RequeueAfter: time.Millisecond}, nil
+		}
+		return ctrl.Result{}, err
 	}
 	if controllerutil.AddFinalizer(cluster, fleetv1.ClusterFinalizer) {
 		return ctrl.Result{}, r.Update(ctx, cluster)
@@ -111,18 +115,18 @@ func (r *ClusterReconciler) syncVolumes(ctx context.Context, cluster *fleetv1.Cl
 
 // finalize waits until no Database names the Cluster, deletes its Volumes,
 // waits until none remains, and then removes its finalizer.
-func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Cluster) (ctrl.Result, error) {
+func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Cluster) error {
 	if !controllerutil.ContainsFinalizer(cluster, fleetv1.ClusterFinalizer) {
-		return ctrl.Result{}, nil
+		return nil
 	}
 	databases := &fleetv1.DatabaseList{}
 	if err := r.APIReader.List(ctx, databases, client.InNamespace(cluster.Namespace)); err != nil && !r.unserved(err) {
-		return ctrl.Result{}, fmt.Errorf("listing Databases: %w", err)
+		return fmt.Errorf("listing Databases: %w", err)
 	}
 	named := slices.ContainsFunc(databases.Items, func(db fleetv1.Database) bool { return db.Spec.ClusterRef == cluster.Name })
 	volumes, err := r.ownedVolumes(ctx, r.APIReader, cluster)
 	if err != nil {
-		return ctrl.Result{}, err
+		return err
 	}
 	old := cluster.Status
 	cluster.Status.Phase = fleetv1.Deleting
@@ -135,31 +139,28 @@ func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Clust
 		cluster.Status.Message = ""
 	}
 	if err := r.writeStatus(ctx, cluster, old, cluster.Status); err != nil {
-		return ctrl.Result{}, err
+		return err
 	}
 	if named {
-		return ctrl.Result{}, nil // A Database's deletion requeues the Cluster.
+		return nil // A Database's deletion requeues the Cluster.
 	}
 	for i := range volumes {
 		if v := &volumes[i]; v.DeletionTimestamp.IsZero() || r.Bug == B162 {
 			if err := r.Delete(ctx, v); client.IgnoreNotFound(err) != nil {
-				return ctrl.Result{}, fmt.Errorf("deleting Volume %s: %w", v.Name, err)
+				return fmt.Errorf("deleting Volume %s: %w", v.Name, err)
 			}
 		} else if r.Bug == B116 {
 			v.Finalizers = nil
 			if err := r.Update(ctx, v); client.IgnoreNotFound(err) != nil {
-				return ctrl.Result{}, fmt.Errorf("stripping Volume %s: %w", v.Name, err)
+				return fmt.Errorf("stripping Volume %s: %w", v.Name, err)
 			}
 		}
 	}
-	switch {
-	case len(volumes) > 0 && r.Bug == B162:
-		return ctrl.Result{RequeueAfter: time.Millisecond}, nil
-	case len(volumes) > 0 && r.Bug != B151:
-		return ctrl.Result{}, nil // A Volume's deletion requeues the Cluster.
+	if len(volumes) > 0 && r.Bug != B151 {
+		return nil // A Volume's deletion requeues the Cluster.
 	}
 	controllerutil.RemoveFinalizer(cluster, fleetv1.ClusterFinalizer)
-	return ctrl.Result{}, client.IgnoreNotFound(r.Update(ctx, cluster))
+	return client.IgnoreNotFound(r.Update(ctx, cluster))
 }
 
 // releaseVolumes strips VolumeFinalizer from the gone Cluster's Volumes.
