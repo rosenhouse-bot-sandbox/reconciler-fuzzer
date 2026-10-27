@@ -65,16 +65,13 @@ func (c *calls) whenAfter(entry, other string) (time.Time, bool) {
 	return c.at[from+1+i], true
 }
 
-type fakeProcess struct {
-	*calls
-	tail string
-}
+type fakeProcess struct{ *calls }
 
 func (p fakeProcess) Start(context.Context) error { p.add("start"); return nil }
 func (p fakeProcess) Stop(context.Context) error  { p.add("stop"); return nil }
 func (p fakeProcess) Kill(context.Context) error  { p.add("kill"); return nil }
 func (p fakeProcess) Supervise(on bool) error     { p.add("supervise(%v)", on); return nil }
-func (p fakeProcess) Tail() string                { return p.tail }
+func (p fakeProcess) Tail() string                { return "toy: waiting\n" }
 
 type fakeCluster struct {
 	*calls
@@ -177,7 +174,7 @@ func newFixture(t *testing.T, firstSettled FirstSettled) *fixture {
 		Config:       &config.Config{Timeouts: timeouts},
 		Recorder:     rec,
 		Cluster:      f.cluster,
-		Process:      fakeProcess{calls: f.process},
+		Process:      fakeProcess{f.process},
 		Listeners:    map[string]FaultTarget{"kube": fakeTarget{calls: f.faults}},
 		Actors:       map[string]Actor{"kube": f.cluster},
 		FirstSettled: firstSettled,
@@ -1503,7 +1500,6 @@ func TestQuietFailsAControllerThatNeverStarted(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t, func(*trace.Index, time.Duration, time.Duration) (time.Duration, bool) { return 0, false })
-			f.runner.Process = fakeProcess{calls: f.process, tail: "toy: waiting\n"}
 			for _, e := range c.events {
 				f.rec.Record(e)
 			}
