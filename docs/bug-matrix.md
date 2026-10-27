@@ -65,7 +65,7 @@ Each Cluster owns Volumes of a third party's kind, which a model sets ready. A D
 
 | Bug | Description | Plan | Check | Step |
 |---|---|---|---|---|
-| B0 | The correct controller. | all 15 plans of config.yaml, database/config.yaml, protect/config.yaml | none | |
+| B0 | The correct controller. | all 16 plans of config.yaml, database/config.yaml, protect/config.yaml | none | |
 | B0 | The correct controller. | uninstall/crd-first-stop | none | |
 | B0 | The correct controller. | uninstall/kill-recreate | none | |
 | B0 | The correct controller. | uninstall/recreate | none | |
@@ -75,6 +75,8 @@ Each Cluster owns Volumes of a third party's kind, which a model sets ready. A D
 | B116 | Removes every finalizer from a deleting Volume while its Cluster is deleted. | slow-delete | Finalizers | 1 |
 | B135 | Ends each Volume's name with a suffix that each process picks, and deletes only Volumes with its own suffix, so a restart makes a second set. | b135 | Unique | 0 |
 | B135 | Ends each Volume's name with a suffix that each process picks, and deletes only Volumes with its own suffix, so a restart makes a second set. | b135 | Unique | 1 |
+| B135 | Ends each Volume's name with a suffix that each process picks, and deletes only Volumes with its own suffix, so a restart makes a second set. | b135-restart | Restore | 1 |
+| B135 | Ends each Volume's name with a suffix that each process picks, and deletes only Volumes with its own suffix, so a restart makes a second set. | b135-restart | Unique | 1 |
 | B150 | Strips its finalizers from deleting CRs when it shuts down. | database/restart-cluster-delete | Converge | 1 |
 | B151 | Puts a finalizer on each Volume, and releases a deleted Cluster before its Volumes, whose finalizers it strips only afterwards. | uninstall/kill-recreate | Converge | 1 |
 | B151 | Puts a finalizer on each Volume, and releases a deleted Cluster before its Volumes, whose finalizers it strips only afterwards. | uninstall/stop-after-delete | Clean | 1 |

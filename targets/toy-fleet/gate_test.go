@@ -52,8 +52,11 @@ var gate = []gateRow{
 	// The restart comes 500 ms after the create, long after the first
 	// process makes its Volumes. The second makes its own, and the update
 	// deletes only one of them.
-	{plan: "b135", bug: 135, finding: "Unique: duplicate resources", step: 0, detail: "cluster-vol-1-"},
-	{plan: "b135", bug: 135, finding: "Unique: duplicate resources", step: 1, detail: "cluster-vol-0-"},
+	{plan: "b135", bug: 135, finding: "Unique: duplicate resources", step: 0, detail: `role "cluster-vol-1": `},
+	{plan: "b135", bug: 135, finding: "Unique: duplicate resources", step: 1, detail: `role "cluster-vol-0": `},
+	// The restart has a step of its own, which changes no CR.
+	{plan: "b135-restart", bug: 135, finding: "Restore: replaced resources", step: 1, detail: "cluster-vol-0-"},
+	{plan: "b135-restart", bug: 135, finding: "Unique: duplicate resources", step: 1, detail: `role "cluster-vol-0": `},
 	{plan: "restart-cluster-delete", bug: 150, finding: "Converge: did not settle (clause 1)", step: 1, detail: "db is not ready", config: databaseConfig},
 	// The kill comes after the update that releases the Cluster, so B151
 	// never strips its Volumes' finalizers.
