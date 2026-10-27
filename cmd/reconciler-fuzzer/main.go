@@ -146,7 +146,7 @@ func cli(args []string, stdout, stderr io.Writer) int {
 			}
 			found, err := hunt.ShrinkPlan(ctx, hunt.ShrinkOptions{ConfigPath: *configPath, PlanPath: *planPath, Out: *out, Run: runInto, Log: stderr})
 			if err != nil && len(found) == 0 {
-				// ShrinkPlan wrote no summary.md.
+				// ShrinkPlan wrote no summary.md, and --out may hold a stale one.
 				return 0, harnessError{err}
 			}
 			printSummary(stdout, *out)

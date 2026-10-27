@@ -262,8 +262,8 @@ func TestHuntWritesTheSummaryOfTheSeedsBeforeACancel(t *testing.T) {
 	fake := &fakeRun{out: t.TempDir(), finds: always(clean)}
 	ctx, run := cancelAt(t, fake, "seed-2")
 	_, err := Hunt(ctx, Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1, 2}), Out: fake.out, Run: run})
-	if !errors.Is(err, context.Canceled) {
-		t.Errorf("Hunt returned %v, want the cancel.", err)
+	if !errors.Is(err, context.Canceled) || err.Error() != "context canceled" {
+		t.Errorf("Hunt returned %q, want only the cancel.", err)
 	}
 	summary, _ := os.ReadFile(filepath.Join(fake.out, "summary.md"))
 	if !strings.Contains(string(summary), "over 1 seeds") || !strings.Contains(string(summary), "| 1 | Clean |") {
@@ -285,6 +285,19 @@ func TestHuntCountsASeedWhoseRunEndedBeforeTheCancel(t *testing.T) {
 	summary, _ := os.ReadFile(filepath.Join(fake.out, "summary.md"))
 	if !errors.Is(err, context.Canceled) || !strings.Contains(string(summary), "over 2 seeds") {
 		t.Errorf("Hunt returned %v and wrote:\n%s", err, summary)
+	}
+}
+
+func TestHuntReturnsTheCancelWithTheErrorOfTheRunItEnded(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := Hunt(ctx, Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1}), Out: t.TempDir(),
+		Run: func(context.Context, *plan.Plan, string) (check.Report, error) {
+			cancel()
+			return check.Report{}, boom
+		}})
+	if !errors.Is(err, context.Canceled) || !errors.Is(err, boom) {
+		t.Errorf("Hunt returned %v, want the cancel and boom.", err)
 	}
 }
 
@@ -347,7 +360,7 @@ func TestHuntKeepsAFindWhoseShrunkPlanFailedToSave(t *testing.T) {
 	}
 	found, err := Hunt(context.Background(), Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1}), Out: fake.out, Run: fake.run})
 	summary, _ := os.ReadFile(filepath.Join(fake.out, "summary.md"))
-	if err == nil || len(found) != 1 || found[0].ShrunkPath != "" || !found[0].CutShort || !strings.Contains(string(summary), "over 1 seed") ||
+	if err == nil || len(found) != 1 || found[0].Shrunk != nil || found[0].ShrunkPath != "" || !found[0].CutShort || !strings.Contains(string(summary), "over 1 seed") ||
 		!strings.Contains(string(summary), "| 5/5 | not shrunk (cut short) |") || !strings.Contains(string(summary), "- seed 1: open "+blocked) {
 		t.Errorf("Hunt = %+v, %v, and wrote:\n%s", found, err, summary)
 	}
@@ -364,7 +377,7 @@ func TestACancelKeepsAFindWhoseShrunkPlanFailedToSave(t *testing.T) {
 	ctx, run := cancelAt(t, fake, "shrink-2-1")
 	found, err := Hunt(ctx, Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1}), Out: fake.out, Run: run})
 	summary, _ := os.ReadFile(filepath.Join(fake.out, "summary.md"))
-	if !errors.Is(err, context.Canceled) || !strings.Contains(fmt.Sprint(err), "open "+blocked) || len(found) != 1 || found[0].ShrunkPath != "" || !found[0].CutShort ||
+	if !errors.Is(err, context.Canceled) || !strings.Contains(fmt.Sprint(err), "open "+blocked) || len(found) != 1 || found[0].Shrunk != nil || found[0].ShrunkPath != "" || !found[0].CutShort ||
 		!strings.Contains(string(summary), "over 1 seed") || !strings.Contains(string(summary), "| 5/5 | not shrunk (cut short) |") {
 		t.Errorf("Hunt = %+v, %v, and wrote:\n%s", found, err, summary)
 	}
