@@ -140,8 +140,8 @@ type ShrinkOptions struct {
 }
 
 // ShrinkPlan runs the plan into Out, then replays and shrinks each of its
-// findings as Hunt does. It writes summary.md under Out as they finish,
-// unless an error leaves no findings to list.
+// findings as Hunt does. It writes summary.md under Out as they finish. An
+// error that leaves no findings writes none.
 func ShrinkPlan(ctx context.Context, o ShrinkOptions) ([]Found, error) {
 	cfg, err := config.Load(o.ConfigPath)
 	if err != nil {
@@ -191,8 +191,8 @@ func (h *hunter) logf(format string, args ...any) {
 // finding, c the candidate and r the run. It removes each candidate run that
 // did not fail. A replay or candidate whose run fails counts as not failing.
 // A finding that replays all missed is not shrunk. Only the run of p itself
-// returns its error. When the context ends, it returns the findings so far,
-// unshrunk.
+// returns its error. When the context ends or a shrunk plan fails to save,
+// it returns the findings so far with the error.
 func (h *hunter) investigate(ctx context.Context, p *plan.Plan, dir, name string) ([]Found, error) {
 	report, err := h.run(ctx, p, dir)
 	if err != nil {
@@ -279,20 +279,21 @@ func (h *hunter) investigate(ctx context.Context, p *plan.Plan, dir, name string
 			h.logf("%s: shrink stopped after %d candidates", finding, h.candidates)
 			err = nil
 		}
+		path := filepath.Join(dir, "shrunk.json")
+		if j > 0 {
+			path = filepath.Join(dir, fmt.Sprintf("shrunk-%d.json", j+1))
+		}
+		if err == nil {
+			err = os.MkdirAll(dir, 0o755)
+		}
+		if err == nil {
+			err = plan.Save(path, f.Shrunk)
+		}
 		if err != nil {
 			f.Shrunk = nil
 			return found, err
 		}
-		f.ShrunkPath = filepath.Join(dir, "shrunk.json")
-		if j > 0 {
-			f.ShrunkPath = filepath.Join(dir, fmt.Sprintf("shrunk-%d.json", j+1))
-		}
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return nil, err
-		}
-		if err := plan.Save(f.ShrunkPath, f.Shrunk); err != nil {
-			return nil, err
-		}
+		f.ShrunkPath = path
 		f.shrinking = false
 		h.progress(found)
 	}

@@ -521,6 +521,35 @@ func TestShrinkPlanLeavesNothingPendingAfterACancel(t *testing.T) {
 	}
 }
 
+func TestShrinkPlanLeavesNothingPendingAfterAFailedSave(t *testing.T) {
+	out := t.TempDir()
+	// A directory in its place keeps shrunk.json from being saved.
+	if err := os.Mkdir(filepath.Join(out, "shrunk.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeRun{out: out, finds: always(clean)}
+	found, err := ShrinkPlan(context.Background(), ShrinkOptions{ConfigPath: toyConfig, PlanPath: "../../targets/toy-widget/plans/b13.json", Out: out,
+		Replays: 1, Candidates: 1, Run: fake.run})
+	summary, _ := os.ReadFile(filepath.Join(out, "summary.md"))
+	if err == nil || len(found) != 1 || found[0].Shrunk != nil || !strings.Contains(string(summary), "| - | Clean | a ConfigMap outlives its Widget | 1/1 | not shrunk |") {
+		t.Errorf("ShrinkPlan = %+v, %v, and wrote:\n%s", found, err, summary)
+	}
+}
+
+func TestHuntListsTheFindingOfASeedWhoseShrunkPlanFailedToSave(t *testing.T) {
+	fake := &fakeRun{out: t.TempDir(), finds: always(clean)}
+	if err := os.MkdirAll(filepath.Join(fake.out, "seed-1", "shrunk.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	found, err := Hunt(context.Background(), Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1}), Out: fake.out,
+		Replays: 1, Candidates: 1, Run: fake.run})
+	summary, _ := os.ReadFile(filepath.Join(fake.out, "summary.md"))
+	if err == nil || len(found) != 1 || !strings.Contains(string(summary), "| 1 | Clean | a ConfigMap outlives its Widget | 1/1 | not shrunk |") ||
+		!strings.Contains(string(summary), "- seed 1: ") {
+		t.Errorf("Hunt = %+v, %v, and wrote:\n%s", found, err, summary)
+	}
+}
+
 func TestSummaryShowsNoSeedForAPlanWithout(t *testing.T) {
 	got := Summary("1 plan", []Found{{Finding: clean}, {Finding: clean, Seed: 4}}, nil)
 	if !strings.Contains(got, "| - | Clean |") || !strings.Contains(got, "| 4 | Clean |") {

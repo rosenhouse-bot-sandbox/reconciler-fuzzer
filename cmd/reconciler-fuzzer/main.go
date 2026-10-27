@@ -51,8 +51,8 @@ var purposes = map[string]string{
 	"run":    "Run runs one plan against the controller and prints the report of its trace.",
 	"plan":   "Plan prints the plan that run --seed n runs, without running it.",
 	"judge":  "Judge judges a stored trace and prints its report.",
-	"hunt":   "Hunt runs the plans of n seeds from s on and prints summary.md. A seed with new findings costs r replays of its plan, then up to c shrink candidates of 2 to 4 runs for each finding.",
-	"shrink": "Shrink runs a plan and prints summary.md. A plan with findings costs r replays, then up to c shrink candidates of 2 to 4 runs for each finding.",
+	"hunt":   "Hunt runs the plans of n seeds from s on and prints summary.md. A seed with new findings costs r replays of its plan, then up to c shrink candidates of at most 4 runs for each finding.",
+	"shrink": "Shrink runs a plan and prints summary.md. A plan with findings costs r replays, then up to c shrink candidates of at most 4 runs for each finding.",
 }
 
 // helpWords ask for help in place of a command.
@@ -87,7 +87,7 @@ func cli(args []string, stdout, stderr io.Writer) int {
 	configPath := flags.String("config", "", configUsage)
 	var out, planPath, seed *string
 	var launchArgs repeated
-	var replays, candidates *int
+	replays, candidates := count(hunt.DefaultReplays), count(hunt.DefaultCandidates)
 	if takes("run", "hunt", "shrink") {
 		out = flags.String("out", "", "the directory to write into")
 		flags.Var(&launchArgs, "launch-arg", "an argument to append to launch.args; repeat it for more")
@@ -99,8 +99,8 @@ func cli(args []string, stdout, stderr io.Writer) int {
 		seed = flags.String("seed", "", "the seed to draw the plan from")
 	}
 	if takes("hunt", "shrink") {
-		replays = flags.Int("replays", hunt.DefaultReplays, "how many times to replay a plan with new findings")
-		candidates = flags.Int("candidates", hunt.DefaultCandidates, "how many shrink candidates to try for each finding")
+		flags.Var(&replays, "replays", "how many times to replay a plan with new findings")
+		flags.Var(&candidates, "candidates", "how many shrink candidates to try for each finding")
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -165,7 +165,7 @@ func cli(args []string, stdout, stderr io.Writer) int {
 			if *from+*seeds-1 < *from {
 				return 0, errors.New("--from plus --seeds passes the largest seed")
 			}
-			o := hunt.Options{ConfigPath: *configPath, Out: *out, Replays: *replays, Candidates: *candidates, Run: runInto, Log: stderr,
+			o := hunt.Options{ConfigPath: *configPath, Out: *out, Replays: int(replays), Candidates: int(candidates), Run: runInto, Log: stderr,
 				Seeds: func(yield func(uint64) bool) {
 					for n := range *seeds {
 						if !yield(*from + n) {
@@ -191,7 +191,7 @@ func cli(args []string, stdout, stderr io.Writer) int {
 				return 0, err
 			}
 			found, err := hunt.ShrinkPlan(ctx, hunt.ShrinkOptions{ConfigPath: *configPath, PlanPath: *planPath, Out: *out,
-				Replays: *replays, Candidates: *candidates, Run: runInto, Log: stderr})
+				Replays: int(replays), Candidates: int(candidates), Run: runInto, Log: stderr})
 			if err != nil {
 				return 0, harnessError{err}
 			}
@@ -225,9 +225,6 @@ func cli(args []string, stdout, stderr io.Writer) int {
 		return 2
 	case flags.NArg() > 0:
 		fmt.Fprintf(stderr, "unexpected arguments %q\n%s", flags.Args(), usage)
-		return 2
-	case takes("hunt", "shrink") && min(*replays, *candidates) < 0:
-		fmt.Fprintf(stderr, "--replays and --candidates need counts of 0 or more\n%s", usage)
 		return 2
 	}
 	findings, err := command()
@@ -342,6 +339,20 @@ func judge(configPath, tracePath string) (string, int, error) {
 	}
 	report := check.Judge(ix, spec)
 	return check.Markdown(ix, report), len(report.Findings), nil
+}
+
+// count is a flag that takes a count of 0 or more.
+type count int
+
+func (c *count) String() string { return strconv.Itoa(int(*c)) }
+
+func (c *count) Set(value string) error {
+	n, err := strconv.ParseUint(value, 10, strconv.IntSize-1)
+	if err != nil {
+		return errors.New("want a count of 0 or more")
+	}
+	*c = count(n)
+	return nil
 }
 
 type repeated []string

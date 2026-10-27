@@ -336,10 +336,11 @@ KUBEBUILDER_ASSETS=<path> reconciler-fuzzer hunt --config config.yaml --seeds 20
 ```
 
 It replays the plan of a seed with new findings 5 times, then tries up to 16 shrink candidates
-of 2 to 4 runs for each finding, which takes many minutes. Run it in the background. Lower
-`--replays` and `--candidates` to finish sooner. `summary.md` lists each finding with its seed and shrunk plan, and says
-`pending` until the finding's replays or shrink end. Treat each finding as in step 8.
-`reconciler-fuzzer plan --config config.yaml --seed <n>` prints seed n's plan without running it.
+of at most 4 runs for each finding, which takes many minutes. Run it in the background. Lower
+`--replays` and `--candidates` to finish sooner. `summary.md` lists each finding with its seed
+and shrunk plan, and says `pending` until the finding's replays or shrink end. Treat each
+finding as in step 8. `reconciler-fuzzer plan --config config.yaml --seed <n>` prints seed n's
+plan without running it.
 
 ## 10. Commit plans and seeds
 
