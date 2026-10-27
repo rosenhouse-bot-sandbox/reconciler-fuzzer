@@ -144,7 +144,8 @@ Harness actions return once the observer has recorded their effect. The
 observer list-watches cluster-wide each installed CRD, each served kind the
 config or a fixture names, and each served kind `launch.rbac` names that is not
 ignored (§10). These are the run event's `kinds`. It then watches any kind a
-listener records a call on, and records a `version` per (ref, resourceVersion).
+listener records a call on, and records one `version` per
+(ref, resourceVersion).
 
 ## 7. Models and fake services
 
@@ -342,15 +343,14 @@ dependency` (entry 81). With `track: d`, a CR fails that stays `ready` `d` after
 the controller saw a dependency not ready: `stayed ready after seeing its
 dependency not ready`.
 
-**Backoff.** A controller call is **futile** when it fails, or writes and
+**Backoff.** A controller call is **futile** if it fails, or writes and
 `Index.Changed` finds no change. Futile calls with one system, verb, object,
-subresource and status, each under 100 ms after the last, form a **run**; a
-create's object is its `requestName`. Any other success of its verb, object and
-subresource breaks it, as does a new generation of its object, of the object's
-rule 1 to 3 CR, or, when the object is no CR and has no such CR, of any CR. With
-`n` CRs live, it fails at call `10n + 1`: `retried a failing request in a tight
-loop`, or `repeated a no-op write in a tight loop` for 2xx calls. It skips 409s
-on a held kind until `stable / 4` after the hold.
+subresource and status, each under 100 ms after the last, form a **run**.
+Another success of its verb, object and subresource ends it, as does a new
+generation of its object, of the object's rule 1 to 3 CR, or, for an object
+that is no CR and has none, of any CR. With `n` CRs live, call `10n + 1` fails:
+`retried a failing request in a tight loop` or `repeated a no-op write in a
+tight loop`. It skips 409s on a held kind until `stable / 4` after the hold.
 
 **Finalizers.** A controller `update` or `patch` of an object, or of a built-in
 kind's `status`, fails when its answer drops a finalizer that a model or the gc

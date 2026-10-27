@@ -31,11 +31,13 @@ func Backoff(ix *trace.Index, s Spec) []Finding {
 		}
 		c, start := e.Call, e.At-e.Call.Latency
 		object := c.Object()
+		// A create's object is the name it requests.
 		object.Name = cmp.Or(object.Name, c.RequestName)
 		r := request{c.Ref.System, c.Verb, object, c.Subresource, c.Status}
 		futile := !succeeded(*c) || trace.Mutating(c.Verb) && !ix.Changed(e)
 		if succeeded(*c) {
-			// A success ends each run of its request that it does not join.
+			// A success ends each run of its verb, object and subresource
+			// that it does not join.
 			for key := range runs {
 				if key.object == r.object && key.verb == r.verb && key.subresource == r.subresource && (key != r || !futile) {
 					delete(runs, key)
