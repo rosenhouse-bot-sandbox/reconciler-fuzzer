@@ -22,6 +22,7 @@ const (
 var bugs = map[int]string{
 	0:   "The correct controller.",
 	116: "Removes every finalizer from a deleting Volume while its Cluster is deleted.",
+	135: "Ends each Volume's name with a suffix that each process picks, and deletes only Volumes with its own suffix, so a restart makes a second set.",
 	150: "Strips its finalizers from deleting CRs when it shuts down.",
 	151: "Puts a finalizer on each Volume, and releases a deleted Cluster before its Volumes, whose finalizers it strips only afterwards.",
 	152: "Errors when a dependent kind is not served, as after its CRD is deleted, so the parent's deletion never ends.",

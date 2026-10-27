@@ -116,8 +116,8 @@ type Owns struct {
 	Namespace string
 }
 
-// System is one systems entry: kube, which takes only Owner, or a fake
-// service, which has a Process.
+// System is one systems entry: kube, which takes only Owner and Role, or a
+// fake service, which has a Process.
 type System struct {
 	Name string
 	// Owner is owning-CR rule 2: CEL over self, one of the system's
@@ -134,8 +134,9 @@ type System struct {
 	// Fixtures are files of SystemFixture lists, created before the
 	// controller starts.
 	Fixtures []string
-	// Role, Ready and Gone are CEL over one of the fake's resources, or
-	// empty. Ready is required with Dependency.
+	// Role is CEL over one of the system's resources. Ready and Gone are
+	// CEL over one of the fake's. Each is empty when unset, and Ready is
+	// required with Dependency.
 	Role, Ready, Gone string
 	Dependency        *Dependency
 	// Poll defaults to Timeouts.Stable.
@@ -827,9 +828,9 @@ func systems(d declaration, dir string, stable time.Duration) ([]System, error) 
 			}
 		}
 		if declared.Name == "kube" {
-			if declared.Process != nil || declared.API != "" || declared.Role != "" || declared.Ready != "" || declared.Gone != "" ||
+			if declared.Process != nil || declared.API != "" || declared.Ready != "" || declared.Gone != "" ||
 				declared.Dependency != nil || declared.Poll != "" || declared.Token != "" || declared.Fixtures != nil || declared.Access != "" {
-				return nil, fmt.Errorf("%s: kube takes only name and owner", key)
+				return nil, fmt.Errorf("%s: kube takes only name, owner and role", key)
 			}
 			systems = append(systems, s)
 			continue

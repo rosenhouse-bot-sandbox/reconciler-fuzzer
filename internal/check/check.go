@@ -204,26 +204,29 @@ func listedKinds(primaries []trace.Primary) []string {
 	return kinds
 }
 
-// addSystems sets Polls and Ignore, and adds a Model for each dependency
-// fake.
-func (s *Spec) addSystems(fakes []trace.System) error {
+// addSystems sets Polls and Ignore from the fakes among systems, and adds a
+// Model for each dependency fake.
+func (s *Spec) addSystems(systems []trace.System) error {
 	s.Polls = map[string]time.Duration{}
-	for _, fake := range fakes {
-		s.Polls[fake.Name] = fake.Poll
-		if len(fake.Ignore) > 0 {
+	for _, system := range systems {
+		if system.Name == "kube" {
+			continue
+		}
+		s.Polls[system.Name] = system.Poll
+		if len(system.Ignore) > 0 {
 			if s.Ignore == nil {
 				s.Ignore = map[string][]string{}
 			}
-			s.Ignore[fake.Name] = fake.Ignore
+			s.Ignore[system.Name] = system.Ignore
 		}
-		if fake.Dependency == nil {
+		if system.Dependency == nil {
 			continue
 		}
-		ready, err := config.CompileReady(fake.Ready)
+		ready, err := config.CompileReady(system.Ready)
 		if err != nil {
-			return fmt.Errorf("ready of %s: %w", fake.Name, err)
+			return fmt.Errorf("ready of %s: %w", system.Name, err)
 		}
-		s.Models = append(s.Models, Model{System: fake.Name, Ready: ready, Dependency: fake.Dependency})
+		s.Models = append(s.Models, Model{System: system.Name, Ready: ready, Dependency: system.Dependency})
 	}
 	return nil
 }

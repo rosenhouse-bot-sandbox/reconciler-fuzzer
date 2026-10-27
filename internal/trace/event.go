@@ -87,7 +87,7 @@ type Run struct {
 	Kinds []Ref `json:"kinds,omitempty"`
 	// Owners maps a system's name to its owner CEL, owning-CR rule 2.
 	Owners map[string]string `json:"owners,omitempty"`
-	// Systems lists the fake services.
+	// Systems lists kube when it has a role, and each fake service.
 	Systems []System `json:"systems,omitempty"`
 	// Properties are the config's properties.
 	Properties []Property `json:"properties,omitempty"`
@@ -118,8 +118,8 @@ type Periodic struct {
 	Paths []string      `json:"paths"`
 }
 
-// System is one fake service as the checks need it. Role, Ready and Gone
-// are CEL over one of its resources, or empty.
+// System is one system as the checks need it. Role, Ready and Gone are CEL
+// over one of its resources, or empty. Kube has only a name and a role.
 type System struct {
 	Name  string `json:"name"`
 	API   string `json:"api"`

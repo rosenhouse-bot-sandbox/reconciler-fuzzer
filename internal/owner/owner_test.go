@@ -143,6 +143,22 @@ func TestRoleIsGenerateNameOrName(t *testing.T) {
 	}
 }
 
+// A kube role CEL gives the role where it evaluates. Elsewhere the role is
+// the generateName or the name, as without one.
+func TestAKubeRoleFallsBackWhereItFails(t *testing.T) {
+	labelled := tt.Object("a-1")
+	labelled["metadata"].(map[string]any)["labels"] = map[string]any{"role": "data"}
+	tl := twoWidgets()
+	tl.At(3*s, tt.Version(cmA0, "c1", "3", tt.Object("a-0")), tt.Version(cmGen, "c2", "4", tt.Generated("a-", "a-x7k2")),
+		tt.Version(tt.Ref("configmaps", "ns", "a-1"), "c3", "5", labelled))
+	w := owner.New(tl.Index(), compileSystems(t, nil, nil, trace.System{Name: "kube", Role: "self.metadata.labels['role']"}))
+	for uid, want := range map[string]string{"c1": "a-0", "c2": "a-", "c3": "data"} {
+		if got := instance(t, w, uid).Role; got != want {
+			t.Errorf("%s role = %q, want %q", uid, got, want)
+		}
+	}
+}
+
 func ownerAt(t *testing.T, tl *tt.Timeline, uid string, at time.Duration) owner.Owner {
 	t.Helper()
 	w := owner.New(tl.Index(), owner.Rules{})

@@ -38,3 +38,30 @@ func TestReadyNeedsTheCurrentGenerationInPhaseReady(t *testing.T) {
 		}
 	}
 }
+
+// The kube role drops a suffix after a Volume's index, so that Unique finds
+// two Volumes of one index. Other names are their own role.
+func TestTheKubeRoleDropsASuffixAfterAVolumesIndex(t *testing.T) {
+	c, err := config.Load("config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Systems) != 1 || c.Systems[0].Name != "kube" {
+		t.Fatalf("systems = %+v, want kube alone", c.Systems)
+	}
+	role, err := config.CompileString(c.Systems[0].Role)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{
+		"cluster-vol-0":       "cluster-vol-0",
+		"cluster-vol-1-ab2cd": "cluster-vol-1",
+		"a-vol-1-b-vol-0":     "a-vol-1-b-vol-0",
+		"db-db":               "db-db",
+		"alice-credentials":   "alice-credentials",
+	} {
+		if got, err := role(map[string]any{"metadata": map[string]any{"name": name}}); got != want || err != nil {
+			t.Errorf("The role of %s is %q, %v; want %q.", name, got, err, want)
+		}
+	}
+}

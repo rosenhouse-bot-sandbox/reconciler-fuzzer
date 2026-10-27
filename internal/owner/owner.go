@@ -31,8 +31,9 @@ type Instance struct {
 	// Creator is the caller of the create, or the 201 apply, whose response
 	// carried UID, or trace.Cluster.
 	Creator trace.Caller
-	// Role is its system's role CEL over its first body. Without one, a
-	// kube instance's is its generateName prefix, or else its name.
+	// Role is its system's role CEL over its first body. Without one, or
+	// where it fails, a kube instance's is its generateName prefix, or else
+	// its name.
 	Role string
 }
 
@@ -63,7 +64,8 @@ type Rules struct {
 	Owners map[string]func(self map[string]any) (string, error)
 	// Owns are rule 3.
 	Owns []OwnsRule
-	// Roles and Gone map a fake's name to its role and gone CEL.
+	// Roles maps a system's name to its role CEL, and Gone a fake's name
+	// to its gone CEL.
 	Roles map[string]func(self map[string]any) (string, error)
 	Gone  map[string]func(self map[string]any) (bool, error)
 }
@@ -178,9 +180,15 @@ func source(p config.Primary, resource func(schema.GroupVersionKind) (string, bo
 	return entry, nil
 }
 
-// Systems returns c's fakes for the run event, with their API map's Ignore.
+// Systems returns c's systems for the run event: kube when it has a role,
+// and each fake with its API map's Ignore.
 func Systems(c *config.Config) []trace.System {
 	var systems []trace.System
+	for _, k := range c.Systems {
+		if k.Name == "kube" && k.Role != "" {
+			systems = append(systems, trace.System{Name: k.Name, Role: k.Role})
+		}
+	}
 	for _, f := range c.Fakes() {
 		s := trace.System{Name: f.Name, API: f.API, Role: f.Role, Ready: f.Ready, Gone: f.Gone, Poll: f.Poll, Ignore: f.Map().Ignore}
 		if f.Dependency != nil {
@@ -315,14 +323,15 @@ func names(c trace.Call, ref trace.Ref) bool {
 	return c.Ref == ref && c.ResultName == ref.Name
 }
 
-// role is the system's role CEL over v, or else, on kube, its generateName
-// or name.
+// role is the system's role CEL over v. Without one, or where it fails, a
+// kube object's role is its generateName or name, and a fake's is empty.
 func (w *World) role(v *trace.Version) string {
 	if eval := w.rules.Roles[v.Ref.System]; eval != nil {
 		var self map[string]any
 		_ = json.Unmarshal(v.Body, &self)
-		role, _ := eval(self) // A role that fails to evaluate is empty.
-		return role
+		if role, err := eval(self); err == nil {
+			return role
+		}
 	}
 	if v.Ref.System != "kube" {
 		return ""

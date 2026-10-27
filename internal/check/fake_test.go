@@ -76,6 +76,35 @@ func TestSpecForReadsFakesFromTheRunEvent(t *testing.T) {
 	}
 }
 
+// A kube role reaches the owner rules from the config and from the run
+// event. Only a fake has a poll interval.
+func TestSpecForTakesTheKubeRole(t *testing.T) {
+	kube := trace.System{Name: "kube", Role: "self.metadata.name"}
+	c := bucketConfig(t)
+	c.Systems = append(c.Systems, config.System{Name: kube.Name, Role: kube.Role})
+	run := tt.Run("toy.reconciler-fuzzer", "widgets")
+	var b tt.Builder
+	fromConfig, err := check.SpecFor(c, b.Add(run).Index())
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Run.Primaries[0].Ready, run.Run.Stable, run.Run.Reads, run.Run.Writes = "true", 2*s, 2, 4
+	run.Run.Systems = []trace.System{kube}
+	b = tt.Builder{}
+	fromTrace, err := check.SpecFor(nil, b.Add(run).Index())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for from, spec := range map[string]check.Spec{"config": fromConfig, "run event": fromTrace} {
+		if spec.Owners.Roles["kube"] == nil {
+			t.Errorf("From the %s, kube has no role.", from)
+		}
+		if _, found := spec.Polls["kube"]; found {
+			t.Errorf("From the %s, kube has a poll interval.", from)
+		}
+	}
+}
+
 // bucketConfig is the toy-widget config with halted and a fake service.
 func bucketConfig(t *testing.T) *config.Config {
 	t.Helper()

@@ -129,6 +129,17 @@ func TestSourcesAndSystemsOfAFake(t *testing.T) {
 	}
 }
 
+func TestSystemsListKubeOnlyWithARole(t *testing.T) {
+	c := &config.Config{Systems: []config.System{{Name: "kube", Owner: "self.x", Role: "self.metadata.name"}}}
+	if want := []trace.System{{Name: "kube", Role: "self.metadata.name"}}; !reflect.DeepEqual(owner.Systems(c), want) {
+		t.Errorf("systems = %+v, want %+v", owner.Systems(c), want)
+	}
+	c.Systems[0].Role = ""
+	if got := owner.Systems(c); got != nil {
+		t.Errorf("without a role, systems = %+v", got)
+	}
+}
+
 func TestPropertiesCopyTheConfig(t *testing.T) {
 	c := &config.Config{Properties: []config.Property{{Name: "fresh", Expr: "true", When: config.Always}}}
 	if want := []trace.Property{{Name: "fresh", Expr: "true", When: "always"}}; !reflect.DeepEqual(owner.Properties(c), want) {
