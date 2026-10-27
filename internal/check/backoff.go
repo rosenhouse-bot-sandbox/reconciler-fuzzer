@@ -15,6 +15,7 @@ import (
 func Backoff(ix *trace.Index, s Spec) []Finding {
 	runs := map[request]*run{}
 	found := map[findingKey]*Finding{}
+	named := map[namedRequest]bool{}
 	var order []findingKey
 	steps := ix.Steps()
 	holds := holdWatches(ix, s.Stable)
@@ -51,16 +52,18 @@ func Backoff(ix *trace.Index, s Spec) []Finding {
 		}
 		rn.last = start
 		rn.calls++
-		n := max(1, crsLive(w, rn.first, start))
-		if rn.reported || rn.calls <= tightCalls*n {
+		if rn.calls <= tightCalls*max(1, crsLive(w, rn.first, start)) {
 			continue
 		}
-		rn.reported = true
 		summary := tightLoop
 		if succeeded(*c) {
 			summary = noOpLoop
 		}
 		key := findingKey{stepAt(steps, start), summary, kind(c.Ref)}
+		if named[namedRequest{key, r}] {
+			continue
+		}
+		named[namedRequest{key, r}] = true
 		if found[key] == nil {
 			found[key] = &Finding{Check: "Backoff", Step: key.step, At: e.At, Summary: summary, Kind: key.kind}
 			order = append(order, key)
@@ -125,7 +128,12 @@ type request struct {
 type run struct {
 	first, last time.Duration
 	calls       int
-	reported    bool
+}
+
+// namedRequest is a request that a finding names.
+type namedRequest struct {
+	findingKey
+	request
 }
 
 // backoffEvents returns, in time order, the controller's judged calls that

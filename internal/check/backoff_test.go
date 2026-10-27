@@ -239,6 +239,29 @@ func TestBackoffFailsATightLoopAfterASlowGap(t *testing.T) {
 	requireFinding(t, check.Backoff(retries(starts, nil).Index(), spec), "Backoff", 0, tightLoop, "kube/toy/gadgets", "get gadgets.toy ns/a: 500, 11 calls from 260ms to 360ms")
 }
 
+func TestBackoffNamesARequestOncePerFinding(t *testing.T) {
+	starts := every(10*ms, 22)
+	for i := 11; i < len(starts); i++ {
+		starts[i] += 150 * ms
+	}
+	findings := check.Backoff(retries(starts, nil).Index(), spec)
+	requireFinding(t, findings, "Backoff", 0, tightLoop, "kube/toy/gadgets", "get gadgets.toy ns/a: 500, 11 calls from 10ms to 110ms")
+	if details := findings[0].Details; len(details) != 1 {
+		t.Errorf("details = %q, want one line for two tight runs of one request", details)
+	}
+}
+
+func TestBackoffNamesARequestAgainInALaterStep(t *testing.T) {
+	tl := retries(every(10*ms, 11), nil)
+	tl.At(1*s, tt.Phase(1, trace.FaultPeriod))
+	for _, start := range every(10*ms, 11) {
+		tl.At(1*s+start, tt.Call(ctl, "get", gadgetA, 500, ""))
+	}
+	if findings := check.Backoff(tl.Index(), spec); len(findings) != 2 || findings[1].Step != 1 {
+		t.Fatalf("findings = %+v, want one in each step", findings)
+	}
+}
+
 func TestBackoffRunBreaks(t *testing.T) {
 	widget := func(generation int) trace.Event {
 		return tt.Version(widgetA, "ua", "v", map[string]any{"metadata": map[string]any{"name": "a", "generation": generation}})
