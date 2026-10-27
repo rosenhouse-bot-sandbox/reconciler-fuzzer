@@ -195,9 +195,9 @@ child as restored once a child of its group lives again, whatever its name.
 
 A kube child's role is its `generateName`, or else its name. A controller that ends each child's
 name with a suffix that each process picks needs a `role` on the kube entry. That CEL runs over
-every kube child the controller makes, so guard it by kind. The config of the sample controller
-in [targets/toy-fleet](targets/toy-fleet/config.yaml), whose Cluster CRs own Volumes, drops such
-a suffix from each Volume's name:
+every kube object, so guard it by kind. The config of the sample controller in
+[targets/toy-fleet](targets/toy-fleet/config.yaml), whose Cluster CRs own Volumes, drops such a
+suffix from each Volume's name:
 
 ```yaml
 systems:
@@ -208,9 +208,9 @@ systems:
 ```
 
 Where the CEL fails or yields `''`, a child keeps its `generateName` or name. When it fails on
-every child the controller made, `report.md` notes the first error. A fake takes `role` too, and
-a fake resource without one has an empty role. A `damage` target's `role` picks a child of that
-role.
+every object of a kind the controller created, `report.md` notes the first error. A fake takes
+`role` too, and a fake resource without one has an empty role. A `damage` target's `role` picks
+a child of that role.
 
 ### Objects another controller sets ready
 

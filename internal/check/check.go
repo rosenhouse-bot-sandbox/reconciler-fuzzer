@@ -347,28 +347,31 @@ func Judge(ix *trace.Index, s Spec) Report {
 	return Report{Findings: findings, Notes: append(notes, failedRoles(ix, s)...)}
 }
 
-// failedRoles notes each system whose role CEL failed on every resource the
-// controller created, with the first error.
+// failedRoles notes each kind whose role CEL failed on every resource the
+// controller created, with the first error. A role guarded by kind fails on
+// the kinds it describes, so one note per system would miss it.
 func failedRoles(ix *trace.Index, s Spec) []string {
 	w := owner.New(ix, s.Owners)
-	failed, worked := map[string]error{}, map[string]bool{}
-	var systems []string
+	failed, worked := map[trace.Ref]error{}, map[trace.Ref]bool{}
+	var kinds []trace.Ref
 	for _, i := range w.All() {
-		if i.Creator != trace.Controller || trace.Ignored(trace.Call{Ref: i.Ref}) {
+		if !controllerResource(i) {
 			continue
 		}
+		k := i.Ref
+		k.Namespace, k.Name = "", ""
 		switch err := w.RoleError(i); {
 		case err == nil:
-			worked[i.Ref.System] = true
-		case failed[i.Ref.System] == nil:
-			failed[i.Ref.System] = err
-			systems = append(systems, i.Ref.System)
+			worked[k] = true
+		case failed[k] == nil:
+			failed[k] = err
+			kinds = append(kinds, k)
 		}
 	}
 	var notes []string
-	for _, system := range systems {
-		if !worked[system] {
-			notes = append(notes, fmt.Sprintf("%s: the role failed on every resource the controller created: %v", system, failed[system]))
+	for _, k := range kinds {
+		if !worked[k] {
+			notes = append(notes, fmt.Sprintf("%s: the role failed on every resource of this kind the controller created: %v", kind(k), failed[k]))
 		}
 	}
 	return notes

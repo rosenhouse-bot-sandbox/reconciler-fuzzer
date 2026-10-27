@@ -612,33 +612,41 @@ func TestJudgeNotesAHoldWatchOnlyWithoutAWatchOfItsKind(t *testing.T) {
 	}
 }
 
-// A role that fails on every resource the controller created gets a note.
-// The harness's objects and ignored kinds, such as Events, do not count.
-func TestJudgeNotesARoleThatFailedOnEveryResource(t *testing.T) {
-	labelled := func(name string) map[string]any {
-		return map[string]any{"metadata": map[string]any{"name": name, "labels": map[string]any{"role": name}}}
+// A role that fails on every resource of a kind the controller created gets
+// a note, which names the first error. A Secret whose role works does not
+// excuse the ConfigMaps. The harness's objects and ignored kinds, such as
+// Events, do not count.
+func TestJudgeNotesARoleThatFailedOnEveryResourceOfAKind(t *testing.T) {
+	const noLabels, noRole, hasRole = 0, 1, 2
+	body := func(name string, labels int) map[string]any {
+		metadata := map[string]any{"name": name}
+		switch labels {
+		case noRole:
+			metadata["labels"] = map[string]any{"other": name}
+		case hasRole:
+			metadata["labels"] = map[string]any{"role": name}
+		}
+		return map[string]any{"metadata": metadata}
 	}
-	const note = `kube: the role failed on every resource the controller created: evaluating "self.metadata.labels['role']": no such key: labels`
+	// The first ConfigMap that fails has no labels at all.
+	const note = `kube/configmaps: the role failed on every resource of this kind the controller created: evaluating "self.metadata.labels['role']": no such key: labels`
 	for name, c := range map[string]struct {
-		labelled []bool
-		noted    bool
+		configMaps []int
+		notes      []string
 	}{
-		"fails on every child": {[]bool{false, false}, true},
-		"works on one child":   {[]bool{false, true}, false},
+		"fails on every configmap": {[]int{noLabels, noRole}, []string{note}},
+		"works on one configmap":   {[]int{noLabels, hasRole}, nil},
 	} {
 		r := newRun(1)
 		r.Spec.Systems = []trace.System{{Name: "kube", Role: "self.metadata.labels['role']"}}
 		r.Begin()
-		r.Create(trace.Harness, widgetA, labelled("a"))
+		r.Create(trace.Harness, widgetA, body("a", noLabels))
 		r.Act("create", "a", &widgetA)
-		r.Create(ctl, tt.Ref("events", "ns", "a.1"), labelled("a.1"))
-		for n, labels := range c.labelled {
+		r.Create(ctl, tt.Ref("events", "ns", "a.1"), body("a.1", noLabels))
+		r.Create(ctl, tt.Ref("secrets", "ns", "a-tls"), tt.OwnedBy(body("a-tls", hasRole), r.UID(widgetA), true))
+		for n, labels := range c.configMaps {
 			child := fmt.Sprintf("a-%d", n)
-			body := tt.Object(child)
-			if labels {
-				body = labelled(child)
-			}
-			r.Create(ctl, tt.Ref("configmaps", "ns", child), tt.OwnedBy(body, r.UID(widgetA), true))
+			r.Create(ctl, tt.Ref("configmaps", "ns", child), tt.OwnedBy(body(child, labels), r.UID(widgetA), true))
 		}
 		r.Ready(widgetA).EndFaults().Settle()
 		ix := r.Index()
@@ -646,8 +654,8 @@ func TestJudgeNotesARoleThatFailedOnEveryResource(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if notes := check.Judge(ix, spec).Notes; slices.Contains(notes, note) != c.noted || len(notes) > 1 {
-			t.Errorf("%s: notes = %q, want only %q: %v", name, notes, note, c.noted)
+		if notes := check.Judge(ix, spec).Notes; !slices.Equal(notes, c.notes) {
+			t.Errorf("%s: notes = %q, want %q", name, notes, c.notes)
 		}
 	}
 }

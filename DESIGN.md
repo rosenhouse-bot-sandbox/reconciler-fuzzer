@@ -296,8 +296,8 @@ Most checks are `func(*trace.Index, Spec) []Finding`. A finding's signature is
 its check, summary and `kind` (`system/group/resource`). `check.Judge` runs
 every check, and notes each action error, request fault that picked no request,
 `holdWatch` while the controller had no watch of its kind, stage-model fault
-that held no object, distinct unmapped (system, method, path), and system whose
-`role` failed on every resource the controller made. `Spec` comes from the
+that held no object, distinct unmapped (system, method, path), and kind whose
+`role` failed on every resource the controller created. `Spec` comes from the
 config, or else the run event. A step's **end** is its `confirmed` time. Clean,
 Restore and Unique judge only settled steps (§17, entry 15).
 
@@ -329,8 +329,8 @@ must stay under the root. A damaged group must be live again while its owner
 lives, or else a CR made in the step must own its kind and role there:
 `did not restore damaged resources` (entries 22 and 82).
 
-**Unique.** At each settled step's end, a group holds at most one live
-controller instance. Summary: `duplicate resources`.
+**Unique.** At each settled step's end, a group holds at most one live controller
+instance. Each detail line names its role. Summary: `duplicate resources`.
 
 **Honest** and Backoff judge the whole run (`honest.go`, `backoff.go`). A CR's
 dependencies are the dependency instances it owns by rules 1 to 3 (entries 47

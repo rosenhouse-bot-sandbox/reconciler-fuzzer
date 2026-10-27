@@ -54,7 +54,9 @@ var gate = []gateRow{
 	// deletes only one of them.
 	{plan: "b135", bug: 135, finding: "Unique: duplicate resources", step: 0, detail: `role "cluster-vol-1": `},
 	{plan: "b135", bug: 135, finding: "Unique: duplicate resources", step: 1, detail: `role "cluster-vol-0": `},
-	// The restart has a step of its own, which changes no CR.
+	// The restart has a step of its own, which changes no CR. Restore flags
+	// the second process's Volumes whatever their role, so only the Unique
+	// row below needs the config's role.
 	{plan: "b135-restart", bug: 135, finding: "Restore: replaced resources", step: 1, detail: "cluster-vol-0-"},
 	{plan: "b135-restart", bug: 135, finding: "Unique: duplicate resources", step: 1, detail: `role "cluster-vol-0": `},
 	{plan: "restart-cluster-delete", bug: 150, finding: "Converge: did not settle (clause 1)", step: 1, detail: "db is not ready", config: databaseConfig},

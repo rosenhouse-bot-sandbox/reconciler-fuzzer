@@ -151,12 +151,15 @@ func (v *view) has(step int, do ...string) bool {
 	return slices.ContainsFunc(v.ix.Actions(step), func(e trace.Event) bool { return slices.Contains(do, e.Action.Do) })
 }
 
-// resources are the instances the controller created that live at t,
-// except the kinds of trace.Ignored.
+// resources are the controller's resources that live at t.
 func (v *view) resources(t time.Duration) []owner.Instance {
-	return slices.DeleteFunc(v.w.Instances(t), func(i owner.Instance) bool {
-		return i.Creator != trace.Controller || trace.Ignored(trace.Call{Ref: i.Ref})
-	})
+	return slices.DeleteFunc(v.w.Instances(t), func(i owner.Instance) bool { return !controllerResource(i) })
+}
+
+// controllerResource reports whether i is one of the controller's resources:
+// one it created, of a kind outside trace.Ignored.
+func controllerResource(i owner.Instance) bool {
+	return i.Creator == trace.Controller && !trace.Ignored(trace.Call{Ref: i.Ref})
 }
 
 // group is what Clean, Restore and Unique compare: a kind, a namespace, an

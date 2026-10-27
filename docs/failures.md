@@ -43,13 +43,13 @@ during startup. The runner appends two steps to every plan without a
 `stop`: `Step N (delete all)` and `Step N+1 (restart)`.
 A `Labels:` line may follow. The block lists the detail lines.
 
-A `# Notes` section follows the findings. A note says what the trace could
-not decide: an action that failed, a fault that picked no request, a
-step the trace ended too early to judge, a CR still being deleted that a
-`stop` did not wait for, an unmapped request, or a `role` that failed on
-every resource the controller created. Notes do not fail a run. A fault
-that picked no request tested nothing, so a plan with such notes may need
-a different fault.
+A `# Notes` section follows the findings. A note says what the checks
+could not judge, or names a config mistake: an action that failed, a fault
+that picked no request, a step the trace ended too early to judge, a CR
+still being deleted that a `stop` did not wait for, an unmapped request, or
+a `role` that failed on every resource of a kind. Notes do not fail a run.
+A fault that picked no request tested nothing, so a plan with such notes
+may need a different fault.
 
 `the slot's name is still taken after the create waited 37s` means that
 a create gave up waiting until its slot's previous CR no longer existed.
@@ -65,10 +65,11 @@ that request, so a leak or duplicate it causes goes unseen. The `crud` map
 places only `/<collection>` and `/<collection>/<id>` (DESIGN.md §5). Serve
 the API at those paths, or put it behind another fake service.
 
-`kube: the role failed on every resource the controller created: evaluating
-"self.metadata.labels['x']": no such key: x` names the first error of the
-system's `role`. The checks then group those resources as if the system had
-no `role`. Fix the CEL.
+`kube/storage.thirdparty/volumes: the role failed on every resource of this
+kind the controller created: evaluating "self.metadata.labels['x']": no such
+key: x` names the first error of the system's `role`. The checks then group
+those resources as if the system had no `role`. One note per kind catches a
+`role` that a kind guard applies to that kind alone. Fix the CEL.
 
 Hunt and shrink match findings by check, summary and kind, so a replay
 need not fail at the same step or on the same names.

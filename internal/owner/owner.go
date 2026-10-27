@@ -333,10 +333,10 @@ func names(c trace.Call, ref trace.Ref) bool {
 // where it fails or yields "", a kube object's role is its generateName or
 // name, and a fake's is empty.
 func (w *World) role(v *trace.Version) (string, error) {
-	var self map[string]any
-	_ = json.Unmarshal(v.Body, &self)
 	var err error
 	if eval := w.rules.Roles[v.Ref.System]; eval != nil {
+		var self map[string]any
+		_ = json.Unmarshal(v.Body, &self)
 		var role string
 		if role, err = eval(self); err == nil && role != "" {
 			return role, nil
@@ -345,9 +345,13 @@ func (w *World) role(v *trace.Version) (string, error) {
 	if v.Ref.System != "kube" {
 		return "", err
 	}
-	metadata, _ := self["metadata"].(map[string]any)
-	if generateName, _ := metadata["generateName"].(string); generateName != "" {
-		return generateName, err
+	var body struct {
+		Metadata struct {
+			GenerateName string `json:"generateName"`
+		} `json:"metadata"`
+	}
+	if json.Unmarshal(v.Body, &body) == nil && body.Metadata.GenerateName != "" {
+		return body.Metadata.GenerateName, err
 	}
 	return v.Ref.Name, err
 }
