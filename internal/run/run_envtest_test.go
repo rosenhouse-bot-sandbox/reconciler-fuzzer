@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
@@ -239,5 +240,63 @@ func TestTheControllerGetsTheHarnessKubeconfigByDefault(t *testing.T) {
 	}
 	if want := filepath.Join(out, "kubeconfig") + "\n"; string(text) != want {
 		t.Errorf("The controller got KUBECONFIG %q, want %q.", text, want)
+	}
+}
+
+// TestARestartSendsSIGKILLOnceTheGracePeriodPasses runs a controller that
+// ignores SIGTERM. Its children write nowhere, so its reap is quick.
+func TestARestartSendsSIGKILLOnceTheGracePeriodPasses(t *testing.T) {
+	toyDir, err := filepath.Abs(toy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	config := fmt.Sprintf(`launch:
+  binary: /bin/sh
+  args: [-c, 'trap "" TERM; while true; do curl -sf ${systems.kube.url}/apis/toy.reconciler-fuzzer/v1/widgets >/dev/null 2>&1; sleep 1 >/dev/null 2>&1; done']
+  rbac: [%[1]s/rbac/role.yaml]
+  gracePeriod: 500ms
+crds: [%[1]s/crds/]
+primary:
+  kind: toy.reconciler-fuzzer/v1/Widget
+  sample: %[1]s/widget.yaml
+  ready: "true"
+timeouts: {settle: 3s, stable: 1s}
+`, toyDir)
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := &plan.Plan{Steps: []plan.Step{
+		{Actions: []plan.Action{{Do: plan.Create, Slot: "a"}}},
+		{Actions: []plan.Action{{Do: plan.Restart}}},
+	}}
+	out := filepath.Join(dir, "out")
+	report, err := Run(context.Background(), Options{ConfigPath: filepath.Join(dir, "config.yaml"), Plan: p, Out: out})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var killed []string
+	for _, note := range report.Notes {
+		if strings.Contains(note, "SIGKILL") {
+			killed = append(killed, note)
+		}
+	}
+	// Step 1 restarts, step 3 restarts, and the run ends with a stop.
+	if len(report.Findings) > 0 || len(killed) != 3 || !strings.HasPrefix(killed[0], "Step 1, at ") {
+		t.Errorf("findings %+v, notes %q, want no findings and a SIGKILL note for each of 3 stops", report.Findings, report.Notes)
+	}
+	events, err := trace.Load(filepath.Join(out, "trace.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	restart := slices.IndexFunc(events, func(e trace.Event) bool {
+		return e.Phase != nil && e.Phase.Step == 1 && e.Phase.Name == trace.FaultPeriod
+	})
+	exit := slices.IndexFunc(events, func(e trace.Event) bool { return e.Proc != nil && e.Proc.Event == trace.Exit })
+	if restart < 0 || exit < 0 {
+		t.Fatal("the trace holds no step 1 or no exit")
+	}
+	if took := events[exit].At - events[restart].At; took < 500*time.Millisecond || took >= 3*time.Second {
+		t.Errorf("the controller exited %v into the restart step, want just after the 500ms grace period", took)
 	}
 }

@@ -18,9 +18,10 @@ import (
 
 func TestExpandLaunch(t *testing.T) {
 	l := config.Launch{
-		Binary: "/bin/toy",
-		Args:   []string{"--namespace=${systems.kube.namespace}", "--bug=0", "--cloud=${systems.cloud.url}"},
-		Env:    map[string]string{"KUBECONFIG": "${systems.kube.kubeconfig}", "CLOUD": "${systems.cloud.url}/v1"},
+		Binary:      "/bin/toy",
+		Args:        []string{"--namespace=${systems.kube.namespace}", "--bug=0", "--cloud=${systems.cloud.url}"},
+		Env:         map[string]string{"KUBECONFIG": "${systems.kube.kubeconfig}", "CLOUD": "${systems.cloud.url}/v1"},
+		GracePeriod: 30 * time.Second,
 	}
 	vars := map[string]map[string]string{
 		"kube":  {"namespace": "rf-1", "kubeconfig": "/out/kubeconfig"},
@@ -31,7 +32,8 @@ func TestExpandLaunch(t *testing.T) {
 		t.Fatal(err)
 	}
 	if o.Path != "/bin/toy" || !reflect.DeepEqual(o.Args, []string{"--namespace=rf-1", "--bug=0", "--cloud=http://127.0.0.1:1", "--bug=3"}) ||
-		!reflect.DeepEqual(o.Env, map[string]string{"KUBECONFIG": "/out/kubeconfig", "CLOUD": "http://127.0.0.1:1/v1"}) {
+		!reflect.DeepEqual(o.Env, map[string]string{"KUBECONFIG": "/out/kubeconfig", "CLOUD": "http://127.0.0.1:1/v1"}) ||
+		o.GracePeriod != 30*time.Second {
 		t.Errorf("expandLaunch = %+v", o)
 	}
 	if _, err := expandLaunch(l, []string{"${systems.kube.url}"}, vars); err == nil || !strings.Contains(err.Error(), "systems.kube.url") {

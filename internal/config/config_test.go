@@ -137,6 +137,27 @@ func TestDefaults(t *testing.T) {
 	if c.Timeouts != (config.Timeouts{Settle: 30 * time.Second, Stable: 3 * time.Second, BackoffCap: 60 * time.Second}) {
 		t.Errorf("timeouts = %+v", c.Timeouts)
 	}
+	if c.Launch.GracePeriod != 5*time.Second {
+		t.Errorf("launch.gracePeriod = %v, want 5s", c.Launch.GracePeriod)
+	}
+}
+
+func TestLaunchGracePeriod(t *testing.T) {
+	withGracePeriod := func(value string) string {
+		return writeConfig(t, strings.Replace(minimal(t), "launch:\n", "launch:\n  gracePeriod: "+value+"\n", 1))
+	}
+	c, err := config.Load(withGracePeriod("30s"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Launch.GracePeriod != 30*time.Second {
+		t.Errorf("launch.gracePeriod = %v, want 30s", c.Launch.GracePeriod)
+	}
+	for _, bad := range []string{"soon", "30", "0s", "-1s"} {
+		if _, err := config.Load(withGracePeriod(bad)); err == nil || !strings.Contains(err.Error(), "gracePeriod") {
+			t.Errorf("gracePeriod %s: err = %v, want one naming gracePeriod", bad, err)
+		}
+	}
 }
 
 func TestLaunchEnvKubeconfigDefaultsToTheHarnessKubeconfig(t *testing.T) {

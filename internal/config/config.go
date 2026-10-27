@@ -66,6 +66,9 @@ type Launch struct {
 	// RBAC holds Role and ClusterRole manifests that the controller's
 	// identity is bound to.
 	RBAC []string
+	// GracePeriod is how long a stop of the controller waits after SIGTERM
+	// before it sends SIGKILL.
+	GracePeriod time.Duration
 }
 
 // Primary describes one CR kind the controller serves, which the harness

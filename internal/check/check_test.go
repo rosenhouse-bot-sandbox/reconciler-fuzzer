@@ -294,6 +294,24 @@ func TestJudgeNotesAFailedAction(t *testing.T) {
 	}
 }
 
+func TestJudgeNotesAStopThatSentSIGKILL(t *testing.T) {
+	note := "Step 1, at 10s: the controller did not exit within launch.gracePeriod of SIGTERM, so the harness sent SIGKILL."
+	for name, c := range map[string]struct {
+		exit trace.Proc
+		want []string
+	}{
+		"a stop that sent SIGKILL":  {trace.Proc{Event: trace.Exit, Exit: "signal: killed", HarnessCaused: true, Stopped: true}, []string{note}},
+		"a stop that SIGTERM ended": {trace.Proc{Event: trace.Exit, Exit: "signal: terminated", HarnessCaused: true, Stopped: true}, nil},
+		"a kill":                    {trace.Proc{Event: trace.Exit, Exit: "signal: killed", HarnessCaused: true}, nil},
+	} {
+		b := cleanRun()
+		b.At(10*s).Add(trace.Event{Proc: &c.exit}, tt.Start(3))
+		if notes := check.Judge(b.Index(), spec).Notes; !slices.Equal(notes, c.want) {
+			t.Errorf("%s: notes = %q, want %q", name, notes, c.want)
+		}
+	}
+}
+
 func TestJudgeNotesAFaultThatPickedNoRequest(t *testing.T) {
 	const what = "dropResponse on verb=create resource=configmaps nth=2"
 	fault := func(ended bool) trace.Event {

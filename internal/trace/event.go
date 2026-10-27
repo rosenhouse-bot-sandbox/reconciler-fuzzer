@@ -330,6 +330,9 @@ type Proc struct {
 	// Exit is the exit status or signal, such as "exit status 2".
 	Exit string `json:"exit,omitempty"`
 	// HarnessCaused says the harness stopped or killed the process.
-	HarnessCaused bool   `json:"harnessCaused,omitempty"`
-	StderrTail    string `json:"stderrTail,omitempty"`
+	HarnessCaused bool `json:"harnessCaused,omitempty"`
+	// Stopped says the harness stopped it: SIGTERM, then SIGKILL once
+	// launch.gracePeriod passed.
+	Stopped    bool   `json:"stopped,omitempty"`
+	StderrTail string `json:"stderrTail,omitempty"`
 }

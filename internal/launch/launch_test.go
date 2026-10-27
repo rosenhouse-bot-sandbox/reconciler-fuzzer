@@ -182,8 +182,8 @@ func TestStopTerminatesAndIsHarnessCaused(t *testing.T) {
 	if _, exits := h.counts(); exits != 1 {
 		t.Fatalf("Heard %d exits by the time Stop returned, want 1.", exits)
 	}
-	if exit := h.lastExit(); exit.Status != "exit status 3" || !exit.HarnessCaused {
-		t.Errorf("Exit is %+v, want a harness-caused exit status 3.", exit)
+	if exit := h.lastExit(); exit.Status != "exit status 3" || !exit.HarnessCaused || !exit.Stopped {
+		t.Errorf("Exit is %+v, want exit status 3 from a Stop.", exit)
 	}
 }
 
@@ -197,11 +197,11 @@ func TestStopEscalatesToSIGKILL(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if elapsed := time.Since(start); elapsed < 200*time.Millisecond {
-		t.Errorf("Stop returned after %v, before the grace period.", elapsed)
+	if elapsed := time.Since(start); elapsed < 200*time.Millisecond || elapsed > time.Second {
+		t.Errorf("Stop returned after %v, want just after the 200ms grace period.", elapsed)
 	}
-	if exit := h.lastExit(); exit.Status != "signal: killed" || !exit.HarnessCaused {
-		t.Errorf("Exit is %+v, want a harness-caused SIGKILL.", exit)
+	if exit := h.lastExit(); exit.Status != "signal: killed" || !exit.HarnessCaused || !exit.Stopped {
+		t.Errorf("Exit is %+v, want a SIGKILL from a Stop.", exit)
 	}
 }
 
@@ -232,8 +232,20 @@ func TestKillIsHarnessCaused(t *testing.T) {
 	if b.Running() {
 		t.Error("Running is true after Kill.")
 	}
-	if exit := h.lastExit(); exit.Status != "signal: killed" || !exit.HarnessCaused {
-		t.Errorf("Exit is %+v, want a harness-caused SIGKILL.", exit)
+	if exit := h.lastExit(); exit.Status != "signal: killed" || !exit.HarnessCaused || exit.Stopped {
+		t.Errorf("Exit is %+v, want a harness-caused SIGKILL that no Stop sent.", exit)
+	}
+}
+
+func TestKillOutwaitsAGracePeriodShorterThanTheReap(t *testing.T) {
+	// The background sleep holds the output pipe, so the reap takes the
+	// wait delay of 500ms.
+	b, _, _ := newBinary(t, "sleep 1 & "+forever, func(o *launch.Options) { o.GracePeriod = 50 * time.Millisecond })
+	mustStart(t, b)
+	time.Sleep(50 * time.Millisecond) // The sleep must start.
+
+	if err := b.Kill(t.Context()); err != nil {
+		t.Error(err)
 	}
 }
 

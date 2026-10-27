@@ -54,6 +54,8 @@ type Exit struct {
 	Status string
 	// HarnessCaused says Stop or Kill ended the process.
 	HarnessCaused bool
+	// Stopped says Stop ended it.
+	Stopped bool
 	// Tail is the last TailBytes of the process's output.
 	Tail string
 }
