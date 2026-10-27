@@ -56,6 +56,12 @@ var gate = []gateRow{
 	// The update error keeps B151's Volumes held until the stop.
 	{plan: "stop-after-delete", bug: 151, finding: "Clean: left resources behind", step: 1, detail: "/cluster-vol-0 (rule 1, slot a)", config: uninstallConfig},
 	{plan: "crd-first-stop", bug: 152, finding: "Converge: did not settle (clause 2)", step: 2, detail: "cluster is being deleted", config: uninstallConfig},
+	// The kill follows B160's release of the Cluster and comes before its
+	// Volume deletes.
+	{plan: "kill-finalize", bug: 160, finding: "Clean: left resources behind", step: 1, detail: "/cluster-vol-0 (rule 2, slot a)"},
+	// The restart or kill comes while slowDelete holds the Volumes.
+	{plan: "restart-deleting", bug: 161, finding: "Converge: did not settle (clause 2)", step: 1, detail: "cluster is being deleted"},
+	{plan: "foreground-kill", bug: 161, finding: "Converge: did not settle (clause 2)", step: 1, detail: "cluster is being deleted"},
 	{plan: "crd-first-stop", config: uninstallConfig},
 	{plan: "kill-recreate", config: uninstallConfig},
 	// The create waits for the name, the slowDelete for the create, and the

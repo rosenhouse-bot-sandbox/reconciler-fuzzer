@@ -402,8 +402,12 @@ func (g *Generator) plan(t *rapid.T) *plan.Plan {
 	return p
 }
 
+// maxActions bounds the actions of a step.
+const maxActions = 4
+
 // step draws one step: a single restart, kill or damage, or a fault with
 // one, in about 30% of steps, else 1 to 4 actions and maybe a fault.
+// restartMidDelete may then add a restart or kill to a model-fault step.
 func (g *Generator) step(t *rapid.T, at state) plan.Step {
 	var step plan.Step
 	switch {
@@ -435,7 +439,7 @@ func (g *Generator) step(t *rapid.T, at state) plan.Step {
 			step.Actions = g.holdTraffic(t, at, step.Faults[0])
 			break
 		}
-		for range 1 + uniform(t, 4, "actions") {
+		for range 1 + uniform(t, maxActions, "actions") {
 			step.Actions = append(step.Actions, g.action(t, at))
 		}
 	}
@@ -443,9 +447,29 @@ func (g *Generator) step(t *rapid.T, at state) plan.Step {
 		step.Period = g.period(t)
 		if len(step.Faults) > 0 && step.Faults[0].ModelFault() {
 			step.Period += plan.Duration(g.track)
+			step.Actions = restartMidDelete(t, step)
 		}
 	}
 	return step
+}
+
+// restartMidDelete inserts a restart or kill right after the step's first
+// delete, unless the step already holds maxActions actions. This late
+// action's offset is 300 ms or more past the delete's and before Period ends,
+// so the old process may stop while the fault holds the deletion, and a new
+// process may have to finish it. Actions run in order, so later actions wait
+// for the late action and cannot delay it. A restart or create before the
+// delete can delay the delete, which shortens the gap.
+func restartMidDelete(t *rapid.T, step plan.Step) []plan.Action {
+	del := slices.IndexFunc(step.Actions, func(a plan.Action) bool { return a.Do == plan.Delete })
+	if del < 0 || len(step.Actions) == maxActions {
+		return step.Actions
+	}
+	const after, tick = 300 * time.Millisecond, 100 * time.Millisecond
+	from := time.Duration(step.Actions[del].At) + after
+	at := from + time.Duration(uniform(t, int((time.Duration(step.Period)-from)/tick), "at"))*tick
+	late := plan.Action{At: plan.Duration(at), Do: sampled(t, []plan.Do{plan.Restart, plan.Kill}, "restart or kill")}
+	return slices.Insert(step.Actions, del+1, late)
 }
 
 // burst puts a delete then a create of one slot's kind, or two updates,

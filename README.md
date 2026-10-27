@@ -209,7 +209,10 @@ models:
 - Generated plans then draw two model faults. `stuck` keeps Gadgets not ready, and `slowDelete`
   holds their deletion. Each ends with the fault period. A create that waits until a deleted CR
   no longer exists ends them once `period` has passed. A plan step writes one as
-  `{"match": {"group": "example.com", "resource": "gadgets"}, "stuck": true}`.
+  `{"match": {"group": "example.com", "resource": "gadgets"}, "stuck": true}`. A model-fault
+  step that deletes a CR also restarts or kills the controller, unless the step already holds 4
+  actions. The plan schedules the restart or kill 300 ms or more after the delete, within the
+  period. The fault may then still hold the deletion, and a new process may have to finish it.
 - `finalizer: {name: example.com/cleanup, after: 500ms}` plays a controller, such as a storage
   controller, that holds each Gadget's deletion with its own finalizer. The model adds the
   finalizer to each live Gadget it hears, and removes it 500 ms after it hears the deletion.
