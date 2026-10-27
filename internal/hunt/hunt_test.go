@@ -287,7 +287,8 @@ func TestHuntKeepsTheShrinkSoFarOnACancel(t *testing.T) {
 		}
 		return []check.Finding{clean}
 	}}
-	found, err := Hunt(ctx, Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{4}), Out: fake.out,
+	var log strings.Builder
+	found, err := Hunt(ctx, Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{4}), Out: fake.out, Log: &log,
 		Run: func(ctx context.Context, p *plan.Plan, out string) (check.Report, error) {
 			if filepath.Base(out) == "shrink-3-1" {
 				cancel()
@@ -300,6 +301,9 @@ func TestHuntKeepsTheShrinkSoFarOnACancel(t *testing.T) {
 	if !errors.Is(err, context.Canceled) || len(found) != 1 || !found[0].CutShort || found[0].ShrunkPath != shrunk ||
 		!strings.Contains(string(summary), "over 1 seed") || !strings.Contains(string(summary), "| 5/5 | "+shrunk+" (cut short) |") {
 		t.Errorf("Hunt = %+v, %v, and wrote:\n%s", found, err, summary)
+	}
+	if !strings.Contains(log.String(), "seed 4: shrink cut short\n") {
+		t.Errorf("The log does not say the shrink was cut short:\n%s", log.String())
 	}
 	if saved, err := plan.Load(shrunk); err != nil || encoded(t, saved) != encoded(t, smallest) {
 		t.Errorf("shrunk.json holds %s, %v; want the last failing candidate, %s.", encoded(t, saved), err, encoded(t, smallest))
