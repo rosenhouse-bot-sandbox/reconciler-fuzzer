@@ -173,7 +173,8 @@ instead of a CR.
 ### Unique: duplicate resources
 
 Two live controller resources share a kind, namespace, owning CR or
-unlisted owner, and role (DESIGN.md §11).
+unlisted owner, and role (DESIGN.md §11). A kube resource's role is its
+system's `role`, or else its `generateName` or name.
 
 ### Honest
 
