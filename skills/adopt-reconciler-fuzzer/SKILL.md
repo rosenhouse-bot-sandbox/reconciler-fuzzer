@@ -326,8 +326,8 @@ A note `unmapped request` means the API map could not read a request to a fake, 
 judged it. Tell the user which paths the controller uses.
 
 A note that the harness sent SIGKILL means the controller did not exit within
-`launch.gracePeriod`, 5s by default, of SIGTERM. Set it above the controller's shutdown time,
-or tell the user if the controller ignores SIGTERM.
+`launch.gracePeriod` of SIGTERM. Set it above the controller's shutdown time, or tell the user
+if the controller ignores SIGTERM.
 
 **Exit 0**: no findings. Act on any notes as above, then go on.
 

@@ -302,8 +302,8 @@ func TestJudgeNotesAStopThatSentSIGKILL(t *testing.T) {
 	killed := trace.Event{Proc: &trace.Proc{Event: trace.Exit, Exit: "signal: killed", HarnessCaused: true, GracePeriodPassed: true}}
 	kill := trace.Event{Proc: &trace.Proc{Event: trace.Exit, Exit: "signal: killed", HarnessCaused: true}}
 	restart := restartRun(killed).Events()
-	// interrupted ends at the restart's exit, before step 1's faults end.
-	interrupted := restart[:slices.IndexFunc(restart, func(e trace.Event) bool { return e.Proc != nil && e.Proc.Event == trace.Exit })+1]
+	// endsInFaults ends at the restart's exit, before step 1's faults end.
+	endsInFaults := restart[:slices.IndexFunc(restart, func(e trace.Event) bool { return e.Proc != nil && e.Proc.Event == trace.Exit })+1]
 	// cut ends in step 1's settle wait, as after a harness error, with the
 	// run's stop.
 	cut := createStep()
@@ -320,11 +320,11 @@ func TestJudgeNotesAStopThatSentSIGKILL(t *testing.T) {
 		events []trace.Event
 		want   []string
 	}{
-		"a stop before step 0":                   {early.Events(), []string{"Before step 0, at 0s: " + sentSIGKILL}},
-		"a restart's stop":                       {restart, []string{"Step 1, at 5.6s: " + sentSIGKILL}},
-		"a restart's stop in an interrupted run": {interrupted, []string{"Step 1, at 5.6s: " + sentSIGKILL}},
-		"the run's stop":                         {cleanRun().At(10 * s).Add(killed).Events(), []string{"After the last step, at 10s: " + sentSIGKILL}},
-		"the run's stop after a timed-out step":  {churn(false).At(11 * s).Add(killed).Events(), []string{"After the last step, at 11s: " + sentSIGKILL}},
+		"a stop before step 0":                  {early.Events(), []string{"Before step 0, at 0s: " + sentSIGKILL}},
+		"a restart's stop":                      {restart, []string{"Step 1, at 5.6s: " + sentSIGKILL}},
+		"a restart's stop that ends the trace":  {endsInFaults, []string{"Step 1, at 5.6s: " + sentSIGKILL}},
+		"the run's stop":                        {cleanRun().At(10 * s).Add(killed).Events(), []string{"After the last step, at 10s: " + sentSIGKILL}},
+		"the run's stop after a timed-out step": {churn(false).At(11 * s).Add(killed).Events(), []string{"After the last step, at 11s: " + sentSIGKILL}},
 		"both stops of a run cut short": {cut.Events(), []string{
 			"Step 1, at 5.6s: " + sentSIGKILL, "After the last step, at 7s: " + sentSIGKILL,
 			"Step 1 is not judged: the trace ends at 7s, before its deadline 20s.",

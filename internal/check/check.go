@@ -442,23 +442,18 @@ func killedStops(ix *trace.Index) []string {
 		if !e.Proc.GracePeriodPassed {
 			continue
 		}
-		when := stepName(ix, stepAt(steps, e.At))
-		if afterSteps(steps, e.At) {
-			when = "After the last step"
-		}
-		notes = append(notes, fmt.Sprintf("%s, at %v: the controller did not exit within launch.gracePeriod of SIGTERM, so the harness sent SIGKILL.", when, e.At))
+		notes = append(notes, fmt.Sprintf("%s, at %v: the controller did not exit within launch.gracePeriod of SIGTERM, so the harness sent SIGKILL.", stopLabel(ix, steps, e.At), e.At))
 	}
 	return notes
 }
 
-// afterSteps says t is after the last step's fault period ended. The harness
-// stops the controller only in fault periods and at the run's end.
-func afterSteps(steps []trace.StepSpan, t time.Duration) bool {
-	if len(steps) == 0 {
-		return false
+// stopLabel names the step of a stop at t. Only the run's final stop can
+// follow the last step's fault period.
+func stopLabel(ix *trace.Index, steps []trace.StepSpan, t time.Duration) string {
+	if n := len(steps); n > 0 && steps[n-1].Reached[trace.EndFaults] && t > steps[n-1].EndFaults {
+		return "After the last step"
 	}
-	last := steps[len(steps)-1]
-	return last.Reached[trace.EndFaults] && t > last.EndFaults
+	return stepName(ix, stepAt(steps, t))
 }
 
 // stepName names a step, and says which steps the runner appended.

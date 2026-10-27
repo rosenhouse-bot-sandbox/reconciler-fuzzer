@@ -46,10 +46,10 @@ A `Labels:` line may follow. The block lists the detail lines.
 A `# Notes` section follows the findings. A note says what the trace could
 not decide: an action that failed, a fault that picked no request, a step
 the trace ended too early to judge, a CR still being deleted that a `stop`
-did not wait for, or an unmapped request. A note also names each stop of
-the controller that sent SIGKILL. Notes do not fail a run. A fault that
-picked no request tested nothing, so a plan with such notes may need a
-different fault.
+did not wait for, or an unmapped request. A note also names each time the
+controller outlived `launch.gracePeriod`. Notes do not fail a run. A
+fault that picked no request tested nothing, so a plan with such notes may
+need a different fault.
 
 `the slot's name is still taken after the create waited 37s` means that
 a create gave up waiting until its slot's previous CR no longer existed.
@@ -70,8 +70,7 @@ SIGTERM, so the harness sent SIGKILL.` means that a stop of the controller
 for a `restart` or a `stop` waited `launch.gracePeriod` after SIGTERM and
 then killed it. Such a stop tested a crash, not a clean shutdown. A note
 that begins `After the last step` names the stop at the run's end. Raise
-`launch.gracePeriod`, 5s by default, if the controller needs longer to shut
-down.
+`launch.gracePeriod` if the controller needs longer to shut down.
 
 Hunt and shrink match findings by check, summary and kind, so a replay
 need not fail at the same step or on the same names.
