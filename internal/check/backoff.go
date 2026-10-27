@@ -45,13 +45,14 @@ func Backoff(ix *trace.Index, s Spec) []Finding {
 			continue
 		}
 		rn := runs[r]
-		if rn == nil {
-			rn = &run{}
+		if rn == nil || start-rn.last >= tightGap {
+			rn = &run{first: start}
 			runs[r] = rn
 		}
-		rn.starts = append(rn.starts, start)
-		n := max(1, crsLive(w, rn.starts[0], start))
-		if rn.reported || len(rn.starts) < tightRepeats*2*n+1 || !tight(rn.starts[len(rn.starts)-tightRepeats*n-1:]) {
+		rn.last = start
+		rn.calls++
+		n := max(1, crsLive(w, rn.first, start))
+		if rn.reported || rn.calls <= tightCalls*n {
 			continue
 		}
 		rn.reported = true
@@ -69,7 +70,7 @@ func Backoff(ix *trace.Index, s Spec) []Finding {
 		if r.subresource != "" {
 			what += "/" + r.subresource
 		}
-		f.Details = append(f.Details, fmt.Sprintf("%s %s: %d, %d calls from %v to %v", c.Verb, what, c.Status, len(rn.starts), rn.starts[0], start))
+		f.Details = append(f.Details, fmt.Sprintf("%s %s: %d, %d calls from %v to %v", c.Verb, what, c.Status, rn.calls, rn.first, start))
 	}
 	findings := make([]Finding, len(order))
 	for n, key := range order {
@@ -107,10 +108,9 @@ func ownedByAnother(w *owner.World, ref trace.Ref, cr string, t time.Duration) b
 const (
 	tightLoop = "retried a failing request in a tight loop"
 	noOpLoop  = "repeated a no-op write in a tight loop"
-	// tightRepeats is how many repeats per CR come before the judged gaps,
-	// and how many gaps per CR are judged.
-	tightRepeats = 5
-	tightGap     = 100 * time.Millisecond
+	// A run fails with more than tightCalls calls per CR live.
+	tightCalls = 10
+	tightGap   = 100 * time.Millisecond
 )
 
 // request is what a run of futile calls repeats.
@@ -121,18 +121,11 @@ type request struct {
 	status       int
 }
 
+// run counts a request's futile calls, each under tightGap after the last.
 type run struct {
-	starts   []time.Duration
-	reported bool
-}
-
-func tight(starts []time.Duration) bool {
-	for n := 1; n < len(starts); n++ {
-		if starts[n]-starts[n-1] >= tightGap {
-			return false
-		}
-	}
-	return true
+	first, last time.Duration
+	calls       int
+	reported    bool
 }
 
 // backoffEvents returns, in time order, the controller's judged calls that

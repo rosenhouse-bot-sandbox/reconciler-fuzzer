@@ -49,8 +49,11 @@ func retries(starts []time.Duration, between func(n int) trace.Event) *tt.Timeli
 // none changes it.
 func noOpDeletes(starts []time.Duration, between func(n int) trace.Event) *tt.Timeline {
 	tl := repeat(tt.Call(ctl, "delete", gadgetA, 200, "2"), starts, between)
-	deleting := map[string]any{"metadata": map[string]any{"name": "a", "finalizers": []any{"x"}, "deletionTimestamp": "2026-10-26T00:00:00Z"}}
-	return tl.At(0, tt.Version(gadgetA, "ug", "2", deleting))
+	return tl.At(0, tt.Version(gadgetA, "ug", "2", deletingGadget("x")))
+}
+
+func deletingGadget(finalizers ...any) map[string]any {
+	return map[string]any{"metadata": map[string]any{"name": "a", "finalizers": finalizers, "deletionTimestamp": "2026-10-26T00:00:00Z"}}
 }
 
 func every(gap time.Duration, n int) []time.Duration {
@@ -93,6 +96,45 @@ func TestBackoffFailsATightLoopOfNoOpDeletes(t *testing.T) {
 	requireNone(t, check.Backoff(noOpDeletes(every(10*ms, 10), nil).Index(), spec))
 }
 
+// The delete that marks the Gadget deleting changes it, so the run starts at
+// the next delete.
+func TestBackoffCountsTheNoOpDeletesAfterTheChangingOne(t *testing.T) {
+	for calls, want := range map[int]int{11: 0, 12: 1} {
+		tl := repeat(tt.Call(ctl, "delete", gadgetA, 200, "2"), every(10*ms, calls), nil)
+		tl.At(0, tt.Version(gadgetA, "ug", "1", tt.Object("a")))
+		tl.At(11*ms, tt.Version(gadgetA, "ug", "2", deletingGadget("x")))
+		if got := len(check.Backoff(tl.Index(), spec)); got != want {
+			t.Errorf("%d deletes 10ms apart: %d findings, want %d", calls, got, want)
+		}
+	}
+}
+
+// A delete with foreground propagation adds a finalizer to the deleting
+// Gadget, so it ends the run of no-op deletes before it.
+func TestBackoffNoOpRunBreaksOnADeleteThatChangesTheObject(t *testing.T) {
+	tl := noOpDeletes(every(10*ms, 8), nil)
+	for n, start := range every(10*ms, 8) {
+		start += 80 * ms
+		if n == 0 {
+			tl.At(start+ms, tt.Version(gadgetA, "ug", "3", deletingGadget("x", "foregroundDeletion")))
+		}
+		del := tt.Call(ctl, "delete", gadgetA, 200, "3")
+		del.Call.Latency = 2 * ms
+		tl.At(start+2*ms, del)
+	}
+	requireNone(t, check.Backoff(tl.Index(), spec))
+}
+
+// Slow no-op writes, such as one per event of an owned object, do not count
+// toward a later burst.
+func TestBackoffPassesABurstAfterSlowNoOpWrites(t *testing.T) {
+	starts := append(every(time.Second, 11), every(20*ms, 10)...)
+	for i := 11; i < len(starts); i++ {
+		starts[i] += 20 * time.Second
+	}
+	requireNone(t, check.Backoff(noOpDeletes(starts, nil).Index(), spec))
+}
+
 func TestBackoffPassesATightLoopOfWritesThatChangeTheObject(t *testing.T) {
 	var tl tt.Timeline
 	tl.At(0, tt.Run("toy", "widgets"), tt.Phase(0, trace.FaultPeriod))
@@ -114,9 +156,8 @@ func TestBackoffNoOpRunBreaks(t *testing.T) {
 		event  trace.Event
 		breaks bool
 	}{
-		"a delete that changes the object": {tt.Call(ctl, "delete", gadgetA, 200, "3"), true},
-		"a failing delete":                 {tt.Call(ctl, "delete", gadgetA, 500, ""), false},
-		"a new generation":                 {widget(2), true},
+		"a failing delete": {tt.Call(ctl, "delete", gadgetA, 500, ""), false},
+		"a new generation": {widget(2), true},
 	} {
 		findings := check.Backoff(noOpDeletes(every(10*ms, 16), func(n int) trace.Event {
 			switch n {
@@ -133,8 +174,9 @@ func TestBackoffNoOpRunBreaks(t *testing.T) {
 	}
 }
 
-// A success resets controller-runtime's rate limiter, so the failures after
-// it start a fresh backoff, even when the success changed nothing.
+// A reconcile whose write changed nothing may still succeed, and so reset
+// controller-runtime's rate limiter. The failures after it then start a fresh
+// backoff.
 func TestBackoffPassesAFreshBackoffAfterANoOpSuccess(t *testing.T) {
 	limiter := workqueue.DefaultTypedControllerRateLimiter[string]()
 	var tl tt.Timeline
@@ -149,7 +191,7 @@ func TestBackoffPassesAFreshBackoffAfterANoOpSuccess(t *testing.T) {
 	fail(5)
 	tl.At(at, tt.Call(ctl, "update", gadgetA, 200, "2"))
 	limiter.Forget("a")
-	at += 2 * s
+	at += 5 * ms
 	fail(6)
 	requireNone(t, check.Backoff(tl.Index(), spec))
 }
@@ -176,27 +218,25 @@ func TestBackoffFailsATightLoopOfWritesToAFakeThatTheObserverSeesNoChangeFrom(t 
 	}
 }
 
-func TestBackoffExcusesTheFirstFiveCalls(t *testing.T) {
-	starts := append(every(10*ms, 5), every(100*ms, 6)...)
-	for i := 5; i < len(starts); i++ {
-		starts[i] += time.Second
-	}
-	requireNone(t, check.Backoff(retries(starts, nil).Index(), spec))
-	starts = append(every(time.Second, 5), every(10*ms, 6)...)
-	for i := 5; i < len(starts); i++ {
-		starts[i] += 10 * time.Second
-	}
-	if len(check.Backoff(retries(starts, nil).Index(), spec)) != 1 {
-		t.Fatal("a slow start excused calls 6 to 11")
+func TestBackoffRunBreaksAtAGapOf100ms(t *testing.T) {
+	for gap, want := range map[time.Duration]int{99 * ms: 1, 100 * ms: 0} {
+		starts := every(10*ms, 20)
+		for i := 10; i < len(starts); i++ {
+			starts[i] += gap - 10*ms
+		}
+		if got := len(check.Backoff(retries(starts, nil).Index(), spec)); got != want {
+			t.Errorf("10 calls 10ms apart, then 10 more after %v: %d findings, want %d", gap, got, want)
+		}
 	}
 }
 
+// Under load, B162's loop paused once and went on.
 func TestBackoffFailsATightLoopAfterASlowGap(t *testing.T) {
-	starts := every(10*ms, 16)
-	for i := 9; i < len(starts); i++ {
+	starts := every(10*ms, 21)
+	for i := 10; i < len(starts); i++ {
 		starts[i] += 150 * ms
 	}
-	requireFinding(t, check.Backoff(retries(starts, nil).Index(), spec), "Backoff", 0, tightLoop, "kube/toy/gadgets", "get gadgets.toy ns/a: 500, 15 calls")
+	requireFinding(t, check.Backoff(retries(starts, nil).Index(), spec), "Backoff", 0, tightLoop, "kube/toy/gadgets", "get gadgets.toy ns/a: 500, 11 calls from 260ms to 360ms")
 }
 
 func TestBackoffRunBreaks(t *testing.T) {
@@ -356,6 +396,23 @@ func TestBackoffPassesOneDefaultBackoffPerCROnASharedRequest(t *testing.T) {
 		requireNone(t, check.Backoff(limited([]trace.Ref{widgetA, widgetB}, offset, 14).Index(), spec))
 		requireNone(t, check.Backoff(limited([]trace.Ref{widgetA, widgetB, widgetC}, offset, 14).Index(), spec))
 	}
+}
+
+// A CR deleted during a run still counts, since its retries joined the run.
+func TestBackoffCountsACRDeletedDuringTheRun(t *testing.T) {
+	var tl tt.Timeline
+	tl.At(0, tt.Run("toy", "widgets"))
+	for n, cr := range []trace.Ref{widgetA, widgetB} {
+		tl.At(0, tt.Version(cr, "u"+cr.Name, "1", generation(cr.Name, 1)))
+		limiter := workqueue.DefaultTypedControllerRateLimiter[string]()
+		at := 1*s + time.Duration(n)*3*ms
+		for range 6 - n {
+			tl.At(at, tt.Call(ctl, "get", gadgetA, 500, ""))
+			at += limiter.When(cr.Name)
+		}
+	}
+	tl.At(1*s+80*ms, tt.Deleted(widgetB, "ub", "2", generation("b", 1)))
+	requireNone(t, check.Backoff(tl.Index(), spec))
 }
 
 func TestBackoffFailsATightLoopWhileSeveralCRsLive(t *testing.T) {

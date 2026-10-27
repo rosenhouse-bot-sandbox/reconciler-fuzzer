@@ -144,8 +144,7 @@ Harness actions return once the observer has recorded their effect. The
 observer list-watches cluster-wide each installed CRD, each served kind the
 config or a fixture names, and each served kind `launch.rbac` names that is not
 ignored (§10). These are the run event's `kinds`. It then watches any kind a
-listener records a call on, and records one `version` per
-(ref, resourceVersion).
+listener records a call on, and records a `version` per (ref, resourceVersion).
 
 ## 7. Models and fake services
 
@@ -248,15 +247,16 @@ to the CRs the stop waited for (§9).
    the change, it needs `stable` since the first request that looked; a
    held watch, `stable` since its `holdWatch` ended.
 6. No model or fake has work pending at `t` (`Index.Pending`).
-7. No changed write, not ignored, ended in `(t - stable, t]` or was in flight at
-   `t`. Over each system's poll interval up to `t`, the controller made at most
-   `reads × max(1, live CRs)` gets and lists and at most `writes × max(1, live
-   CRs)` mutating requests of that system, no-op writes included. Kube's poll
-   interval is `stable`. A controller write of a CR that changes only its kind's
-   `periodic.paths`, and comes at least `every / 2` after the previous one of
-   that CR, is not a changed write; the budgets still count it. A path's `[*]`
-   names every list item. A fake's write without a resourceVersion is changed
-   only if the observer records a new version within 200 ms (`Index.Changed`).
+7. No changed write, not ignored, ended in `(t - stable, t]` or was in
+   flight at `t`. Over each system's poll interval up to `t`, the
+   controller made at most `reads × max(1, live CRs)` gets and lists and
+   at most `writes × max(1, live CRs)` mutating requests of that system,
+   no-op writes included. Kube's poll interval is `stable`. A controller
+   write of a CR that changes only its kind's `periodic.paths`, and comes at
+   least `every / 2` after the previous one of that CR, is not a changed
+   write; the budgets still count it. A path's `[*]` names every list item.
+   A fake's write without a resourceVersion is changed only if the
+   observer records a new version within 200 ms (`Index.Changed`).
 
 `ready` and `halted` are CEL over `self`, the CR; an error fails clause 1. No
 check counts what `trace.Ignored` lists: Events, Leases, TokenReview, access
@@ -344,13 +344,13 @@ dependency not ready`.
 
 **Backoff.** A controller call is **futile** when it fails, or writes and
 `Index.Changed` finds no change. Futile calls with one system, verb, object,
-subresource and status form a **run**; a create's object is its `requestName`.
-Any other success of its verb, object and subresource breaks it, as does a new
-generation of its object, of the object's rule 1 to 3 CR, or, when the object is
-no CR and has no such CR, of any CR. With `n` CRs live, it fails once `5n + 1`
-calls in a row after its first `5n` have gaps under 100 ms: `retried a failing
-request in a tight loop`, or `repeated a no-op write in a tight loop` for 2xx
-calls. It skips 409s on a held kind until `stable / 4` after the hold.
+subresource and status, each under 100 ms after the last, form a **run**; a
+create's object is its `requestName`. Any other success of its verb, object and
+subresource breaks it, as does a new generation of its object, of the object's
+rule 1 to 3 CR, or, when the object is no CR and has no such CR, of any CR. With
+`n` CRs live, it fails at call `10n + 1`: `retried a failing request in a tight
+loop`, or `repeated a no-op write in a tight loop` for 2xx calls. It skips 409s
+on a held kind until `stable / 4` after the hold.
 
 **Finalizers.** A controller `update` or `patch` of an object, or of a built-in
 kind's `status`, fails when its answer drops a finalizer that a model or the gc
@@ -515,7 +515,7 @@ Each entry changes a check, exception, `System` interface or ignore list.
 69. Properties judge settled step ends; `firstWrittenUnder` follows a value across instances, for #63.
 70. `primary.periodic` lets a timer's CR writes pass clause 7, for an external-secrets rotation.
 72. Clause 5 holds `stable` after a polling controller's look, for ACK's repair.
-73. A held watch looks only `stable` after its hold, and Backoff allows its 409s until `stable / 4` after.
+73. A held watch looks only `stable` after its hold. Backoff allows 409s on a held kind during the hold, as #114 defines, and until `stable / 4` after.
 74. A fake's write without a resourceVersion is a change only if the observer saw one, for ACK.
 75. Restore ignores Vault's `current_version` and `versions`, and S3's `versionId`.
 76. `primary.periodic` paths name list items with `[*]`, so ACK exempts only condition stamps.
@@ -526,4 +526,4 @@ Each entry changes a check, exception, `System` interface or ignore list.
 81. `required` binds only the first entry's CRs, so the kinds that own no dependency pass.
 82. A `damage` touches each group under its root. An undamaged touched group may empty while its kind lives under that root, and a damaged one whose owner is gone while a CR made in the step owns its kind and role there. So a damage under a CR that the controller made touches that CR's owner, and the controller may remake that CR.
 85. A kube write's call records its answer's finalizers, for Finalizers (#133), since an update that empties a deleting object's finalizers deletes it and answers with the old version. The gc owns `foregroundDeletion` and `orphan`, which the API server adds for whoever deletes. A finalizer the harness wrote, from a sample, a fixture or a plan, may be the controller's own. Listeners record answers in no fixed order, so a version that overlapping writes of two callers carry may be either's. After an answer names a version the observer missed, the trace may lack a change, so the object's later writes pass. A CRD's status write keeps its metadata.
-88. Backoff counts a no-op write, such as a delete of an object already being deleted, as futile, so a tight loop of them fails (#139). A no-op success still breaks a run of failing calls, since controller-runtime then forgets the item's backoff. Backoff judges each `5n + 1` calls in a row after a run's first `5n`, so one slow gap excuses no loop.
+88. Backoff counts a no-op write, such as a delete of an object already being deleted, as futile, so a tight loop of them fails (#139). A gap of 100 ms or more ends a run, so one slow gap excuses no loop, and slow writes do not join a later burst. A no-op success still ends a run of failing calls, since its reconcile may have succeeded and reset the rate limiter.
