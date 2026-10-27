@@ -198,13 +198,22 @@ func Load(path string) (*Plan, error) {
 	return &p, nil
 }
 
+// Marshal returns p as indented JSON, as Save writes it.
+func Marshal(p *Plan) ([]byte, error) {
+	data, err := json.MarshalIndent(p, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
+}
+
 // Save writes p as indented JSON.
 func Save(path string, p *Plan) error {
-	data, err := json.MarshalIndent(p, "", "  ")
+	data, err := Marshal(p)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0o644)
+	return os.WriteFile(path, data, 0o644)
 }
 
 // Validate reports the first malformed step, action or fault, naming its
