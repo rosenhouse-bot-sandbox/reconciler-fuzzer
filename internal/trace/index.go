@@ -408,12 +408,13 @@ func (ix *Index) Opaque(caller Caller, ref Ref, from, to time.Duration) bool {
 
 // Changed reports whether e, a successful mutating call, produced a
 // resourceVersion that no earlier version or response held for its object.
-// A no-op write is not a change. A kube write whose response carried no
-// resourceVersion counts as a change. A fake's such write changed its
-// object when the observer recorded, within ObserveLag of the response, a
-// version that differs from the last before the request, or when the trace
-// ends within ObserveLag of the response. A kube deletecollection counts as a
-// change, since its response names no object.
+// A no-op write is not a change. A kube deletecollection's object is its
+// collection, and its response holds the resourceVersion of its list. That
+// resourceVersion repeats only while nothing in the cluster changes. A kube
+// write whose response carried no resourceVersion counts as a change. A
+// fake's such write changed its object when the observer recorded, within
+// ObserveLag of the response, a version that differs from the last before
+// the request, or when the trace ends within ObserveLag of the response.
 //
 // An earlier holder must precede the call's request, at At minus Latency,
 // because the observer may see a write's own version before its response
