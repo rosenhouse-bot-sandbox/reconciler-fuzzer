@@ -454,13 +454,12 @@ func (g *Generator) step(t *rapid.T, at state) plan.Step {
 }
 
 // restartMidDelete inserts a restart or kill right after the step's first
-// delete, if the step holds fewer than maxActions actions. The restart or
-// kill comes 300 ms or more after the delete's offset and before Period
-// ends. The fault may then still hold the deletion, so a new process may
-// have to finish it. Actions run in order, so no later action can delay the
-// restart or kill. The later actions wait for it instead. A restart or
-// create before the delete can delay the delete, and so shorten the time
-// between them.
+// delete, unless the step already holds maxActions actions. This late
+// action's offset is 300 ms or more past the delete's and before Period ends,
+// so the old process may stop while the fault holds the deletion, and a new
+// process may have to finish it. Actions run in order, so later actions wait
+// for the late action and cannot delay it. A restart or create before the
+// delete can delay the delete, which shortens the gap.
 func restartMidDelete(t *rapid.T, step plan.Step) []plan.Action {
 	del := slices.IndexFunc(step.Actions, func(a plan.Action) bool { return a.Do == plan.Delete })
 	if del < 0 || len(step.Actions) == maxActions {

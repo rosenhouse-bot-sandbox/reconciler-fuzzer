@@ -1,6 +1,7 @@
 package generate
 
 import (
+	"maps"
 	"slices"
 	"testing"
 	"time"
@@ -160,13 +161,22 @@ func TestARestartOrKillAtAnOffsetFollowsTheFirstDeleteWhileAModelFaultLasts(t *t
 	}
 }
 
-func TestARestartOrKillMidDeleteComesAtLeast300msAfterTheDelete(t *testing.T) {
-	step := plan.Step{Period: plan.Duration(400 * time.Millisecond), Actions: []plan.Action{{Do: plan.Delete, Slot: "a"}}}
+func TestARestartOrKillMidDeleteDrawsEachTickFrom300msPastTheDeleteToPeriod(t *testing.T) {
+	step := plan.Step{Period: plan.Duration(600 * time.Millisecond), Actions: []plan.Action{
+		{Do: plan.Update, Slot: "a"},
+		{At: plan.Duration(100 * time.Millisecond), Do: plan.Delete, Slot: "b"},
+	}}
+	drawn := map[time.Duration]bool{}
 	for seed := range 20 {
 		actions := example(t, seed, func(rt *rapid.T) []plan.Action { return restartMidDelete(rt, step) })
-		if len(actions) != 2 || time.Duration(actions[1].At) != 300*time.Millisecond {
-			t.Errorf("Seed %d turns a delete in a 400ms period into %+v, want a restart or kill 300ms after it.", seed, actions)
+		if len(actions) != 3 || actions[2].Do != plan.Restart && actions[2].Do != plan.Kill {
+			t.Fatalf("Seed %d turns %+v into %+v, want a restart or kill after the delete.", seed, step.Actions, actions)
 		}
+		drawn[time.Duration(actions[2].At)] = true
+	}
+	want := map[time.Duration]bool{400 * time.Millisecond: true, 500 * time.Millisecond: true}
+	if !maps.Equal(drawn, want) {
+		t.Errorf("A delete at 100ms in a 600ms period draws restarts or kills at %v, want %v.", slices.Sorted(maps.Keys(drawn)), slices.Sorted(maps.Keys(want)))
 	}
 }
 
@@ -184,23 +194,22 @@ func TestEveryModelFaultStepThatDeletesAndHasRoomRestartsOrKillsMidDelete(t *tes
 	}
 }
 
-// A restart or kill soon after the delete finds a controller that has just
-// begun to finalize, and a late one a controller that the fault still holds.
-func TestRestartsOrKillsMidDeleteSpreadFromTheDeleteToThePeriodEnd(t *testing.T) {
-	afterEarliest, beforeEnd := time.Hour, time.Hour
+// A model fault's period ends with the longest track, and a restart or kill
+// mid-delete may come in it.
+func TestSomeRestartsOrKillsMidDeleteComeInTheLongestTrack(t *testing.T) {
+	const longestTrack = 3 * time.Second
+	beforeEnd := time.Hour
 	for _, p := range plans(t, modelsConfig, 400) {
 		for _, step := range p.Steps {
-			del := slices.IndexFunc(step.Actions, func(a plan.Action) bool { return a.Do == plan.Delete })
 			for _, a := range step.Actions {
-				if del >= 0 && a.At > 0 && (a.Do == plan.Restart || a.Do == plan.Kill) {
-					afterEarliest = min(afterEarliest, time.Duration(a.At-step.Actions[del].At)-300*time.Millisecond)
+				if a.At > 0 && (a.Do == plan.Restart || a.Do == plan.Kill) {
 					beforeEnd = min(beforeEnd, time.Duration(step.Period-a.At))
 				}
 			}
 		}
 	}
-	if afterEarliest >= time.Second || beforeEnd >= time.Second {
-		t.Errorf("Restarts or kills mid-delete come %v or more after 300ms past their delete, and %v or more before their period ends, want under 1s each.", afterEarliest, beforeEnd)
+	if beforeEnd >= longestTrack {
+		t.Errorf("Restarts or kills mid-delete come %v or more before their period ends, want some within the longest track, %v.", beforeEnd, longestTrack)
 	}
 }
 
