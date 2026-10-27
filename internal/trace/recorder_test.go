@@ -3,6 +3,7 @@ package trace_test
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -47,6 +48,36 @@ func TestRecorderWritesWhatLoadReads(t *testing.T) {
 	}
 	if got := r.Events(); len(got) != 51 || got[50].Seq != 51 {
 		t.Fatalf("Events() holds %d events", len(got))
+	}
+}
+
+func TestLoadReadsAFaultPeriodsPeriod(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "trace.jsonl")
+	r, err := trace.NewRecorder(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	none, two := time.Duration(0), 2*time.Second
+	for step, period := range []*time.Duration{&none, &two, nil} {
+		r.Record(trace.Event{Phase: &trace.Phase{Step: step, Name: trace.FaultPeriod, Period: period}})
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := trace.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, e := range loaded {
+		if p := e.Phase.Period; p != nil {
+			got = append(got, p.String())
+		} else {
+			got = append(got, "none")
+		}
+	}
+	if want := []string{"0s", "2s", "none"}; !slices.Equal(got, want) {
+		t.Errorf("loaded periods %q, want %q", got, want)
 	}
 }
 

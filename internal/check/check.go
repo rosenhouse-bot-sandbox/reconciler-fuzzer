@@ -360,15 +360,13 @@ func unmapped(ix *trace.Index) []string {
 
 // unpicked notes each request fault that altered no controller request
 // while it was active, each stage-model fault whose model held no object,
-// and each holdWatch while the controller had no watch of its kind. A
-// request or model fault's note says how long a step without a period kept
-// it on.
+// and each holdWatch while the controller had no watch of its kind.
 func unpicked(ix *trace.Index, s Spec) []string {
 	starts := map[[2]int]trace.Event{}
 	var notes []string
 	for _, h := range ix.Holds() {
 		if !ix.WatchedKind(trace.Controller, h.Kind, h.Start, h.End) {
-			notes = append(notes, fmt.Sprintf("%s, fault %d (%s) held no watch.", stepName(ix, h.Step), h.Index, h.What))
+			notes = append(notes, faultNote(ix, trace.Fault{Step: h.Step, Index: h.Index, What: h.What}, "held no watch", h.Start, h.End))
 		}
 	}
 	for _, e := range ix.Events() {
@@ -384,23 +382,27 @@ func unpicked(ix *trace.Index, s Spec) []string {
 		start := starts[key].At
 		switch {
 		case f.Model != "" && !s.fake(f.Model) && !held(ix, *f, start, e.At):
-			notes = append(notes, faultNote(ix, *f, "held no object", e.At-start))
+			notes = append(notes, faultNote(ix, *f, "held no object", start, e.At))
 		case f.Model == "" && !slices.ContainsFunc(ix.Calls(trace.Controller, start, math.MaxInt64), func(c trace.Event) bool {
 			return c.At-c.Call.Latency <= e.At && c.Call.Ref.System == cmp.Or(f.System, "kube") &&
 				c.Call.Injected != "" && strings.HasPrefix(f.What, c.Call.Injected)
 		}):
-			notes = append(notes, faultNote(ix, *f, "picked no request", e.At-start))
+			notes = append(notes, faultNote(ix, *f, "picked no request", start, e.At))
 		}
 	}
 	return notes
 }
 
-// faultNote says that f did nothing. Without a period, a step's faults end
-// by the time its last action returns.
-func faultNote(ix *trace.Index, f trace.Fault, nothing string, lasted time.Duration) string {
+// faultNote says that f did nothing while on from start to end. A step
+// without a period ends its faults by the time its last action returns.
+// When the controller still runs then, a period would keep f on, so the
+// note says how long f lasted. A hold the trace cuts short ends at
+// math.MaxInt64 and gets no length.
+func faultNote(ix *trace.Index, f trace.Fault, nothing string, start, end time.Duration) string {
 	note := fmt.Sprintf("%s, fault %d (%s) %s", stepName(ix, f.Step), f.Index, f.What, nothing)
-	if step, _ := ix.Step(f.Step); step.Period != nil && *step.Period == 0 {
-		return fmt.Sprintf("%s: it lasted %v, as the step has no period. Set one to keep faults on after the last action returns.", note, lasted.Round(time.Millisecond))
+	step, _ := ix.Step(f.Step)
+	if _, up := ix.Up(end); up && end < math.MaxInt64 && step.Period != nil && *step.Period == 0 {
+		return fmt.Sprintf("%s: it lasted %v because the step has no period. Set one to keep faults on after the last action returns.", note, (end - start).Round(time.Millisecond))
 	}
 	return note + "."
 }

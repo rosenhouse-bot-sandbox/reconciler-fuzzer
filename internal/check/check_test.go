@@ -295,30 +295,49 @@ func TestJudgeNotesAFailedAction(t *testing.T) {
 }
 
 // A step without a period ends its faults as its last action returns, so
-// a fault meant for the controller's next request never acts.
+// a fault meant for the controller's next request never acts. A period
+// does not help while a kill or a stop keeps the controller down.
 func TestJudgeNotesAFaultPeriodOfZero(t *testing.T) {
-	const what, hint = "killAfter on verb=update resource=clusters nth=2", ", as the step has no period. Set one to keep faults on after the last action returns."
+	const what, hint = "killAfter on verb=update resource=clusters nth=2", " because the step has no period. Set one to keep faults on after the last action returns."
 	request := func(ended bool) trace.Event { return tt.Fault(1, 0, ended, what) }
 	model := func(ended bool) trace.Event { return tt.ModelFault(1, 0, ended, "stuck", "model:gadgets.toy") }
+	secrets := trace.Ref{System: "kube", Resource: "secrets"}
+	hold := func(ended bool) trace.Event { return tt.HoldFault(1, 0, ended, secrets) }
+	kill := []trace.Event{{Action: &trace.Action{Step: 1, Do: "kill"}}, tt.Exit("signal: killed", true, "")}
+	stop := []trace.Event{{Action: &trace.Action{Step: 1, Do: "stop"}}, tt.Exit("signal: terminated", true, "")}
 	for name, c := range map[string]struct {
 		phase  trace.Event
 		fault  func(ended bool) trace.Event
+		during []trace.Event
 		lasted time.Duration
 		want   string
 	}{
-		"a request fault":                       {tt.FaultPeriod(1, 0), request, 0, "Step 1, fault 0 (" + what + ") picked no request: it lasted 0s" + hint},
-		"a longer request fault":                {tt.FaultPeriod(1, 0), request, 1234567 * time.Microsecond, "Step 1, fault 0 (" + what + ") picked no request: it lasted 1.235s" + hint},
-		"a model fault":                         {tt.FaultPeriod(1, 0), model, s, "Step 1, fault 0 (stuck) held no object: it lasted 1s" + hint},
-		"a request fault of a step with period": {tt.FaultPeriod(1, s), request, s, "Step 1, fault 0 (" + what + ") picked no request."},
-		"a model fault of a step with period":   {tt.FaultPeriod(1, s), model, s, "Step 1, fault 0 (stuck) held no object."},
-		"a trace that lacks the period":         {tt.Phase(1, trace.FaultPeriod), request, 0, "Step 1, fault 0 (" + what + ") picked no request."},
+		"a request fault":                        {tt.FaultPeriod(1, 0), request, nil, 0, "Step 1, fault 0 (" + what + ") picked no request: it lasted 0s" + hint},
+		"a longer request fault":                 {tt.FaultPeriod(1, 0), request, nil, 1234567 * time.Microsecond, "Step 1, fault 0 (" + what + ") picked no request: it lasted 1.235s" + hint},
+		"a model fault":                          {tt.FaultPeriod(1, 0), model, nil, s, "Step 1, fault 0 (stuck) held no object: it lasted 1s" + hint},
+		"a holdWatch":                            {tt.FaultPeriod(1, 0), hold, nil, s, "Step 1, fault 0 (holdWatch) held no watch: it lasted 1s" + hint},
+		"a request fault of a step with period":  {tt.FaultPeriod(1, s), request, nil, s, "Step 1, fault 0 (" + what + ") picked no request."},
+		"a model fault of a step with period":    {tt.FaultPeriod(1, s), model, nil, s, "Step 1, fault 0 (stuck) held no object."},
+		"a holdWatch of a step with period":      {tt.FaultPeriod(1, s), hold, nil, s, "Step 1, fault 0 (holdWatch) held no watch."},
+		"a trace that lacks the period":          {tt.Phase(1, trace.FaultPeriod), request, nil, 0, "Step 1, fault 0 (" + what + ") picked no request."},
+		"a request fault that ends after a kill": {tt.FaultPeriod(1, 0), request, kill, s, "Step 1, fault 0 (" + what + ") picked no request."},
+		"a holdWatch that ends after a stop":     {tt.FaultPeriod(1, 0), hold, stop, s, "Step 1, fault 0 (holdWatch) held no watch."},
 	} {
 		b := createStep()
-		b.At(2*s).Add(c.phase, c.fault(false)).At(2*s + c.lasted).Add(c.fault(true))
+		b.At(2*s).Add(c.phase, c.fault(false)).Add(c.during...).At(2*s + c.lasted).Add(c.fault(true))
 		notes := slices.DeleteFunc(check.Judge(b.Index(), spec).Notes, func(n string) bool { return !strings.HasPrefix(n, "Step 1, fault") })
 		if !slices.Equal(notes, []string{c.want}) {
 			t.Errorf("%s: fault notes = %q, want %q", name, notes, c.want)
 		}
+	}
+}
+
+// A trace that ends during a hold does not say how long the hold lasted.
+func TestJudgeGivesNoLengthOfAHoldThatNeverEnded(t *testing.T) {
+	b := createStep()
+	b.At(2*s).Add(tt.FaultPeriod(1, 0), tt.HoldFault(1, 0, false, trace.Ref{System: "kube", Resource: "secrets"}))
+	if notes := check.Judge(b.Index(), spec).Notes; !slices.Contains(notes, "Step 1, fault 0 (holdWatch) held no watch.") {
+		t.Errorf("notes = %q, want the hold's note without a length", notes)
 	}
 }
 

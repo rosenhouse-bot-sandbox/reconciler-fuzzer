@@ -642,8 +642,8 @@ var ErrNoMatch = errors.New("no instance matches")
 // Select resolves target at t among the live instances that creator made.
 // A slot narrows the match to instances whose root holds that slot's live
 // CR; an empty slot matches any owner. An error wraps ErrNoMatch and names
-// the target. It then says what the slot holds, or which live instances of
-// the target's kind creator made.
+// the target. It then says what the slot holds, or names up to five live
+// instances of the target's kind that creator made, in the slot if set.
 func (w *World) Select(creator trace.Caller, target plan.Target, slot string, t time.Duration) (trace.Ref, error) {
 	system := cmp.Or(target.System, "kube")
 	cr := ""
@@ -663,66 +663,61 @@ func (w *World) Select(creator trace.Caller, target plan.Target, slot string, t 
 		}
 		cr = held.UID
 	}
-	ofKind := func(i Instance) bool {
-		return i.Live(t) && i.Creator == creator && i.Ref.System == system && matches(target.Resource, i.Ref.Resource) && matches(target.Group, i.Ref.Group)
-	}
-	inSlot := func(i Instance) bool { return cr == "" || slices.Contains(w.Root(w.Owner(i, t), t).CRs, cr) }
+	var live []Instance
 	nth := max(target.Nth, 1)
 	for _, i := range w.instances {
-		if !ofKind(i) || !matches(target.Namespace, i.Ref.Namespace) || !matches(target.Name, i.Ref.Name) || !matches(target.Role, i.Role) || !inSlot(i) {
+		if !i.Live(t) || i.Creator != creator || i.Ref.System != system || !matches(target.Resource, i.Ref.Resource) || !matches(target.Group, i.Ref.Group) {
+			continue
+		}
+		if cr != "" && !slices.Contains(w.Root(w.Owner(i, t), t).CRs, cr) {
+			continue
+		}
+		live = append(live, i)
+		if !matches(target.Namespace, i.Ref.Namespace) || !matches(target.Name, i.Ref.Name) || !matches(target.Role, i.Role) {
 			continue
 		}
 		if nth--; nth == 0 {
 			return i.Ref, nil
 		}
 	}
-	var live []Instance
-	for _, i := range w.instances {
-		if ofKind(i) && inSlot(i) {
-			live = append(live, i)
-		}
-	}
-	return trace.Ref{}, fmt.Errorf("%w %s: %s", ErrNoMatch, target, candidates(creator, target, slot, live))
+	return trace.Ref{}, fmt.Errorf("%w %s: %s", ErrNoMatch, target, candidates(creator, target, system, slot, live))
 }
 
-// candidates says which live instances of target's kind creator made, in
-// slot if set, and names up to five.
-func candidates(creator trace.Caller, target plan.Target, slot string, live []Instance) string {
-	kind := target.Resource
-	if target.Group != "" {
-		kind += "." + target.Group
+// candidates names up to five of live, the instances of target's kind that
+// creator made, in slot if set.
+func candidates(creator trace.Caller, target plan.Target, system, slot string, live []Instance) string {
+	kind := "objects"
+	if target.Resource != "" {
+		kind = schema.GroupResource{Group: target.Group, Resource: target.Resource}.String()
 	}
-	if target.Resource == "" {
-		kind = "objects"
-	}
-	if system := cmp.Or(target.System, "kube"); system != "kube" {
+	if system != "kube" {
 		kind = system + " " + kind
 	}
+	where := ""
 	if slot != "" {
-		kind += " in slot " + slot
+		where = " in slot " + slot
 	}
-	if len(live) == 0 {
-		said := fmt.Sprintf("the %s has no live %s", creator, kind)
-		if creator == trace.Harness && target.Resource == "customresourcedefinitions" {
-			said += "; a CRD from crds is not a fixture"
+	said := fmt.Sprintf("the %s has no live %s%s", creator, kind, where)
+	if len(live) > 0 {
+		const shown = 5
+		var names []string
+		for _, i := range live[:min(len(live), shown)] {
+			name := i.Ref.Name
+			if i.Ref.Namespace != "" {
+				name = i.Ref.Namespace + "/" + name
+			}
+			if target.Resource == "" {
+				name = i.Ref.Resource + "/" + name
+			}
+			names = append(names, name)
 		}
-		return said
+		said = fmt.Sprintf("the %s's live %s%s are %s", creator, kind, where, strings.Join(names, ", "))
+		if len(live) > shown {
+			said += fmt.Sprintf(" and %d more", len(live)-shown)
+		}
 	}
-	const shown = 5
-	var names []string
-	for _, i := range live[:min(len(live), shown)] {
-		name := i.Ref.Name
-		if i.Ref.Namespace != "" {
-			name = i.Ref.Namespace + "/" + name
-		}
-		if target.Resource == "" {
-			name = i.Ref.Resource + "/" + name
-		}
-		names = append(names, name)
-	}
-	said := fmt.Sprintf("the %s's live %s are %s", creator, kind, strings.Join(names, ", "))
-	if len(live) > shown {
-		said += fmt.Sprintf(" and %d more", len(live)-shown)
+	if creator == trace.Harness && target.Resource == "customresourcedefinitions" {
+		said += "; a CRD in the config's crds is not a fixture"
 	}
 	return said
 }
