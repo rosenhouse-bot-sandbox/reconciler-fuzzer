@@ -170,12 +170,13 @@ func TestBackoffPassesATightLoopOfWritesThatChangeTheObject(t *testing.T) {
 	requireNone(t, check.Backoff(tl.Index(), spec))
 }
 
-// A deletecollection answers at the resourceVersion of its list, which
-// repeats only while nothing in the cluster changes. The first answer at a
-// resourceVersion is a change.
+// The first answer at a list's resourceVersion counts as a change, even when
+// an item's version holds that resourceVersion too.
 func TestBackoffFailsATightLoopOfNoOpDeleteCollections(t *testing.T) {
 	gadgets := tt.Ref("toy/gadgets", "ns", "")
-	findings := check.Backoff(repeat(tt.Call(ctl, "deletecollection", gadgets, 200, "7"), every(10*ms, 22), nil).Index(), spec)
+	repeats := repeat(tt.Call(ctl, "deletecollection", gadgets, 200, "7"), every(10*ms, 22), nil)
+	repeats.At(0, tt.Version(gadgetA, "ug", "7", gadgetBody(true, "x")))
+	findings := check.Backoff(repeats.Index(), spec)
 	requireFinding(t, findings, "Backoff", 0, noOpLoop, "kube/toy/gadgets", "deletecollection gadgets.toy ns/: 200, 21 calls from 20ms to 220ms")
 
 	var tl tt.Timeline

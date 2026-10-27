@@ -20,6 +20,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -502,7 +503,7 @@ func (rec *recorder) readResult(encoding string) {
 	var meta metav1.ObjectMeta
 	var err error
 	if media(rec.Header().Get("Content-Type")) == protobufType {
-		meta, err = protobufMeta(body, rec.call.Verb == "deletecollection")
+		meta, err = protobufMeta(body)
 	} else {
 		var object struct {
 			Metadata metav1.ObjectMeta `json:"metadata"`
@@ -674,9 +675,10 @@ const protobufType = "application/vnd.kubernetes.protobuf"
 var protobufMagic = []byte("k8s\x00")
 
 // protobufMeta decodes the metadata of a Kubernetes protobuf object, which
-// is field 1 of every object inside the runtime.Unknown envelope. A list's
-// metadata is a ListMeta, so of a list it returns only the resourceVersion.
-func protobufMeta(body io.Reader, list bool) (metav1.ObjectMeta, error) {
+// is field 1 of every object inside the runtime.Unknown envelope. A list
+// kind's metadata is a ListMeta, so of a list it returns only the
+// resourceVersion.
+func protobufMeta(body io.Reader) (metav1.ObjectMeta, error) {
 	data, err := io.ReadAll(body)
 	if err != nil {
 		return metav1.ObjectMeta{}, err
@@ -699,7 +701,7 @@ func protobufMeta(body io.Reader, list bool) (metav1.ObjectMeta, error) {
 		return meta, errors.New("truncated metadata")
 	}
 	field := raw[n+m : n+m+int(size)]
-	if list {
+	if strings.HasSuffix(envelope.Kind, "List") {
 		var listMeta metav1.ListMeta
 		err := listMeta.Unmarshal(field)
 		meta.ResourceVersion = listMeta.ResourceVersion

@@ -203,9 +203,10 @@ limiter, such as controller-runtime's default, rather than a short
 
 The controller repeated a write that changed nothing, with gaps under 100 ms.
 The line names the verb, the object, the status and the calls. A delete of an
-object that is already being deleted is such a write. Skip a write that the
-cached object already shows, and wait for a watch event rather than a short
-`RequeueAfter`.
+object that is already being deleted is such a write. So is a
+`deletecollection` sent again before anything in the cluster changed. Skip a
+write that the cached object already shows, and wait for a watch event rather
+than a short `RequeueAfter`.
 
 ### Finalizers: removed another caller's finalizer
 

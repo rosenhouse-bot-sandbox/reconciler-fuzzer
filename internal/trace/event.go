@@ -245,8 +245,9 @@ type Call struct {
 	// Injected names the fault that altered the request.
 	Injected string `json:"injected,omitempty"`
 	// ResultUID and ResultRV come from the response body of a mutating
-	// request. They are empty when the body named no object, but a kube
-	// deletecollection's ResultRV is the resourceVersion of its list.
+	// request. A kube deletecollection's ResultRV is the resourceVersion of
+	// the list it answers with. Otherwise both are empty when the body named
+	// no object.
 	ResultUID string `json:"resultUID,omitempty"`
 	ResultRV  string `json:"resultRV,omitempty"`
 	// ResultName is the name the server gave an object created with
