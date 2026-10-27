@@ -412,7 +412,8 @@ func (ix *Index) Opaque(caller Caller, ref Ref, from, to time.Duration) bool {
 // resourceVersion counts as a change. A fake's such write changed its
 // object when the observer recorded, within ObserveLag of the response, a
 // version that differs from the last before the request, or when the trace
-// ends within ObserveLag of the response.
+// ends within ObserveLag of the response. A kube deletecollection counts as a
+// change, since its response names no object.
 //
 // An earlier holder must precede the call's request, at At minus Latency,
 // because the observer may see a write's own version before its response

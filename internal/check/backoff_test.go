@@ -76,8 +76,8 @@ func TestBackoffPassesControllerRuntimesDefaultBackoff(t *testing.T) {
 	}
 	requireNone(t, check.Backoff(retries(starts, nil).Index(), spec))
 	requireNone(t, check.Backoff(noOpDeletes(starts, nil).Index(), spec))
-	// A reconcile may write an unchanged status twice, as when a deferred
-	// update follows an explicit one.
+	// A reconcile may write an unchanged status twice before it fails, as when
+	// a deferred update follows an explicit one.
 	update := tt.Call(ctl, "update", gadgetA, 200, "2")
 	update.Call.Subresource = "status"
 	tl := repeat(update, twice, nil)
@@ -95,9 +95,6 @@ func TestBackoffFailsATightLoop(t *testing.T) {
 // dependency again on each pass. Each delete succeeds and changes nothing.
 func TestBackoffFailsATightLoopOfNoOpDeletes(t *testing.T) {
 	findings := check.Backoff(noOpDeletes(every(10*ms, 21), nil).Index(), spec)
-	if len(findings) != 1 || findings[0].Check != "Backoff" {
-		t.Fatalf("Want one Backoff finding for 21 no-op deletes 10ms apart, got %+v.", findings)
-	}
 	requireFinding(t, findings, "Backoff", 0, noOpLoop, "kube/toy/gadgets", "delete gadgets.toy ns/a: 200, 21 calls from 10ms to 210ms")
 	requireNone(t, check.Backoff(noOpDeletes(every(10*ms, 20), nil).Index(), spec))
 }
@@ -170,6 +167,13 @@ func TestBackoffPassesATightLoopOfWritesThatChangeTheObject(t *testing.T) {
 		tl.At(start+ms, tt.Version(gadgetA, "ug", rv, tt.Object("a")))
 		tl.At(start+2*ms, update)
 	}
+	requireNone(t, check.Backoff(tl.Index(), spec))
+}
+
+// A deletecollection's answer names no object, so it counts as a change.
+func TestBackoffPassesATightLoopOfDeleteCollections(t *testing.T) {
+	tl := repeat(tt.Call(ctl, "deletecollection", tt.Ref("toy/gadgets", "ns", ""), 200, "2"), every(10*ms, 21), nil)
+	tl.At(0, tt.Version(gadgetA, "ug", "2", gadgetBody(true, "x")))
 	requireNone(t, check.Backoff(tl.Index(), spec))
 }
 
@@ -280,6 +284,17 @@ func TestBackoffNamesARequestOncePerFinding(t *testing.T) {
 	}
 }
 
+// Two runs of one request fail in step 0, and the second continues into step 1.
+func TestBackoffNamesARunOnlyInTheStepWhereItFails(t *testing.T) {
+	starts := every(10*ms, 26)
+	for i := 11; i < len(starts); i++ {
+		starts[i] += 150 * ms
+	}
+	tl := retries(starts, nil)
+	tl.At(375*ms, tt.Phase(1, trace.FaultPeriod))
+	requireFinding(t, check.Backoff(tl.Index(), spec), "Backoff", 0, tightLoop, "kube/toy/gadgets", "get gadgets.toy ns/a: 500, 11 calls from 10ms to 110ms")
+}
+
 func TestBackoffNamesARequestAgainInALaterStep(t *testing.T) {
 	tl := retries(every(10*ms, 11), nil)
 	tl.At(1*s, tt.Phase(1, trace.FaultPeriod))
@@ -347,6 +362,7 @@ func TestBackoffCountsOtherCallsDuringAHold(t *testing.T) {
 	for name, call := range map[string]func() trace.Event{
 		"a 500 on the held kind":        func() trace.Event { return tt.Call(ctl, "update", gadgetA, 500, "") },
 		"a 409 on another kind":         func() trace.Event { return tt.Call(ctl, "update", widgetA, 409, "") },
+		"a 409 on another group's kind": func() trace.Event { return tt.Call(ctl, "update", tt.Ref("other.toy/gadgets", "ns", "a"), 409, "") },
 		"a no-op write on another kind": func() trace.Event { return tt.Call(ctl, "patch", widgetA, 200, "2") },
 	} {
 		var b tt.Builder

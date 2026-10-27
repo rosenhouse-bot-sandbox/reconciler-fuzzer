@@ -61,9 +61,10 @@ func Backoff(ix *trace.Index, s Spec) []Finding {
 		if succeeded(*c) {
 			summary, calls = noOpLoop, noOpCalls
 		}
-		if rn.named || rn.calls <= calls*max(1, crsLive(w, rn.first, start)) {
+		if rn.failed || rn.calls <= calls*max(1, crsLive(w, rn.first, start)) {
 			continue
 		}
+		rn.failed = true
 		key := findingKey{stepAt(steps, start), summary, kind(c.Ref)}
 		l := found[key]
 		if l == nil {
@@ -73,7 +74,6 @@ func Backoff(ix *trace.Index, s Spec) []Finding {
 		}
 		// A finding names each request once.
 		if !slices.ContainsFunc(l.runs, func(named *run) bool { return named.request == r }) {
-			rn.named = true
 			l.runs = append(l.runs, rn)
 		}
 	}
@@ -89,9 +89,7 @@ func Backoff(ix *trace.Index, s Spec) []Finding {
 }
 
 // futile says whether e, a controller call, failed, or wrote and changed
-// nothing. An update that empties a deleting object's finalizers changes it,
-// since the API server deletes it. A kube deletecollection counts as a change,
-// since its answer names no object.
+// nothing.
 func futile(ix *trace.Index, e trace.Event) bool {
 	c := *e.Call
 	if !succeeded(c) {
@@ -162,8 +160,8 @@ type run struct {
 	request
 	first, last time.Duration
 	calls       int
-	// named says whether a finding names the run.
-	named bool
+	// failed says whether the run failed Backoff.
+	failed bool
 }
 
 func (rn *run) detail() string {
