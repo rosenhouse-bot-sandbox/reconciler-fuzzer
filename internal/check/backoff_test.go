@@ -331,7 +331,8 @@ func TestBackoffSkips(t *testing.T) {
 	} {
 		var b tt.Builder
 		b.Add(tt.Run("toy", "widgets"))
-		for _, start := range every(10*ms, 11) {
+		// 21 calls 10ms apart fail a run of no-op writes too.
+		for _, start := range every(10*ms, 21) {
 			call := tt.Call(ctl, "get", gadgetA, 500, "")
 			edit(call.Call)
 			b.At(start).Add(call)

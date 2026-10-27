@@ -346,10 +346,11 @@ dependency not ready`.
 **Backoff.** A controller call is **futile** if it fails, or writes and changes
 nothing. Futile calls with one system, verb, object, subresource and status,
 each under 100 ms after the last, form a **run**. Another success of its verb,
-object and subresource ends it. So does a new generation of a CR that bears on
-its object (`ownedByAnother`). With `n` CRs live, call `10n + 1` fails: `retried
-a failing request in a tight loop` or `repeated a no-op write in a tight loop`.
-A held kind's 409s and no-op writes pass during the hold and `stable / 4` after.
+object and subresource ends it. So does a new generation of the object, of its
+rule 1 to 3 CR, or, if it is no CR and has none, of any CR. With `n` CRs live, a
+run fails at call `10n + 1`, or `20n + 1` for no-op writes: `retried a failing
+request in a tight loop` or `repeated a no-op write in a tight loop`. A held
+kind's 409s and no-op writes pass during the hold and `stable / 4` after.
 
 **Finalizers.** A controller `update` or `patch` of an object, or of a built-in
 kind's `status`, fails when its answer drops a finalizer that a model or the gc
@@ -367,8 +368,7 @@ rules 1 to 3, or `""`; a finding's details say where such values came from. The
 string and base64 CEL extensions apply. Summaries: `property <name> does not
 hold`, `could not be evaluated`.
 
-**Corpus.** `check/testdata/corpus/` holds traces of known bugs and false
-positives (`corpus_test.go`).
+**Corpus.** `corpus_test.go` judges traces of known bugs and false positives.
 
 ## 13. Config
 
@@ -526,4 +526,4 @@ Each entry changes a check, exception, `System` interface or ignore list.
 81. `required` binds only the first entry's CRs, so the kinds that own no dependency pass.
 82. A `damage` touches each group under its root. An undamaged touched group may empty while its kind lives under that root, and a damaged one whose owner is gone while a CR made in the step owns its kind and role there. So a damage under a CR that the controller made touches that CR's owner, and the controller may remake that CR.
 85. A kube write's call records its answer's finalizers, for Finalizers (#133), since an update that empties a deleting object's finalizers deletes it and answers with the old version. The gc owns `foregroundDeletion` and `orphan`, which the API server adds for whoever deletes. A finalizer the harness wrote, from a sample, a fixture or a plan, may be the controller's own. Listeners record answers in no fixed order, so a version that overlapping writes of two callers carry may be either's. After an answer names a version the observer missed, the trace may lack a change, so the object's later writes pass. A CRD's status write keeps its metadata.
-88. Backoff counts a no-op write, such as a delete of an object already being deleted, as futile (#139). A gap of 100 ms or more ends a run. A no-op success ends a run of failing calls, since its reconcile may have reset the rate limiter. An update that empties a deleting object's finalizers is not futile, since it deletes the object (entry 85).
+88. Backoff counts a no-op write, such as a delete of an object already being deleted, as futile (#139). A gap of 100 ms or more ends a run. A no-op success ends a run of failing calls, since its reconcile may have reset the rate limiter. A run of no-op writes allows twice the calls, since a reconcile may repeat a write, as a deferred status update after an explicit one does. An update that empties a deleting object's finalizers is not futile, since it deletes the object (entry 85). A kube `deletecollection` counts as a change, since its answer names no object.
