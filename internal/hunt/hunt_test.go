@@ -274,6 +274,8 @@ func TestHuntWritesTheSummaryOfTheSeedsBeforeACancel(t *testing.T) {
 	wantKept(t, fake.out, map[string]bool{"seed-2/trace.jsonl": true})
 }
 
+// A cancel during seed 2's run, which finds nothing new, still counts the
+// seed and removes its run.
 func TestHuntCountsASeedWhoseRunEndedBeforeTheCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
