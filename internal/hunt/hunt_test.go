@@ -408,6 +408,28 @@ func TestACancelCutsShortEachFindingLeftToShrink(t *testing.T) {
 	}
 }
 
+// The cancel comes during the second finding's shrink.
+func TestACancelDoesNotCutShortAShrinkThatFinished(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fake := &fakeRun{out: t.TempDir(), finds: always(clean, unique)}
+	first, second := filepath.Join(fake.out, "seed-1", "shrunk.json"), filepath.Join(fake.out, "seed-1", "shrunk-2.json")
+	found, err := Hunt(ctx, Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1}), Out: fake.out,
+		Run: func(ctx context.Context, p *plan.Plan, out string) (check.Report, error) {
+			if _, err := os.Stat(first); err == nil {
+				cancel()
+				return check.Report{}, ctx.Err()
+			}
+			return fake.run(ctx, p, out)
+		}})
+	summary, _ := os.ReadFile(filepath.Join(fake.out, "summary.md"))
+	if !errors.Is(err, context.Canceled) || len(found) != 2 || found[0].CutShort || !found[1].CutShort ||
+		!strings.Contains(string(summary), "| 1 | Clean | a ConfigMap outlives its Widget | 5/5 | "+first+" |") ||
+		!strings.Contains(string(summary), "| 1 | Unique | two ConfigMaps hold one index | 5/5 | "+second+" (cut short) |") {
+		t.Errorf("Hunt = %+v, %v, and wrote:\n%s", found, err, summary)
+	}
+}
+
 func TestHuntRemovesTheRunOfASeedWithNothingNew(t *testing.T) {
 	_, fake := hunt(t, []uint64{1, 2}, always(clean))
 	wantKept(t, fake.out, map[string]bool{"seed-1": true, "seed-2": false})
