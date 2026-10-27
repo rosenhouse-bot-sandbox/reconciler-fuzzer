@@ -29,7 +29,8 @@ models:
     dependency: {track: 1s}
 systems:
   # A Volume's role drops a suffix after its index, so that Unique finds two
-  # Volumes of one index. Other objects keep their default role.
+  # Volumes of one index. The guard yields '' for every other object, which
+  # keeps its default role and raises no error.
   - name: kube
     role: >-
       self.kind == 'Volume' && self.metadata.name.matches('-vol-[0-9]+-[^-]+$')
