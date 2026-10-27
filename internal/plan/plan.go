@@ -102,6 +102,22 @@ type Target struct {
 	Nth int `json:"nth,omitempty"`
 }
 
+// String names the target's set fields, as "resource=secrets name=token".
+func (t Target) String() string {
+	var set []string
+	for _, field := range []struct{ name, value string }{
+		{"system", t.System}, {"group", t.Group}, {"resource", t.Resource}, {"namespace", t.Namespace}, {"name", t.Name}, {"role", t.Role},
+	} {
+		if field.value != "" {
+			set = append(set, field.name+"="+field.value)
+		}
+	}
+	if t.Nth > 0 {
+		set = append(set, fmt.Sprintf("nth=%d", t.Nth))
+	}
+	return strings.Join(set, " ")
+}
+
 // Fault starts with the fault period and ends with it, or when a create's
 // or a stop's wait for a deleted CR ends it. A request fault acts on one
 // system's controller listener. A model fault, Stuck or SlowDelete, acts on

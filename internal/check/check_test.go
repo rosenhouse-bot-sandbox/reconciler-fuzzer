@@ -300,7 +300,7 @@ func TestJudgeNotesAFaultPeriodOfZero(t *testing.T) {
 	const what = "killAfter on verb=update resource=clusters nth=2"
 	b := createStep()
 	b.At(2*s).Add(tt.Phase(1, trace.FaultPeriod), trace.Event{Fault: &trace.Fault{Step: 1, What: what}}).
-		At(2*s).Add(trace.Event{Fault: &trace.Fault{Step: 1, Ended: true, What: what}})
+		At(2 * s).Add(trace.Event{Fault: &trace.Fault{Step: 1, Ended: true, What: what}})
 	notes := check.Judge(b.Index(), spec).Notes
 	want := "Step 1, fault 0 (" + what + ") picked no request: it lasted 0s, as the step has no period. Set one to keep faults on after the last action returns."
 	if !slices.Contains(notes, want) {
@@ -317,8 +317,8 @@ func TestJudgeNotesHowLongAFaultOfAStepWithoutAPeriodLasted(t *testing.T) {
 		period time.Duration
 		want   string
 	}{
-		"a request fault":                         {request, 0, "Step 1, fault 0 (" + what + ") picked no request: it lasted 1.235s" + hint},
-		"a model fault":                           {model, 0, "Step 1, fault 0 (stuck) held no object: it lasted 1.235s" + hint},
+		"a request fault": {request, 0, "Step 1, fault 0 (" + what + ") picked no request: it lasted 1.235s" + hint},
+		"a model fault":   {model, 0, "Step 1, fault 0 (stuck) held no object: it lasted 1.235s" + hint},
 		"a request fault of a step with a period": {request, s, "Step 1, fault 0 (" + what + ") picked no request."},
 		"a model fault of a step with a period":   {model, s, "Step 1, fault 0 (stuck) held no object."},
 	} {

@@ -209,7 +209,8 @@ models:
 - Generated plans then draw two model faults. `stuck` keeps Gadgets not ready, and `slowDelete`
   holds their deletion. Each ends with the fault period. A create that waits until a deleted CR
   no longer exists ends them once `period` has passed. A plan step writes one as
-  `{"match": {"group": "example.com", "resource": "gadgets"}, "stuck": true}`.
+  `{"match": {"group": "example.com", "resource": "gadgets"}, "stuck": true}`, and needs a
+  `period` to keep it on after the step's last action returns.
 - `finalizer: {name: example.com/cleanup, after: 500ms}` plays a controller, such as a storage
   controller, that holds each Gadget's deletion with its own finalizer. The model adds the
   finalizer to each live Gadget it hears, and removes it 500 ms after it hears the deletion.
@@ -263,9 +264,12 @@ collections:
   `DELETE /<c>/<id>`. A new resource is `pending` for `createDelay`, then `ready`. `DELETE` sets
   `deleting`, and the resource leaves after `deleteDelay`. A repeated `unique` field answers 409,
   and an unknown id 404.
-- A plan faults the fake with `"system": "cloud"`: any request fault, such as
-  `{"system": "cloud", "match": {"verb": "create", "resource": "buckets"}, "nth": 1, "dropResponse": true}`,
-  and `stuck` or `slowDelete`. `damage` takes `"target": {"system": "cloud"}`.
+- A plan faults the fake with `"system": "cloud"`: any request fault, and `stuck` or
+  `slowDelete`. The step
+  `{"period": "2s", "faults": [{"system": "cloud", "match": {"verb": "create", "resource": "buckets"}, "nth": 1, "dropResponse": true}], "actions": [{"do": "create", "slot": "a"}]}`
+  drops the response to the first bucket create. Without its `period`, the fault would end as
+  the CR's create returns, before the controller creates the bucket. `damage` takes
+  `"target": {"system": "cloud"}`.
 - An entry's `halted` is CEL over its CR. It counts a CR as done after a request of unknown
   outcome, for a controller that stops on purpose. [targets/toy-bucket/halted](targets/toy-bucket/halted/config.yaml)
   uses it.

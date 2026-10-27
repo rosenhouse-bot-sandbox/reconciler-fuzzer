@@ -288,7 +288,6 @@ func TestSelectPicksTheNthMatchInCreationOrder(t *testing.T) {
 
 func TestSelectSaysWhyNoInstanceMatches(t *testing.T) {
 	w := owner.New(children().Index(), owner.Rules{})
-	crd := plan.Target{Group: "apiextensions.k8s.io", Resource: "customresourcedefinitions", Name: "widgets.toy"}
 	for _, c := range []struct {
 		creator trace.Caller
 		target  plan.Target
@@ -302,12 +301,26 @@ func TestSelectSaysWhyNoInstanceMatches(t *testing.T) {
 		{ctl, plan.Target{Group: "apps", Resource: "configmaps"}, "", "group=apps resource=configmaps: the controller has no live configmaps.apps"},
 		{ctl, plan.Target{System: "vault", Resource: "configmaps"}, "", "system=vault resource=configmaps: the controller has no live vault configmaps"},
 		{trace.Harness, plan.Target{Resource: "configmaps", Namespace: "other"}, "", "resource=configmaps namespace=other: the harness's live configmaps are ns/fixture"},
-		{trace.Harness, crd, "", "group=apiextensions.k8s.io resource=customresourcedefinitions name=widgets.toy: " +
-			"the harness has no live customresourcedefinitions.apiextensions.k8s.io; a CRD from crds is not a fixture"},
 	} {
 		_, err := w.Select(c.creator, c.target, c.slot, 10*s)
 		if want := "no instance matches " + c.want; !errors.Is(err, owner.ErrNoMatch) || err.Error() != want {
 			t.Errorf("Select(%s, %+v, %q) = %v, want %q", c.creator, c.target, c.slot, err, want)
+		}
+	}
+}
+
+func TestSelectSaysACRDFromCRDsIsNoFixture(t *testing.T) {
+	gadgets := tt.Ref("apiextensions.k8s.io/customresourcedefinitions", "", "gadgets.toy")
+	withGadgets := children()
+	withGadgets.At(500*time.Millisecond, tt.Create(trace.Harness, gadgets, "u-crd", "0"), tt.Version(gadgets, "u-crd", "0", tt.Object("gadgets.toy")))
+	target := plan.Target{Group: "apiextensions.k8s.io", Resource: "customresourcedefinitions", Name: "widgets.toy"}
+	const kind = "no instance matches group=apiextensions.k8s.io resource=customresourcedefinitions name=widgets.toy: the harness"
+	for tl, want := range map[*tt.Timeline]string{
+		children():  kind + " has no live customresourcedefinitions.apiextensions.k8s.io; a CRD from crds is not a fixture",
+		withGadgets: kind + "'s live customresourcedefinitions.apiextensions.k8s.io are gadgets.toy; a CRD from crds is not a fixture",
+	} {
+		if _, err := owner.New(tl.Index(), owner.Rules{}).Select(trace.Harness, target, "", 10*s); err == nil || err.Error() != want {
+			t.Errorf("Select = %v, want %q", err, want)
 		}
 	}
 }

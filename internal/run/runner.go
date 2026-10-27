@@ -108,7 +108,7 @@ func (e *execution) phase(step int, name trace.PhaseName) {
 
 func (e *execution) step(ctx context.Context, n int, step plan.Step) error {
 	s := &stepRun{execution: e, n: n, step: step, start: time.Now()}
-	e.phase(n, trace.FaultPeriod)
+	e.Recorder.Record(trace.Event{Phase: &trace.Phase{Step: n, Name: trace.FaultPeriod, Period: time.Duration(step.Period)}})
 	if err := e.Process.Supervise(false); err != nil {
 		return err
 	}

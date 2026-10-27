@@ -196,7 +196,7 @@ A `target` has `system` (default `kube`), `group`, `resource`, `namespace`,
 in creation order, that the controller (for `damage`) or the harness created,
 whose root (§11) holds the slot's newest live CR when a slot is set. A target
 that matches nothing records the error `no instance matches`, which names the
-slot's kind when the slot holds an object that is not a CR.
+target and the slot's object if not a CR, or else live instances of its kind.
 
 Actions run in order, each at its optional `at` offset. A fault sets one
 effect: a request fault or `holdWatch` (§5), or a model fault (§7) with no

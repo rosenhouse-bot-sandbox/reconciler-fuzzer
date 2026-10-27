@@ -641,8 +641,9 @@ var ErrNoMatch = errors.New("no instance matches")
 
 // Select resolves target at t among the live instances that creator made.
 // A slot narrows the match to instances whose root holds that slot's live
-// CR; an empty slot matches any owner. An error wraps ErrNoMatch, and names
-// the object a slot holds that is not a CR.
+// CR; an empty slot matches any owner. An error wraps ErrNoMatch. It names
+// the target, and the slot's object that is not a CR or else the
+// candidates of the target's kind.
 func (w *World) Select(creator trace.Caller, target plan.Target, slot string, t time.Duration) (trace.Ref, error) {
 	system := cmp.Or(target.System, "kube")
 	cr := ""
@@ -655,27 +656,71 @@ func (w *World) Select(creator trace.Caller, target plan.Target, slot string, t 
 		}
 		switch {
 		case held.UID == "":
-			return trace.Ref{}, ErrNoMatch
+			return trace.Ref{}, fmt.Errorf("%w %s: slot %s holds no live CR", ErrNoMatch, target, slot)
 		case !w.Primary(held):
 			kind := schema.GroupResource{Group: held.Ref.Group, Resource: held.Ref.Resource}
-			return trace.Ref{}, fmt.Errorf("%w: slot %s holds %s %s, which primaries does not list", ErrNoMatch, slot, kind, held.Ref.Name)
+			return trace.Ref{}, fmt.Errorf("%w %s: slot %s holds %s %s, which primaries does not list", ErrNoMatch, target, slot, kind, held.Ref.Name)
 		}
 		cr = held.UID
 	}
-	nth := max(target.Nth, 1)
+	var ofKind []Instance
 	for _, i := range w.instances {
-		if !i.Live(t) || i.Creator != creator || i.Ref.System != system || !matches(target.Resource, i.Ref.Resource) ||
-			!matches(target.Group, i.Ref.Group) || !matches(target.Namespace, i.Ref.Namespace) || !matches(target.Name, i.Ref.Name) || !matches(target.Role, i.Role) {
-			continue
+		if i.Live(t) && i.Creator == creator && i.Ref.System == system && matches(target.Resource, i.Ref.Resource) &&
+			matches(target.Group, i.Ref.Group) && (cr == "" || slices.Contains(w.Root(w.Owner(i, t), t).CRs, cr)) {
+			ofKind = append(ofKind, i)
 		}
-		if cr != "" && !slices.Contains(w.Root(w.Owner(i, t), t).CRs, cr) {
+	}
+	nth := max(target.Nth, 1)
+	for _, i := range ofKind {
+		if !matches(target.Namespace, i.Ref.Namespace) || !matches(target.Name, i.Ref.Name) || !matches(target.Role, i.Role) {
 			continue
 		}
 		if nth--; nth == 0 {
 			return i.Ref, nil
 		}
 	}
-	return trace.Ref{}, ErrNoMatch
+	return trace.Ref{}, fmt.Errorf("%w %s: %s", ErrNoMatch, target, candidates(creator, target, slot, ofKind))
+}
+
+// candidates names up to five of the live instances of target's kind that
+// creator made, in slot if set.
+func candidates(creator trace.Caller, target plan.Target, slot string, ofKind []Instance) string {
+	kind := target.Resource
+	if target.Group != "" {
+		kind += "." + target.Group
+	}
+	if target.Resource == "" {
+		kind = "objects"
+	}
+	if system := cmp.Or(target.System, "kube"); system != "kube" {
+		kind = system + " " + kind
+	}
+	if slot != "" {
+		kind += " in slot " + slot
+	}
+	said := fmt.Sprintf("the %s has no live %s", creator, kind)
+	if len(ofKind) > 0 {
+		const shown = 5
+		var names []string
+		for _, i := range ofKind[:min(len(ofKind), shown)] {
+			name := i.Ref.Name
+			if i.Ref.Namespace != "" {
+				name = i.Ref.Namespace + "/" + name
+			}
+			if target.Resource == "" {
+				name = i.Ref.Resource + "/" + name
+			}
+			names = append(names, name)
+		}
+		said = fmt.Sprintf("the %s's live %s are %s", creator, kind, strings.Join(names, ", "))
+		if len(ofKind) > shown {
+			said += fmt.Sprintf(" and %d more", len(ofKind)-shown)
+		}
+	}
+	if creator == trace.Harness && target.Resource == "customresourcedefinitions" {
+		said += "; a CRD from crds is not a fixture"
+	}
+	return said
 }
 
 func matches(want, got string) bool { return want == "" || want == got }

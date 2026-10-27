@@ -360,7 +360,9 @@ func unmapped(ix *trace.Index) []string {
 
 // unpicked notes each request fault that altered no controller request
 // while it was active, each stage-model fault whose model held no object,
-// and each holdWatch while the controller had no watch of its kind.
+// and each holdWatch while the controller had no watch of its kind. A
+// request or model fault's note says how long a step without a period kept
+// it on.
 func unpicked(ix *trace.Index, s Spec) []string {
 	starts := map[[2]int]trace.Event{}
 	var notes []string
@@ -379,17 +381,28 @@ func unpicked(ix *trace.Index, s Spec) []string {
 			starts[key] = e
 			continue
 		}
+		start := starts[key].At
 		switch {
-		case f.Model != "" && !s.fake(f.Model) && !held(ix, *f, starts[key].At, e.At):
-			notes = append(notes, fmt.Sprintf("%s, fault %d (%s) held no object.", stepName(ix, f.Step), f.Index, f.What))
-		case f.Model == "" && !slices.ContainsFunc(ix.Calls(trace.Controller, starts[key].At, math.MaxInt64), func(c trace.Event) bool {
+		case f.Model != "" && !s.fake(f.Model) && !held(ix, *f, start, e.At):
+			notes = append(notes, faultNote(ix, *f, "held no object", e.At-start))
+		case f.Model == "" && !slices.ContainsFunc(ix.Calls(trace.Controller, start, math.MaxInt64), func(c trace.Event) bool {
 			return c.At-c.Call.Latency <= e.At && c.Call.Ref.System == cmp.Or(f.System, "kube") &&
 				c.Call.Injected != "" && strings.HasPrefix(f.What, c.Call.Injected)
 		}):
-			notes = append(notes, fmt.Sprintf("%s, fault %d (%s) picked no request.", stepName(ix, f.Step), f.Index, f.What))
+			notes = append(notes, faultNote(ix, *f, "picked no request", e.At-start))
 		}
 	}
 	return notes
+}
+
+// faultNote says that f did nothing. Without a period, a step's faults end
+// by the time its last action returns.
+func faultNote(ix *trace.Index, f trace.Fault, nothing string, lasted time.Duration) string {
+	note := fmt.Sprintf("%s, fault %d (%s) %s", stepName(ix, f.Step), f.Index, f.What, nothing)
+	if step, _ := ix.Step(f.Step); step.Period == 0 {
+		return fmt.Sprintf("%s: it lasted %v, as the step has no period. Set one to keep faults on after the last action returns.", note, lasted.Round(time.Millisecond))
+	}
+	return note + "."
 }
 
 // fake reports whether a fault's model is a fake service.
