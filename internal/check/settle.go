@@ -86,7 +86,7 @@ func runClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 }
 
 // MadeSuccessfulRequest says whether the controller sent a request that a
-// check judges in [since, t] and saw it succeed.
+// check judges at or after since and saw it succeed by t.
 func MadeSuccessfulRequest(ix *trace.Index, since, t time.Duration) bool {
 	return slices.ContainsFunc(ix.Calls(trace.Controller, since, t), func(e trace.Event) bool {
 		return judged(e) && succeeded(*e.Call) && !e.Call.Unknown() && e.At-e.Call.Latency >= since

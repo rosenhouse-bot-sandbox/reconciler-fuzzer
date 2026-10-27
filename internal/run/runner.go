@@ -75,7 +75,11 @@ func (r *Runner) Quiet(ctx context.Context) error {
 			if check.MadeSuccessfulRequest(ix, 0, now) {
 				return nil
 			}
-			return neverStarted(ix, r.Config.Timeouts.Settle, r.Process.Tail())
+			runningTail := r.Process.Tail()
+			// An exit since the poll empties the tail, and its Exit event
+			// holds the tail.
+			ix.Append(r.Recorder.EventsSince(ix.Len())...)
+			return neverStarted(ix, r.Config.Timeouts.Settle, runningTail)
 		}
 		select {
 		case <-ctx.Done():
@@ -522,11 +526,11 @@ func sleepUntil(ctx context.Context, t time.Time) error {
 // in the settle wait before step 0. It quotes the first exit, as Crash does,
 // or else the running controller's output tail.
 func neverStarted(ix *trace.Index, settle time.Duration, runningTail string) error {
-	msg := fmt.Sprintf("the controller never started: it made no successful request that a check judges (discovery, Leases and Events do not count) in the %v before step 0 (timeouts.settle)", settle)
+	msg := fmt.Sprintf("the controller never started: in the %v before step 0 (timeouts.settle), it made no successful request apart from ones that no check judges, such as discovery, Leases and Events", settle)
 	var tail string
 	procs := ix.Procs()
 	if i := slices.IndexFunc(procs, func(e trace.Event) bool { return e.Proc.Event == trace.Exit }); i < 0 {
-		msg += ", and it did not exit"
+		msg += "\nit did not exit"
 		tail = runningTail
 	} else {
 		msg += "\nfirst exit: " + procs[i].Proc.Exit

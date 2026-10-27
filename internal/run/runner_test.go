@@ -1461,49 +1461,80 @@ func TestQuietWaitsUntilTheControllerSettles(t *testing.T) {
 	}
 }
 
+// A controller that made a successful request passes the wait, even if it
+// has crashed or restarted since.
 func TestQuietGivesUpAfterTheSettleTimeout(t *testing.T) {
-	f := newFixture(t, func(*trace.Index, time.Duration, time.Duration) (time.Duration, bool) { return 0, false })
-	f.rec.Record(tracetest.Start(1))
-	f.rec.Record(tracetest.Call(trace.Controller, "list", tracetest.Ref("widgets", "ns", ""), 200, "1"))
-	f.rec.Record(tracetest.Exit("exit status 2", false, "panic: boom\n"))
-	start := time.Now()
-	if err := f.runner.Quiet(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if waited := time.Since(start); waited < timeouts.Settle || waited > timeouts.Settle+3*PollInterval {
-		t.Errorf("Quiet waited %v, want the settle timeout %v", waited, timeouts.Settle)
-	}
-}
-
-// A controller that worked once and then crash-loops gets a Crash finding,
-// not the never-started error.
-func TestQuietCountsARequestBeforeTheLastStart(t *testing.T) {
-	f := newFixture(t, func(*trace.Index, time.Duration, time.Duration) (time.Duration, bool) { return 0, false })
-	f.rec.Record(tracetest.Start(1))
-	f.rec.Record(tracetest.Call(trace.Controller, "list", tracetest.Ref("widgets", "ns", ""), 200, "1"))
-	f.rec.Record(tracetest.Exit("exit status 2", false, "panic: boom\n"))
-	f.rec.Record(tracetest.Start(2))
-	if err := f.runner.Quiet(context.Background()); err != nil {
-		t.Fatal(err)
+	worked := []trace.Event{tracetest.Start(1), tracetest.Call(trace.Controller, "list", tracetest.Ref("widgets", "ns", ""), 200, "1")}
+	crashed := slices.Concat(worked, []trace.Event{tracetest.Exit("exit status 2", false, "panic: boom\n")})
+	for name, events := range map[string][]trace.Event{
+		"running":   worked,
+		"crashed":   crashed,
+		"restarted": slices.Concat(crashed, []trace.Event{tracetest.Start(2)}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, func(*trace.Index, time.Duration, time.Duration) (time.Duration, bool) { return 0, false })
+			for _, e := range events {
+				f.rec.Record(e)
+			}
+			start := time.Now()
+			if err := f.runner.Quiet(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if waited := time.Since(start); waited < timeouts.Settle || waited > timeouts.Settle+3*PollInterval {
+				t.Errorf("Quiet waited %v, want the settle timeout %v", waited, timeouts.Settle)
+			}
+		})
 	}
 }
 
 func TestQuietStopsWhenASystemFails(t *testing.T) {
+	for name, c := range map[string]struct {
+		settled   bool
+		failAfter time.Duration
+	}{
+		"mid-wait":                  {false, 100 * time.Millisecond},
+		"as the controller settles": {true, 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, func(_ *trace.Index, from, _ time.Duration) (time.Duration, bool) { return from, c.settled })
+			f.runner.Config.Timeouts.Settle = 5 * time.Second
+			failAt := time.Now().Add(c.failAfter)
+			f.runner.Failed = func() error {
+				if time.Now().After(failAt) {
+					return errors.New("fake cloud exited")
+				}
+				return nil
+			}
+			start := time.Now()
+			if err := f.runner.Quiet(context.Background()); err == nil || err.Error() != "fake cloud exited" {
+				t.Errorf("Quiet = %v, want the system's error", err)
+			}
+			if waited := time.Since(start); waited >= f.runner.Config.Timeouts.Settle {
+				t.Errorf("Quiet waited %v, the whole settle timeout", waited)
+			}
+		})
+	}
+}
+
+// exitOnTail is a controller that exits after Quiet's last poll, as Quiet
+// reads its tail.
+type exitOnTail struct {
+	fakeProcess
+	rec *trace.Recorder
+}
+
+func (p exitOnTail) Tail() string {
+	p.rec.Record(tracetest.Exit("exit status 1", false, "toy: forbidden\n"))
+	return ""
+}
+
+func TestQuietQuotesAnExitAfterTheLastPoll(t *testing.T) {
 	f := newFixture(t, func(*trace.Index, time.Duration, time.Duration) (time.Duration, bool) { return 0, false })
-	f.runner.Config.Timeouts.Settle = 5 * time.Second
-	failAt := time.Now().Add(100 * time.Millisecond)
-	f.runner.Failed = func() error {
-		if time.Now().After(failAt) {
-			return errors.New("fake cloud exited")
-		}
-		return nil
-	}
-	start := time.Now()
-	if err := f.runner.Quiet(context.Background()); err == nil || err.Error() != "fake cloud exited" {
-		t.Errorf("Quiet = %v, want the system's error", err)
-	}
-	if waited := time.Since(start); waited >= f.runner.Config.Timeouts.Settle {
-		t.Errorf("Quiet waited %v, the whole settle timeout", waited)
+	f.runner.Process = exitOnTail{fakeProcess{f.process}, f.rec}
+	f.rec.Record(tracetest.Start(1))
+	err := f.runner.Quiet(context.Background())
+	if want := "\nfirst exit: exit status 1\noutput tail:\ntoy: forbidden\n"; err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("Quiet = %v, want it to quote %q", err, want)
 	}
 }
 
@@ -1515,7 +1546,7 @@ func TestQuietFailsAControllerThatNeverStarted(t *testing.T) {
 		tracetest.Call(trace.Controller, "get", lease, 200, "1"),
 		tracetest.Call(trace.Controller, "list", tracetest.Ref("widgets", "ns", ""), 403, ""),
 	}
-	never := "the controller never started: it made no successful request that a check judges (discovery, Leases and Events do not count) in the 300ms before step 0 (timeouts.settle)"
+	never := "the controller never started: in the 300ms before step 0 (timeouts.settle), it made no successful request apart from ones that no check judges, such as discovery, Leases and Events"
 	for name, c := range map[string]struct {
 		events []trace.Event
 		want   string
@@ -1528,7 +1559,7 @@ func TestQuietFailsAControllerThatNeverStarted(t *testing.T) {
 			slices.Concat(tried, []trace.Event{tracetest.Exit("exit status 1", false, "")}),
 			never + "\nfirst exit: exit status 1\nsee controller.log",
 		},
-		"still running": {tried, never + ", and it did not exit\noutput tail:\ntoy: waiting\nsee controller.log"},
+		"still running": {tried, never + "\nit did not exit\noutput tail:\ntoy: waiting\nsee controller.log"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t, func(*trace.Index, time.Duration, time.Duration) (time.Duration, bool) { return 0, false })
