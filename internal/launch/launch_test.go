@@ -142,7 +142,7 @@ func TestExitCarriesTheTailOfBothStreams(t *testing.T) {
 	}
 }
 
-func TestTailIsTheRunningProcesssOutput(t *testing.T) {
+func TestTailHoldsTheRunningProcessOutput(t *testing.T) {
 	b, _, _ := newBinary(t, "echo up; "+forever)
 	if got := b.Tail(); got != "" {
 		t.Errorf("Before Start, Tail = %q, want none.", got)

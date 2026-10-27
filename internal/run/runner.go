@@ -53,7 +53,8 @@ func (r *Runner) Execute(ctx context.Context, p *plan.Plan) error {
 
 // Quiet waits until the settle condition holds, or for at most the settle
 // timeout, so that what the controller makes at startup precedes the first
-// CR. It fails if the controller made no successful request by then.
+// CR. It fails when a system fails, or when the controller made no
+// successful request by the timeout.
 func (r *Runner) Quiet(ctx context.Context) error {
 	ix := trace.NewIndex(nil)
 	deadline := r.Recorder.Now() + r.Config.Timeouts.Settle
@@ -62,11 +63,16 @@ func (r *Runner) Quiet(ctx context.Context) error {
 	for {
 		now := r.Recorder.Now()
 		ix.Append(r.Recorder.EventsSince(ix.Len())...)
+		if err := r.failed(); err != nil {
+			return err
+		}
 		if _, ok := r.FirstSettled(ix, 0, now); ok {
 			return nil
 		}
 		if now >= deadline {
-			if check.Requested(ix, 0, now) {
+			// A request before the last start counts, so that Crash judges
+			// a controller that worked and then crashed.
+			if check.MadeSuccessfulRequest(ix, 0, now) {
 				return nil
 			}
 			return neverStarted(ix, r.Config.Timeouts.Settle, r.Process.Tail())
@@ -515,15 +521,16 @@ func sleepUntil(ctx context.Context, t time.Time) error {
 // neverStarted is the error for a controller that made no successful request
 // in the settle wait before step 0. It quotes the first exit, as Crash does,
 // or else the running controller's output tail.
-func neverStarted(ix *trace.Index, settle time.Duration, running string) error {
-	msg := fmt.Sprintf("the controller never started: it made no successful request in the %v before step 0 (timeouts.settle)", settle)
-	tail := running
-	if i := slices.IndexFunc(ix.Procs(), func(e trace.Event) bool { return e.Proc.Event == trace.Exit }); i < 0 {
+func neverStarted(ix *trace.Index, settle time.Duration, runningTail string) error {
+	msg := fmt.Sprintf("the controller never started: it made no successful request that a check judges (discovery, Leases and Events do not count) in the %v before step 0 (timeouts.settle)", settle)
+	var tail string
+	procs := ix.Procs()
+	if i := slices.IndexFunc(procs, func(e trace.Event) bool { return e.Proc.Event == trace.Exit }); i < 0 {
 		msg += ", and it did not exit"
+		tail = runningTail
 	} else {
-		exit := ix.Procs()[i].Proc
-		msg += "\nfirst exit: " + exit.Exit
-		tail = exit.StderrTail
+		msg += "\nfirst exit: " + procs[i].Proc.Exit
+		tail = procs[i].Proc.StderrTail
 	}
 	if tail = strings.TrimRight(tail, "\n"); tail != "" {
 		msg += "\noutput tail:\n" + tail

@@ -1475,6 +1475,38 @@ func TestQuietGivesUpAfterTheSettleTimeout(t *testing.T) {
 	}
 }
 
+// A controller that worked once and then crash-loops gets a Crash finding,
+// not the never-started error.
+func TestQuietCountsARequestBeforeTheLastStart(t *testing.T) {
+	f := newFixture(t, func(*trace.Index, time.Duration, time.Duration) (time.Duration, bool) { return 0, false })
+	f.rec.Record(tracetest.Start(1))
+	f.rec.Record(tracetest.Call(trace.Controller, "list", tracetest.Ref("widgets", "ns", ""), 200, "1"))
+	f.rec.Record(tracetest.Exit("exit status 2", false, "panic: boom\n"))
+	f.rec.Record(tracetest.Start(2))
+	if err := f.runner.Quiet(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestQuietStopsWhenASystemFails(t *testing.T) {
+	f := newFixture(t, func(*trace.Index, time.Duration, time.Duration) (time.Duration, bool) { return 0, false })
+	f.runner.Config.Timeouts.Settle = 5 * time.Second
+	failAt := time.Now().Add(100 * time.Millisecond)
+	f.runner.Failed = func() error {
+		if time.Now().After(failAt) {
+			return errors.New("fake cloud exited")
+		}
+		return nil
+	}
+	start := time.Now()
+	if err := f.runner.Quiet(context.Background()); err == nil || err.Error() != "fake cloud exited" {
+		t.Errorf("Quiet = %v, want the system's error", err)
+	}
+	if waited := time.Since(start); waited >= f.runner.Config.Timeouts.Settle {
+		t.Errorf("Quiet waited %v, the whole settle timeout", waited)
+	}
+}
+
 func TestQuietFailsAControllerThatNeverStarted(t *testing.T) {
 	lease := trace.Ref{System: "kube", Group: "coordination.k8s.io", Resource: "leases", Namespace: "ns", Name: "toy"}
 	tried := []trace.Event{
@@ -1483,7 +1515,7 @@ func TestQuietFailsAControllerThatNeverStarted(t *testing.T) {
 		tracetest.Call(trace.Controller, "get", lease, 200, "1"),
 		tracetest.Call(trace.Controller, "list", tracetest.Ref("widgets", "ns", ""), 403, ""),
 	}
-	never := "the controller never started: it made no successful request in the 300ms before step 0 (timeouts.settle)"
+	never := "the controller never started: it made no successful request that a check judges (discovery, Leases and Events do not count) in the 300ms before step 0 (timeouts.settle)"
 	for name, c := range map[string]struct {
 		events []trace.Event
 		want   string
