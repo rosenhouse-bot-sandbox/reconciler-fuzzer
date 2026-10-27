@@ -302,9 +302,13 @@ func TestBackoffSkips(t *testing.T) {
 		"another caller":      func(c *trace.Call) { c.Caller = trace.Harness },
 		"successes":           func(c *trace.Call) { c.Status = 200 },
 		"409s on a held kind": func(c *trace.Call) { c.Verb, c.Status = "update", 409 },
+		"no-op writes on a held kind": func(c *trace.Call) {
+			c.Verb, c.Status, c.ResultRV = "patch", 200, "2"
+		},
 	} {
 		var b tt.Builder
 		b.Add(tt.Run("toy", "widgets"), tt.HoldFault(0, 0, false, tt.Ref("toy/gadgets", "", "")))
+		b.Add(tt.Version(gadgetA, "ug", "2", gadgetBody(false)))
 		for _, start := range every(10*ms, 11) {
 			call := tt.Call(ctl, "get", gadgetA, 500, "")
 			edit(call.Call)
@@ -317,7 +321,7 @@ func TestBackoffSkips(t *testing.T) {
 	}
 }
 
-func TestBackoffHoldsOnlyA409DuringTheHold(t *testing.T) {
+func TestBackoffHoldsNoOtherFailureDuringTheHold(t *testing.T) {
 	var b tt.Builder
 	b.Add(tt.Run("toy", "widgets"), tt.HoldFault(0, 0, false, tt.Ref("toy/gadgets", "", "")))
 	for _, start := range every(10*ms, 11) {
@@ -333,7 +337,7 @@ func TestBackoffHoldsOnlyA409DuringTheHold(t *testing.T) {
 	}
 }
 
-func TestBackoffAllowsA409JustAfterTheHold(t *testing.T) {
+func TestBackoffAllowsA409OrANoOpWriteJustAfterTheHold(t *testing.T) {
 	for name, c := range map[string]struct {
 		after time.Duration
 		finds bool
@@ -341,11 +345,39 @@ func TestBackoffAllowsA409JustAfterTheHold(t *testing.T) {
 		"within stable/4": {spec.Stable/4 - 200*ms, false},
 		"after stable/4":  {spec.Stable/4 + 10*ms, true},
 	} {
+		for what, call := range map[string]func() trace.Event{
+			"a 409":         func() trace.Event { return tt.Call(ctl, "update", gadgetA, 409, "") },
+			"a no-op write": func() trace.Event { return tt.Call(ctl, "patch", gadgetA, 200, "2") },
+		} {
+			var b tt.Builder
+			b.Add(tt.Run("toy", "widgets"), tt.HoldFault(0, 0, false, tt.Ref("toy/gadgets", "", "")))
+			b.Add(tt.Version(gadgetA, "ug", "2", gadgetBody(false)))
+			b.At(time.Second).Add(tt.HoldFault(0, 0, true, tt.Ref("toy/gadgets", "", "")))
+			for _, start := range every(10*ms, 11) {
+				b.At(time.Second + c.after + start).Add(call())
+			}
+			if findings := check.Backoff(b.Index(), spec); (len(findings) > 0) != c.finds {
+				t.Errorf("%s %s: findings = %+v", what, name, findings)
+			}
+		}
+	}
+}
+
+// TestBackoffCountsAnUpdateThatDeletesItsObjectAsAChange has the controller
+// update slot a's Gadget 11 times. Each answers at the Gadget's version 2.
+func TestBackoffCountsAnUpdateThatDeletesItsObjectAsAChange(t *testing.T) {
+	for name, c := range map[string]struct {
+		held, answered []string
+		finds          bool
+	}{
+		"an update that empties a deleting object's finalizers": {[]string{own}, nil, false},
+		"an update that keeps them":                             {[]string{own}, []string{own}, true},
+		"an update of an object without finalizers":             {nil, nil, true},
+	} {
 		var b tt.Builder
-		b.Add(tt.Run("toy", "widgets"), tt.HoldFault(0, 0, false, tt.Ref("toy/gadgets", "", "")))
-		b.At(time.Second).Add(tt.HoldFault(0, 0, true, tt.Ref("toy/gadgets", "", "")))
+		b.Add(tt.Run("toy", "widgets"), tt.Version(gadgetA, "ug", "2", gadgetBody(c.held != nil, c.held...)))
 		for _, start := range every(10*ms, 11) {
-			b.At(time.Second + c.after + start).Add(tt.Call(ctl, "update", gadgetA, 409, ""))
+			b.At(start).Add(write(ctl, "update", gadgetA, "2", c.answered...))
 		}
 		if findings := check.Backoff(b.Index(), spec); (len(findings) > 0) != c.finds {
 			t.Errorf("%s: findings = %+v", name, findings)

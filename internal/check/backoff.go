@@ -34,7 +34,7 @@ func Backoff(ix *trace.Index, s Spec) []Finding {
 		// A create's object is the name it requests.
 		object.Name = cmp.Or(object.Name, c.RequestName)
 		r := request{c.Ref.System, c.Verb, object, c.Subresource, c.Status}
-		futile := !succeeded(*c) || trace.Mutating(c.Verb) && !ix.Changed(e)
+		futile := !succeeded(*c) || trace.Mutating(c.Verb) && !ix.Changed(e) && !emptiedFinalizers(ix, *c)
 		if succeeded(*c) {
 			// A success ends each run of its verb, object and subresource
 			// that it does not join.
@@ -44,7 +44,9 @@ func Backoff(ix *trace.Index, s Spec) []Finding {
 				}
 			}
 		}
-		if !futile || c.Status == 409 && holds(c.Ref, start) {
+		// A held kind's stale cache gives 409s, and writes that the server
+		// already holds.
+		if !futile || (c.Status == 409 || succeeded(*c)) && holds(c.Ref, start) {
 			continue
 		}
 		rn := runs[r]
@@ -82,6 +84,17 @@ func Backoff(ix *trace.Index, s Spec) []Finding {
 		findings[n] = *found[key]
 	}
 	return findings
+}
+
+// emptiedFinalizers says whether c answered with no finalizers at a version
+// that holds some. Such a write emptied a deleting object's finalizers, so the
+// API server deleted the object and answered at the old resourceVersion.
+func emptiedFinalizers(ix *trace.Index, c trace.Call) bool {
+	if c.ResultFinalizers == nil || len(*c.ResultFinalizers) > 0 {
+		return false
+	}
+	v, _ := ix.VersionOf(c.Object(), c.ResultRV)
+	return len(finalizers(v)) > 0
 }
 
 // crsLive counts the CRs live at some time in [from, to]. Each CR may back
