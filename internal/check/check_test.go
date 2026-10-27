@@ -299,17 +299,15 @@ func TestJudgeNotesAFailedAction(t *testing.T) {
 
 func TestJudgeNotesAStopThatSentSIGKILL(t *testing.T) {
 	const sentSIGKILL = "the controller did not exit within launch.gracePeriod of SIGTERM, so the harness sent SIGKILL."
-	killed := trace.Proc{Event: trace.Exit, Exit: "signal: killed", HarnessCaused: true, GracePeriodPassed: true}
-	restart := restartRun(trace.Event{Proc: &killed}).Events()
-	// interrupted ends at the restart's exit, before step 1's settle wait.
+	killed := trace.Event{Proc: &trace.Proc{Event: trace.Exit, Exit: "signal: killed", HarnessCaused: true, GracePeriodPassed: true}}
+	kill := trace.Event{Proc: &trace.Proc{Event: trace.Exit, Exit: "signal: killed", HarnessCaused: true}}
+	restart := restartRun(killed).Events()
+	// interrupted ends at the restart's exit, before step 1's faults end.
 	interrupted := restart[:slices.IndexFunc(restart, func(e trace.Event) bool { return e.Proc != nil && e.Proc.Event == trace.Exit })+1]
-	atEnd := func(exit trace.Proc) []trace.Event {
-		return cleanRun().At(10 * s).Add(trace.Event{Proc: &exit}).Events()
-	}
 	run := tt.Run("toy", "widgets")
 	run.Run.Primaries[0].Kind = widgets
 	var early tt.Builder
-	early.Add(run, tt.Start(1), trace.Event{Proc: &killed})
+	early.Add(run, tt.Start(1), killed)
 	for name, c := range map[string]struct {
 		events []trace.Event
 		want   []string
@@ -317,9 +315,12 @@ func TestJudgeNotesAStopThatSentSIGKILL(t *testing.T) {
 		"a stop before step 0":                   {early.Events(), []string{"Before step 0, at 0s: " + sentSIGKILL}},
 		"a restart's stop":                       {restart, []string{"Step 1, at 5.6s: " + sentSIGKILL}},
 		"a restart's stop in an interrupted run": {interrupted, []string{"Step 1, at 5.6s: " + sentSIGKILL}},
-		"the run's stop":                         {atEnd(killed), []string{"After the last step, at 10s: " + sentSIGKILL}},
-		"an exit as the grace period passed":     {atEnd(trace.Proc{Event: trace.Exit, Exit: "signal: terminated", HarnessCaused: true, GracePeriodPassed: true}), nil},
-		"a kill":                                 {atEnd(trace.Proc{Event: trace.Exit, Exit: "signal: killed", HarnessCaused: true}), nil},
+		"the run's stop":                         {cleanRun().At(10 * s).Add(killed).Events(), []string{"After the last step, at 10s: " + sentSIGKILL}},
+		"the run's stop after a timed-out step":  {churn(false).At(11 * s).Add(killed).Events(), []string{"After the last step, at 11s: " + sentSIGKILL}},
+		"the run's stop during a settle wait": {createStep().At(3 * s).Add(killed).Events(), []string{
+			"After the last step, at 3s: " + sentSIGKILL, "Step 0 is not judged: the trace ends at 3s, before its deadline 10s.",
+		}},
+		"a kill": {cleanRun().At(10 * s).Add(kill).Events(), nil},
 	} {
 		if notes := check.Judge(trace.NewIndex(c.events), spec).Notes; !slices.Equal(notes, c.want) {
 			t.Errorf("%s: notes = %q, want %q", name, notes, c.want)

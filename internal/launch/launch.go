@@ -41,8 +41,7 @@ type Options struct {
 	Env map[string]string
 	// Log receives stdout and stderr through one pipe.
 	Log io.Writer
-	// GracePeriod is how long Stop waits after SIGTERM before SIGKILL. Zero
-	// sends SIGKILL at once.
+	// GracePeriod is how long Stop waits after SIGTERM before SIGKILL.
 	GracePeriod time.Duration
 	// OnStart and OnExit hear every start and exit, including restarts.
 	OnStart func(pid int)
@@ -56,8 +55,8 @@ type Exit struct {
 	Status string
 	// HarnessCaused says Stop or Kill ended the process.
 	HarnessCaused bool
-	// GracePeriodPassed says Stop sent SIGKILL because the process outlived
-	// the grace period.
+	// GracePeriodPassed says the process outlived the grace period, and the
+	// SIGKILL that Stop then sent ended it.
 	GracePeriodPassed bool
 	// Tail is the last TailBytes of the process's output.
 	Tail string
@@ -153,12 +152,15 @@ func (b *Binary) announce(p *process) {
 func (b *Binary) reap(p *process) {
 	err := p.cmd.Wait()
 	status := fmt.Sprint(err)
-	if p.cmd.ProcessState != nil {
-		status = p.cmd.ProcessState.String()
+	var killed bool
+	if s := p.cmd.ProcessState; s != nil {
+		status = s.String()
+		ws, _ := s.Sys().(syscall.WaitStatus)
+		killed = ws.Signaled() && ws.Signal() == syscall.SIGKILL
 	}
 
 	b.mu.Lock()
-	exit := Exit{PID: p.cmd.Process.Pid, Status: status, HarnessCaused: p.harness, GracePeriodPassed: p.gracePeriodPassed, Tail: p.tail.String()}
+	exit := Exit{PID: p.cmd.Process.Pid, Status: status, HarnessCaused: p.harness, GracePeriodPassed: p.gracePeriodPassed && killed, Tail: p.tail.String()}
 	var delay time.Duration
 	if b.running == p {
 		b.running = nil

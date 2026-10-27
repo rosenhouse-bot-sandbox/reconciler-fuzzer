@@ -439,7 +439,7 @@ func killedStops(ix *trace.Index) []string {
 	var notes []string
 	steps := ix.Steps()
 	for _, e := range ix.Procs() {
-		if p := e.Proc; !p.GracePeriodPassed || p.Exit != "signal: killed" {
+		if !e.Proc.GracePeriodPassed {
 			continue
 		}
 		when := stepName(ix, stepAt(steps, e.At))
@@ -451,14 +451,14 @@ func killedStops(ix *trace.Index) []string {
 	return notes
 }
 
-// afterSteps says t is after the last step's settle wait ended. The harness
+// afterSteps says t is after the last step's fault period ended. The harness
 // stops the controller only in fault periods and at the run's end.
 func afterSteps(steps []trace.StepSpan, t time.Duration) bool {
 	if len(steps) == 0 {
 		return false
 	}
 	last := steps[len(steps)-1]
-	return last.WaitEnd > 0 && t > last.WaitEnd
+	return last.Reached[trace.EndFaults] && t > last.EndFaults
 }
 
 // stepName names a step, and says which steps the runner appended.

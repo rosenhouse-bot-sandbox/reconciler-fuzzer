@@ -332,7 +332,7 @@ type Proc struct {
 	// HarnessCaused says the harness stopped or killed the process.
 	HarnessCaused bool `json:"harnessCaused,omitempty"`
 	// GracePeriodPassed says the process outlived launch.gracePeriod after
-	// SIGTERM, so the harness sent SIGKILL.
+	// SIGTERM, and the SIGKILL that the harness then sent ended it.
 	GracePeriodPassed bool   `json:"gracePeriodPassed,omitempty"`
 	StderrTail        string `json:"stderrTail,omitempty"`
 }
