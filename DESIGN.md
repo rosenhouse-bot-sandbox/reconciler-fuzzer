@@ -344,13 +344,13 @@ the controller saw a dependency not ready: `stayed ready after seeing its
 dependency not ready`.
 
 **Backoff.** A controller call is **futile** if it fails, or writes and changes
-nothing. Futile calls with one system, verb, object, subresource and status,
-each under 100 ms after the last, form a **run**. Another success of its verb,
-object and subresource ends it. So does a new generation of the object, of its
-rule 1 to 3 CR, or, if it is no CR and has none, of any CR. With `n` CRs live, a
-run fails at call `10n + 1`, or `20n + 1` for no-op writes: `retried a failing
-request in a tight loop` or `repeated a no-op write in a tight loop`. A held
-kind's 409s and no-op writes pass during the hold and `stable / 4` after.
+nothing (entry 88). Futile calls with one system, verb, object, subresource and
+status, each under 100 ms after the last, form a **run**. Another success of its
+verb, object and subresource ends it. So does a new generation of the object, of
+its rule 1 to 3 CR, or, if it is no CR and has none, of any CR. With `n` CRs
+live, a run fails at call `10n + 1`, or `20n + 1` for no-op writes: `retried a
+failing request in a tight loop` or `repeated a no-op write in a tight loop`. A
+held kind's 409s and no-op writes pass during the hold and `stable / 4` after.
 
 **Finalizers.** A controller `update` or `patch` of an object, or of a built-in
 kind's `status`, fails when its answer drops a finalizer that a model or the gc
