@@ -387,23 +387,25 @@ func TestHuntWithoutReplaysStillShrinks(t *testing.T) {
 }
 
 func TestHuntUpdatesTheSummaryAsItGoes(t *testing.T) {
+	restore := check.Finding{Check: "Restore", Summary: "a ConfigMap stays changed", Kind: "kube/configmaps"}
 	fake := &fakeRun{out: t.TempDir()}
 	summaries := map[string]string{}
 	fake.finds = func(dir string, _ *plan.Plan) []check.Finding {
 		summary, _ := os.ReadFile(filepath.Join(fake.out, "summary.md"))
 		summaries[dir] = string(summary)
-		if strings.HasPrefix(dir, "seed-2") {
-			return []check.Finding{clean, unique}
+		if strings.HasPrefix(dir, "seed-1") {
+			return []check.Finding{restore}
 		}
-		return nil
+		return []check.Finding{clean, unique}
 	}
 	if _, err := Hunt(context.Background(), Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1, 2}), Out: fake.out, Run: fake.run,
 		Replays: DefaultReplays, Candidates: DefaultCandidates}); err != nil {
 		t.Fatal(err)
 	}
+	restoreRow := "| 1 | Restore | a ConfigMap stays changed | 5/5 | " + filepath.Join(fake.out, "seed-1", "shrunk.json") + " |"
 	cleanRow, uniqueRow := "| 2 | Clean | a ConfigMap outlives its Widget |", "| 2 | Unique | two ConfigMaps hold one index |"
 	for dir, want := range map[string][]string{
-		"seed-2/replay-1":     {"2 distinct findings over 2 seeds.", cleanRow + " pending | pending |", uniqueRow + " pending | pending |"},
+		"seed-2/replay-1":     {"3 distinct findings over 2 seeds.", restoreRow, cleanRow + " pending | pending |", uniqueRow + " pending | pending |"},
 		"seed-2/shrink-1-1-1": {cleanRow + " 5/5 | pending |", uniqueRow + " 5/5 | pending |"},
 		"seed-2/shrink-2-1-1": {cleanRow + " 5/5 | " + filepath.Join(fake.out, "seed-2", "shrunk.json") + " |", uniqueRow + " 5/5 | pending |"},
 	} {
@@ -496,6 +498,26 @@ func TestShrinkPlanUpdatesTheSummaryAsItGoes(t *testing.T) {
 	}
 	if want := "| - | Clean | a ConfigMap outlives its Widget | pending | pending |"; !strings.Contains(string(summary), want) {
 		t.Errorf("When the first replay ran, summary.md lacked %q:\n%s", want, summary)
+	}
+}
+
+func TestShrinkPlanLeavesNothingPendingAfterACancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	out := t.TempDir()
+	fake := &fakeRun{out: out, finds: always(clean)}
+	_, err := ShrinkPlan(ctx, ShrinkOptions{ConfigPath: toyConfig, PlanPath: "../../targets/toy-widget/plans/b13.json", Out: out,
+		Replays: DefaultReplays, Candidates: DefaultCandidates,
+		Run: func(ctx context.Context, p *plan.Plan, out string) (check.Report, error) {
+			if filepath.Base(out) == "replay-2" {
+				cancel()
+				return check.Report{}, ctx.Err()
+			}
+			return fake.run(ctx, p, out)
+		}})
+	summary, _ := os.ReadFile(filepath.Join(out, "summary.md"))
+	if !errors.Is(err, context.Canceled) || !strings.Contains(string(summary), "| - | Clean |") || strings.Contains(string(summary), "pending") {
+		t.Errorf("ShrinkPlan returned %v and wrote:\n%s", err, summary)
 	}
 }
 

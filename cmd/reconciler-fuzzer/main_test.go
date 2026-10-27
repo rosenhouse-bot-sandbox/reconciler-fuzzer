@@ -65,7 +65,6 @@ func TestUsageErrors(t *testing.T) {
 		"plan no config":    {"plan", "--seed", "1"},
 		"plan bad seed":     {"plan", "--config", toyConfig, "--seed", "-1"},
 		"plan out":          {"plan", "--config", toyConfig, "--seed", "1", "--out", "dir"},
-		"hunt replays":      {"hunt", "--config", toyConfig, "--seeds", "2", "--replays", "-1", "--out", "dir"},
 		"shrink candidates": {"shrink", "--config", toyConfig, "--plan", "p.json", "--candidates", "x", "--out", "dir"},
 		"help of a typo":    {"help", "fuzz"},
 		"help of two":       {"help", "run", "hunt"},
@@ -77,6 +76,25 @@ func TestUsageErrors(t *testing.T) {
 				t.Errorf("cli(%q) = %d, stdout %q, stderr %q; want 2 and usage on stderr", args, code, stdout, stderr)
 			}
 		})
+	}
+}
+
+func TestHuntAndShrinkRefuseANegativeCountOrOnePastAnInt(t *testing.T) {
+	runPlan = func(context.Context, run.Options) (check.Report, error) {
+		t.Error("cli ran a plan")
+		return check.Report{}, errors.New("cli ran a plan")
+	}
+	t.Cleanup(func() { runPlan = run.Run })
+	shrink := []string{"shrink", "--config", toyConfig, "--plan", "../../targets/toy-widget/plans/b13.json"}
+	for _, args := range [][]string{
+		{"hunt", "--config", toyConfig, "--seeds", "1", "--replays", "-1"},
+		{"hunt", "--config", toyConfig, "--seeds", "1", "--replays", "9223372036854775808"},
+		append(shrink, "--candidates", "-1"),
+		append(shrink, "--candidates", "9223372036854775808"),
+	} {
+		if code, _, stderr := cliOutput(append(args, "--out", t.TempDir())...); code != 2 || !strings.Contains(stderr, "usage:") {
+			t.Errorf("cli(%q) = %d, stderr %q; want 2 and the usage", args, code, stderr)
+		}
 	}
 }
 

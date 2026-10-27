@@ -22,7 +22,7 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 )
 
-// DefaultReplays is how many times the CLI replays each new finding's plan
+// DefaultReplays is how many times the CLI replays a plan with new findings
 // unless told otherwise, and DefaultCandidates how many candidates it tries
 // in the shrink of one finding, so that one slow shrink leaves time for the
 // other seeds.
@@ -44,7 +44,7 @@ type Options struct {
 	// Seeds are the seeds to draw plans from.
 	Seeds iter.Seq[uint64]
 	Out   string
-	// Replays is how many times to replay the plan of each new finding, and
+	// Replays is how many times to replay a plan with new findings, and
 	// Candidates how many shrink candidates to try for each finding. Zero
 	// candidates skip the shrink.
 	Replays, Candidates int
@@ -140,7 +140,8 @@ type ShrinkOptions struct {
 }
 
 // ShrinkPlan runs the plan into Out, then replays and shrinks each of its
-// findings as Hunt does. It writes summary.md under Out as they finish.
+// findings as Hunt does. It writes summary.md under Out as they finish,
+// unless an error leaves no findings to list.
 func ShrinkPlan(ctx context.Context, o ShrinkOptions) ([]Found, error) {
 	cfg, err := config.Load(o.ConfigPath)
 	if err != nil {
@@ -160,10 +161,10 @@ func ShrinkPlan(ctx context.Context, o ShrinkOptions) ([]Found, error) {
 		_ = writeSummary(o.Out, "1 plan", found, nil)
 	}
 	found, err := h.investigate(ctx, p, o.Out, "plan")
-	if err != nil {
+	if err != nil && len(found) == 0 {
 		return nil, err
 	}
-	return found, writeSummary(o.Out, "1 plan", found, nil)
+	return found, errors.Join(err, writeSummary(o.Out, "1 plan", found, nil))
 }
 
 // hunter investigates plans and remembers the signatures they found.
@@ -202,7 +203,7 @@ func (h *hunter) investigate(ctx context.Context, p *plan.Plan, dir, name string
 	for _, f := range report.Findings {
 		if !h.seen[f.Signature()] {
 			h.seen[f.Signature()] = true
-			found = append(found, Found{Finding: f, Seed: p.Seed, Replays: h.replays, replaying: h.replays > 0, shrinking: h.candidates > 0})
+			found = append(found, Found{Finding: f, Seed: p.Seed, Replays: h.replays, replaying: true, shrinking: h.candidates > 0})
 		}
 	}
 	h.logf("%s: %d new %s", name, len(found), plural(len(found), "finding"))

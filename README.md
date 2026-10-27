@@ -80,11 +80,11 @@ reconciler-fuzzer hunt --config targets/toy-widget/config.yaml --seeds 3 \
   --launch-arg --bug=3 --out reconciler-fuzzer-out/hunt
 ```
 
-A toy run takes half a minute or more. `hunt` replays each new finding 5 times, then tries up
-to 16 shrink candidates of 2 to 4 runs each, so this hunt takes several minutes. `--replays`
-and `--candidates` change these counts. `hunt` rewrites `summary.md` as it goes. It lists each
-finding with its seed, reproduction rate and shrunk plan. `reconciler-fuzzer help hunt`
-describes each flag of `hunt`.
+A toy run takes half a minute or more. `hunt` replays the plan of a seed with new findings 5
+times, then tries up to 16 shrink candidates of 2 to 4 runs for each finding, so this hunt takes
+several minutes. `--replays` and `--candidates` change these counts. `hunt` rewrites
+`summary.md` as it goes. It lists each finding with its seed, reproduction rate and shrunk plan.
+`reconciler-fuzzer help hunt` describes each flag of `hunt`.
 
 ## Writing a config
 
@@ -404,8 +404,8 @@ findings, and a negative control, where one exists, must fail.
 
 [docs/failures.md](docs/failures.md) explains each finding and what to change when a run exits 2.
 The `--out` directory holds `report.md`, the `plan.json` that ran, `trace.jsonl`,
-`controller.log` and `harness.log`, where client-go logs the harness's own errors. `judge`
-rejudges a stored trace, and `shrink` shrinks a failing plan to `shrunk.json`:
+`controller.log` and `harness.log`, where client-go logs the errors of the harness's watches.
+`judge` rejudges a stored trace, and `shrink` shrinks a failing plan to `shrunk.json`:
 
 ```sh
 reconciler-fuzzer judge --trace reconciler-fuzzer-out/b3

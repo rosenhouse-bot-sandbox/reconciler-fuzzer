@@ -14,14 +14,14 @@ define the clauses and checks.
 | `trace.jsonl` | Every request, action, phase and controller start and exit (DESIGN.md §4). |
 | `report.md` | The findings and notes. |
 | `controller.log` | The controller's output. |
-| `harness.log` | client-go's errors in the harness, such as a failed watch of a CRD the plan deleted. |
+| `harness.log` | client-go's errors from the harness's watches, such as a failed watch of a CRD the plan deleted. |
 | `kubeconfig` | The envtest API server's kubeconfig. The server is gone after the run. |
 
 `hunt --out <out>` writes one `seed-<n>` directory per seed that found
 something new, and `summary.md`. Each seed directory holds a run's files,
 `replay-<i>` runs, and `shrunk.json`, or `shrunk-<f>.json` for finding f
 past the first. `shrink-<f>-<c>-<r>` is run r of candidate c in the shrink
-of finding f. Only a run that gave the finding stays. `summary.md` has one
+of finding f, and stays only when it gave the finding. `summary.md` has one
 row per distinct finding: seed, check, summary, replays that reproduced it,
 and the shrunk plan. `hunt` rewrites it as it goes, and a cell says
 `pending` until its replays or shrink end. It also lists seeds whose run

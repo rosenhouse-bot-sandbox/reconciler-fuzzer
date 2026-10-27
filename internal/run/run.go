@@ -172,8 +172,8 @@ func Run(ctx context.Context, o Options) (check.Report, error) {
 		return check.Report{}, err
 	}
 	defer harnessLog.Close()
-	// client-go logs its own errors, such as a failed watch of a deleted CRD,
-	// to the context's logger.
+	// client-go logs the errors of the harness's watches, such as a failed
+	// watch of a deleted CRD, to the context's logger.
 	ctx = klog.NewContext(ctx, textlogger.NewLogger(textlogger.NewConfig(textlogger.Output(harnessLog))))
 	rec, err := trace.NewRecorder(filepath.Join(o.Out, "trace.jsonl"))
 	if err != nil {
