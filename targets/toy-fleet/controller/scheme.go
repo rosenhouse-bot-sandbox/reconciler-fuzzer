@@ -27,9 +27,13 @@ func clusterRef(o client.Object) []string  { return []string{o.(*fleetv1.Databas
 func databaseRef(o client.Object) []string { return []string{o.(*fleetv1.User).Spec.DatabaseRef} }
 
 // NewScheme registers the built-in kinds, the fleet's and the Volume.
-func NewScheme() (*runtime.Scheme, error) {
+func NewScheme(bug Bug) (*runtime.Scheme, error) {
 	scheme := runtime.NewScheme()
-	for _, add := range []func(*runtime.Scheme) error{clientgoscheme.AddToScheme, fleetv1.AddToScheme, storagev1.AddToScheme} {
+	adds := []func(*runtime.Scheme) error{clientgoscheme.AddToScheme, storagev1.AddToScheme}
+	if bug != B170 {
+		adds = append(adds, fleetv1.AddToScheme)
+	}
+	for _, add := range adds {
 		if err := add(scheme); err != nil {
 			return nil, fmt.Errorf("building the scheme: %w", err)
 		}

@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/check"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/kube"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/owner"
@@ -51,7 +53,8 @@ func (r *Runner) Execute(ctx context.Context, p *plan.Plan) error {
 
 // Quiet waits until the settle condition holds, or for at most the settle
 // timeout, so that what the controller makes at startup precedes the first
-// CR.
+// CR. It fails when a system fails, or when the controller made no
+// successful request by the timeout.
 func (r *Runner) Quiet(ctx context.Context) error {
 	ix := trace.NewIndex(nil)
 	deadline := r.Recorder.Now() + r.Config.Timeouts.Settle
@@ -60,8 +63,23 @@ func (r *Runner) Quiet(ctx context.Context) error {
 	for {
 		now := r.Recorder.Now()
 		ix.Append(r.Recorder.EventsSince(ix.Len())...)
-		if _, ok := r.FirstSettled(ix, 0, now); ok || now >= deadline {
+		if err := r.failed(); err != nil {
+			return err
+		}
+		if _, ok := r.FirstSettled(ix, 0, now); ok {
 			return nil
+		}
+		if now >= deadline {
+			// A request before the last start counts, so that Crash judges
+			// a controller that worked and then crashed.
+			if check.MadeSuccessfulRequest(ix, 0, now) {
+				return nil
+			}
+			runningTail := r.Process.Tail()
+			// An exit since the poll empties the tail, and its Exit event
+			// holds the tail.
+			ix.Append(r.Recorder.EventsSince(ix.Len())...)
+			return neverStarted(ix, r.Config.Timeouts.Settle, runningTail)
 		}
 		select {
 		case <-ctx.Done():
@@ -502,4 +520,24 @@ func sleepUntil(ctx context.Context, t time.Time) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+// neverStarted is the error for a controller that made no successful request
+// in the settle wait before step 0. It quotes the first exit, as Crash does,
+// or else the running controller's output tail.
+func neverStarted(ix *trace.Index, settle time.Duration, runningTail string) error {
+	msg := fmt.Sprintf("the controller never started: in the %v before step 0 (timeouts.settle), it made no successful request apart from ones that no check judges, such as discovery, Leases and Events", settle)
+	var tail string
+	procs := ix.Procs()
+	if i := slices.IndexFunc(procs, func(e trace.Event) bool { return e.Proc.Event == trace.Exit }); i < 0 {
+		msg += "\nit did not exit"
+		tail = runningTail
+	} else {
+		msg += "\nfirst exit: " + procs[i].Proc.Exit
+		tail = procs[i].Proc.StderrTail
+	}
+	if tail = strings.TrimRight(tail, "\n"); tail != "" {
+		msg += "\noutput tail:\n" + tail
+	}
+	return errors.New(msg + "\nsee controller.log")
 }

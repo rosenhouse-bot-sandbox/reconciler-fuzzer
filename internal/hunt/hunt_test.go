@@ -390,6 +390,14 @@ func TestSummaryEscapesPipes(t *testing.T) {
 	}
 }
 
+// A panic's output has a blank line, which would end a Markdown list item.
+func TestSummaryListsEachFailedRunByItsErrorsFirstLine(t *testing.T) {
+	got := Summary("2 seeds", nil, []string{"seed 1: the controller never started\noutput tail:\npanic: boom\n\ngoroutine 1 [running]:", "seed 2: boom"})
+	if want := "No findings over 2 seeds.\n\nRuns that failed:\n\n- seed 1: the controller never started\n- seed 2: boom\n"; got != want {
+		t.Errorf("Summary is %q, want %q.", got, want)
+	}
+}
+
 func TestLoadSamplesReadsEachEntrysSampleInOrder(t *testing.T) {
 	cfg, err := config.Load("../generate/testdata/fleet/config.yaml")
 	if err != nil {

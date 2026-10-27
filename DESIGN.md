@@ -501,7 +501,7 @@ Each entry changes a check, exception, `System` interface or ignore list.
 25. An apply patch that answers 201 created its object, as cert-manager's do.
 26. Clause 5 holds `stable` after the change, for external-secrets' repair.
 27. Crash allows an exit within 1 s of a faulted Lease request.
-29. The runner waits for the settle condition before step 0, for singletons.
+29. The runner waits for the settle condition before step 0, for singletons. A run whose controller made no successful request by then exits 2 (#145).
 34. A stage model has one stage and an exact `after`; `outputs:` waits.
 38. `stuck` writes `Ready` False rather than nothing, so B18 and B25 see it.
 39. A model fault's end writes a fresh status, for a controller without a watch.

@@ -17,7 +17,8 @@ define the clauses and checks.
 | `kubeconfig` | The envtest API server's kubeconfig. The server is gone after the run. |
 
 `hunt --out <out>` writes one `seed-<n>` directory per seed that found
-something new, and `summary.md`. Each seed directory holds a run's files,
+something new or whose run failed, and `summary.md`. Each seed directory
+holds a run's files,
 `replay-<i>` runs, the failing `shrink-<c>-<r>` candidates, and
 `shrunk.json`. `summary.md` has one row per distinct finding: seed, check,
 summary, replays that reproduced it, and the shrunk plan. It also lists
@@ -116,10 +117,6 @@ exceeds the cap fails there. Raise the cap if that backoff is intended.
 The controller exited without the harness stopping it. The summary counts
 the exits in the step. The details hold the first exit status and the tail
 of its output, often a panic.
-
-A Crash before step 0 whose output is a flag or usage error means the
-controller never started. Fix `launch.args` or `launch.env`. Converge
-clause 4 findings follow from it.
 
 ### Clean: left resources behind
 
@@ -221,6 +218,7 @@ names its cause. A run that started leaves its partial trace in `--out`. Common 
 | --- | --- |
 | `starting envtest: ... etcd: no such file or directory` | Set `KUBEBUILDER_ASSETS` to `$(make -s assets-path)`. |
 | `starting <binary>: ... no such file or directory` | Build the controller to `launch.binary`. |
+| `the controller never started: ...` | No request got a 2xx answer within `timeouts.settle`. Requests that no check judges, such as discovery, Leases and Events, do not count. Read the output tail and `controller.log`. Fix `launch.args`, `launch.env` or `launch.rbac`. Raise `timeouts.settle` for a controller that starts slowly. |
 | `creating fixture ...` | Fix the fixture, or install the CRD it needs under `crds`. |
 | `launch args: ...` or `launch env <name>: ...` | Use only `${systems.kube.kubeconfig}`, `namespace` and `url`, and a fake's `${systems.<name>.url}`. |
 | `fake <name> exited ...` | Read `<out>/<name>.log`. Fix the `systems[].process` command or the fake's own config. |
@@ -228,7 +226,8 @@ names its cause. A run that started leaves its partial trace in `--out`. Common 
 | `create of slot "<s>" makes an object without apiVersion or kind` | Give the create's `object` both. |
 | `... holds a <kind>, not a <kind>` | Point the entry's `sample` at an object of its `kind`. |
 
-`hunt` notes a seed whose run failed in `summary.md`, and goes on. It
+`hunt` lists each seed whose run failed in `summary.md`, by the first line
+of its error, and goes on. It prints the whole error to stderr. It
 exits 2 when a seed failed and nothing was found, and 1 on any find.
 
 ## Next steps

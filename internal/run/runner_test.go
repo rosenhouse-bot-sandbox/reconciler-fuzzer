@@ -19,6 +19,7 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/system"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace/tracetest"
 )
 
 var timeouts = config.Timeouts{Settle: 300 * time.Millisecond, Stable: 50 * time.Millisecond, BackoffCap: time.Second}
@@ -70,6 +71,7 @@ func (p fakeProcess) Start(context.Context) error { p.add("start"); return nil }
 func (p fakeProcess) Stop(context.Context) error  { p.add("stop"); return nil }
 func (p fakeProcess) Kill(context.Context) error  { p.add("kill"); return nil }
 func (p fakeProcess) Supervise(on bool) error     { p.add("supervise(%v)", on); return nil }
+func (p fakeProcess) Tail() string                { return "toy: waiting\n" }
 
 type fakeCluster struct {
 	*calls
@@ -1459,14 +1461,120 @@ func TestQuietWaitsUntilTheControllerSettles(t *testing.T) {
 	}
 }
 
+// A controller that made a successful request passes the wait, even if it
+// has crashed or restarted since.
 func TestQuietGivesUpAfterTheSettleTimeout(t *testing.T) {
-	f := newFixture(t, func(*trace.Index, time.Duration, time.Duration) (time.Duration, bool) { return 0, false })
-	start := time.Now()
-	if err := f.runner.Quiet(context.Background()); err != nil {
-		t.Fatal(err)
+	worked := []trace.Event{tracetest.Start(1), tracetest.Call(trace.Controller, "list", tracetest.Ref("widgets", "ns", ""), 200, "1")}
+	crashed := slices.Concat(worked, []trace.Event{tracetest.Exit("exit status 2", false, "panic: boom\n")})
+	for name, events := range map[string][]trace.Event{
+		"running":   worked,
+		"crashed":   crashed,
+		"restarted": slices.Concat(crashed, []trace.Event{tracetest.Start(2)}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, func(*trace.Index, time.Duration, time.Duration) (time.Duration, bool) { return 0, false })
+			for _, e := range events {
+				f.rec.Record(e)
+			}
+			start := time.Now()
+			if err := f.runner.Quiet(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if waited := time.Since(start); waited < timeouts.Settle || waited > timeouts.Settle+3*PollInterval {
+				t.Errorf("Quiet waited %v, want the settle timeout %v", waited, timeouts.Settle)
+			}
+		})
 	}
-	if waited := time.Since(start); waited < timeouts.Settle || waited > timeouts.Settle+3*PollInterval {
-		t.Errorf("Quiet waited %v, want the settle timeout %v", waited, timeouts.Settle)
+}
+
+func TestQuietStopsWhenASystemFails(t *testing.T) {
+	for name, c := range map[string]struct {
+		settled   bool
+		failAfter time.Duration
+	}{
+		"mid-wait":                  {false, 100 * time.Millisecond},
+		"as the controller settles": {true, 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, func(_ *trace.Index, from, _ time.Duration) (time.Duration, bool) { return from, c.settled })
+			f.runner.Config.Timeouts.Settle = 5 * time.Second
+			failAt := time.Now().Add(c.failAfter)
+			f.runner.Failed = func() error {
+				if time.Now().After(failAt) {
+					return errors.New("fake cloud exited")
+				}
+				return nil
+			}
+			start := time.Now()
+			if err := f.runner.Quiet(context.Background()); err == nil || err.Error() != "fake cloud exited" {
+				t.Errorf("Quiet = %v, want the system's error", err)
+			}
+			if waited := time.Since(start); waited >= f.runner.Config.Timeouts.Settle {
+				t.Errorf("Quiet waited %v, the whole settle timeout", waited)
+			}
+		})
+	}
+}
+
+// exitOnTail is a controller that exits after Quiet's last poll, as Quiet
+// reads its tail.
+type exitOnTail struct {
+	fakeProcess
+	rec *trace.Recorder
+}
+
+func (p exitOnTail) Tail() string {
+	p.rec.Record(tracetest.Exit("exit status 1", false, "toy: forbidden\n"))
+	return ""
+}
+
+func TestQuietQuotesAnExitAfterTheLastPoll(t *testing.T) {
+	f := newFixture(t, func(*trace.Index, time.Duration, time.Duration) (time.Duration, bool) { return 0, false })
+	f.runner.Process = exitOnTail{fakeProcess{f.process}, f.rec}
+	f.rec.Record(tracetest.Start(1))
+	err := f.runner.Quiet(context.Background())
+	if want := "\nfirst exit: exit status 1\noutput tail:\ntoy: forbidden\n"; err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("Quiet = %v, want it to quote %q", err, want)
+	}
+}
+
+func TestQuietFailsAControllerThatNeverStarted(t *testing.T) {
+	lease := trace.Ref{System: "kube", Group: "coordination.k8s.io", Resource: "leases", Namespace: "ns", Name: "toy"}
+	tried := []trace.Event{
+		tracetest.Start(1),
+		tracetest.Call(trace.Controller, "get", trace.Ref{System: "kube"}, 200, ""),
+		tracetest.Call(trace.Controller, "get", lease, 200, "1"),
+		tracetest.Call(trace.Controller, "list", tracetest.Ref("widgets", "ns", ""), 403, ""),
+	}
+	never := "the controller never started: in the 300ms before step 0 (timeouts.settle), it made no successful request apart from ones that no check judges, such as discovery, Leases and Events"
+	for name, c := range map[string]struct {
+		events []trace.Event
+		want   string
+	}{
+		"exited": {
+			slices.Concat(tried, []trace.Event{tracetest.Exit("exit status 1", false, "toy: forbidden\n"), tracetest.Start(2), tracetest.Exit("exit status 2", false, "toy: again\n")}),
+			never + "\nfirst exit: exit status 1\noutput tail:\ntoy: forbidden\nsee controller.log",
+		},
+		"exited silently": {
+			slices.Concat(tried, []trace.Event{tracetest.Exit("exit status 1", false, "")}),
+			never + "\nfirst exit: exit status 1\nsee controller.log",
+		},
+		"still running": {tried, never + "\nit did not exit\noutput tail:\ntoy: waiting\nsee controller.log"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, func(*trace.Index, time.Duration, time.Duration) (time.Duration, bool) { return 0, false })
+			for _, e := range c.events {
+				f.rec.Record(e)
+			}
+			start := time.Now()
+			err := f.runner.Quiet(context.Background())
+			if err == nil || err.Error() != c.want {
+				t.Errorf("Quiet = %v, want %q", err, c.want)
+			}
+			if waited := time.Since(start); waited < timeouts.Settle {
+				t.Errorf("Quiet gave up after %v, want the settle timeout %v", waited, timeouts.Settle)
+			}
+		})
 	}
 }
 

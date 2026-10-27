@@ -52,7 +52,10 @@ func run(args []string, out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("loading the cluster configuration: %w", err)
 	}
-	scheme, err := controller.NewScheme()
+	if bug == controller.B171 {
+		config = &rest.Config{Host: "http://localhost:8080"}
+	}
+	scheme, err := controller.NewScheme(bug)
 	if err != nil {
 		return err
 	}
