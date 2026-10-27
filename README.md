@@ -207,7 +207,9 @@ models:
   also fails one with no Gadget. `track: d` fails a CR that stays ready longer than `d` after
   the controller saw its Gadget not ready.
 - Generated plans then draw two model faults. `stuck` keeps Gadgets not ready, and `slowDelete`
-  holds their deletion. Each ends with the fault period. A create that waits until a deleted CR
+  holds their deletion. Each ends with the fault period. Half the model-fault steps that delete
+  a CR also restart or kill the controller 300 ms or more later, so a new process must finish
+  the deletion. A create that waits until a deleted CR
   no longer exists ends them once `period` has passed. A plan step writes one as
   `{"match": {"group": "example.com", "resource": "gadgets"}, "stuck": true}`.
 - `finalizer: {name: example.com/cleanup, after: 500ms}` plays a controller, such as a storage

@@ -406,7 +406,8 @@ func (g *Generator) plan(t *rapid.T) *plan.Plan {
 const maxActions = 4
 
 // step draws one step: a single restart, kill or damage, or a fault with
-// one, in about 30% of steps, else 1 to 4 actions and maybe a fault.
+// one, in about 30% of steps, else 1 to 4 actions and maybe a fault. A
+// model-fault step that deletes may also restart or kill later.
 func (g *Generator) step(t *rapid.T, at state) plan.Step {
 	var step plan.Step
 	switch {

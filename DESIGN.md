@@ -427,8 +427,9 @@ sample, and the fixtures. rapid draws values, and the CRD's own validation, run
 in-process, rejects invalid ones. `Plan(seed)` draws 3 to 8 steps of 1 to 4
 actions and at most one fault each. A create draws its kind uniformly from
 `primaries`, and each CR takes its kind's `values`. Step 0 creates slot `a`.
-About 30% of steps hold one `restart`, `kill` or `damage`, so Restore has steps
-to judge. A kube fault draws its request from what `launch.rbac` grants,
+About 30% of steps hold a `restart`, `kill` or `damage`, so Restore has steps
+to judge. Half the model-fault steps that delete also restart or kill 300ms or
+more later. A kube fault draws its request from what `launch.rbac` grants,
 creates weighted most (§17, entry 20). 2 of 7 kube fault draws (of 9 with
 `models:`, 2 of which are `stuck` or `slowDelete`) hold a kind `launch.rbac`
 lets the controller watch, the listed and `owns` kinds weighted most, with the
@@ -436,8 +437,7 @@ traffic `holdTraffic` documents. With fakes, half of the fault draws and of the
 `damage` draws name a fake: a request fault by verb alone, or a model fault on
 a `crud` fake, and a target by system alone. A read-only fake takes no damage
 and only read faults. `changeFixture` draws kube and system fixtures alike.
-`damage` only deletes. `generate.go` documents the weights, bursts and fault
-periods.
+`damage` only deletes. `generate.go` documents its weights, bursts and periods.
 
 **Hunt.** `hunt.Hunt` runs each seed, keeps runs with a new signature, replays
 each 5 times and shrinks it (`shrink.go`), trying at most 16 candidates.

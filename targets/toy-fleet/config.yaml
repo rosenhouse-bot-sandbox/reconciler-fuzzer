@@ -29,7 +29,7 @@ models:
     dependency: {track: 1s}
 systems:
   - name: kube
-    owner: "self.metadata.labels['fleet.toy/cluster']"   # a Volume without an ownerReference, as under B160
+    owner: "self.metadata.labels['fleet.toy/cluster']"   # B160's Volumes have no ownerReference.
 timeouts:
   settle: 10s
   stable: 2s
