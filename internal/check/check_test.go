@@ -166,12 +166,15 @@ func TestConvergeNotesATraceThatEndsBeforeTheDeadline(t *testing.T) {
 }
 
 // cleanRun settles and confirms a create step, then a restart step.
-func cleanRun() *tt.Builder {
+func cleanRun() *tt.Builder { return restartRun(tt.Exit("signal: terminated", true, "bye")) }
+
+// restartRun is cleanRun with exit as the end of the restart's stop.
+func restartRun(exit trace.Event) *tt.Builder {
 	b := createStep()
 	b.At(3500 * ms).Add(tt.Phase(0, trace.Settled)).
 		At(5500 * ms).Add(tt.Phase(0, trace.Confirmed)).
 		At(5500 * ms).Add(tt.Phase(1, trace.FaultPeriod)).
-		At(5600 * ms).Add(tt.Exit("signal: terminated", true, "bye")).
+		At(5600 * ms).Add(exit).
 		At(5700 * ms).Add(tt.Start(2)).
 		At(5700 * ms).Add(tt.EndFaults(1, 20*s, false)).
 		At(5800 * ms).Add(tt.Call(ctl, "list", widgetA, 200, "")).
@@ -291,6 +294,46 @@ func TestJudgeNotesAFailedAction(t *testing.T) {
 	notes := check.Judge(b.Index(), spec).Notes
 	if len(notes) != 1 || notes[0] != "Step 1, action 2 (create) failed at 10s: the slot's name is still taken after the create waited 1s" {
 		t.Fatalf("notes = %q", notes)
+	}
+}
+
+func TestJudgeNotesAStopThatSentSIGKILL(t *testing.T) {
+	const sentSIGKILL = "the controller did not exit within launch.gracePeriod of SIGTERM, so the harness sent SIGKILL."
+	killed := trace.Event{Proc: &trace.Proc{Event: trace.Exit, Exit: "signal: killed", HarnessCaused: true, GracePeriodPassed: true}}
+	kill := trace.Event{Proc: &trace.Proc{Event: trace.Exit, Exit: "signal: killed", HarnessCaused: true}}
+	restart := restartRun(killed).Events()
+	// endsInFaults ends at the restart's exit, before step 1's faults end.
+	endsInFaults := restart[:slices.IndexFunc(restart, func(e trace.Event) bool { return e.Proc != nil && e.Proc.Event == trace.Exit })+1]
+	// cut ends in step 1's settle wait, as after a harness error, with the
+	// run's stop.
+	cut := createStep()
+	cut.At(3500*ms).Add(tt.Phase(0, trace.Settled)).
+		At(5500*ms).Add(tt.Phase(0, trace.Confirmed), tt.Phase(1, trace.FaultPeriod)).
+		At(5600*ms).Add(killed).
+		At(5700*ms).Add(tt.Start(2), tt.EndFaults(1, 20*s, false)).
+		At(7 * s).Add(killed)
+	run := tt.Run("toy", "widgets")
+	run.Run.Primaries[0].Kind = widgets
+	var early tt.Builder
+	early.Add(run, tt.Start(1), killed)
+	for name, c := range map[string]struct {
+		events []trace.Event
+		want   []string
+	}{
+		"a stop before step 0":                  {early.Events(), []string{"Before step 0, at 0s: " + sentSIGKILL}},
+		"a restart's stop":                      {restart, []string{"Step 1, at 5.6s: " + sentSIGKILL}},
+		"a restart's stop that ends the trace":  {endsInFaults, []string{"Step 1, at 5.6s: " + sentSIGKILL}},
+		"the run's stop":                        {cleanRun().At(10 * s).Add(killed).Events(), []string{"After the last step, at 10s: " + sentSIGKILL}},
+		"the run's stop after a timed-out step": {churn(false).At(11 * s).Add(killed).Events(), []string{"After the last step, at 11s: " + sentSIGKILL}},
+		"both stops of a run cut short": {cut.Events(), []string{
+			"Step 1, at 5.6s: " + sentSIGKILL, "After the last step, at 7s: " + sentSIGKILL,
+			"Step 1 is not judged: the trace ends at 7s, before its deadline 20s.",
+		}},
+		"a kill": {cleanRun().At(10 * s).Add(kill).Events(), nil},
+	} {
+		if notes := check.Judge(trace.NewIndex(c.events), spec).Notes; !slices.Equal(notes, c.want) {
+			t.Errorf("%s: notes = %q, want %q", name, notes, c.want)
+		}
 	}
 }
 

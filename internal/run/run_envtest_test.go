@@ -4,6 +4,7 @@ package run
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
@@ -239,5 +241,126 @@ func TestTheControllerGetsTheHarnessKubeconfigByDefault(t *testing.T) {
 	}
 	if want := filepath.Join(out, "kubeconfig") + "\n"; string(text) != want {
 		t.Errorf("The controller got KUBECONFIG %q, want %q.", text, want)
+	}
+}
+
+// TestARestartSendsSIGKILLOnceTheGracePeriodPasses runs a controller that
+// ignores SIGTERM. Its children write nowhere, so its reap is quick.
+func TestARestartSendsSIGKILLOnceTheGracePeriodPasses(t *testing.T) {
+	toyDir, err := filepath.Abs(toy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	config := fmt.Sprintf(`launch:
+  binary: /bin/sh
+  args: [-c, 'trap "" TERM; while true; do curl -sf ${systems.kube.url}/apis/toy.reconciler-fuzzer/v1/widgets >/dev/null 2>&1; sleep 1 >/dev/null 2>&1; done']
+  rbac: [%[1]s/rbac/role.yaml]
+  gracePeriod: 500ms
+crds: [%[1]s/crds/]
+primary:
+  kind: toy.reconciler-fuzzer/v1/Widget
+  sample: %[1]s/widget.yaml
+  ready: "true"
+timeouts: {settle: 3s, stable: 1s}
+`, toyDir)
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := &plan.Plan{Steps: []plan.Step{
+		{Actions: []plan.Action{{Do: plan.Create, Slot: "a"}}},
+		{Actions: []plan.Action{{Do: plan.Restart}}},
+	}}
+	out := filepath.Join(dir, "out")
+	report, err := Run(context.Background(), Options{ConfigPath: filepath.Join(dir, "config.yaml"), Plan: p, Out: out})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var killed []string
+	for _, note := range report.Notes {
+		if strings.Contains(note, "SIGKILL") {
+			killed = append(killed, note)
+		}
+	}
+	if len(report.Findings) > 0 || len(killed) != 3 || !strings.HasPrefix(killed[0], "Step 1, at ") ||
+		!strings.HasPrefix(killed[1], "Step 3 (restart), at ") || !strings.HasPrefix(killed[2], "After the last step, at ") {
+		t.Errorf("findings %+v, notes %q, want no findings and a SIGKILL note for each restart and the run's stop", report.Findings, report.Notes)
+	}
+	events, err := trace.Load(filepath.Join(out, "trace.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	restart := slices.IndexFunc(events, func(e trace.Event) bool {
+		return e.Phase != nil && e.Phase.Step == 1 && e.Phase.Name == trace.FaultPeriod
+	})
+	exit := slices.IndexFunc(events, func(e trace.Event) bool { return e.Proc != nil && e.Proc.Event == trace.Exit })
+	if restart < 0 || exit < 0 {
+		t.Fatal("the trace holds no step 1 or no exit")
+	}
+	if p := events[exit].Proc; p.Exit != "signal: killed" || !p.GracePeriodPassed {
+		t.Errorf("the first exit is %+v, want a SIGKILL once the grace period passed", *p)
+	}
+	if took := events[exit].At - events[restart].At; took < 500*time.Millisecond || took >= 3*time.Second {
+		t.Errorf("the controller exited %v into the restart step, want just after the 500ms grace period", took)
+	}
+}
+
+// TestAnInterruptDoesNotWaitOutTheGracePeriod interrupts a run whose
+// controller ignores SIGTERM. The plan has no restart, so the run's final
+// stop is its only stop. A ready of false keeps step 0 from settling.
+func TestAnInterruptDoesNotWaitOutTheGracePeriod(t *testing.T) {
+	toyDir, err := filepath.Abs(toy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	started := filepath.Join(dir, "started")
+	config := fmt.Sprintf(`launch:
+  binary: /bin/sh
+  args: [-c, 'trap "" TERM; touch %[2]s; while true; do curl -sf ${systems.kube.url}/apis/toy.reconciler-fuzzer/v1/widgets >/dev/null 2>&1; sleep 1 >/dev/null 2>&1; done']
+  rbac: [%[1]s/rbac/role.yaml]
+  gracePeriod: 1m
+crds: [%[1]s/crds/]
+primary:
+  kind: toy.reconciler-fuzzer/v1/Widget
+  sample: %[1]s/widget.yaml
+  ready: "false"
+timeouts: {settle: 1m, stable: 1s}
+`, toyDir, started)
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, interrupt := context.WithCancel(context.Background())
+	defer interrupt()
+	out := filepath.Join(dir, "out")
+	ran := make(chan error, 1)
+	go func() {
+		p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{{Do: plan.Create, Slot: "a"}}}}}
+		_, err := Run(ctx, Options{ConfigPath: filepath.Join(dir, "config.yaml"), Plan: p, Out: out})
+		ran <- err
+	}()
+	exists := func(path string) bool { _, err := os.Stat(path); return err == nil }
+	for !exists(started) {
+		select {
+		case err := <-ran:
+			t.Fatalf("Run returned %v before the controller started", err)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	interrupt()
+	interrupted := time.Now()
+	if err := <-ran; !errors.Is(err, context.Canceled) {
+		t.Errorf("Run returned %v, want context.Canceled", err)
+	}
+	if took := time.Since(interrupted); took > 20*time.Second {
+		t.Errorf("Run returned %v after the interrupt, want no wait for the 1m grace period", took)
+	}
+	events, err := trace.Load(filepath.Join(out, "trace.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	exit := slices.IndexFunc(events, func(e trace.Event) bool { return e.Proc != nil && e.Proc.Event == trace.Exit })
+	if exit < 0 || events[exit].Proc.Exit != "signal: killed" || events[exit].Proc.GracePeriodPassed {
+		t.Errorf("the trace holds no SIGKILL exit before the grace period passed")
 	}
 }

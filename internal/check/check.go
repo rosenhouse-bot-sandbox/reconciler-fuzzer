@@ -340,7 +340,7 @@ func Judge(ix *trace.Index, s Spec) Report {
 	findings = append(findings, Backoff(ix, s)...)
 	findings = append(findings, Finalizers(ix, s)...)
 	findings = append(findings, Property(ix, s)...)
-	notes = append(append(append(actionErrors(ix), unpicked(ix, s)...), notes...), unmapped(ix)...)
+	notes = slices.Concat(actionErrors(ix), killedStops(ix), unpicked(ix, s), notes, unmapped(ix))
 	return Report{Findings: findings, Notes: notes}
 }
 
@@ -431,6 +431,29 @@ func actionErrors(ix *trace.Index) []string {
 		}
 	}
 	return notes
+}
+
+// killedStops notes each stop of the controller that SIGKILL ended once
+// launch.gracePeriod passed.
+func killedStops(ix *trace.Index) []string {
+	var notes []string
+	steps := ix.Steps()
+	for _, e := range ix.Procs() {
+		if !e.Proc.GracePeriodPassed {
+			continue
+		}
+		notes = append(notes, fmt.Sprintf("%s, at %v: the controller did not exit within launch.gracePeriod of SIGTERM, so the harness sent SIGKILL.", stopLabel(ix, steps, e.At), e.At))
+	}
+	return notes
+}
+
+// stopLabel names the step of a stop at t. Only the run's final stop can
+// follow the last step's fault period.
+func stopLabel(ix *trace.Index, steps []trace.StepSpan, t time.Duration) string {
+	if n := len(steps); n > 0 && steps[n-1].Reached[trace.EndFaults] && t > steps[n-1].EndFaults {
+		return "After the last step"
+	}
+	return stepName(ix, stepAt(steps, t))
 }
 
 // stepName names a step, and says which steps the runner appended.

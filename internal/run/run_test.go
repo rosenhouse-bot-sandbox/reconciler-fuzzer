@@ -13,14 +13,16 @@ import (
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/fake"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/launch"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 )
 
 func TestExpandLaunch(t *testing.T) {
 	l := config.Launch{
-		Binary: "/bin/toy",
-		Args:   []string{"--namespace=${systems.kube.namespace}", "--bug=0", "--cloud=${systems.cloud.url}"},
-		Env:    map[string]string{"KUBECONFIG": "${systems.kube.kubeconfig}", "CLOUD": "${systems.cloud.url}/v1"},
+		Binary:      "/bin/toy",
+		Args:        []string{"--namespace=${systems.kube.namespace}", "--bug=0", "--cloud=${systems.cloud.url}"},
+		Env:         map[string]string{"KUBECONFIG": "${systems.kube.kubeconfig}", "CLOUD": "${systems.cloud.url}/v1"},
+		GracePeriod: 30 * time.Second,
 	}
 	vars := map[string]map[string]string{
 		"kube":  {"namespace": "rf-1", "kubeconfig": "/out/kubeconfig"},
@@ -31,7 +33,8 @@ func TestExpandLaunch(t *testing.T) {
 		t.Fatal(err)
 	}
 	if o.Path != "/bin/toy" || !reflect.DeepEqual(o.Args, []string{"--namespace=rf-1", "--bug=0", "--cloud=http://127.0.0.1:1", "--bug=3"}) ||
-		!reflect.DeepEqual(o.Env, map[string]string{"KUBECONFIG": "/out/kubeconfig", "CLOUD": "http://127.0.0.1:1/v1"}) {
+		!reflect.DeepEqual(o.Env, map[string]string{"KUBECONFIG": "/out/kubeconfig", "CLOUD": "http://127.0.0.1:1/v1"}) ||
+		o.GracePeriod != 30*time.Second {
 		t.Errorf("expandLaunch = %+v", o)
 	}
 	if _, err := expandLaunch(l, []string{"${systems.kube.url}"}, vars); err == nil || !strings.Contains(err.Error(), "systems.kube.url") {
@@ -41,6 +44,14 @@ func TestExpandLaunch(t *testing.T) {
 	l.Env["X"] = "${nope}"
 	if _, err := expandLaunch(l, nil, vars); err == nil || !strings.Contains(err.Error(), "X") {
 		t.Errorf("expandLaunch = %v, want an env error naming X", err)
+	}
+}
+
+func TestProcExitCarriesEveryField(t *testing.T) {
+	e := launch.Exit{PID: 7, Status: "signal: killed", HarnessCaused: true, GracePeriodPassed: true, Tail: "bye"}
+	want := trace.Proc{Event: trace.Exit, PID: 7, Exit: "signal: killed", HarnessCaused: true, GracePeriodPassed: true, StderrTail: "bye"}
+	if got := procExit(e); !reflect.DeepEqual(*got, want) {
+		t.Errorf("procExit = %+v, want %+v", *got, want)
 	}
 }
 

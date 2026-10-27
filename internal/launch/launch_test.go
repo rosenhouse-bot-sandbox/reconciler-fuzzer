@@ -182,8 +182,22 @@ func TestStopTerminatesAndIsHarnessCaused(t *testing.T) {
 	if _, exits := h.counts(); exits != 1 {
 		t.Fatalf("Heard %d exits by the time Stop returned, want 1.", exits)
 	}
-	if exit := h.lastExit(); exit.Status != "exit status 3" || !exit.HarnessCaused {
-		t.Errorf("Exit is %+v, want a harness-caused exit status 3.", exit)
+	if exit := h.lastExit(); exit.Status != "exit status 3" || !exit.HarnessCaused || exit.GracePeriodPassed {
+		t.Errorf("Exit is %+v, want exit status 3 within the grace period.", exit)
+	}
+}
+
+func TestStopWaitsTheGracePeriodForASlowExit(t *testing.T) {
+	b, h, _ := newBinary(t, "trap 'sleep 0.3; exit 3' TERM; "+forever, func(o *launch.Options) { o.GracePeriod = time.Second })
+	mustStart(t, b)
+	time.Sleep(50 * time.Millisecond)
+
+	if err := b.Stop(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	if exit := h.lastExit(); exit.Status != "exit status 3" || exit.GracePeriodPassed {
+		t.Errorf("Exit is %+v, want exit status 3 within the grace period.", exit)
 	}
 }
 
@@ -197,11 +211,27 @@ func TestStopEscalatesToSIGKILL(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if elapsed := time.Since(start); elapsed < 200*time.Millisecond {
-		t.Errorf("Stop returned after %v, before the grace period.", elapsed)
+	if elapsed := time.Since(start); elapsed < 200*time.Millisecond || elapsed > time.Second {
+		t.Errorf("Stop returned after %v, want just after the 200ms grace period.", elapsed)
 	}
-	if exit := h.lastExit(); exit.Status != "signal: killed" || !exit.HarnessCaused {
-		t.Errorf("Exit is %+v, want a harness-caused SIGKILL.", exit)
+	if exit := h.lastExit(); exit.Status != "signal: killed" || !exit.HarnessCaused || !exit.GracePeriodPassed {
+		t.Errorf("Exit is %+v, want a SIGKILL once the grace period passed.", exit)
+	}
+}
+
+func TestAnExitReapedAfterTheGracePeriodDidNotOutliveIt(t *testing.T) {
+	// The background sleep holds the output pipe, so the reap waits 500ms
+	// after SIGTERM ends the shell.
+	b, h, _ := newBinary(t, "sleep 1 & "+forever, func(o *launch.Options) { o.GracePeriod = 100 * time.Millisecond })
+	mustStart(t, b)
+	time.Sleep(50 * time.Millisecond) // The sleep must start.
+
+	if err := b.Stop(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	if exit := h.lastExit(); exit.Status != "signal: terminated" || exit.GracePeriodPassed {
+		t.Errorf("Exit is %+v, want SIGTERM's exit within the grace period.", exit)
 	}
 }
 
@@ -216,8 +246,8 @@ func TestStopEscalatesWhenTheContextEnds(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if exit := h.lastExit(); exit.Status != "signal: killed" {
-		t.Errorf("Exit is %+v, want a SIGKILL.", exit)
+	if exit := h.lastExit(); exit.Status != "signal: killed" || exit.GracePeriodPassed {
+		t.Errorf("Exit is %+v, want a SIGKILL before the grace period passed.", exit)
 	}
 }
 
@@ -232,8 +262,20 @@ func TestKillIsHarnessCaused(t *testing.T) {
 	if b.Running() {
 		t.Error("Running is true after Kill.")
 	}
-	if exit := h.lastExit(); exit.Status != "signal: killed" || !exit.HarnessCaused {
-		t.Errorf("Exit is %+v, want a harness-caused SIGKILL.", exit)
+	if exit := h.lastExit(); exit.Status != "signal: killed" || !exit.HarnessCaused || exit.GracePeriodPassed {
+		t.Errorf("Exit is %+v, want a harness-caused SIGKILL without a grace period.", exit)
+	}
+}
+
+func TestKillOutwaitsAGracePeriodShorterThanTheReap(t *testing.T) {
+	// The background sleep holds the output pipe, so the reap takes the
+	// wait delay of 500ms.
+	b, _, _ := newBinary(t, "sleep 1 & "+forever, func(o *launch.Options) { o.GracePeriod = 50 * time.Millisecond })
+	mustStart(t, b)
+	time.Sleep(50 * time.Millisecond) // The sleep must start.
+
+	if err := b.Kill(t.Context()); err != nil {
+		t.Error(err)
 	}
 }
 

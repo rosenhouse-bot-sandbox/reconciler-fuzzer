@@ -261,18 +261,15 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 	launchOptions.OnStart = func(pid int) {
 		rec.Record(trace.Event{Proc: &trace.Proc{Event: trace.Start, PID: pid}})
 	}
-	launchOptions.OnExit = func(e launch.Exit) {
-		rec.Record(trace.Event{Proc: &trace.Proc{Event: trace.Exit, PID: e.PID, Exit: e.Status, HarnessCaused: e.HarnessCaused, StderrTail: e.Tail}})
-	}
+	launchOptions.OnExit = func(e launch.Exit) { rec.Record(trace.Event{Proc: procExit(e)}) }
 	controller := launch.New(launchOptions)
 	listeners := map[string]FaultTarget{}
 	for name, l := range controllerListeners {
 		l.SetKill(controller.Kill)
 		listeners[name] = l
 	}
-	defer func() {
-		err = errors.Join(err, controller.Supervise(false), controller.Stop(context.WithoutCancel(ctx)))
-	}()
+	// The stop takes ctx, so an interrupt sends SIGKILL at once.
+	defer func() { err = errors.Join(err, controller.Supervise(false), controller.Stop(ctx)) }()
 	if err := controller.Supervise(true); err != nil {
 		return err
 	}
@@ -423,11 +420,15 @@ func primaryKinds(primaries []config.Primary) []schema.GroupVersionKind {
 	return kinds
 }
 
+func procExit(e launch.Exit) *trace.Proc {
+	return &trace.Proc{Event: trace.Exit, PID: e.PID, Exit: e.Status, HarnessCaused: e.HarnessCaused, GracePeriodPassed: e.GracePeriodPassed, StderrTail: e.Tail}
+}
+
 // expandLaunch expands ${systems.<name>.<key>} in the launch args, with
 // extra appended, and in the env. systemVars maps a system to its Vars.
 func expandLaunch(l config.Launch, extra []string, systemVars map[string]map[string]string) (launch.Options, error) {
 	vars := flatten(systemVars)
-	o := launch.Options{Path: l.Binary, Env: map[string]string{}}
+	o := launch.Options{Path: l.Binary, Env: map[string]string{}, GracePeriod: l.GracePeriod}
 	for _, arg := range append(slices.Clone(l.Args), extra...) {
 		expanded, err := config.Expand(arg, vars)
 		if err != nil {
