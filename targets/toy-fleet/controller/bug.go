@@ -18,8 +18,8 @@ const (
 	// B152 errors when a dependent kind is not served, as after its CRD is
 	// deleted, so the parent's deletion never ends.
 	B152 Bug = 152
-	// B162 requeues a Cluster being deleted every 1 ms, and deletes its
-	// Volumes again each time.
+	// B162 requeues a Cluster being deleted every 1 ms while its Volumes
+	// remain, and deletes them again each time.
 	B162 Bug = 162
 )
 
