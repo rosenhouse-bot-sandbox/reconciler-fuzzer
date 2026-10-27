@@ -88,9 +88,10 @@ func Backoff(ix *trace.Index, s Spec) []Finding {
 
 // emptiedFinalizers says whether c answered with no finalizers at a version
 // that holds some. Such a write emptied a deleting object's finalizers, so the
-// API server deleted the object and answered at the old resourceVersion.
+// API server deleted the object and answered at the old resourceVersion. A
+// subresource's answer, such as a Scale, may hold no finalizers.
 func emptiedFinalizers(ix *trace.Index, c trace.Call) bool {
-	if c.ResultFinalizers == nil || len(*c.ResultFinalizers) > 0 {
+	if c.Subresource != "" || c.ResultFinalizers == nil || len(*c.ResultFinalizers) > 0 {
 		return false
 	}
 	v, _ := ix.VersionOf(c.Object(), c.ResultRV)
@@ -185,11 +186,11 @@ func backoffTime(e trace.Event) time.Duration {
 
 // holdWatches says whether a holdWatch fault on ref's kind is active at t,
 // or ended less than stable/4 before it, while the controller's cache
-// catches up.
+// catches up. A hold with no end has End math.MaxInt64.
 func holdWatches(ix *trace.Index, stable time.Duration) func(ref trace.Ref, t time.Duration) bool {
 	return func(ref trace.Ref, t time.Duration) bool {
 		return slices.ContainsFunc(ix.Holds(), func(h trace.Hold) bool {
-			return h.Kind.Group == ref.Group && h.Kind.Resource == ref.Resource && h.Start <= t && t <= h.End+stable/4
+			return h.Kind.Group == ref.Group && h.Kind.Resource == ref.Resource && h.Start <= t && t-stable/4 <= h.End
 		})
 	}
 }
