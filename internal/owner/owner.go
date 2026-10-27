@@ -641,9 +641,9 @@ var ErrNoMatch = errors.New("no instance matches")
 
 // Select resolves target at t among the live instances that creator made.
 // A slot narrows the match to instances whose root holds that slot's live
-// CR; an empty slot matches any owner. An error wraps ErrNoMatch. It names
-// the target, and the slot's object that is not a CR or else the
-// candidates of the target's kind.
+// CR; an empty slot matches any owner. An error wraps ErrNoMatch and names
+// the target. It then says what the slot holds, or which live instances of
+// the target's kind creator made.
 func (w *World) Select(creator trace.Caller, target plan.Target, slot string, t time.Duration) (trace.Ref, error) {
 	system := cmp.Or(target.System, "kube")
 	cr := ""
@@ -685,8 +685,8 @@ func (w *World) Select(creator trace.Caller, target plan.Target, slot string, t 
 	return trace.Ref{}, fmt.Errorf("%w %s: %s", ErrNoMatch, target, candidates(creator, target, slot, live))
 }
 
-// candidates names up to five live instances of target's kind that creator
-// made, in slot if set.
+// candidates says which live instances of target's kind creator made, in
+// slot if set, and names up to five.
 func candidates(creator trace.Caller, target plan.Target, slot string, live []Instance) string {
 	kind := target.Resource
 	if target.Group != "" {
