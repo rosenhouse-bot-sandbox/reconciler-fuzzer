@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -57,6 +58,22 @@ func hunt(t *testing.T, seeds []uint64, finds func(dir string, p *plan.Plan) []c
 
 func always(findings ...check.Finding) func(string, *plan.Plan) []check.Finding {
 	return func(string, *plan.Plan) []check.Finding { return findings }
+}
+
+// cancelAt returns a context, and runs plans with fake until the run into a
+// directory named dir. That run writes the directory, then a cancel of the
+// context ends it.
+func cancelAt(t *testing.T, fake *fakeRun, dir string) (context.Context, RunPlan) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	return ctx, func(ctx context.Context, p *plan.Plan, out string) (check.Report, error) {
+		report, err := fake.run(ctx, p, out)
+		if filepath.Base(out) == dir {
+			cancel()
+			return check.Report{}, ctx.Err()
+		}
+		return report, err
+	}
 }
 
 func TestHuntReplaysAndShrinksEachSignatureOnce(t *testing.T) {
@@ -236,17 +253,9 @@ func TestHuntDoesNotShrinkAFindingNoReplayReproduced(t *testing.T) {
 }
 
 func TestHuntWritesTheSummaryOfTheSeedsBeforeACancel(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	fake := &fakeRun{out: t.TempDir(), finds: always(clean)}
-	_, err := Hunt(ctx, Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1, 2}), Out: fake.out,
-		Run: func(ctx context.Context, p *plan.Plan, out string) (check.Report, error) {
-			if filepath.Base(out) == "seed-2" {
-				cancel()
-				return check.Report{}, ctx.Err()
-			}
-			return fake.run(ctx, p, out)
-		}})
+	ctx, run := cancelAt(t, fake, "seed-2")
+	_, err := Hunt(ctx, Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1, 2}), Out: fake.out, Run: run})
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("Hunt returned %v, want the cancel.", err)
 	}
@@ -256,30 +265,38 @@ func TestHuntWritesTheSummaryOfTheSeedsBeforeACancel(t *testing.T) {
 	}
 }
 
-func TestHuntKeepsAFindWhoseReplaysWereCutShort(t *testing.T) {
+func TestHuntCountsASeedWhoseRunEndedBeforeTheCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	fake := &fakeRun{out: t.TempDir(), finds: always(clean)}
-	found, err := Hunt(ctx, Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1}), Out: fake.out,
+	_, err := Hunt(ctx, Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1, 2, 3}), Out: fake.out,
 		Run: func(ctx context.Context, p *plan.Plan, out string) (check.Report, error) {
-			if filepath.Base(out) == "replay-2" {
+			if filepath.Base(out) == "seed-2" {
 				cancel()
-				return check.Report{}, ctx.Err()
 			}
 			return fake.run(ctx, p, out)
 		}})
 	summary, _ := os.ReadFile(filepath.Join(fake.out, "summary.md"))
-	if !errors.Is(err, context.Canceled) || len(found) != 1 || !strings.Contains(string(summary), "over 1 seed") ||
-		!strings.Contains(string(summary), "| 1 | Clean |") {
+	if !errors.Is(err, context.Canceled) || !strings.Contains(string(summary), "over 2 seeds") {
+		t.Errorf("Hunt returned %v and wrote:\n%s", err, summary)
+	}
+}
+
+func TestHuntKeepsAFindWhoseReplaysWereCutShort(t *testing.T) {
+	fake := &fakeRun{out: t.TempDir(), finds: always(clean)}
+	ctx, run := cancelAt(t, fake, "replay-2")
+	found, err := Hunt(ctx, Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1}), Out: fake.out, Run: run})
+	summary, _ := os.ReadFile(filepath.Join(fake.out, "summary.md"))
+	if !errors.Is(err, context.Canceled) || len(found) != 1 || !found[0].CutShort || !strings.Contains(string(summary), "over 1 seed") ||
+		!strings.Contains(string(summary), "| 1 | Clean | a ConfigMap outlives its Widget | 1/5 | not shrunk (cut short) |") {
 		t.Errorf("Hunt = %+v, %v, and wrote:\n%s", found, err, summary)
 	}
 }
 
 // A hunt cut short while shrinking, as by a CI timeout, keeps the smallest
-// failing plan so far and counts the seed that found it.
+// failing plan so far and counts the seed that found it. It removes the
+// candidate run that the cancel cut.
 func TestHuntKeepsTheShrinkSoFarOnACancel(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	var smallest *plan.Plan
 	fake := &fakeRun{out: t.TempDir(), finds: func(dir string, p *plan.Plan) []check.Finding {
 		if dir == "seed-4/shrink-2-1" {
@@ -287,15 +304,9 @@ func TestHuntKeepsTheShrinkSoFarOnACancel(t *testing.T) {
 		}
 		return []check.Finding{clean}
 	}}
+	ctx, run := cancelAt(t, fake, "shrink-3-1")
 	var log strings.Builder
-	found, err := Hunt(ctx, Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{4}), Out: fake.out, Log: &log,
-		Run: func(ctx context.Context, p *plan.Plan, out string) (check.Report, error) {
-			if filepath.Base(out) == "shrink-3-1" {
-				cancel()
-				return check.Report{}, ctx.Err()
-			}
-			return fake.run(ctx, p, out)
-		}})
+	found, err := Hunt(ctx, Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{4}), Out: fake.out, Log: &log, Run: run})
 	summary, _ := os.ReadFile(filepath.Join(fake.out, "summary.md"))
 	shrunk := filepath.Join(fake.out, "seed-4", "shrunk.json")
 	if !errors.Is(err, context.Canceled) || len(found) != 1 || !found[0].CutShort || found[0].ShrunkPath != shrunk ||
@@ -307,6 +318,28 @@ func TestHuntKeepsTheShrinkSoFarOnACancel(t *testing.T) {
 	}
 	if saved, err := plan.Load(shrunk); err != nil || encoded(t, saved) != encoded(t, smallest) {
 		t.Errorf("shrunk.json holds %s, %v; want the last failing candidate, %s.", encoded(t, saved), err, encoded(t, smallest))
+	}
+	if _, err := os.Stat(filepath.Join(fake.out, "seed-4", "shrink-3-1")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("Stat of the cut candidate run gives %v, want that it does not exist.", err)
+	}
+}
+
+func TestACancelCutsShortEachFindingLeftToShrink(t *testing.T) {
+	unreproduced := check.Finding{Check: "Converge", Summary: "a Widget never settles", Kind: "toy.reconciler-fuzzer/widgets"}
+	fake := &fakeRun{out: t.TempDir(), finds: func(dir string, _ *plan.Plan) []check.Finding {
+		if dir == "seed-1" {
+			return []check.Finding{clean, unreproduced, unique}
+		}
+		return []check.Finding{clean, unique}
+	}}
+	ctx, run := cancelAt(t, fake, "shrink-1-1")
+	found, _ := Hunt(ctx, Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1}), Out: fake.out, Run: run})
+	var cut []bool
+	for _, f := range found {
+		cut = append(cut, f.CutShort)
+	}
+	if !slices.Equal(cut, []bool{true, false, true}) {
+		t.Errorf("Hunt found %+v; want each finding cut short but the one that no replay reproduced.", found)
 	}
 }
 
@@ -379,14 +412,8 @@ func TestShrinkPlanReportsTheShrinkSoFarOnACancel(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake := &fakeRun{out: out, finds: always(clean)}
-	found, err := ShrinkPlan(ctx, ShrinkOptions{ConfigPath: toyConfig, PlanPath: path, Out: out,
-		Run: func(ctx context.Context, p *plan.Plan, dir string) (check.Report, error) {
-			if filepath.Base(dir) == "shrink-1-1" {
-				cancel()
-				return check.Report{}, ctx.Err()
-			}
-			return fake.run(ctx, p, dir)
-		}})
+	ctx, run := cancelAt(t, fake, "shrink-1-1")
+	found, err := ShrinkPlan(ctx, ShrinkOptions{ConfigPath: toyConfig, PlanPath: path, Out: out, Run: run})
 	summary, _ := os.ReadFile(filepath.Join(out, "summary.md"))
 	if !errors.Is(err, context.Canceled) || len(found) != 1 || !strings.Contains(string(summary), "| 5/5 | "+filepath.Join(out, "shrunk.json")+" (cut short) |") {
 		t.Errorf("ShrinkPlan = %+v, %v, and wrote:\n%s", found, err, summary)
