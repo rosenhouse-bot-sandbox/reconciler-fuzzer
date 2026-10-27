@@ -324,7 +324,7 @@ func TestJudgeNotesAFaultPeriodOfZero(t *testing.T) {
 		"a holdWatch that ends after a stop":     {tt.FaultPeriod(1, 0), hold, stop, s, "Step 1, fault 0 (holdWatch) held no watch."},
 	} {
 		b := createStep()
-		b.At(2*s).Add(c.phase, c.fault(false)).Add(c.during...).At(2*s + c.lasted).Add(c.fault(true))
+		b.At(2*s).Add(c.phase, c.fault(false)).At(2*s + c.lasted/2).Add(c.during...).At(2*s + c.lasted).Add(c.fault(true))
 		notes := slices.DeleteFunc(check.Judge(b.Index(), spec).Notes, func(n string) bool { return !strings.HasPrefix(n, "Step 1, fault") })
 		if !slices.Equal(notes, []string{c.want}) {
 			t.Errorf("%s: fault notes = %q, want %q", name, notes, c.want)
