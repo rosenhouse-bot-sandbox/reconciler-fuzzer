@@ -110,7 +110,7 @@ func decode(t *testing.T, raw json.RawMessage) map[string]any {
 }
 
 func TestPlansHaveTheShapeOfSection14(t *testing.T) {
-	for _, path := range []string{toyConfig, fleetConfig, rulesConfig} {
+	for _, path := range []string{toyConfig, fleetConfig, rulesConfig, modelsConfig} {
 		for _, p := range plans(t, path, 200) {
 			if err := p.Validate(); err != nil {
 				t.Fatalf("%s seed %d: %v", path, p.Seed, err)
