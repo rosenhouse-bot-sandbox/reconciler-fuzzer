@@ -173,7 +173,7 @@ primary:                                   # or a primaries entry
     - {kind: rbac.authorization.k8s.io/v1/ClusterRole, name: "self.metadata.name + '-reader'"}
     - {kind: v1/Secret, name: self.spec.secretName, namespace: "'shared'"}
 systems:
-  - name: kube                             # takes only owner
+  - name: kube                             # takes only owner and role
     owner: self.metadata.labels['example.com/owner-uid']   # a label on the child names the CR
 ```
 
@@ -186,6 +186,8 @@ systems:
   those that the controller created. It fails only once all of them are gone. A child made while
   none lived is shared, and fails only if the run ends with more shared children of its kind and
   role than the first create saw.
+- `role` takes CEL over the child, such as its name without a per-process suffix. Unique and
+  Restore group children by role. Without it, a child's role is its `generateName`, or else its name.
 
 ### Objects another controller sets ready
 

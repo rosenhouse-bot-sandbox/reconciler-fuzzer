@@ -159,6 +159,8 @@ Fill each key from the project:
   `systems: [{name: kube, owner}]` holds CEL over a child that yields its CR's UID,
   `namespace/name` or name, such as an owner label. Prefer the UID: a bare name that
   matches CRs in two other namespaces, or CRs of two kinds, names none.
+  Its `role` is CEL over a child. Set it when a child's name or `generateName` does not show its
+  role, such as a name with a random suffix. Unique and Restore group children by role.
 - `models`: one entry for every kind whose status another controller sets and the controller
   reads. Add `dependency` when a CR's readiness waits on it and the CR owns it: through
   ownerReferences, directly or through owned objects, or by `owns` or `owner`. Honest judges only such
@@ -316,7 +318,8 @@ controller:
 | Converge | A drawn value is one a webhook would refuse. | Narrow `values.overlay`. |
 | Honest, `reported ready with no dependency` | The CR can be ready without that kind, or does not own it. | Set `required: false` in the first case. In the second, add `owns` or `owner`, or drop `dependency`. |
 | Clean | The controller keeps resources by design. | Set the entry's `retain`. |
-| Unique, on a fake | The CR owns several resources in one collection by design. | Set the system's `role`. |
+| Unique | The CR owns several resources of one kind and role by design, such as several in one collection of a fake. | Set the system's `role`. |
+| Restore, `did not restore damaged resources` | The controller recreates a damaged resource under a new name by design. | Set the system's `role` to CEL that gives both names one role. |
 | Converge, with a CR that halted after a create of unknown outcome | The controller stops on purpose and waits for a person. | Set the entry's `halted` to CEL over its halted condition. |
 
 Every other finding is a bug in the controller. Never hide one to make a check pass, and ask

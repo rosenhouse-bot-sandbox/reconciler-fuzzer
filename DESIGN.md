@@ -283,8 +283,8 @@ from the config, or else the run event.
   instance with no CR is **shared**. Its **root** is its owner, or, when that
   names one CR that the controller created, that CR's root.
 - Its **role** is its system's `role` CEL over its first body. Without
-  one, a kube instance's is its `generateName`, or else its name, and a
-  fake's is empty.
+  one, or where it fails, a kube instance's is its `generateName`, or else
+  its name, and a fake's is empty.
 - The **controller's resources** at `t` are its live instances, minus
   ignored kinds (§10).
 - A **group** is a (system, group, resource, namespace, owning CRs or
@@ -393,7 +393,7 @@ primaries:                                  # every kind the controller serves
 values: {fixtures: {kv.yaml: [value]}}              # with primaries, only fixtures
 models: [{kind: toy.reconciler-fuzzer/v1/Gadget, after: 200ms, dependency: {track: 1s}}]
 systems:
-  - {name: kube, owner: "self.metadata.labels['widget-uid']"}   # kube takes only owner
+  - {name: kube, owner: "self.metadata.labels['widget-uid']"}   # kube takes only owner and role
   - name: cloud
     process: {command: [../../bin/crudfake, --config, cloud.yaml]}
     api: crud
