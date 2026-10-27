@@ -436,9 +436,10 @@ func actionErrors(ix *trace.Index) []string {
 // killedStops notes each stop of the controller that ended in SIGKILL.
 func killedStops(ix *trace.Index) []string {
 	var notes []string
+	steps := ix.Steps()
 	for _, e := range ix.Procs() {
 		if p := e.Proc; p.Stopped && p.Exit == "signal: killed" {
-			notes = append(notes, fmt.Sprintf("%s, at %v: the controller did not exit within launch.gracePeriod of SIGTERM, so the harness sent SIGKILL.", stepName(ix, stepAt(ix.Steps(), e.At)), e.At))
+			notes = append(notes, fmt.Sprintf("%s, at %v: the controller did not exit within launch.gracePeriod of SIGTERM, so the harness sent SIGKILL.", stepName(ix, stepAt(steps, e.At)), e.At))
 		}
 	}
 	return notes
