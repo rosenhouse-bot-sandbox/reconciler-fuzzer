@@ -294,12 +294,12 @@ from the config, or else the run event.
 
 Most checks are `func(*trace.Index, Spec) []Finding`. A finding's signature is
 its check, summary and `kind` (`system/group/resource`). `check.Judge` runs
-every check, and notes each action error, each request fault that picked no
-request, each `holdWatch` while the controller had no watch of its kind, each
-stage-model fault that held no object, and each distinct unmapped (system,
-method, path). `Spec` comes from the config, or else the run event. A step's
-**end** is its `confirmed` time. Clean, Restore and Unique judge only settled
-steps (§17, entry 15).
+every check, and notes each action error, request fault that picked no request,
+`holdWatch` while the controller had no watch of its kind, stage-model fault
+that held no object, distinct unmapped (system, method, path), and system whose
+`role` failed on every resource the controller made. `Spec` comes from the
+config, or else the run event. A step's **end** is its `confirmed` time. Clean,
+Restore and Unique judge only settled steps (§17, entry 15).
 
 **Converge.** The settle condition holds by the deadline, and still holds at
 `t* + stable`. The summary names the first unmet clause, such as `did not

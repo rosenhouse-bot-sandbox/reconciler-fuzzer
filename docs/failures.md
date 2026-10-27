@@ -46,9 +46,10 @@ A `Labels:` line may follow. The block lists the detail lines.
 A `# Notes` section follows the findings. A note says what the trace could
 not decide: an action that failed, a fault that picked no request, a
 step the trace ended too early to judge, a CR still being deleted that a
-`stop` did not wait for, or an unmapped request. Notes do
-not fail a run. A fault that picked no request tested nothing, so a plan
-with such notes may need a different fault.
+`stop` did not wait for, an unmapped request, or a `role` that failed on
+every resource the controller created. Notes do not fail a run. A fault
+that picked no request tested nothing, so a plan with such notes may need
+a different fault.
 
 `the slot's name is still taken after the create waited 37s` means that
 a create gave up waiting until its slot's previous CR no longer existed.
@@ -63,6 +64,11 @@ map could not place a controller request on a resource. No check judges
 that request, so a leak or duplicate it causes goes unseen. The `crud` map
 places only `/<collection>` and `/<collection>/<id>` (DESIGN.md §5). Serve
 the API at those paths, or put it behind another fake service.
+
+`kube: the role failed on every resource the controller created: evaluating
+"self.metadata.labels['x']": no such key: x` names the first error of the
+system's `role`. The checks then group those resources as if the system had
+no `role`. Fix the CEL.
 
 Hunt and shrink match findings by check, summary and kind, so a replay
 need not fail at the same step or on the same names.
@@ -160,7 +166,9 @@ from the previous step's end.
   recreated, or every resource of some kind under the damaged resource's
   root (DESIGN.md §11) is gone. Once a damaged resource's owner is gone, a
   CR that the controller made in the step must own a resource of the
-  damaged one's kind and role under that root.
+  damaged one's kind and role under that root. A resource recreated under
+  another name counts when its system's `role` gives it the damaged one's
+  role.
 - `replaced resources`: an undamaged resource was replaced, or a new one
   appeared.
 - `changed resources`: an undamaged resource's body changed. Each line
@@ -174,7 +182,12 @@ instead of a CR.
 
 Two live controller resources share a kind, namespace, owning CR or
 unlisted owner, and role (DESIGN.md §11). A kube resource's role is its
-system's `role`, or else its `generateName` or name.
+system's `role`, or else its `generateName` or name. A fake's resource
+without a `role` has an empty role. Each line starts with the role:
+
+```
+role "cluster-vol-0": volumes.storage.thirdparty rf-ba88ef99/cluster-vol-0-bhltd (rule 1, slot a), volumes.storage.thirdparty rf-ba88ef99/cluster-vol-0-iomkw (rule 1, slot a)
+```
 
 ### Honest
 
