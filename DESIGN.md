@@ -440,20 +440,16 @@ and only read faults. `changeFixture` draws kube and system fixtures alike.
 periods.
 
 **Hunt.** `hunt.Hunt` runs each seed, keeps runs with a new signature, replays
-each 5 times and shrinks it (`shrink.go`), trying at most 16 candidates.
-`summary.md` lists the findings with seed, reproduction rate and shrunk plan.
+each `--replays` times (5) and shrinks it (`shrink.go`), trying at most
+`--candidates` (16) candidates per finding. It rewrites `summary.md`, which
+lists the findings with seed, reproduction rate and shrunk plan, as they finish.
 
 ## 15. Commands
 
-```
-reconciler-fuzzer run    --config c.yaml (--plan plan.json | --seed n) --out dir [--launch-arg a]...
-reconciler-fuzzer judge  --trace dir[/trace.jsonl] [--config c.yaml]
-reconciler-fuzzer hunt   --config c.yaml --seeds n [--from s] --out dir [--launch-arg a]...
-reconciler-fuzzer shrink --config c.yaml --plan plan.json --out dir [--launch-arg a]...
-crudfake --config cloud.yaml [--listen addr]
-```
-
+`reconciler-fuzzer help` lists the commands `run`, `plan`, `judge`, `hunt` and
+`shrink`, and `reconciler-fuzzer help <command>` describes a command's flags.
 They exit 0 with no findings, 1 with some, and 2 on a usage or harness error.
+`crudfake --config cloud.yaml [--listen addr]` serves a fake.
 
 ## 16. Gates, examples and testing
 

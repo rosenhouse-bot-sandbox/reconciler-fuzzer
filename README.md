@@ -70,18 +70,21 @@ configmaps rf-cd767d99/widget-0 (rule 4, slot a)
 ```
 ````
 
-`--seed n` draws a plan from the config instead. `hunt` runs many seeds, replays each new
-finding, and shrinks its plan:
+`--seed n` draws a plan from the config instead, and `plan` prints that plan without running
+it. `hunt` runs many seeds, replays each new finding, and shrinks its plan:
 
 ```sh
+reconciler-fuzzer plan --config targets/toy-widget/config.yaml --seed 6
 reconciler-fuzzer run --config targets/toy-widget/config.yaml --seed 6 --out reconciler-fuzzer-out/seed-6
 reconciler-fuzzer hunt --config targets/toy-widget/config.yaml --seeds 3 \
   --launch-arg --bug=3 --out reconciler-fuzzer-out/hunt
 ```
 
-A toy run takes half a minute or more, and `hunt` replays and shrinks each finding, so this
-hunt takes several minutes. It writes `summary.md`, which lists each finding with its seed,
-reproduction rate and shrunk plan.
+A toy run takes half a minute or more. `hunt` replays each new finding 5 times, then tries up
+to 16 shrink candidates of 2 to 4 runs each, so this hunt takes several minutes. `--replays`
+and `--candidates` change these counts. `hunt` rewrites `summary.md` as it goes. It lists each
+finding with its seed, reproduction rate and shrunk plan. `reconciler-fuzzer help hunt`
+describes each flag of `hunt`.
 
 ## Writing a config
 
@@ -400,9 +403,9 @@ findings, and a negative control, where one exists, must fail.
 ## Reading a failure
 
 [docs/failures.md](docs/failures.md) explains each finding and what to change when a run exits 2.
-The `--out` directory holds `report.md`, the `plan.json` that ran, `trace.jsonl` and
-`controller.log`. `judge` rejudges a stored trace, and `shrink` shrinks a failing plan to
-`shrunk.json`:
+The `--out` directory holds `report.md`, the `plan.json` that ran, `trace.jsonl`,
+`controller.log` and `harness.log`, where client-go logs the harness's own errors. `judge`
+rejudges a stored trace, and `shrink` shrinks a failing plan to `shrunk.json`:
 
 ```sh
 reconciler-fuzzer judge --trace reconciler-fuzzer-out/b3
