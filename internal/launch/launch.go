@@ -15,9 +15,6 @@ import (
 	"time"
 )
 
-// DefaultGracePeriod is how long Stop waits after SIGTERM before SIGKILL.
-const DefaultGracePeriod = 5 * time.Second
-
 // InitialBackoff is the delay before supervision restarts a process that
 // exited on its own. The delay doubles with each such restart, up to
 // MaxBackoff, and resets when the harness starts the process.
@@ -33,6 +30,9 @@ const TailBytes = 4096
 // output pipe open.
 const waitDelay = 500 * time.Millisecond
 
+// reapTimeout bounds how long a kill waits for the reap.
+const reapTimeout = 5 * time.Second
+
 // Options configure a Binary. Args and Env arrive already expanded.
 type Options struct {
 	Path string
@@ -40,7 +40,8 @@ type Options struct {
 	// Env overrides variables the controller inherits.
 	Env map[string]string
 	// Log receives stdout and stderr through one pipe.
-	Log         io.Writer
+	Log io.Writer
+	// GracePeriod is how long Stop waits after SIGTERM before SIGKILL.
 	GracePeriod time.Duration
 	// OnStart and OnExit hear every start and exit, including restarts.
 	OnStart func(pid int)
@@ -76,8 +77,9 @@ type Binary struct {
 type process struct {
 	cmd  *exec.Cmd
 	tail *ring
-	// harness is set before Stop or Kill signals the process.
-	harness bool
+	// harness is set before Stop or Kill signals the process, and stopped
+	// before Stop does.
+	harness, stopped bool
 	// announced closes once OnStart has run, so OnExit never comes first.
 	announced chan struct{}
 	// done closes once OnExit has run.
@@ -87,9 +89,6 @@ type process struct {
 func New(o Options) *Binary {
 	if o.Log == nil {
 		o.Log = io.Discard
-	}
-	if o.GracePeriod <= 0 {
-		o.GracePeriod = DefaultGracePeriod
 	}
 	return &Binary{o: o}
 }
@@ -155,7 +154,7 @@ func (b *Binary) reap(p *process) {
 	}
 
 	b.mu.Lock()
-	exit := Exit{PID: p.cmd.Process.Pid, Status: status, HarnessCaused: p.harness, Tail: p.tail.String()}
+	exit := Exit{PID: p.cmd.Process.Pid, Status: status, HarnessCaused: p.harness, Stopped: p.stopped, Tail: p.tail.String()}
 	var delay time.Duration
 	if b.running == p {
 		b.running = nil
@@ -192,13 +191,13 @@ func (b *Binary) restart() {
 	b.announce(p)
 }
 
-// claim marks the running process as ended by the harness and returns it,
-// or nil when none runs.
-func (b *Binary) claim() *process {
+// claim marks the running process as ended by the harness, and by Stop when
+// stopped, and returns it, or nil when none runs.
+func (b *Binary) claim(stopped bool) *process {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.running != nil {
-		b.running.harness = true
+		b.running.harness, b.running.stopped = true, stopped
 	}
 	return b.running
 }
@@ -208,7 +207,7 @@ func (b *Binary) claim() *process {
 func (b *Binary) Stop(ctx context.Context) error {
 	b.ops.Lock()
 	defer b.ops.Unlock()
-	p := b.claim()
+	p := b.claim(true)
 	if p == nil {
 		return nil
 	}
@@ -230,7 +229,7 @@ func (b *Binary) Stop(ctx context.Context) error {
 func (b *Binary) Kill(ctx context.Context) error {
 	b.ops.Lock()
 	defer b.ops.Unlock()
-	p := b.claim()
+	p := b.claim(false)
 	if p == nil {
 		return nil
 	}
@@ -241,13 +240,13 @@ func (b *Binary) kill(p *process) error {
 	if err := signal(p, syscall.SIGKILL); err != nil {
 		return err
 	}
-	reap := time.NewTimer(b.o.GracePeriod)
+	reap := time.NewTimer(reapTimeout)
 	defer reap.Stop()
 	select {
 	case <-p.done:
 		return nil
 	case <-reap.C:
-		return fmt.Errorf("%s did not exit within %v of SIGKILL", b.o.Path, b.o.GracePeriod)
+		return fmt.Errorf("%s did not exit within %v of SIGKILL", b.o.Path, reapTimeout)
 	}
 }
 

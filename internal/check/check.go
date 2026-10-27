@@ -340,7 +340,7 @@ func Judge(ix *trace.Index, s Spec) Report {
 	findings = append(findings, Backoff(ix, s)...)
 	findings = append(findings, Finalizers(ix, s)...)
 	findings = append(findings, Property(ix, s)...)
-	notes = append(append(append(actionErrors(ix), unpicked(ix, s)...), notes...), unmapped(ix)...)
+	notes = slices.Concat(actionErrors(ix), killedStops(ix), unpicked(ix, s), notes, unmapped(ix))
 	return Report{Findings: findings, Notes: notes}
 }
 
@@ -428,6 +428,17 @@ func actionErrors(ix *trace.Index) []string {
 			if a := e.Action; a.Error != "" {
 				notes = append(notes, fmt.Sprintf("%s, action %d (%s) failed at %v: %s", stepName(ix, a.Step), a.Index, a.Do, e.At, a.Error))
 			}
+		}
+	}
+	return notes
+}
+
+// killedStops notes each stop of the controller that ended in SIGKILL.
+func killedStops(ix *trace.Index) []string {
+	var notes []string
+	for _, e := range ix.Procs() {
+		if p := e.Proc; p.Stopped && p.Exit == "signal: killed" {
+			notes = append(notes, fmt.Sprintf("%s, at %v: the controller did not exit within launch.gracePeriod of SIGTERM, so the harness sent SIGKILL.", stepName(ix, stepAt(ix.Steps(), e.At)), e.At))
 		}
 	}
 	return notes
