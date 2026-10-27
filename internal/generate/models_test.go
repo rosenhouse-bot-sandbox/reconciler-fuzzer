@@ -160,23 +160,47 @@ func TestARestartOrKillAtAnOffsetFollowsTheFirstDeleteWhileAModelFaultLasts(t *t
 	}
 }
 
-// The other half leave each deletion to the process that started it.
-func TestHalfTheModelFaultStepsThatDeleteAndHaveRoomRestartOrKillMidDelete(t *testing.T) {
-	var room, late int
+func TestARestartOrKillMidDeleteComesAtLeast300msAfterTheDelete(t *testing.T) {
+	step := plan.Step{Period: plan.Duration(400 * time.Millisecond), Actions: []plan.Action{{Do: plan.Delete, Slot: "a"}}}
+	for seed := range 20 {
+		actions := example(t, seed, func(rt *rapid.T) []plan.Action { return restartMidDelete(rt, step) })
+		if len(actions) != 2 || time.Duration(actions[1].At) != 300*time.Millisecond {
+			t.Errorf("Seed %d turns a delete in a 400ms period into %+v, want a restart or kill 300ms after it.", seed, actions)
+		}
+	}
+}
+
+func TestEveryModelFaultStepThatDeletesAndHasRoomRestartsOrKillsMidDelete(t *testing.T) {
 	for _, p := range plans(t, modelsConfig, 400) {
-		for _, step := range p.Steps {
+		for i, step := range p.Steps {
 			drawn := slices.DeleteFunc(slices.Clone(step.Actions), func(a plan.Action) bool { return a.At > 0 })
 			if len(step.Faults) == 0 || !step.Faults[0].ModelFault() || len(drawn) == maxActions || !slices.ContainsFunc(drawn, func(a plan.Action) bool { return a.Do == plan.Delete }) {
 				continue
 			}
-			room++
-			if len(drawn) < len(step.Actions) {
-				late++
+			if late := len(step.Actions) - len(drawn); late != 1 {
+				t.Errorf("Seed %d step %d holds %d actions at an offset, want 1.", p.Seed, i, late)
 			}
 		}
 	}
-	if late*100 < room*35 || late*100 > room*65 {
-		t.Errorf("%d of %d model-fault steps that delete and have room restart or kill mid-delete, want about half.", late, room)
+}
+
+// A restart or kill soon after the delete finds a controller that has just
+// begun to finalize, and a late one a controller that the fault still holds.
+func TestRestartsOrKillsMidDeleteSpreadFromTheDeleteToThePeriodEnd(t *testing.T) {
+	afterEarliest, beforeEnd := time.Hour, time.Hour
+	for _, p := range plans(t, modelsConfig, 400) {
+		for _, step := range p.Steps {
+			del := slices.IndexFunc(step.Actions, func(a plan.Action) bool { return a.Do == plan.Delete })
+			for _, a := range step.Actions {
+				if del >= 0 && a.At > 0 && (a.Do == plan.Restart || a.Do == plan.Kill) {
+					afterEarliest = min(afterEarliest, time.Duration(a.At-step.Actions[del].At)-300*time.Millisecond)
+					beforeEnd = min(beforeEnd, time.Duration(step.Period-a.At))
+				}
+			}
+		}
+	}
+	if afterEarliest >= time.Second || beforeEnd >= time.Second {
+		t.Errorf("Restarts or kills mid-delete come %v or more after 300ms past their delete, and %v or more before their period ends, want under 1s each.", afterEarliest, beforeEnd)
 	}
 }
 

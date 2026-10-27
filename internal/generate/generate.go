@@ -406,8 +406,8 @@ func (g *Generator) plan(t *rapid.T) *plan.Plan {
 const maxActions = 4
 
 // step draws one step: a single restart, kill or damage, or a fault with
-// one, in about 30% of steps, else 1 to 4 actions and maybe a fault. A
-// model-fault step that deletes may also restart or kill later.
+// one, in about 30% of steps, else 1 to 4 actions and maybe a fault.
+// restartMidDelete may then add a restart or kill to a model-fault step.
 func (g *Generator) step(t *rapid.T, at state) plan.Step {
 	var step plan.Step
 	switch {
@@ -453,14 +453,17 @@ func (g *Generator) step(t *rapid.T, at state) plan.Step {
 	return step
 }
 
-// restartMidDelete adds a restart or kill to half the model-fault steps that
-// delete and hold fewer than maxActions actions. It comes 300 ms or more
-// after the first delete and before Period ends, while the fault may still
-// hold the deletion, so a new process may have to finish it. It directly
-// follows that delete, so no action between them delays it.
+// restartMidDelete inserts a restart or kill right after the step's first
+// delete, if the step holds fewer than maxActions actions. The restart or
+// kill comes 300 ms or more after the delete's offset and before Period
+// ends. The fault may then still hold the deletion, so a new process may
+// have to finish it. Actions run in order, so no later action can delay the
+// restart or kill. The later actions wait for it instead. A restart or
+// create before the delete can delay the delete, and so shorten the time
+// between them.
 func restartMidDelete(t *rapid.T, step plan.Step) []plan.Action {
 	del := slices.IndexFunc(step.Actions, func(a plan.Action) bool { return a.Do == plan.Delete })
-	if del < 0 || len(step.Actions) == maxActions || !rapid.Bool().Draw(t, "restart mid-delete") {
+	if del < 0 || len(step.Actions) == maxActions {
 		return step.Actions
 	}
 	const after, tick = 300 * time.Millisecond, 100 * time.Millisecond
