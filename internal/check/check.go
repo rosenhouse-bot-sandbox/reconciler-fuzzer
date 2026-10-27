@@ -367,8 +367,9 @@ func unpicked(ix *trace.Index, s Spec) []string {
 	for _, h := range ix.Holds() {
 		switch {
 		case ix.WatchedKind(trace.Controller, h.Kind, h.Start, h.End):
-		case ix.WatchedKind(trace.Controller, h.Kind, h.End, math.MaxInt64):
-			// A longer hold could have held the watch that the controller opened later.
+		case ix.WatchedKind(trace.Controller, h.Kind, h.End, nextStart(ix, h.Step)):
+			// A longer hold could have held the watch that the controller
+			// opened later in the hold's step.
 			notes = append(notes, faultNote(ix, h.Step, h.Index, h.What, "held no watch", h.Start, h.End))
 		default:
 			notes = append(notes, fmt.Sprintf("%s, fault %d (%s) held no watch.", stepName(ix, h.Step), h.Index, h.What))
@@ -396,6 +397,17 @@ func unpicked(ix *trace.Index, s Spec) []string {
 		}
 	}
 	return notes
+}
+
+// nextStart is when the step after step started, or math.MaxInt64 when no
+// later step started.
+func nextStart(ix *trace.Index, step int) time.Duration {
+	for _, span := range ix.Steps() {
+		if span.Step > step {
+			return span.Start
+		}
+	}
+	return math.MaxInt64
 }
 
 // faultNote says that fault index of step did nothing while on from start

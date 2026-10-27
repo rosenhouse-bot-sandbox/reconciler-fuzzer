@@ -202,10 +202,10 @@ Actions run in order, each at its optional `at` offset. A fault sets one
 effect: a request fault or `holdWatch` (§5), or a model fault (§7) with no
 verb, subresource or `nth`. A fault's `system` defaults to `kube`; the runner
 refuses an unknown one. On `kube`, a model fault and a target need a
-`resource`; on a fake, an empty one matches every collection. `plan.Load`
-decodes strictly and validates each action's slot and fields (`plan.go`). Two
-slots' CRs clash only with equal group, kind, namespace and name. `run.Run`
-refuses a plan that creates an object of an unlisted kind (`ValidateKinds`).
+`resource`; on a fake, an empty one matches every collection, and a target
+takes no `group`. `plan.Load` decodes strictly and validates the plan
+(`plan.go`). Two slots' CRs clash only with equal group, kind, namespace and
+name. `run.Run` refuses a create of an unlisted kind (`ValidateKinds`).
 
 ## 9. Step runner
 

@@ -52,7 +52,7 @@ with such notes may need a different fault. A step without a `period`
 ends its faults by the time its last action returns. Such a fault's note
 says how long the fault lasted, unless the fault ended while the
 controller was down, or it is a `holdWatch` of a kind that the controller
-does not watch later.
+does not watch later in that step.
 
 The note of an action whose target matches nothing names the target. It
 then says what the action's slot holds, or names up to five live objects
