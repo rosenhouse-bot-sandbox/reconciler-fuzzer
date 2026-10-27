@@ -170,6 +170,8 @@ func TestValidate(t *testing.T) {
 		"kube stuck no resource":  {[]Step{{Faults: []Fault{{System: "kube", Stuck: true}}}}, "stuck needs a match with a resource"},
 		"fake stuck with verb":    {[]Step{{Faults: []Fault{{System: "cloud", Stuck: true, Match: Match{Verb: "get"}}}}}, "stuck matches objects"},
 		"kube target no resource": {[]Step{{Actions: []Action{{Do: Damage, Target: &Target{System: "kube"}}}}}, "damage needs a target with a resource"},
+		"fake target with group":  {[]Step{{Actions: []Action{{Do: Damage, Target: &Target{System: "cloud", Group: "x"}}}}}, "steps[0].actions[0]: damage target on cloud takes no group"},
+		"fake fixture with group": {[]Step{{Actions: []Action{{Do: ChangeFixture, Target: &Target{System: "vault", Group: "x", Resource: "secret", Name: "token"}}}}}, "changeFixture target on vault takes no group"},
 		"malformed target system": {[]Step{{Actions: []Action{{Do: Damage, Target: &Target{System: "Cloud"}}}}}, "steps[0].actions[0]: system \"Cloud\" is not a system name"},
 		"fake fixture no name":    {[]Step{{Actions: []Action{{Do: ChangeFixture, Target: &Target{System: "cloud", Resource: "buckets"}}}}}, "changeFixture needs a target name"},
 		"create a live slot":      {[]Step{{Actions: []Action{create}}, {Actions: []Action{create}}}, "steps[1].actions[0]: create names slot \"a\", which still holds a CR"},
@@ -215,6 +217,8 @@ func TestValidateAccepts(t *testing.T) {
 		{Faults: []Fault{{DropResponse: true}, {KillAfter: true, Nth: 1}}, Actions: []Action{
 			{Do: Damage, Target: cms}, {Do: Damage, Slot: "a", Target: cms, Patch: json.RawMessage(`{"data":{}}`)},
 			{Do: ChangeFixture, Target: fixture}, {Do: ChangeFixture, Target: fixture, Patch: json.RawMessage(`{"data":{"k":"v"}}`)},
+			{Do: Damage, Target: &Target{Group: "example.com", Resource: "gadgets"}},
+			{Do: ChangeFixture, Target: &Target{System: "kube", Group: "example.com", Resource: "gadgets", Name: "g"}},
 		}},
 		{Faults: []Fault{{System: "cloud", Stuck: true}, {System: "cloud-2", SlowDelete: true, Match: Match{Resource: "buckets"}}, {System: "cloud", Error: &Error{Code: 503}}},
 			Actions: []Action{{Do: Damage, Target: &Target{System: "cloud"}}, {Do: Damage, Target: &Target{System: "cloud", Resource: "buckets", Role: "r"}}}},

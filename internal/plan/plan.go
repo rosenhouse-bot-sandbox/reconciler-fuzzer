@@ -87,7 +87,8 @@ const Foreground Propagation = "Foreground"
 
 // Target selects one object for damage or changeFixture. It is resolved
 // when the action runs. An empty field matches any value. Resource is
-// required on kube.
+// required on kube. Group is empty on other systems, whose objects have
+// none.
 type Target struct {
 	// System defaults to "kube".
 	System   string `json:"system,omitempty"`
@@ -345,8 +346,11 @@ func (a Action) validateChange(names map[string]string) error {
 	if err := validSystem(a.Target.System); err != nil {
 		return err
 	}
-	if onKube(a.Target.System) && a.Target.Resource == "" {
+	switch kube := onKube(a.Target.System); {
+	case kube && a.Target.Resource == "":
 		return fmt.Errorf("%s needs a target with a resource", a.Do)
+	case !kube && a.Target.Group != "":
+		return fmt.Errorf("%s target on %s takes no group, since only kube objects have one", a.Do, a.Target.System)
 	}
 	if a.Patch != nil && !isObject(a.Patch) {
 		return fmt.Errorf("%s needs a JSON object patch", a.Do)
