@@ -379,9 +379,17 @@ func TestB160MapsAVolumeToTheClusterItsLabelNames(t *testing.T) {
 // B161 keeps in memory the deletions that its process started.
 func TestB161ForgetsAPendingDeletionAfterARestart(t *testing.T) {
 	for _, c := range []struct {
-		bug           Bug
-		restart, gone bool
-	}{{0, true, true}, {B161, false, true}, {B161, true, false}} {
+		bug     Bug
+		restart bool
+		// another says that the new process first finalizes another Cluster.
+		another bool
+		gone    bool
+	}{
+		{bug: 0, restart: true, gone: true},
+		{bug: B161, gone: true},
+		{bug: B161, restart: true},
+		{bug: B161, restart: true, another: true},
+	} {
 		f := newBuggyFleet(t, c.bug, clusterObj())
 		f.settle(f.clusters, "cluster")
 		f.holdVolumes()
@@ -391,6 +399,19 @@ func TestB161ForgetsAPendingDeletionAfterARestart(t *testing.T) {
 		if c.restart {
 			r = &ClusterReconciler{reconciler: r.reconciler}
 		}
+		if c.another {
+			other := clusterObj()
+			other.Name = "other"
+			if err := f.c.Create(t.Context(), other); err != nil {
+				t.Fatal(err)
+			}
+			f.settle(r, "other")
+			f.delete(other)
+			f.settle(r, "other")
+			if !apierrors.IsNotFound(f.get("other", &fleetv1.Cluster{})) {
+				t.Fatalf("B%d: the new process leaves another deleted Cluster.", c.bug)
+			}
+		}
 		for _, v := range f.listVolumes() {
 			v.Finalizers = nil
 			if err := f.c.Update(t.Context(), &v); err != nil {
@@ -399,7 +420,7 @@ func TestB161ForgetsAPendingDeletionAfterARestart(t *testing.T) {
 		}
 		f.settle(r, "cluster")
 		if gone := apierrors.IsNotFound(f.get("cluster", &fleetv1.Cluster{})); gone != c.gone {
-			t.Errorf("B%d, restart %v: once its Volumes are gone, the deleted Cluster is gone %v.", c.bug, c.restart, gone)
+			t.Errorf("B%d, restart %v, another %v: once its Volumes are gone, the deleted Cluster is gone %v.", c.bug, c.restart, c.another, gone)
 		}
 	}
 }
