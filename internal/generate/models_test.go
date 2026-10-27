@@ -160,7 +160,7 @@ func TestARestartOrKillAtAnOffsetFollowsTheFirstDeleteWhileAModelFaultLasts(t *t
 	}
 }
 
-// The other half leave the deletion to one process.
+// The other half leave each deletion to the process that started it.
 func TestHalfTheModelFaultStepsThatDeleteAndHaveRoomRestartOrKillMidDelete(t *testing.T) {
 	var room, late int
 	for _, p := range plans(t, modelsConfig, 400) {
