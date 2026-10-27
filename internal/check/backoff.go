@@ -10,11 +10,11 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 )
 
-// Backoff fails a failing request that the controller repeats in a tight
-// loop. DESIGN.md §12 defines it.
+// Backoff fails a futile request that the controller repeats in a tight loop.
+// DESIGN.md §12 defines it.
 func Backoff(ix *trace.Index, s Spec) []Finding {
-	runs := map[request][]time.Duration{}
-	found := map[findingKey]*Finding{}
+	runs := map[request]*run{}
+	found := map[findingKey]*loop{}
 	var order []findingKey
 	steps := ix.Steps()
 	holds := holdWatches(ix, s.Stable)
@@ -30,41 +30,84 @@ func Backoff(ix *trace.Index, s Spec) []Finding {
 		}
 		c, start := e.Call, e.At-e.Call.Latency
 		object := c.Object()
+		// A create's object is the name it requests.
 		object.Name = cmp.Or(object.Name, c.RequestName)
 		r := request{c.Ref.System, c.Verb, object, c.Subresource, c.Status}
+		isFutile := futile(ix, e)
 		if succeeded(*c) {
+			// A success ends each run of its verb, object and subresource
+			// that it does not join.
 			for key := range runs {
-				if key.object == r.object && key.verb == r.verb && key.subresource == r.subresource {
+				if key.object == r.object && key.verb == r.verb && key.subresource == r.subresource && (key != r || !isFutile) {
 					delete(runs, key)
 				}
 			}
+		}
+		if !isFutile {
 			continue
 		}
-		if c.Status == 409 && holds(c.Ref, start) {
+		// A held kind's stale cache causes 409s and no-op writes.
+		if (c.Status == 409 || succeeded(*c)) && holds(c.Ref, start) {
 			continue
 		}
-		runs[r] = append(runs[r], start)
-		n := max(1, crsLive(w, runs[r][0], start))
-		if len(runs[r]) != tightRepeats*2*n+1 || !tight(runs[r][tightRepeats*n:]) {
+		rn := runs[r]
+		if rn == nil || start-rn.last >= tightGap {
+			rn = &run{request: r, first: start}
+			runs[r] = rn
+		}
+		rn.last = start
+		rn.calls++
+		summary, calls := tightLoop, tightCalls
+		if succeeded(*c) {
+			summary, calls = noOpLoop, noOpCalls
+		}
+		if rn.failed || rn.calls <= calls*max(1, crsLive(w, rn.first, start)) {
 			continue
 		}
-		key := findingKey{stepAt(steps, start), tightLoop, kind(c.Ref)}
-		if found[key] == nil {
-			found[key] = &Finding{Check: "Backoff", Step: key.step, At: e.At, Summary: tightLoop, Kind: key.kind}
+		rn.failed = true
+		key := findingKey{stepAt(steps, start), summary, kind(c.Ref)}
+		l := found[key]
+		if l == nil {
+			l = &loop{Finding: Finding{Check: "Backoff", Step: key.step, At: e.At, Summary: summary, Kind: key.kind}}
+			found[key] = l
 			order = append(order, key)
 		}
-		f := found[key]
-		what := describe(r.object)
-		if r.subresource != "" {
-			what += "/" + r.subresource
+		// A finding names each request once.
+		if !slices.ContainsFunc(l.runs, func(named *run) bool { return named.request == r }) {
+			l.runs = append(l.runs, rn)
 		}
-		f.Details = append(f.Details, fmt.Sprintf("%s %s: %d, %d calls from %v to %v", c.Verb, what, c.Status, len(runs[r]), runs[r][0], start))
 	}
 	findings := make([]Finding, len(order))
 	for n, key := range order {
-		findings[n] = *found[key]
+		l := found[key]
+		for _, rn := range l.runs {
+			l.Details = append(l.Details, rn.detail())
+		}
+		findings[n] = l.Finding
 	}
 	return findings
+}
+
+// futile says whether e, a controller call, failed, or wrote and changed
+// nothing.
+func futile(ix *trace.Index, e trace.Event) bool {
+	c := *e.Call
+	if !succeeded(c) {
+		return true
+	}
+	return trace.Mutating(c.Verb) && !ix.Changed(e) && !emptiedFinalizers(ix, c)
+}
+
+// emptiedFinalizers says whether c answered with no finalizers at a version
+// that holds some. Such a write emptied a deleting object's finalizers, so the
+// API server deleted the object and answered at the old resourceVersion. A
+// subresource's answer, such as a Scale, may hold no finalizers.
+func emptiedFinalizers(ix *trace.Index, c trace.Call) bool {
+	if c.Subresource != "" || c.ResultFinalizers == nil || len(*c.ResultFinalizers) > 0 {
+		return false
+	}
+	v, _ := ix.VersionOf(c.Object(), c.ResultRV)
+	return len(finalizers(v)) > 0
 }
 
 // crsLive counts the CRs live at some time in [from, to]. Each CR may back
@@ -95,13 +138,16 @@ func ownedByAnother(w *owner.World, ref trace.Ref, cr string, t time.Duration) b
 
 const (
 	tightLoop = "retried a failing request in a tight loop"
-	// tightRepeats is how many repeats per CR come before the judged gaps,
-	// and how many gaps per CR are judged.
-	tightRepeats = 5
-	tightGap     = 100 * time.Millisecond
+	noOpLoop  = "repeated a no-op write in a tight loop"
+	// A run of failing calls fails with more than tightCalls calls per CR
+	// live. A run of no-op writes fails with more than noOpCalls, since a
+	// reconcile may repeat a write.
+	tightCalls = 10
+	noOpCalls  = 20
+	tightGap   = 100 * time.Millisecond
 )
 
-// request is what a run of failing calls repeats.
+// request is what a run of futile calls repeats.
 type request struct {
 	system, verb string
 	object       trace.Ref
@@ -109,13 +155,27 @@ type request struct {
 	status       int
 }
 
-func tight(starts []time.Duration) bool {
-	for n := 1; n < len(starts); n++ {
-		if starts[n]-starts[n-1] >= tightGap {
-			return false
-		}
+// run counts a request's futile calls, each under tightGap after the last.
+type run struct {
+	request
+	first, last time.Duration
+	calls       int
+	// failed says whether the run failed Backoff.
+	failed bool
+}
+
+func (rn *run) detail() string {
+	what := describe(rn.object)
+	if rn.subresource != "" {
+		what += "/" + rn.subresource
 	}
-	return true
+	return fmt.Sprintf("%s %s: %d, %d calls from %v to %v", rn.verb, what, rn.status, rn.calls, rn.first, rn.last)
+}
+
+// loop is a Backoff finding and the runs it names.
+type loop struct {
+	Finding
+	runs []*run
 }
 
 // backoffEvents returns, in time order, the controller's judged calls that
@@ -151,12 +211,12 @@ func backoffTime(e trace.Event) time.Duration {
 }
 
 // holdWatches says whether a holdWatch fault on ref's kind is active at t,
-// or ended less than stable/4 before it, while the controller's cache
-// catches up.
+// or ended at most stable/4 before it, while the controller's cache
+// catches up. A hold with no end has End math.MaxInt64.
 func holdWatches(ix *trace.Index, stable time.Duration) func(ref trace.Ref, t time.Duration) bool {
 	return func(ref trace.Ref, t time.Duration) bool {
 		return slices.ContainsFunc(ix.Holds(), func(h trace.Hold) bool {
-			return h.Kind.Group == ref.Group && h.Kind.Resource == ref.Resource && h.Start <= t && t <= h.End+stable/4
+			return h.Kind.Group == ref.Group && h.Kind.Resource == ref.Resource && h.Start <= t && t-stable/4 <= h.End
 		})
 	}
 }

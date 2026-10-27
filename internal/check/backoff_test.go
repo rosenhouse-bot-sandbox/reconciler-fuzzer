@@ -1,6 +1,7 @@
 package check_test
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -11,12 +12,15 @@ import (
 	tt "github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace/tracetest"
 )
 
-const tightLoop = "retried a failing request in a tight loop"
+const (
+	tightLoop = "retried a failing request in a tight loop"
+	noOpLoop  = "repeated a no-op write in a tight loop"
+)
 
-// retries has the controller fail a get of slot a's Gadget at each start,
-// each response taking 2ms. Before the n-th (1-based) it adds between(n),
-// a call that starts there or a version.
-func retries(starts []time.Duration, between func(n int) trace.Event) *tt.Timeline {
+// repeat has the controller make a copy of call at each start, each
+// response taking 2ms. Before the n-th (1-based) it adds between(n), a call
+// that starts there or a version.
+func repeat(call trace.Event, starts []time.Duration, between func(n int) trace.Event) *tt.Timeline {
 	var tl tt.Timeline
 	tl.At(0, tt.Run("toy", "widgets"), tt.Start(1), tt.Phase(0, trace.FaultPeriod))
 	for n, start := range starts {
@@ -28,11 +32,29 @@ func retries(starts []time.Duration, between func(n int) trace.Event) *tt.Timeli
 				tl.At(start, e)
 			}
 		}
-		get := tt.Call(ctl, "get", gadgetA, 500, "")
-		get.Call.Latency = 2 * ms
-		tl.At(start+2*ms, get)
+		c := *call.Call
+		c.Latency = 2 * ms
+		tl.At(start+2*ms, trace.Event{Call: &c})
 	}
 	return &tl
+}
+
+// retries has the controller fail a get of slot a's Gadget at each start.
+func retries(starts []time.Duration, between func(n int) trace.Event) *tt.Timeline {
+	return repeat(tt.Call(ctl, "get", gadgetA, 500, ""), starts, between)
+}
+
+// noOpDeletes has the controller delete slot a's Gadget at each start, while
+// a finalizer holds it. Each delete answers with the Gadget's version 2, so
+// none changes it.
+func noOpDeletes(starts []time.Duration, between func(n int) trace.Event) *tt.Timeline {
+	tl := repeat(tt.Call(ctl, "delete", gadgetA, 200, "2"), starts, between)
+	return tl.At(0, tt.Version(gadgetA, "ug", "2", gadgetBody(true, "x")))
+}
+
+// widgetGeneration is slot a's Widget at generation n.
+func widgetGeneration(n int) trace.Event {
+	return tt.Version(widgetA, "ua", "v", generation("a", n))
 }
 
 func every(gap time.Duration, n int) []time.Duration {
@@ -45,13 +67,22 @@ func every(gap time.Duration, n int) []time.Duration {
 
 func TestBackoffPassesControllerRuntimesDefaultBackoff(t *testing.T) {
 	limiter := workqueue.DefaultTypedControllerRateLimiter[string]()
-	var starts []time.Duration
+	var starts, twice []time.Duration
 	at := 1 * s
 	for range 20 {
 		starts = append(starts, at)
+		twice = append(twice, at, at+ms)
 		at += limiter.When("a")
 	}
 	requireNone(t, check.Backoff(retries(starts, nil).Index(), spec))
+	requireNone(t, check.Backoff(noOpDeletes(starts, nil).Index(), spec))
+	// A reconcile may write an unchanged status twice before it fails, as when
+	// a deferred update follows an explicit one.
+	update := tt.Call(ctl, "update", gadgetA, 200, "2")
+	update.Call.Subresource = "status"
+	tl := repeat(update, twice, nil)
+	tl.At(0, tt.Version(gadgetA, "ug", "2", gadgetBody(false)))
+	requireNone(t, check.Backoff(tl.Index(), spec))
 }
 
 func TestBackoffFailsATightLoop(t *testing.T) {
@@ -60,25 +91,234 @@ func TestBackoffFailsATightLoop(t *testing.T) {
 	requireNone(t, check.Backoff(retries(every(10*ms, 10), nil).Index(), spec))
 }
 
-func TestBackoffJudgesOnlyCallsSixToEleven(t *testing.T) {
-	starts := append(every(10*ms, 5), every(100*ms, 6)...)
-	for i := 5; i < len(starts); i++ {
-		starts[i] += time.Second
+// A controller that requeues a deleting CR at once deletes its deleting
+// dependency again on each pass. Each delete succeeds and changes nothing.
+func TestBackoffFailsATightLoopOfNoOpDeletes(t *testing.T) {
+	findings := check.Backoff(noOpDeletes(every(10*ms, 21), nil).Index(), spec)
+	requireFinding(t, findings, "Backoff", 0, noOpLoop, "kube/toy/gadgets", "delete gadgets.toy ns/a: 200, 21 calls from 10ms to 210ms")
+	requireNone(t, check.Backoff(noOpDeletes(every(10*ms, 20), nil).Index(), spec))
+}
+
+// A finding names a run once, with all its calls, though the run outlasts the
+// finding's step.
+func TestBackoffNamesTheWholeRunOnce(t *testing.T) {
+	tl := retries(every(10*ms, 30), nil)
+	tl.At(200*ms, tt.Phase(1, trace.FaultPeriod))
+	requireFinding(t, check.Backoff(tl.Index(), spec), "Backoff", 0, tightLoop, "kube/toy/gadgets", "get gadgets.toy ns/a: 500, 30 calls from 10ms to 300ms")
+}
+
+func TestBackoffGivesAFailingLoopAndANoOpLoopTheirOwnFindings(t *testing.T) {
+	tl := noOpDeletes(every(10*ms, 21), nil)
+	for _, start := range every(10*ms, 11) {
+		tl.At(start, tt.Call(ctl, "get", tt.Ref("toy/gadgets", "ns", "b"), 500, ""))
 	}
-	requireNone(t, check.Backoff(retries(starts, nil).Index(), spec))
-	starts = append(every(time.Second, 5), every(10*ms, 6)...)
-	for i := 5; i < len(starts); i++ {
-		starts[i] += 10 * time.Second
+	findings := check.Backoff(tl.Index(), spec)
+	if len(findings) != 2 || findings[0].Summary != tightLoop || findings[1].Summary != noOpLoop {
+		t.Fatalf("findings = %+v, want one for the failing gets and one for the no-op deletes", findings)
 	}
-	if len(check.Backoff(retries(starts, nil).Index(), spec)) != 1 {
-		t.Fatal("a slow start excused calls 6 to 11")
+}
+
+// The delete that marks the Gadget deleting changes it, so the run starts at
+// the next delete.
+func TestBackoffCountsTheNoOpDeletesAfterTheChangingOne(t *testing.T) {
+	for calls, want := range map[int]int{21: 0, 22: 1} {
+		tl := repeat(tt.Call(ctl, "delete", gadgetA, 200, "2"), every(10*ms, calls), nil)
+		tl.At(0, tt.Version(gadgetA, "ug", "1", tt.Object("a")))
+		tl.At(11*ms, tt.Version(gadgetA, "ug", "2", gadgetBody(true, "x")))
+		if got := len(check.Backoff(tl.Index(), spec)); got != want {
+			t.Errorf("%d deletes 10ms apart: %d findings, want %d", calls, got, want)
+		}
+	}
+}
+
+// A delete with foreground propagation adds a finalizer to the deleting
+// Gadget, so it ends the run of no-op deletes before it.
+func TestBackoffNoOpRunBreaksOnADeleteThatChangesTheObject(t *testing.T) {
+	tl := noOpDeletes(every(10*ms, 15), nil)
+	for n, start := range every(10*ms, 15) {
+		start += 150 * ms
+		if n == 0 {
+			tl.At(start+ms, tt.Version(gadgetA, "ug", "3", gadgetBody(true, "x", "foregroundDeletion")))
+		}
+		del := tt.Call(ctl, "delete", gadgetA, 200, "3")
+		del.Call.Latency = 2 * ms
+		tl.At(start+2*ms, del)
+	}
+	requireNone(t, check.Backoff(tl.Index(), spec))
+}
+
+// Slow no-op writes, such as one per event of an owned object, do not count
+// toward a later burst.
+func TestBackoffPassesABurstAfterSlowNoOpWrites(t *testing.T) {
+	starts := append(every(time.Second, 11), every(20*ms, 20)...)
+	for i := 11; i < len(starts); i++ {
+		starts[i] += 20 * time.Second
+	}
+	requireNone(t, check.Backoff(noOpDeletes(starts, nil).Index(), spec))
+}
+
+func TestBackoffPassesATightLoopOfWritesThatChangeTheObject(t *testing.T) {
+	var tl tt.Timeline
+	tl.At(0, tt.Run("toy", "widgets"), tt.Phase(0, trace.FaultPeriod))
+	for n, start := range every(10*ms, 21) {
+		rv := strconv.Itoa(n + 2)
+		update := tt.Call(ctl, "update", gadgetA, 200, rv)
+		update.Call.Latency = 2 * ms
+		tl.At(start+ms, tt.Version(gadgetA, "ug", rv, tt.Object("a")))
+		tl.At(start+2*ms, update)
+	}
+	requireNone(t, check.Backoff(tl.Index(), spec))
+}
+
+// The first answer at a list's resourceVersion counts as a change, even when
+// an item's version holds that resourceVersion too.
+func TestBackoffFailsATightLoopOfNoOpDeleteCollections(t *testing.T) {
+	gadgets := tt.Ref("toy/gadgets", "ns", "")
+	repeats := repeat(tt.Call(ctl, "deletecollection", gadgets, 200, "7"), every(10*ms, 22), nil)
+	repeats.At(0, tt.Version(gadgetA, "ug", "7", gadgetBody(true, "x")))
+	findings := check.Backoff(repeats.Index(), spec)
+	requireFinding(t, findings, "Backoff", 0, noOpLoop, "kube/toy/gadgets", "deletecollection gadgets.toy ns/: 200, 21 calls from 20ms to 220ms")
+
+	var tl tt.Timeline
+	tl.At(0, tt.Run("toy", "widgets"), tt.Phase(0, trace.FaultPeriod))
+	for n, start := range every(10*ms, 22) {
+		deleteAll := tt.Call(ctl, "deletecollection", gadgets, 200, strconv.Itoa(n+7))
+		deleteAll.Call.Latency = 2 * ms
+		tl.At(start+2*ms, deleteAll)
+	}
+	requireNone(t, check.Backoff(tl.Index(), spec))
+}
+
+func TestBackoffNoOpRunBreaks(t *testing.T) {
+	for name, tc := range map[string]struct {
+		event  trace.Event
+		breaks bool
+	}{
+		"a failing delete": {tt.Call(ctl, "delete", gadgetA, 500, ""), false},
+		"a new generation": {widgetGeneration(2), true},
+	} {
+		findings := check.Backoff(noOpDeletes(every(10*ms, 31), func(n int) trace.Event {
+			switch n {
+			case 1:
+				return widgetGeneration(1)
+			case 16:
+				return tc.event
+			}
+			return tt.Start(1)
+		}).Index(), spec)
+		if got := len(findings) == 0; got != tc.breaks {
+			t.Errorf("%s: findings = %+v", name, findings)
+		}
+	}
+}
+
+// A reconcile whose write changed nothing may still succeed, and so reset
+// controller-runtime's rate limiter. The failures after it then start a fresh
+// backoff, during a hold too.
+func TestBackoffPassesAFreshBackoffAfterANoOpSuccess(t *testing.T) {
+	for _, held := range []bool{false, true} {
+		limiter := workqueue.DefaultTypedControllerRateLimiter[string]()
+		var tl tt.Timeline
+		tl.At(0, tt.Run("toy", "widgets"), tt.Version(gadgetA, "ug", "2", tt.Object("a")))
+		if held {
+			tl.At(0, tt.HoldFault(0, 0, false, tt.Ref("toy/gadgets", "", "")))
+			tl.At(2*s, tt.HoldFault(0, 0, true, tt.Ref("toy/gadgets", "", "")))
+		}
+		at := 1 * s
+		fail := func(calls int) {
+			for range calls {
+				tl.At(at, tt.Call(ctl, "update", gadgetA, 500, ""))
+				at += limiter.When("a")
+			}
+		}
+		fail(5)
+		tl.At(at, tt.Call(ctl, "update", gadgetA, 200, "2"))
+		limiter.Forget("a")
+		at += 5 * ms
+		fail(6)
+		if findings := check.Backoff(tl.Index(), spec); len(findings) > 0 {
+			t.Errorf("held %v: findings = %+v", held, findings)
+		}
+	}
+}
+
+// A fake's answer carries no resourceVersion, so the observer tells whether
+// a write changed its object.
+func TestBackoffFailsATightLoopOfWritesToAFakeThatTheObserverSeesNoChangeFrom(t *testing.T) {
+	bucket := trace.Ref{System: "s3", Resource: "buckets", Name: "b"}
+	for name, observed := range map[string]bool{"no new version": false, "a new version after each": true} {
+		var tl tt.Timeline
+		tl.At(0, tt.Run("toy", "widgets"), tt.Phase(0, trace.FaultPeriod), tt.Version(bucket, "ub", "1", tt.Object("b")))
+		for n, start := range every(10*ms, 21) {
+			put := tt.Call(ctl, "update", bucket, 200, "")
+			put.Call.Latency = 2 * ms
+			tl.At(start+2*ms, put)
+			if observed {
+				tl.At(start+5*ms, tt.Version(bucket, "ub", strconv.Itoa(n+2), tt.Object("b")))
+			}
+		}
+		tl.At(time.Second, tt.Phase(0, trace.Settled))
+		if findings := check.Backoff(tl.Index(), spec); (len(findings) == 1) == observed {
+			t.Errorf("%s: findings = %+v", name, findings)
+		}
+	}
+}
+
+func TestBackoffRunBreaksAtAGapOf100ms(t *testing.T) {
+	for gap, want := range map[time.Duration]int{99 * ms: 1, 100 * ms: 0} {
+		starts := every(10*ms, 20)
+		for i := 10; i < len(starts); i++ {
+			starts[i] += gap - 10*ms
+		}
+		if got := len(check.Backoff(retries(starts, nil).Index(), spec)); got != want {
+			t.Errorf("10 calls 10ms apart, then 10 more after %v: %d findings, want %d", gap, got, want)
+		}
+	}
+}
+
+func TestBackoffFailsATightLoopAfterASlowGap(t *testing.T) {
+	starts := every(10*ms, 21)
+	for i := 10; i < len(starts); i++ {
+		starts[i] += 150 * ms
+	}
+	requireFinding(t, check.Backoff(retries(starts, nil).Index(), spec), "Backoff", 0, tightLoop, "kube/toy/gadgets", "get gadgets.toy ns/a: 500, 11 calls from 260ms to 360ms")
+}
+
+func TestBackoffNamesARequestOncePerFinding(t *testing.T) {
+	starts := every(10*ms, 22)
+	for i := 11; i < len(starts); i++ {
+		starts[i] += 150 * ms
+	}
+	findings := check.Backoff(retries(starts, nil).Index(), spec)
+	requireFinding(t, findings, "Backoff", 0, tightLoop, "kube/toy/gadgets", "get gadgets.toy ns/a: 500, 11 calls from 10ms to 110ms")
+	if details := findings[0].Details; len(details) != 1 {
+		t.Errorf("details = %q, want one line for two tight runs of one request", details)
+	}
+}
+
+// Two runs of one request fail in step 0, and the second continues into step 1.
+func TestBackoffNamesARunOnlyInTheStepWhereItFails(t *testing.T) {
+	starts := every(10*ms, 26)
+	for i := 11; i < len(starts); i++ {
+		starts[i] += 150 * ms
+	}
+	tl := retries(starts, nil)
+	tl.At(375*ms, tt.Phase(1, trace.FaultPeriod))
+	requireFinding(t, check.Backoff(tl.Index(), spec), "Backoff", 0, tightLoop, "kube/toy/gadgets", "get gadgets.toy ns/a: 500, 11 calls from 10ms to 110ms")
+}
+
+func TestBackoffNamesARequestAgainInALaterStep(t *testing.T) {
+	tl := retries(every(10*ms, 11), nil)
+	tl.At(1*s, tt.Phase(1, trace.FaultPeriod))
+	for _, start := range every(10*ms, 11) {
+		tl.At(1*s+start, tt.Call(ctl, "get", gadgetA, 500, ""))
+	}
+	if findings := check.Backoff(tl.Index(), spec); len(findings) != 2 || findings[1].Step != 1 {
+		t.Fatalf("findings = %+v, want one in each step", findings)
 	}
 }
 
 func TestBackoffRunBreaks(t *testing.T) {
-	widget := func(generation int) trace.Event {
-		return tt.Version(widgetA, "ua", "v", map[string]any{"metadata": map[string]any{"name": "a", "generation": generation}})
-	}
 	other := tt.Ref("toy/gadgets", "ns", "b")
 	slowSuccess := tt.Call(ctl, "get", gadgetA, 200, "")
 	slowSuccess.Call.Latency = time.Second
@@ -90,13 +330,13 @@ func TestBackoffRunBreaks(t *testing.T) {
 		"a slow success":              {slowSuccess, true},
 		"a success on another object": {tt.Call(ctl, "get", other, 200, ""), false},
 		"another status":              {tt.Call(ctl, "get", gadgetA, 503, ""), false},
-		"a new generation":            {widget(2), true},
-		"the same generation":         {widget(1), false},
+		"a new generation":            {widgetGeneration(2), true},
+		"the same generation":         {widgetGeneration(1), false},
 	} {
 		findings := check.Backoff(retries(every(10*ms, 16), func(n int) trace.Event {
 			switch n {
 			case 1:
-				return widget(1)
+				return widgetGeneration(1)
 			case 9:
 				return tc.event
 			}
@@ -110,56 +350,126 @@ func TestBackoffRunBreaks(t *testing.T) {
 
 func TestBackoffSkips(t *testing.T) {
 	for name, edit := range map[string]func(c *trace.Call){
-		"watches":             func(c *trace.Call) { c.Watch = true },
-		"unknown outcomes":    func(c *trace.Call) { c.Injected = trace.DropResponse },
-		"ignored kinds":       func(c *trace.Call) { c.Ref = lease },
-		"another caller":      func(c *trace.Call) { c.Caller = trace.Harness },
-		"successes":           func(c *trace.Call) { c.Status = 200 },
-		"409s on a held kind": func(c *trace.Call) { c.Verb, c.Status = "update", 409 },
+		"watches":          func(c *trace.Call) { c.Watch = true },
+		"unknown outcomes": func(c *trace.Call) { c.Injected = trace.DropResponse },
+		"ignored kinds":    func(c *trace.Call) { c.Ref = lease },
+		"another caller":   func(c *trace.Call) { c.Caller = trace.Harness },
+		"successful reads": func(c *trace.Call) { c.Status = 200 },
 	} {
 		var b tt.Builder
-		b.Add(tt.Run("toy", "widgets"), tt.HoldFault(0, 0, false, tt.Ref("toy/gadgets", "", "")))
-		for _, start := range every(10*ms, 11) {
+		b.Add(tt.Run("toy", "widgets"))
+		// 21 calls 10ms apart fail a run of no-op writes too.
+		for _, start := range every(10*ms, 21) {
 			call := tt.Call(ctl, "get", gadgetA, 500, "")
 			edit(call.Call)
 			b.At(start).Add(call)
 		}
-		b.Add(tt.HoldFault(0, 0, true, tt.Ref("toy/gadgets", "", "")))
 		if findings := check.Backoff(b.Index(), spec); len(findings) != 0 {
 			t.Errorf("Backoff counts %s: %+v", name, findings)
 		}
 	}
 }
 
-func TestBackoffHoldsOnlyA409DuringTheHold(t *testing.T) {
-	var b tt.Builder
-	b.Add(tt.Run("toy", "widgets"), tt.HoldFault(0, 0, false, tt.Ref("toy/gadgets", "", "")))
-	for _, start := range every(10*ms, 11) {
-		b.At(start).Add(tt.Call(ctl, "update", gadgetA, 500, ""))
-	}
-	b.Add(tt.HoldFault(0, 0, true, tt.Ref("toy/gadgets", "", "")))
-	for _, start := range every(10*ms, 11) {
-		b.At(time.Second + start).Add(tt.Call(ctl, "update", gadgetA, 409, ""))
-	}
-	b.Add(tt.HoldFault(0, 1, false, tt.Ref("configmaps", "", "")))
-	if findings := check.Backoff(b.Index(), spec); len(findings) != 1 || len(findings[0].Details) != 2 {
-		t.Fatalf("findings = %+v, want the 500s during the hold and the 409s after it", findings)
+func TestBackoffCountsOtherCallsDuringAHold(t *testing.T) {
+	for name, call := range map[string]func() trace.Event{
+		"a 500 on the held kind":        func() trace.Event { return tt.Call(ctl, "update", gadgetA, 500, "") },
+		"a 409 on another kind":         func() trace.Event { return tt.Call(ctl, "update", widgetA, 409, "") },
+		"a 409 on another group's kind": func() trace.Event { return tt.Call(ctl, "update", tt.Ref("other.toy/gadgets", "ns", "a"), 409, "") },
+		"a no-op write on another kind": func() trace.Event { return tt.Call(ctl, "patch", widgetA, 200, "2") },
+	} {
+		var b tt.Builder
+		b.Add(tt.Run("toy", "widgets"), tt.HoldFault(0, 0, false, tt.Ref("toy/gadgets", "", "")), tt.Version(widgetA, "ua", "2", tt.Object("a")))
+		for _, start := range every(10*ms, 21) {
+			b.At(start).Add(call())
+		}
+		b.Add(tt.HoldFault(0, 0, true, tt.Ref("toy/gadgets", "", "")))
+		if findings := check.Backoff(b.Index(), spec); len(findings) != 1 {
+			t.Errorf("%s: findings = %+v", name, findings)
+		}
 	}
 }
 
-func TestBackoffAllowsA409JustAfterTheHold(t *testing.T) {
+// A trace that stops during a hold records no end for it.
+func TestBackoffSkipsA409DuringAHoldWithNoEnd(t *testing.T) {
+	var b tt.Builder
+	b.Add(tt.Run("toy", "widgets"), tt.HoldFault(0, 0, false, tt.Ref("toy/gadgets", "", "")))
+	for _, start := range every(10*ms, 11) {
+		b.At(start).Add(tt.Call(ctl, "update", gadgetA, 409, ""))
+	}
+	requireNone(t, check.Backoff(b.Index(), spec))
+}
+
+// A holdWatch on Gadgets lasts from 1s to 2s. The controller sends 21 calls
+// 10ms apart, from just after first.
+func TestBackoffAllowsA409OrANoOpWriteOnAHeldKindUntilStableOver4AfterTheHold(t *testing.T) {
 	for name, c := range map[string]struct {
-		after time.Duration
-		finds bool
+		first, latency time.Duration
+		finds          bool
 	}{
-		"within stable/4": {spec.Stable/4 - 200*ms, false},
-		"after stable/4":  {spec.Stable/4 + 10*ms, true},
+		"sent before the hold":                    {1*s - 300*ms, 0, true},
+		"sent during the hold":                    {1*s + 100*ms, 0, false},
+		"sent within stable/4 after it":           {2*s + spec.Stable/4 - 300*ms, 0, false},
+		"sent within stable/4 and answered after": {2*s + spec.Stable/4 - 300*ms, 400 * ms, false},
+		"sent after stable/4":                     {2*s + spec.Stable/4 + 10*ms, 0, true},
+	} {
+		for what, call := range map[string]func() trace.Event{
+			"a 409":         func() trace.Event { return tt.Call(ctl, "update", gadgetA, 409, "") },
+			"a no-op write": func() trace.Event { return tt.Call(ctl, "patch", gadgetA, 200, "2") },
+		} {
+			var tl tt.Timeline
+			tl.At(0, tt.Run("toy", "widgets"), tt.Version(gadgetA, "ug", "2", gadgetBody(false)))
+			tl.At(1*s, tt.HoldFault(0, 0, false, tt.Ref("toy/gadgets", "", "")))
+			tl.At(2*s, tt.HoldFault(0, 0, true, tt.Ref("toy/gadgets", "", "")))
+			for _, start := range every(10*ms, 21) {
+				tl.At(c.first+start+c.latency, sent(call(), c.latency))
+			}
+			if findings := check.Backoff(tl.Index(), spec); (len(findings) > 0) != c.finds {
+				t.Errorf("%s %s: findings = %+v", what, name, findings)
+			}
+		}
+	}
+}
+
+// A holdWatch on Gadgets lasts from 1s to 2s. The controller sends 21 no-op
+// writes 10ms apart. Only the one at a bound of the hold's window is held.
+func TestBackoffAllowsANoOpWriteAtABoundOfTheHold(t *testing.T) {
+	for name, first := range map[string]time.Duration{
+		"the last at the hold's start":     1*s - 200*ms,
+		"the first stable/4 after its end": 2*s + spec.Stable/4,
+	} {
+		var tl tt.Timeline
+		tl.At(0, tt.Run("toy", "widgets"), tt.Version(gadgetA, "ug", "2", gadgetBody(false)))
+		tl.At(1*s, tt.HoldFault(0, 0, false, tt.Ref("toy/gadgets", "", "")))
+		tl.At(2*s, tt.HoldFault(0, 0, true, tt.Ref("toy/gadgets", "", "")))
+		for _, start := range every(10*ms, 21) {
+			tl.At(first-10*ms+start, tt.Call(ctl, "patch", gadgetA, 200, "2"))
+		}
+		if findings := check.Backoff(tl.Index(), spec); len(findings) != 0 {
+			t.Errorf("%s: findings = %+v", name, findings)
+		}
+	}
+}
+
+// TestBackoffCountsAWriteThatDeletesItsObjectAsAChange has the controller
+// write slot a's Gadget 21 times. Each answers at the Gadget's version 2.
+func TestBackoffCountsAWriteThatDeletesItsObjectAsAChange(t *testing.T) {
+	for name, c := range map[string]struct {
+		verb, subresource string
+		held, answered    []string
+		finds             bool
+	}{
+		"an update that empties a deleting object's finalizers": {"update", "", []string{own}, nil, false},
+		"a patch that empties them":                             {"patch", "", []string{own}, nil, false},
+		"an update that keeps them":                             {"update", "", []string{own}, []string{own}, true},
+		"an update of an object without finalizers":             {"update", "", nil, nil, true},
+		"a scale update, whose answer holds no finalizers":      {"update", "scale", []string{own}, nil, true},
 	} {
 		var b tt.Builder
-		b.Add(tt.Run("toy", "widgets"), tt.HoldFault(0, 0, false, tt.Ref("toy/gadgets", "", "")))
-		b.At(time.Second).Add(tt.HoldFault(0, 0, true, tt.Ref("toy/gadgets", "", "")))
-		for _, start := range every(10*ms, 11) {
-			b.At(time.Second + c.after + start).Add(tt.Call(ctl, "update", gadgetA, 409, ""))
+		b.Add(tt.Run("toy", "widgets"), tt.Version(gadgetA, "ug", "2", gadgetBody(c.held != nil, c.held...)))
+		for _, start := range every(10*ms, 21) {
+			w := write(ctl, c.verb, gadgetA, "2", c.answered...)
+			w.Call.Subresource = c.subresource
+			b.At(start).Add(w)
 		}
 		if findings := check.Backoff(b.Index(), spec); (len(findings) > 0) != c.finds {
 			t.Errorf("%s: findings = %+v", name, findings)
@@ -232,6 +542,23 @@ func TestBackoffPassesOneDefaultBackoffPerCROnASharedRequest(t *testing.T) {
 		requireNone(t, check.Backoff(limited([]trace.Ref{widgetA, widgetB}, offset, 14).Index(), spec))
 		requireNone(t, check.Backoff(limited([]trace.Ref{widgetA, widgetB, widgetC}, offset, 14).Index(), spec))
 	}
+}
+
+// A CR deleted during a run still counts, since its retries joined the run.
+func TestBackoffCountsACRDeletedDuringTheRun(t *testing.T) {
+	var tl tt.Timeline
+	tl.At(0, tt.Run("toy", "widgets"))
+	for n, cr := range []trace.Ref{widgetA, widgetB} {
+		tl.At(0, tt.Version(cr, "u"+cr.Name, "1", generation(cr.Name, 1)))
+		limiter := workqueue.DefaultTypedControllerRateLimiter[string]()
+		at := 1*s + time.Duration(n)*3*ms
+		for range 6 - n {
+			tl.At(at, tt.Call(ctl, "get", gadgetA, 500, ""))
+			at += limiter.When(cr.Name)
+		}
+	}
+	tl.At(1*s+80*ms, tt.Deleted(widgetB, "ub", "2", generation("b", 1)))
+	requireNone(t, check.Backoff(tl.Index(), spec))
 }
 
 func TestBackoffFailsATightLoopWhileSeveralCRsLive(t *testing.T) {
