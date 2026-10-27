@@ -2,6 +2,7 @@ package check_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -607,6 +608,46 @@ func TestJudgeNotesAHoldWatchOnlyWithoutAWatchOfItsKind(t *testing.T) {
 		}
 		if slices.ContainsFunc(notes, func(n string) bool { return strings.Contains(n, "picked no request") }) {
 			t.Errorf("%s: notes = %q, want no picked-no-request note", name, notes)
+		}
+	}
+}
+
+// A role that fails on every resource the controller created gets a note.
+// The harness's objects and ignored kinds, such as Events, do not count.
+func TestJudgeNotesARoleThatFailedOnEveryResource(t *testing.T) {
+	labelled := func(name string) map[string]any {
+		return map[string]any{"metadata": map[string]any{"name": name, "labels": map[string]any{"role": name}}}
+	}
+	const note = `kube: the role failed on every resource the controller created: evaluating "self.metadata.labels['role']": no such key: labels`
+	for name, c := range map[string]struct {
+		labelled []bool
+		noted    bool
+	}{
+		"fails on every child": {[]bool{false, false}, true},
+		"works on one child":   {[]bool{false, true}, false},
+	} {
+		r := newRun(1)
+		r.Spec.Systems = []trace.System{{Name: "kube", Role: "self.metadata.labels['role']"}}
+		r.Begin()
+		r.Create(trace.Harness, widgetA, labelled("a"))
+		r.Act("create", "a", &widgetA)
+		r.Create(ctl, tt.Ref("events", "ns", "a.1"), labelled("a.1"))
+		for n, labels := range c.labelled {
+			child := fmt.Sprintf("a-%d", n)
+			body := tt.Object(child)
+			if labels {
+				body = labelled(child)
+			}
+			r.Create(ctl, tt.Ref("configmaps", "ns", child), tt.OwnedBy(body, r.UID(widgetA), true))
+		}
+		r.Ready(widgetA).EndFaults().Settle()
+		ix := r.Index()
+		spec, err := check.SpecFor(nil, ix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if notes := check.Judge(ix, spec).Notes; slices.Contains(notes, note) != c.noted || len(notes) > 1 {
+			t.Errorf("%s: notes = %q, want only %q: %v", name, notes, note, c.noted)
 		}
 	}
 }

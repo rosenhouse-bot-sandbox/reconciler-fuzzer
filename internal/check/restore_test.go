@@ -36,6 +36,22 @@ func TestRestoreFailsADamagedResourceThatStaysGone(t *testing.T) {
 	requireFinding(t, restore(t, r), "Restore", 1, "did not restore damaged resources", "kube/configmaps", "configmaps ns/a-0 (rule 1, slot a)")
 }
 
+// A damaged resource recreated under another name counts when the kube
+// role gives it the damaged one's role.
+func TestRestoreTakesARenamedResourceInTheDamagedOnesRole(t *testing.T) {
+	for _, role := range []string{"", "self.metadata.name.substring(self.metadata.name.lastIndexOf('-') + 1)"} {
+		r := damageA(twoCRs())
+		r.Spec.Systems = []trace.System{{Name: "kube", Role: role}}
+		r.Create(ctl, tt.Ref("configmaps", "ns", "a-data-0"), tt.OwnedBy(tt.Object("a-data-0"), r.UID(widgetA), true))
+		r.Settle()
+		if role == "" {
+			requireFinding(t, restore(t, r), "Restore", 1, "did not restore damaged resources", "kube/configmaps", "configmaps ns/a-0 (rule 1, slot a)")
+		} else {
+			requireNone(t, restore(t, r))
+		}
+	}
+}
+
 func TestRestoreJudgesADamagedCROnExistenceOnly(t *testing.T) {
 	r := damageA(twoCRs())
 	r.Create(ctl, childA, tt.OwnedBy(map[string]any{"metadata": map[string]any{"name": "a-0"}, "data": "new"}, r.UID(widgetA), true))

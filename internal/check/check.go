@@ -344,7 +344,34 @@ func Judge(ix *trace.Index, s Spec) Report {
 	findings = append(findings, Finalizers(ix, s)...)
 	findings = append(findings, Property(ix, s)...)
 	notes = append(append(append(actionErrors(ix), unpicked(ix, s)...), notes...), unmapped(ix)...)
-	return Report{Findings: findings, Notes: notes}
+	return Report{Findings: findings, Notes: append(notes, failedRoles(ix, s)...)}
+}
+
+// failedRoles notes each system whose role CEL failed on every resource the
+// controller created, with the first error.
+func failedRoles(ix *trace.Index, s Spec) []string {
+	w := owner.New(ix, s.Owners)
+	failed, worked := map[string]error{}, map[string]bool{}
+	var systems []string
+	for _, i := range w.All() {
+		if i.Creator != trace.Controller || trace.Ignored(trace.Call{Ref: i.Ref}) {
+			continue
+		}
+		switch err := w.RoleError(i); {
+		case err == nil:
+			worked[i.Ref.System] = true
+		case failed[i.Ref.System] == nil:
+			failed[i.Ref.System] = err
+			systems = append(systems, i.Ref.System)
+		}
+	}
+	var notes []string
+	for _, system := range systems {
+		if !worked[system] {
+			notes = append(notes, fmt.Sprintf("%s: the role failed on every resource the controller created: %v", system, failed[system]))
+		}
+	}
+	return notes
 }
 
 // unmapped notes each distinct request of the controller that its system's

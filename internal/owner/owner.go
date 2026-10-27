@@ -238,6 +238,8 @@ type World struct {
 	versions  map[string][]trace.Event
 	slots     map[string]string
 	decoded   map[decodedKey]map[string]any
+	// roleErrors maps an instance's UID to its role CEL's error.
+	roleErrors map[string]error
 }
 
 type decodedKey struct {
@@ -247,7 +249,8 @@ type decodedKey struct {
 
 // New indexes every instance in ix.
 func New(ix *trace.Index, rules Rules) *World {
-	w := &World{rules: rules, byUID: map[string]int{}, versions: map[string][]trace.Event{}, slots: map[string]string{}, decoded: map[decodedKey]map[string]any{}}
+	w := &World{rules: rules, byUID: map[string]int{}, versions: map[string][]trace.Event{}, slots: map[string]string{}, decoded: map[decodedKey]map[string]any{},
+		roleErrors: map[string]error{}}
 	if run, ok := ix.Run(); ok {
 		for _, p := range run.Primaries {
 			w.listed = append(w.listed, p.Kind)
@@ -274,7 +277,10 @@ func New(ix *trace.Index, rules Rules) *World {
 		if c, found := creates[i.UID]; found && names(c, i.Ref) {
 			i.Creator = c.Caller
 		}
-		i.Role = w.role(w.versions[i.UID][0].Version)
+		var err error
+		if i.Role, err = w.role(w.versions[i.UID][0].Version); err != nil {
+			w.roleErrors[i.UID] = err
+		}
 	}
 	for _, e := range actions {
 		if i, found := w.Latest(*e.Action.Ref, e.At); found {
@@ -323,26 +329,31 @@ func names(c trace.Call, ref trace.Ref) bool {
 	return c.Ref == ref && c.ResultName == ref.Name
 }
 
-// role is the system's role CEL over v. Without one, or where it fails or
-// yields "", a kube object's role is its generateName or name, and a fake's
-// is empty.
-func (w *World) role(v *trace.Version) string {
+// role is the system's role CEL over v, and the CEL's error. Without one, or
+// where it fails or yields "", a kube object's role is its generateName or
+// name, and a fake's is empty.
+func (w *World) role(v *trace.Version) (string, error) {
 	var self map[string]any
 	_ = json.Unmarshal(v.Body, &self)
+	var err error
 	if eval := w.rules.Roles[v.Ref.System]; eval != nil {
-		if role, err := eval(self); err == nil && role != "" {
-			return role
+		var role string
+		if role, err = eval(self); err == nil && role != "" {
+			return role, nil
 		}
 	}
 	if v.Ref.System != "kube" {
-		return ""
+		return "", err
 	}
 	metadata, _ := self["metadata"].(map[string]any)
 	if generateName, _ := metadata["generateName"].(string); generateName != "" {
-		return generateName
+		return generateName, err
 	}
-	return v.Ref.Name
+	return v.Ref.Name, err
 }
+
+// RoleError is the error of the instance's role CEL, or nil.
+func (w *World) RoleError(i Instance) error { return w.roleErrors[i.UID] }
 
 // Latest is the last instance of ref created at or before t, gone or not.
 func (w *World) Latest(ref trace.Ref, t time.Duration) (Instance, bool) {
