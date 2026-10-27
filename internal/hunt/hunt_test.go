@@ -59,20 +59,25 @@ func always(findings ...check.Finding) func(string, *plan.Plan) []check.Finding 
 	return func(string, *plan.Plan) []check.Finding { return findings }
 }
 
-// cancelAt returns a context and a RunPlan that runs plans with fake. The
-// run into a directory named dir writes it, then cancels the context and
+// cancelWhen returns a context and a RunPlan that runs plans with fake. A run
+// into a directory that cut accepts writes it, then cancels the context and
 // returns its error.
-func cancelAt(t *testing.T, fake *fakeRun, dir string) (context.Context, RunPlan) {
+func cancelWhen(t *testing.T, fake *fakeRun, cut func(out string) bool) (context.Context, RunPlan) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	return ctx, func(ctx context.Context, p *plan.Plan, out string) (check.Report, error) {
 		report, err := fake.run(ctx, p, out)
-		if filepath.Base(out) == dir {
+		if cut(out) {
 			cancel()
 			return check.Report{}, ctx.Err()
 		}
 		return report, err
 	}
+}
+
+// cancelAt is cancelWhen for the run into a directory named dir.
+func cancelAt(t *testing.T, fake *fakeRun, dir string) (context.Context, RunPlan) {
+	return cancelWhen(t, fake, func(out string) bool { return filepath.Base(out) == dir })
 }
 
 // wantKept fails the test for each path under out that exists when kept
@@ -396,6 +401,7 @@ func TestACancelCutsShortEachFindingLeftToShrink(t *testing.T) {
 		case "seed-1":
 			return []check.Finding{clean, unreproduced, unique}
 		case "seed-1/replay-1":
+			// A finding that one replay reproduced still waits for a shrink.
 			return []check.Finding{clean, unique}
 		}
 		return []check.Finding{clean}
@@ -411,20 +417,15 @@ func TestACancelCutsShortEachFindingLeftToShrink(t *testing.T) {
 	}
 }
 
-// The cancel comes during the second finding's shrink.
+// A cancel during the second finding's shrink cuts short only that finding.
 func TestACancelDoesNotCutShortAShrinkThatFinished(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	fake := &fakeRun{out: t.TempDir(), finds: always(clean, unique)}
 	first, second := filepath.Join(fake.out, "seed-1", "shrunk.json"), filepath.Join(fake.out, "seed-1", "shrunk-2.json")
-	found, err := Hunt(ctx, Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1}), Out: fake.out,
-		Run: func(ctx context.Context, p *plan.Plan, out string) (check.Report, error) {
-			if _, err := os.Stat(first); err == nil {
-				cancel()
-				return check.Report{}, ctx.Err()
-			}
-			return fake.run(ctx, p, out)
-		}})
+	ctx, run := cancelWhen(t, fake, func(string) bool {
+		_, err := os.Stat(first)
+		return err == nil
+	})
+	found, err := Hunt(ctx, Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1}), Out: fake.out, Run: run})
 	summary, _ := os.ReadFile(filepath.Join(fake.out, "summary.md"))
 	if !errors.Is(err, context.Canceled) || len(found) != 2 || found[0].CutShort || !found[1].CutShort ||
 		!strings.Contains(string(summary), "| 1 | Clean | a ConfigMap outlives its Widget | 5/5 | "+first+" |") ||
@@ -486,6 +487,20 @@ func TestShrinkPlanRunsReplaysAndShrinksAPlanFile(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(out, "summary.md")); err != nil {
 		t.Error(err)
+	}
+}
+
+func TestShrinkPlanWithoutFindingsSaysSo(t *testing.T) {
+	out := t.TempDir()
+	path := filepath.Join(t.TempDir(), "plan.json")
+	if err := plan.Save(path, parsePlan(t, `{"steps":[{"actions":[`+create+`]}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeRun{out: out, finds: always()}
+	found, err := ShrinkPlan(context.Background(), ShrinkOptions{ConfigPath: toyConfig, PlanPath: path, Out: out, Run: fake.run})
+	summary, _ := os.ReadFile(filepath.Join(out, "summary.md"))
+	if err != nil || len(found) != 0 || string(summary) != "No findings over 1 plan.\n" {
+		t.Errorf("ShrinkPlan = %+v, %v, and wrote %q.", found, err, summary)
 	}
 }
 

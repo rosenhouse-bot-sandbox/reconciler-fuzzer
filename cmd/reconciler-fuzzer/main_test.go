@@ -246,8 +246,8 @@ func TestShrinkExits2WhenItsPlanFailsToRun(t *testing.T) {
 }
 
 func TestShrinkExits0WhenItsPlanFindsNothing(t *testing.T) {
-	runPlan = func(_ context.Context, o run.Options) (check.Report, error) {
-		return check.Report{}, os.MkdirAll(o.Out, 0o755)
+	runPlan = func(context.Context, run.Options) (check.Report, error) {
+		return check.Report{}, nil
 	}
 	t.Cleanup(func() { runPlan = run.Run })
 	code, stdout, stderr := cliOutput("shrink", "--config", toyConfig, "--plan", "../../targets/toy-widget/plans/b13.json", "--out", t.TempDir())
