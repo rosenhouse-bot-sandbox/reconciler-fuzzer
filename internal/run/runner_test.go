@@ -1154,6 +1154,23 @@ func TestExecuteHonoursOffsetsAndPeriod(t *testing.T) {
 	}
 }
 
+func TestExecuteRecordsEachStepsPeriod(t *testing.T) {
+	f := newFixture(t, nil)
+	p := &plan.Plan{Steps: []plan.Step{
+		{Period: plan.Duration(300 * time.Millisecond), Actions: []plan.Action{{Do: plan.Create, Slot: "a", Object: widget("w")}}},
+		{Actions: []plan.Action{{Do: plan.Delete, Slot: "a"}}},
+	}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	for step, want := range []time.Duration{300 * time.Millisecond, 0} {
+		start, found := find(f.rec.Events(), step, trace.FaultPeriod)
+		if !found || start.Phase.Period == nil || *start.Phase.Period != want {
+			t.Errorf("step %d's fault period phase = %+v, want period %v", step, start.Phase, want)
+		}
+	}
+}
+
 func TestExecuteEndsFaultsBeforeEndFaults(t *testing.T) {
 	f := newFixture(t, nil)
 	var recordedEndFaults []bool
@@ -1432,10 +1449,11 @@ func TestExecuteRecordsADamageOfAGoneObjectAsUnmatched(t *testing.T) {
 	var got []string
 	for _, e := range f.rec.Events() {
 		if a := e.Action; a != nil && a.Do != "restart" {
-			got = append(got, fmt.Sprintf("%s ref=%v errored=%v", a.Do, a.Ref != nil, a.Error != ""))
+			got = append(got, fmt.Sprintf("%s ref=%v error=%q", a.Do, a.Ref != nil, a.Error))
 		}
 	}
-	want := []string{"create ref=true errored=false", "delete ref=true errored=false", "damage ref=false errored=true"}
+	want := []string{`create ref=true error=""`, `delete ref=true error=""`,
+		`damage ref=false error="no instance matches resource=configmaps: the object was gone or replaced before the action"`}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("actions = %q, want %q", got, want)
 	}

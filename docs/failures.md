@@ -48,7 +48,17 @@ not decide: an action that failed, a fault that picked no request, a
 step the trace ended too early to judge, a CR still being deleted that a
 `stop` did not wait for, or an unmapped request. Notes do
 not fail a run. A fault that picked no request tested nothing, so a plan
-with such notes may need a different fault.
+with such notes may need a different fault. A step without a `period`
+ends its faults by the time its last action returns. Such a fault's note
+says how long the fault lasted, unless the fault ended while the
+controller was down, or it is a `holdWatch` of a kind that the controller
+does not watch later in that step.
+
+The note of an action whose target matches nothing names the target. It
+then says what the action's slot holds, or names up to five live objects
+of the target's kind, in the slot if one is set. It names only objects
+that the action could pick: for `damage`, ones the controller made, and
+for `changeFixture`, ones the harness made.
 
 `the slot's name is still taken after the create waited 37s` means that
 a create gave up waiting until its slot's previous CR no longer existed.

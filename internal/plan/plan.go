@@ -87,7 +87,8 @@ const Foreground Propagation = "Foreground"
 
 // Target selects one object for damage or changeFixture. It is resolved
 // when the action runs. An empty field matches any value. Resource is
-// required on kube.
+// required on kube. Group is empty on other systems, whose objects have
+// none.
 type Target struct {
 	// System defaults to "kube".
 	System   string `json:"system,omitempty"`
@@ -100,6 +101,22 @@ type Target struct {
 	// Nth picks the nth match in creation order, counting from 1. Zero
 	// picks the first.
 	Nth int `json:"nth,omitempty"`
+}
+
+// String names the target's set fields, as "resource=secrets name=token".
+func (t Target) String() string {
+	var set []string
+	for _, field := range []struct{ name, value string }{
+		{"system", t.System}, {"group", t.Group}, {"resource", t.Resource}, {"namespace", t.Namespace}, {"name", t.Name}, {"role", t.Role},
+	} {
+		if field.value != "" {
+			set = append(set, field.name+"="+field.value)
+		}
+	}
+	if t.Nth > 0 {
+		set = append(set, fmt.Sprintf("nth=%d", t.Nth))
+	}
+	return strings.Join(set, " ")
 }
 
 // Fault starts with the fault period and ends with it, or when a create's
@@ -329,8 +346,11 @@ func (a Action) validateChange(names map[string]string) error {
 	if err := validSystem(a.Target.System); err != nil {
 		return err
 	}
-	if onKube(a.Target.System) && a.Target.Resource == "" {
+	switch kube := onKube(a.Target.System); {
+	case kube && a.Target.Resource == "":
 		return fmt.Errorf("%s needs a target with a resource", a.Do)
+	case !kube && a.Target.Group != "":
+		return fmt.Errorf("%s target on %s takes no group, since only kube objects have one", a.Do, a.Target.System)
 	}
 	if a.Patch != nil && !isObject(a.Patch) {
 		return fmt.Errorf("%s needs a JSON object patch", a.Do)
@@ -405,7 +425,8 @@ func isObject(raw json.RawMessage) bool {
 // Validate requires exactly one effect, an error code from 400 to 599, a
 // system name and a non-negative nth. A model fault takes no verb,
 // subresource or nth, and on kube needs a resource. A holdWatch acts on
-// kube, needs a resource and takes only a group besides.
+// kube, needs a resource and takes only a group besides. Only a fault on
+// kube takes a group.
 func (f Fault) Validate() error {
 	effects := 0
 	for _, set := range []bool{f.Error != nil, f.Delay != nil, f.Drop, f.DropResponse, f.KillAfter, f.Stuck, f.SlowDelete, f.HoldWatch} {
@@ -425,6 +446,9 @@ func (f Fault) Validate() error {
 		case f.Match.Verb != "" || f.Match.Subresource != "" || f.Match.Name != "" || f.Nth != 0:
 			return errors.New("holdWatch takes no verb, subresource, name or nth")
 		}
+	}
+	if !onKube(f.System) && f.Match.Group != "" {
+		return fmt.Errorf("a fault on %s takes no group, since only kube objects have one", f.System)
 	}
 	if f.ModelFault() {
 		switch effect := f.Effect(); {

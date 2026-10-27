@@ -190,22 +190,22 @@ slot wait restarts it, §9), `stop` (for good), `damage` (of an instance the
 controller created) or `changeFixture` (of a fixture, on any system). After a
 `stop`, actions may only `delete` and `changeFixture`. `plan.go` documents each.
 
-A `target` has `system` (default `kube`), `group`, `resource`, `namespace`,
-`name`, `role` and `nth` (default 1). Empty fields match anything.
+A `target` has `system` (default `kube`), `group` (`kube` only), `resource`,
+`namespace`, `name`, `role` and `nth` (default 1). Empty fields match anything.
 `owner.World.Select` resolves it when the action runs: the `nth` live instance,
 in creation order, that the controller (for `damage`) or the harness created,
 whose root (§11) holds the slot's newest live CR when a slot is set. A target
-that matches nothing records the error `no instance matches`, which names the
-slot's kind when the slot holds an object that is not a CR.
+that matches nothing records `no instance matches`, the target, and what the
+slot holds or up to five live instances of its kind that the creator made.
 
 Actions run in order, each at its optional `at` offset. A fault sets one
 effect: a request fault or `holdWatch` (§5), or a model fault (§7) with no
 verb, subresource or `nth`. A fault's `system` defaults to `kube`; the runner
 refuses an unknown one. On `kube`, a model fault and a target need a
-`resource`; on a fake, an empty one matches every collection. `plan.Load`
-decodes strictly and validates each action's slot and fields (`plan.go`). Two
-slots' CRs clash only with equal group, kind, namespace and name. `run.Run`
-refuses a plan that creates an object of an unlisted kind (`ValidateKinds`).
+`resource`; on a fake, an empty one matches every collection, and a fault
+takes no `group`. `plan.Load` decodes strictly and validates the plan
+(`plan.go`). Two slots' CRs clash only with equal group, kind, namespace and
+name. `run.Run` refuses a create of an unlisted kind (`ValidateKinds`).
 
 ## 9. Step runner
 

@@ -283,15 +283,16 @@ to the first create, such as `{"actions": [...], "period": "1s", "faults": [{"sy
 that damages a resource, `{"do": "damage", "slot": "a", "target": {"system": "cloud"}}`. With a
 Vault fixture, add a step that writes a new version, `{"do": "changeFixture", "target":
 {"system": "vault", "resource": "secret", "name": "token"}, "patch": {"value": "new"}}`. A step
-that deletes and creates slot `a` with `"faults": [{"match": {"resource": "secrets"},
-"holdWatch": true}]` tests how the controller acts on a stale cache. A last step
+that deletes and creates slot `a` with `"period": "2s", "faults": [{"match": {"resource":
+"secrets"}, "holdWatch": true}]` tests how the controller acts on a stale cache. A last step
 `{"actions": [{"do": "delete", "slot": "a"}, {"do": "stop"}]}` tests an uninstall. A report
-note that the `holdWatch` held no watch means the controller watches no such kind, or the match
-is wrong.
-A note that a `stuck` fault held no object means no object matched, or the API server refused
-each stuck write. `trace.jsonl` records a refused write as a model call with status 422. The
-API server refuses every stuck write to a done Job. Otherwise, check `stuckStatus:` against the
-kind's status schema.
+note that the `holdWatch` held no watch means the controller watches no such kind, the match
+is wrong, or the hold ended before the controller opened its watch.
+A note that a `stuck` fault held no object means no object matched, the API server refused
+each stuck write, or the fault ended too soon. `trace.jsonl` records a refused write as a model
+call with status 422. The API server refuses every stuck write to a done Job. Otherwise, check
+`stuckStatus:` against the kind's status schema. A fault note that says how long the fault
+lasted means that a `period` could have kept the fault on.
 `<module>/targets/*/plans/` hold more.
 Run it from the config's directory, in the background, and act on the exit code:
 

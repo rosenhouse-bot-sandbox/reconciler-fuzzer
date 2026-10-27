@@ -103,6 +103,10 @@ func TestSelectOnAFakeWithNoResourceMatchesEveryCollection(t *testing.T) {
 			t.Errorf("Select(%+v) = %+v, %v; want %q", c.target, ref, err, c.want)
 		}
 	}
+	_, err := w.Select(ctl, plan.Target{System: "cloud", Nth: 3}, "", 5*s)
+	if want := "no instance matches system=cloud nth=3: the controller's live cloud objects are buckets/b1, disks/d1"; err == nil || err.Error() != want {
+		t.Errorf("Select of a third cloud object = %v, want %q", err, want)
+	}
 }
 
 func TestSourcesAndSystemsOfAFake(t *testing.T) {

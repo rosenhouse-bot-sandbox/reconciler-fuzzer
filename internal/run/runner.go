@@ -108,7 +108,8 @@ func (e *execution) phase(step int, name trace.PhaseName) {
 
 func (e *execution) step(ctx context.Context, n int, step plan.Step) error {
 	s := &stepRun{execution: e, n: n, step: step, start: time.Now()}
-	e.phase(n, trace.FaultPeriod)
+	period := time.Duration(step.Period)
+	e.Recorder.Record(trace.Event{Phase: &trace.Phase{Step: n, Name: trace.FaultPeriod, Period: &period}})
 	if err := e.Process.Supervise(false); err != nil {
 		return err
 	}
@@ -429,7 +430,7 @@ func (e *execution) act(ctx context.Context, a plan.Action, s *stepRun) (*trace.
 		}
 		err = actor.Delete(ctx, ref, "")
 		if errors.Is(err, system.ErrGone) {
-			return nil, fmt.Errorf("%w: %w", owner.ErrNoMatch, err)
+			return nil, fmt.Errorf("%w %s: %w", owner.ErrNoMatch, a.Target, err)
 		}
 		return &ref, err
 	}
