@@ -10,12 +10,11 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 )
 
-// Backoff fails a failing or no-op request that the controller repeats in a
-// tight loop. DESIGN.md §12 defines it.
+// Backoff fails a futile request that the controller repeats in a tight loop.
+// DESIGN.md §12 defines it.
 func Backoff(ix *trace.Index, s Spec) []Finding {
 	runs := map[request]*run{}
-	found := map[findingKey]*Finding{}
-	named := map[namedRequest]bool{}
+	found := map[findingKey]*loop{}
 	var order []findingKey
 	steps := ix.Steps()
 	holds := holdWatches(ix, s.Stable)
@@ -34,56 +33,71 @@ func Backoff(ix *trace.Index, s Spec) []Finding {
 		// A create's object is the name it requests.
 		object.Name = cmp.Or(object.Name, c.RequestName)
 		r := request{c.Ref.System, c.Verb, object, c.Subresource, c.Status}
-		futile := !succeeded(*c) || trace.Mutating(c.Verb) && !ix.Changed(e) && !emptiedFinalizers(ix, *c)
+		isFutile := futile(ix, e)
 		if succeeded(*c) {
 			// A success ends each run of its verb, object and subresource
 			// that it does not join.
 			for key := range runs {
-				if key.object == r.object && key.verb == r.verb && key.subresource == r.subresource && (key != r || !futile) {
+				if key.object == r.object && key.verb == r.verb && key.subresource == r.subresource && (key != r || !isFutile) {
 					delete(runs, key)
 				}
 			}
 		}
-		// A held kind's stale cache gives 409s, and writes that the server
-		// already holds.
-		if !futile || (c.Status == 409 || succeeded(*c)) && holds(c.Ref, start) {
+		if !isFutile {
+			continue
+		}
+		// A held kind's stale cache causes 409s and no-op writes.
+		if (c.Status == 409 || succeeded(*c)) && holds(c.Ref, start) {
 			continue
 		}
 		rn := runs[r]
 		if rn == nil || start-rn.last >= tightGap {
-			rn = &run{first: start}
+			rn = &run{request: r, first: start}
 			runs[r] = rn
 		}
 		rn.last = start
 		rn.calls++
-		if rn.calls <= tightCalls*max(1, crsLive(w, rn.first, start)) {
-			continue
-		}
-		summary := tightLoop
+		summary, calls := tightLoop, tightCalls
 		if succeeded(*c) {
-			summary = noOpLoop
+			summary, calls = noOpLoop, noOpCalls
+		}
+		if rn.named || rn.calls <= calls*max(1, crsLive(w, rn.first, start)) {
+			continue
 		}
 		key := findingKey{stepAt(steps, start), summary, kind(c.Ref)}
-		if named[namedRequest{key, r}] {
-			continue
-		}
-		named[namedRequest{key, r}] = true
-		if found[key] == nil {
-			found[key] = &Finding{Check: "Backoff", Step: key.step, At: e.At, Summary: summary, Kind: key.kind}
+		l := found[key]
+		if l == nil {
+			l = &loop{Finding: Finding{Check: "Backoff", Step: key.step, At: e.At, Summary: summary, Kind: key.kind}}
+			found[key] = l
 			order = append(order, key)
 		}
-		f := found[key]
-		what := describe(r.object)
-		if r.subresource != "" {
-			what += "/" + r.subresource
+		// A finding names each request once.
+		if !slices.ContainsFunc(l.runs, func(named *run) bool { return named.request == r }) {
+			rn.named = true
+			l.runs = append(l.runs, rn)
 		}
-		f.Details = append(f.Details, fmt.Sprintf("%s %s: %d, %d calls from %v to %v", c.Verb, what, c.Status, rn.calls, rn.first, start))
 	}
 	findings := make([]Finding, len(order))
 	for n, key := range order {
-		findings[n] = *found[key]
+		l := found[key]
+		for _, rn := range l.runs {
+			l.Details = append(l.Details, rn.detail())
+		}
+		findings[n] = l.Finding
 	}
 	return findings
+}
+
+// futile says whether e, a controller call, failed, or wrote and changed
+// nothing. An update that empties a deleting object's finalizers changes it,
+// since the API server deletes it. A kube deletecollection counts as a change,
+// since its answer names no object.
+func futile(ix *trace.Index, e trace.Event) bool {
+	c := *e.Call
+	if !succeeded(c) {
+		return true
+	}
+	return trace.Mutating(c.Verb) && !ix.Changed(e) && !emptiedFinalizers(ix, c)
 }
 
 // emptiedFinalizers says whether c answered with no finalizers at a version
@@ -127,8 +141,11 @@ func ownedByAnother(w *owner.World, ref trace.Ref, cr string, t time.Duration) b
 const (
 	tightLoop = "retried a failing request in a tight loop"
 	noOpLoop  = "repeated a no-op write in a tight loop"
-	// A run fails with more than tightCalls calls per CR live.
+	// A run of failing calls fails with more than tightCalls calls per CR
+	// live. A run of no-op writes fails with more than noOpCalls, since a
+	// reconcile may repeat a write.
 	tightCalls = 10
+	noOpCalls  = 20
 	tightGap   = 100 * time.Millisecond
 )
 
@@ -142,14 +159,25 @@ type request struct {
 
 // run counts a request's futile calls, each under tightGap after the last.
 type run struct {
+	request
 	first, last time.Duration
 	calls       int
+	// named says whether a finding names the run.
+	named bool
 }
 
-// namedRequest is a request that a finding names.
-type namedRequest struct {
-	findingKey
-	request
+func (rn *run) detail() string {
+	what := describe(rn.object)
+	if rn.subresource != "" {
+		what += "/" + rn.subresource
+	}
+	return fmt.Sprintf("%s %s: %d, %d calls from %v to %v", rn.verb, what, rn.status, rn.calls, rn.first, rn.last)
+}
+
+// loop is a Backoff finding and the runs it names.
+type loop struct {
+	Finding
+	runs []*run
 }
 
 // backoffEvents returns, in time order, the controller's judged calls that
