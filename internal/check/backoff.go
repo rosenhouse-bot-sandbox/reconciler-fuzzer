@@ -13,7 +13,7 @@ import (
 // Backoff fails a failing or no-op request that the controller repeats in a
 // tight loop. DESIGN.md §12 defines it.
 func Backoff(ix *trace.Index, s Spec) []Finding {
-	runs := map[request][]time.Duration{}
+	runs := map[request]*run{}
 	found := map[findingKey]*Finding{}
 	var order []findingKey
 	steps := ix.Steps()
@@ -32,22 +32,29 @@ func Backoff(ix *trace.Index, s Spec) []Finding {
 		object := c.Object()
 		object.Name = cmp.Or(object.Name, c.RequestName)
 		r := request{c.Ref.System, c.Verb, object, c.Subresource, c.Status}
-		if !futile(ix, e) {
+		futile := !succeeded(*c) || trace.Mutating(c.Verb) && !ix.Changed(e)
+		if succeeded(*c) {
+			// A success ends each run of its request that it does not join.
 			for key := range runs {
-				if key.object == r.object && key.verb == r.verb && key.subresource == r.subresource {
+				if key.object == r.object && key.verb == r.verb && key.subresource == r.subresource && (key != r || !futile) {
 					delete(runs, key)
 				}
 			}
+		}
+		if !futile || c.Status == 409 && holds(c.Ref, start) {
 			continue
 		}
-		if c.Status == 409 && holds(c.Ref, start) {
+		rn := runs[r]
+		if rn == nil {
+			rn = &run{}
+			runs[r] = rn
+		}
+		rn.starts = append(rn.starts, start)
+		n := max(1, crsLive(w, rn.starts[0], start))
+		if rn.reported || len(rn.starts) < tightRepeats*2*n+1 || !tight(rn.starts[len(rn.starts)-tightRepeats*n-1:]) {
 			continue
 		}
-		runs[r] = append(runs[r], start)
-		n := max(1, crsLive(w, runs[r][0], start))
-		if len(runs[r]) != tightRepeats*2*n+1 || !tight(runs[r][tightRepeats*n:]) {
-			continue
-		}
+		rn.reported = true
 		summary := tightLoop
 		if succeeded(*c) {
 			summary = noOpLoop
@@ -62,18 +69,13 @@ func Backoff(ix *trace.Index, s Spec) []Finding {
 		if r.subresource != "" {
 			what += "/" + r.subresource
 		}
-		f.Details = append(f.Details, fmt.Sprintf("%s %s: %d, %d calls from %v to %v", c.Verb, what, c.Status, len(runs[r]), runs[r][0], start))
+		f.Details = append(f.Details, fmt.Sprintf("%s %s: %d, %d calls from %v to %v", c.Verb, what, c.Status, len(rn.starts), rn.starts[0], start))
 	}
 	findings := make([]Finding, len(order))
 	for n, key := range order {
 		findings[n] = *found[key]
 	}
 	return findings
-}
-
-// futile reports whether e, a call, failed or wrote nothing new.
-func futile(ix *trace.Index, e trace.Event) bool {
-	return !succeeded(*e.Call) || trace.Mutating(e.Call.Verb) && !ix.Changed(e)
 }
 
 // crsLive counts the CRs live at some time in [from, to]. Each CR may back
@@ -117,6 +119,11 @@ type request struct {
 	object       trace.Ref
 	subresource  string
 	status       int
+}
+
+type run struct {
+	starts   []time.Duration
+	reported bool
 }
 
 func tight(starts []time.Duration) bool {

@@ -87,6 +87,9 @@ func TestBackoffFailsATightLoopOfNoOpDeletes(t *testing.T) {
 		t.Fatalf("Want one Backoff finding for 21 no-op deletes 10ms apart, got %+v.", findings)
 	}
 	requireFinding(t, findings, "Backoff", 0, noOpLoop, "kube/toy/gadgets", "delete gadgets.toy ns/a: 200, 11 calls")
+	if details := findings[0].Details; len(details) != 1 {
+		t.Errorf("details = %q, want one line for the run", details)
+	}
 	requireNone(t, check.Backoff(noOpDeletes(every(10*ms, 10), nil).Index(), spec))
 }
 
@@ -130,25 +133,25 @@ func TestBackoffNoOpRunBreaks(t *testing.T) {
 	}
 }
 
-func TestBackoffRunOfFailingWritesBreaksOnlyOnAChange(t *testing.T) {
-	for name, tc := range map[string]struct {
-		resultRV string
-		breaks   bool
-	}{
-		"a write that changes the object": {"3", true},
-		"a no-op write":                   {"2", false},
-	} {
-		tl := repeat(tt.Call(ctl, "update", gadgetA, 500, ""), every(10*ms, 16), func(n int) trace.Event {
-			if n == 9 {
-				return tt.Call(ctl, "update", gadgetA, 200, tc.resultRV)
-			}
-			return tt.Start(1)
-		})
-		tl.At(0, tt.Version(gadgetA, "ug", "2", tt.Object("a")))
-		if got := len(check.Backoff(tl.Index(), spec)) == 0; got != tc.breaks {
-			t.Errorf("%s: breaks = %v, want %v", name, got, tc.breaks)
+// A success resets controller-runtime's rate limiter, so the failures after
+// it start a fresh backoff, even when the success changed nothing.
+func TestBackoffPassesAFreshBackoffAfterANoOpSuccess(t *testing.T) {
+	limiter := workqueue.DefaultTypedControllerRateLimiter[string]()
+	var tl tt.Timeline
+	tl.At(0, tt.Run("toy", "widgets"), tt.Version(gadgetA, "ug", "2", tt.Object("a")))
+	at := 1 * s
+	fail := func(calls int) {
+		for range calls {
+			tl.At(at, tt.Call(ctl, "update", gadgetA, 500, ""))
+			at += limiter.When("a")
 		}
 	}
+	fail(5)
+	tl.At(at, tt.Call(ctl, "update", gadgetA, 200, "2"))
+	limiter.Forget("a")
+	at += 2 * s
+	fail(6)
+	requireNone(t, check.Backoff(tl.Index(), spec))
 }
 
 // A fake's answer carries no resourceVersion, so the observer tells whether
@@ -173,7 +176,7 @@ func TestBackoffFailsATightLoopOfWritesToAFakeThatTheObserverSeesNoChangeFrom(t 
 	}
 }
 
-func TestBackoffJudgesOnlyCallsSixToEleven(t *testing.T) {
+func TestBackoffExcusesTheFirstFiveCalls(t *testing.T) {
 	starts := append(every(10*ms, 5), every(100*ms, 6)...)
 	for i := 5; i < len(starts); i++ {
 		starts[i] += time.Second
@@ -186,6 +189,14 @@ func TestBackoffJudgesOnlyCallsSixToEleven(t *testing.T) {
 	if len(check.Backoff(retries(starts, nil).Index(), spec)) != 1 {
 		t.Fatal("a slow start excused calls 6 to 11")
 	}
+}
+
+func TestBackoffFailsATightLoopAfterASlowGap(t *testing.T) {
+	starts := every(10*ms, 16)
+	for i := 9; i < len(starts); i++ {
+		starts[i] += 150 * ms
+	}
+	requireFinding(t, check.Backoff(retries(starts, nil).Index(), spec), "Backoff", 0, tightLoop, "kube/toy/gadgets", "get gadgets.toy ns/a: 500, 15 calls")
 }
 
 func TestBackoffRunBreaks(t *testing.T) {

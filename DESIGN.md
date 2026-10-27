@@ -344,11 +344,11 @@ dependency not ready`.
 
 **Backoff.** A controller call is **futile** when it fails, or writes and
 `Index.Changed` finds no change. Futile calls with one system, verb, object,
-subresource and status form a **run**; a create's object is its `requestName`. A
-call of its verb, object and subresource that is not futile breaks it, as does a
-new generation of its object, of the object's rule 1 to 3 CR, or, when the
-object is no CR and has no such CR, of any CR. With `n` CRs live, it fails when
-each gap between calls `5n + 1` to `10n + 1` is under 100 ms: `retried a failing
+subresource and status form a **run**; a create's object is its `requestName`.
+Any other success of its verb, object and subresource breaks it, as does a new
+generation of its object, of the object's rule 1 to 3 CR, or, when the object is
+no CR and has no such CR, of any CR. With `n` CRs live, it fails once `5n + 1`
+calls in a row after its first `5n` have gaps under 100 ms: `retried a failing
 request in a tight loop`, or `repeated a no-op write in a tight loop` for 2xx
 calls. It skips 409s on a held kind until `stable / 4` after the hold.
 
@@ -526,4 +526,4 @@ Each entry changes a check, exception, `System` interface or ignore list.
 81. `required` binds only the first entry's CRs, so the kinds that own no dependency pass.
 82. A `damage` touches each group under its root. An undamaged touched group may empty while its kind lives under that root, and a damaged one whose owner is gone while a CR made in the step owns its kind and role there. So a damage under a CR that the controller made touches that CR's owner, and the controller may remake that CR.
 85. A kube write's call records its answer's finalizers, for Finalizers (#133), since an update that empties a deleting object's finalizers deletes it and answers with the old version. The gc owns `foregroundDeletion` and `orphan`, which the API server adds for whoever deletes. A finalizer the harness wrote, from a sample, a fixture or a plan, may be the controller's own. Listeners record answers in no fixed order, so a version that overlapping writes of two callers carry may be either's. After an answer names a version the observer missed, the trace may lack a change, so the object's later writes pass. A CRD's status write keeps its metadata.
-88. Backoff counts a no-op write, such as a delete of an object already being deleted, as futile, so a tight loop of them fails (#139). A no-op write breaks no run of failing calls.
+88. Backoff counts a no-op write, such as a delete of an object already being deleted, as futile, so a tight loop of them fails (#139). A no-op success still breaks a run of failing calls, since controller-runtime then forgets the item's backoff. Backoff judges each `5n + 1` calls in a row after a run's first `5n`, so one slow gap excuses no loop.
