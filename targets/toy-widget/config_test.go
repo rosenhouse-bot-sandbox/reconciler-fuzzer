@@ -1,6 +1,8 @@
 package main_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"reflect"
 	"slices"
 	"testing"
@@ -105,6 +107,34 @@ func TestTheGrantConfigOwnsItsChildrenByLabel(t *testing.T) {
 		t.Errorf("Launch args %v lack --mirror-namespace=rf-shared.", c.Launch.Args)
 	}
 	assertReadyOnTheCurrentGeneration(t, c)
+}
+
+func TestTheLeaseConfigIsConfigYamlWithALease(t *testing.T) {
+	widget, err := config.Load("config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := config.Load(leaseConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(c.Launch.Args, "--lease=2s") {
+		t.Errorf("Launch args %v lack --lease=2s.", c.Launch.Args)
+	}
+	c.Launch.Args = slices.DeleteFunc(c.Launch.Args, func(arg string) bool { return arg == "--lease=2s" })
+	c.Timeouts.Settle = widget.Timeouts.Settle
+	// JSON leaves out the compiled CEL, which reflect.DeepEqual cannot compare.
+	got, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := json.Marshal(widget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("%s differs from config.yaml in more than --lease=2s and the settle timeout:\n%s\nconfig.yaml:\n%s", leaseConfig, got, want)
+	}
 }
 
 func assertReadyOnTheCurrentGeneration(t *testing.T, c *config.Config) {
