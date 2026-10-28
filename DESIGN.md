@@ -460,11 +460,11 @@ They exit 0 with no findings, 1 with some, and 2 on a usage or harness error.
 **Make targets and toys.** `make help` lists the targets, which CI and the
 nightly call. A toy is a directory in `targets/` with a `main.go`. `build`,
 `generate`, `test-generated` and `bug-matrix` run every toy.
-`targets/toy-widget` holds the Widget configs: `gadget/` adds a modelled Gadget,
-and `tenant/` and `grant/` cross scopes. In `targets/toy-bucket`, each Bucket CR
-owns one bucket in the `crudfake` system `cloud`; its bugs start at B30, and
-`halted/` runs `--halt` under `primary.halted`. In `targets/toy-fleet`, a
-Cluster owns modelled third-party Volumes, a Database names a Cluster, and a
+In `targets/toy-widget`, `gadget/` adds a modelled Gadget, `lease/` elects a
+leader, and `tenant/` and `grant/` cross scopes. In `targets/toy-bucket`, each
+Bucket CR owns one bucket in the `crudfake` system `cloud`; its bugs start at
+B30, and `halted/` runs `--halt` under `primary.halted`. In `targets/toy-fleet`,
+a Cluster owns modelled third-party Volumes, a Database names a Cluster, and a
 User a Database. Its bugs start at B100. `config.yaml` lists all three kinds.
 The generated test fuzzes `cluster/`, which lists Clusters alone, `database/`,
 which lists Databases on a fixture Cluster, and `protect/`, whose Volume model

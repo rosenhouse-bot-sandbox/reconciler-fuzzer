@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"testing"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -148,18 +149,26 @@ func TestWithoutGadgetTheWidgetHasNoGadget(t *testing.T) {
 	}
 }
 
-// heldGadget is a Gadget of widget that another finalizer holds, as a
-// slowDelete fault does.
-func heldGadget(t *testing.T, widget *toyv1.Widget) *toyv1.Gadget {
+// ownedGadget is the Gadget that widget controls.
+func ownedGadget(t *testing.T, widget *toyv1.Widget) *toyv1.Gadget {
 	t.Helper()
 	scheme, err := NewScheme()
 	if err != nil {
 		t.Fatal(err)
 	}
-	gadget := &toyv1.Gadget{ObjectMeta: metav1.ObjectMeta{Namespace: widget.Namespace, Name: widget.Name, Finalizers: []string{"test/hold"}}}
+	gadget := &toyv1.Gadget{ObjectMeta: metav1.ObjectMeta{Namespace: widget.Namespace, Name: widget.Name}}
 	if err := controllerutil.SetControllerReference(widget, gadget, scheme); err != nil {
 		t.Fatal(err)
 	}
+	return gadget
+}
+
+// heldGadget is widget's Gadget that another finalizer holds, as a
+// slowDelete fault does.
+func heldGadget(t *testing.T, widget *toyv1.Widget) *toyv1.Gadget {
+	t.Helper()
+	gadget := ownedGadget(t, widget)
+	gadget.Finalizers = []string{"test/hold"}
 	return gadget
 }
 
@@ -189,6 +198,37 @@ func widgetGone(t *testing.T, reader client.Reader, widget *toyv1.Widget) bool {
 		t.Fatal(err)
 	}
 	return err != nil
+}
+
+func TestCleanUpReleasesTheWidgetOnceItsDeleteRemovesTheGadget(t *testing.T) {
+	for _, bug := range []Bug{0, B23} {
+		widget := deletingWidget(0)
+		r := gadgetFixture(t, bug, interceptor.Funcs{}, widget, ownedGadget(t, widget))
+
+		mustReconcile(t, r, widget)
+		if !widgetGone(t, r, widget) {
+			t.Errorf("B%d kept the Widget after its delete removed the Gadget.", bug)
+		}
+	}
+}
+
+func TestCleanUpDeletesTheGadgetOnce(t *testing.T) {
+	widget := deletingWidget(0)
+	deletes := 0
+	r := gadgetFixture(t, 0, interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if _, isGadget := obj.(*toyv1.Gadget); isGadget {
+				deletes++
+			}
+			return c.Delete(ctx, obj, opts...)
+		},
+	}, widget, heldGadget(t, widget))
+
+	mustReconcile(t, r, widget)
+	mustReconcile(t, r, widget)
+	if deletes != 1 {
+		t.Errorf("The cleanup deleted the Gadget %d times, want 1.", deletes)
+	}
 }
 
 func TestCleanUpKeepsTheFinalizerUntilTheGadgetIsGone(t *testing.T) {
