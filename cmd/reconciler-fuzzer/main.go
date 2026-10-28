@@ -16,6 +16,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -51,8 +52,8 @@ var purposes = map[string]string{
 	"run":    "Run runs one plan against the controller and prints the report of its trace.",
 	"plan":   "Plan prints the plan that run --seed n runs, without running it.",
 	"judge":  "Judge judges a stored trace and prints its report.",
-	"hunt":   "Hunt runs the plans of n seeds from s on and prints summary.md. A seed with new findings costs r replays of its plan, then up to c shrink candidates of at most 4 runs for each finding.",
-	"shrink": "Shrink runs a plan and prints summary.md. A plan with findings costs r replays, then up to c shrink candidates of at most 4 runs for each finding.",
+	"hunt":   "Hunt runs the plans of n seeds from s on and prints summary.md. It replays the plan of a seed with new findings r times. For each finding, it then tries up to c smaller plans, called shrink candidates, and runs each at most 4 times.",
+	"shrink": "Shrink runs a plan and prints summary.md. It replays a plan with findings r times. For each finding, it then tries up to c smaller plans, called shrink candidates, and runs each at most 4 times.",
 }
 
 // helpWords ask for help in place of a command.
@@ -341,7 +342,7 @@ func judge(configPath, tracePath string) (string, int, error) {
 	return check.Markdown(ix, report), len(report.Findings), nil
 }
 
-// count is a flag that takes a count of 0 or more.
+// count is a flag that takes a count from 0 to math.MaxInt.
 type count int
 
 func (c *count) String() string { return strconv.Itoa(int(*c)) }
@@ -349,7 +350,7 @@ func (c *count) String() string { return strconv.Itoa(int(*c)) }
 func (c *count) Set(value string) error {
 	n, err := strconv.ParseUint(value, 10, strconv.IntSize-1)
 	if err != nil {
-		return errors.New("want a count of 0 or more")
+		return fmt.Errorf("want a count from 0 to %d", math.MaxInt)
 	}
 	*c = count(n)
 	return nil

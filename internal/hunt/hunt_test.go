@@ -48,9 +48,14 @@ func (f *fakeRun) run(_ context.Context, p *plan.Plan, out string) (check.Report
 
 func hunt(t *testing.T, seeds []uint64, finds func(dir string, p *plan.Plan) []check.Finding) ([]Found, *fakeRun) {
 	t.Helper()
+	return huntWith(t, seeds, DefaultReplays, DefaultCandidates, finds)
+}
+
+func huntWith(t *testing.T, seeds []uint64, replays, candidates int, finds func(dir string, p *plan.Plan) []check.Finding) ([]Found, *fakeRun) {
+	t.Helper()
 	fake := &fakeRun{out: t.TempDir(), finds: finds}
 	found, err := Hunt(context.Background(), Options{ConfigPath: toyConfig, Seeds: slices.Values(seeds), Out: fake.out, Run: fake.run, Log: &fake.log,
-		Replays: DefaultReplays, Candidates: DefaultCandidates})
+		Replays: replays, Candidates: candidates})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,14 +130,13 @@ func TestHuntNamesTheShrunkPlanOfEachFindingOfASeed(t *testing.T) {
 }
 
 func TestACandidateRunsFourTimesWhenTheFindingReproducedInUnderHalfItsReplays(t *testing.T) {
-	for _, testCase := range []struct{ reproduced, runs int }{{1, 4}, {2, 4}, {3, 2}, {5, 2}} {
-		found, fake := hunt(t, []uint64{1}, func(dir string, _ *plan.Plan) []check.Finding {
-			for i := 1; i <= testCase.reproduced; i++ {
-				if dir == "seed-1/replay-"+string(rune('0'+i)) {
-					return []check.Finding{clean}
-				}
-			}
+	for _, c := range []struct{ replays, reproduced, runs int }{{5, 1, 4}, {5, 2, 4}, {5, 3, 2}, {5, 5, 2}, {10, 4, 4}, {2, 1, 2}, {0, 0, 2}} {
+		found, fake := huntWith(t, []uint64{1}, c.replays, 1, func(dir string, _ *plan.Plan) []check.Finding {
 			if dir == "seed-1" {
+				return []check.Finding{clean}
+			}
+			var replay int
+			if _, err := fmt.Sscanf(dir, "seed-1/replay-%d", &replay); err == nil && replay <= c.reproduced {
 				return []check.Finding{clean}
 			}
 			return nil
@@ -143,8 +147,11 @@ func TestACandidateRunsFourTimesWhenTheFindingReproducedInUnderHalfItsReplays(t 
 				runs++
 			}
 		}
-		if found[0].Reproduced != testCase.reproduced || runs != testCase.runs {
-			t.Errorf("Reproduced %d of %d, the first candidate ran %d times, want %d.", found[0].Reproduced, DefaultReplays, runs, testCase.runs)
+		if found[0].Reproduced != c.reproduced || runs != c.runs {
+			t.Errorf("Reproduced %d of %d, the first candidate ran %d times, want %d of %d and %d runs.", found[0].Reproduced, c.replays, runs, c.reproduced, c.replays, c.runs)
+		}
+		if want := fmt.Sprintf("seed 1, finding 1, candidate 1: rejected, since none of its %d runs gave the finding\n", c.runs); !strings.Contains(fake.log.String(), want) {
+			t.Errorf("The log lacks %q:\n%s", want, fake.log.String())
 		}
 	}
 }
@@ -298,8 +305,9 @@ func TestHuntLogsEachRunAndNamesTheFinding(t *testing.T) {
 	for _, want := range []string{
 		"seed 1: 1 new finding\n",
 		"seed 1, finding 1: Clean: a ConfigMap outlives its Widget\n",
-		"seed 1, replay 5: reproduced 1 of 1\n",
+		"seed 1, replay 5: reproduced finding 1\n",
 		"seed 1, finding 1, candidate 1: kept, since it still gives the finding\n",
+		"seed 1, finding 1: shrunk to " + filepath.Join(fake.out, "seed-1", "shrunk.json") + "\n",
 	} {
 		if !strings.Contains(fake.log.String(), want) {
 			t.Errorf("The log lacks %q:\n%s", want, fake.log.String())
@@ -314,7 +322,32 @@ func TestEachFindingOfASeedNumbersItsOwnCandidates(t *testing.T) {
 			t.Errorf("Hunt ran nothing into %s; it ran %v.", want, fake.dirs)
 		}
 	}
-	for _, want := range []string{"seed 1, finding 2: Unique: two ConfigMaps hold one index\n", "seed 1, finding 2, candidate 1: kept, since it still gives the finding\n"} {
+	for _, want := range []string{
+		"seed 1, finding 2: Unique: two ConfigMaps hold one index\n",
+		"seed 1, finding 2, candidate 1: kept, since it still gives the finding\n",
+		"seed 1, finding 2: shrunk to " + filepath.Join(fake.out, "seed-1", "shrunk-2.json") + "\n",
+	} {
+		if !strings.Contains(fake.log.String(), want) {
+			t.Errorf("The log lacks %q:\n%s", want, fake.log.String())
+		}
+	}
+}
+
+func TestAReplayLineNamesTheFindingsItReproduced(t *testing.T) {
+	restore := check.Finding{Check: "Restore", Summary: "a ConfigMap stays changed", Kind: "kube/configmaps"}
+	replays := map[string][]check.Finding{
+		"seed-1":          {clean, unique, restore},
+		"seed-1/replay-1": {clean, unique, restore},
+		"seed-1/replay-2": {unique},
+		"seed-1/replay-3": {restore, clean},
+	}
+	_, fake := huntWith(t, []uint64{1}, 4, 0, func(dir string, _ *plan.Plan) []check.Finding { return replays[dir] })
+	for _, want := range []string{
+		"seed 1, replay 1: reproduced findings 1, 2 and 3\n",
+		"seed 1, replay 2: reproduced finding 2\n",
+		"seed 1, replay 3: reproduced findings 1 and 3\n",
+		"seed 1, replay 4: reproduced no finding\n",
+	} {
 		if !strings.Contains(fake.log.String(), want) {
 			t.Errorf("The log lacks %q:\n%s", want, fake.log.String())
 		}
@@ -334,38 +367,45 @@ func candidates(dirs []string) map[string]bool {
 }
 
 func TestHuntTriesTheGivenReplaysAndCandidates(t *testing.T) {
-	fake := &fakeRun{out: t.TempDir(), finds: func(dir string, _ *plan.Plan) []check.Finding {
-		if strings.Contains(dir, "shrink-") {
-			return nil
+	for _, c := range []struct {
+		replays, candidates int
+		stopped             string
+	}{{2, 3, "shrink stopped after 3 candidates"}, {1, 1, "shrink stopped after 1 candidate"}} {
+		found, fake := huntWith(t, []uint64{1}, c.replays, c.candidates, func(dir string, _ *plan.Plan) []check.Finding {
+			if strings.Contains(dir, "shrink-") {
+				return nil
+			}
+			return []check.Finding{clean}
+		})
+		replays := 0
+		for _, dir := range fake.dirs {
+			if strings.HasPrefix(dir, "seed-1/replay-") {
+				replays++
+			}
 		}
-		return []check.Finding{clean}
-	}}
-	found, err := Hunt(context.Background(), Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1}), Out: fake.out, Run: fake.run, Replays: 2, Candidates: 3})
-	if err != nil || len(found) != 1 {
-		t.Fatalf("Hunt = %+v, %v.", found, err)
-	}
-	replays := 0
-	for _, dir := range fake.dirs {
-		if strings.HasPrefix(dir, "seed-1/replay-") {
-			replays++
+		summary, _ := os.ReadFile(filepath.Join(fake.out, "summary.md"))
+		reproduced := fmt.Sprintf("| %d/%d |", c.replays, c.replays)
+		if tried := len(candidates(fake.dirs)); len(found) != 1 || replays != c.replays || tried != c.candidates || !strings.Contains(string(summary), reproduced) {
+			t.Errorf("Hunt found %+v, ran %d replays and %d candidates, and wrote:\n%s\nwant %d replays, %d candidates and %s reproduced.",
+				found, replays, tried, summary, c.replays, c.candidates, reproduced)
 		}
-	}
-	summary, _ := os.ReadFile(filepath.Join(fake.out, "summary.md"))
-	if tried := len(candidates(fake.dirs)); replays != 2 || tried != 3 || !strings.Contains(string(summary), "| 2/2 |") {
-		t.Errorf("Hunt ran %d replays and %d candidates, and wrote:\n%s\nwant 2 replays, 3 candidates and 2/2 reproduced.", replays, tried, summary)
+		for _, want := range []string{"seed 1, finding 1: " + c.stopped + "\n", "rejected, since none of its 2 runs gave the finding\n"} {
+			if !strings.Contains(fake.log.String(), want) {
+				t.Errorf("The log lacks %q:\n%s", want, fake.log.String())
+			}
+		}
 	}
 }
 
 func TestHuntWithoutCandidatesDoesNotShrink(t *testing.T) {
-	fake := &fakeRun{out: t.TempDir(), finds: always(clean)}
-	found, err := Hunt(context.Background(), Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1}), Out: fake.out, Run: fake.run, Replays: DefaultReplays})
-	if err != nil || len(found) != 1 {
-		t.Fatalf("Hunt = %+v, %v.", found, err)
-	}
+	found, fake := huntWith(t, []uint64{1}, DefaultReplays, 0, always(clean))
 	summary, _ := os.ReadFile(filepath.Join(fake.out, "summary.md"))
 	_, statErr := os.Stat(filepath.Join(fake.out, "seed-1", "shrunk.json"))
-	if len(candidates(fake.dirs)) > 0 || found[0].Shrunk != nil || !os.IsNotExist(statErr) || !strings.Contains(string(summary), "| 5/5 | not shrunk |") {
+	if len(found) != 1 || len(candidates(fake.dirs)) > 0 || found[0].Shrunk != nil || !os.IsNotExist(statErr) || !strings.Contains(string(summary), "| 5/5 | not shrunk |") {
 		t.Errorf("Hunt ran %v, found %+v and wrote:\n%s", fake.dirs, found, summary)
+	}
+	if want := "seed 1, finding 1: not shrunk, since --candidates is 0\n"; !strings.Contains(fake.log.String(), want) {
+		t.Errorf("The log lacks %q:\n%s", want, fake.log.String())
 	}
 }
 
@@ -414,6 +454,27 @@ func TestHuntUpdatesTheSummaryAsItGoes(t *testing.T) {
 				t.Errorf("When %s ran, summary.md lacked %q:\n%s", dir, line, summaries[dir])
 			}
 		}
+	}
+}
+
+func TestTheSummaryListsAFailedSeedWhileALaterSeedReplays(t *testing.T) {
+	fake := &fakeRun{out: t.TempDir()}
+	var summary []byte
+	fake.finds = func(dir string, _ *plan.Plan) []check.Finding {
+		if dir == "seed-2/replay-1" {
+			summary, _ = os.ReadFile(filepath.Join(fake.out, "summary.md"))
+		}
+		return []check.Finding{clean}
+	}
+	Hunt(context.Background(), Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1, 2}), Out: fake.out, Replays: 1,
+		Run: func(ctx context.Context, p *plan.Plan, out string) (check.Report, error) {
+			if filepath.Base(out) == "seed-1" {
+				return check.Report{}, boom
+			}
+			return fake.run(ctx, p, out)
+		}})
+	if !strings.Contains(string(summary), "| 2 | Clean | a ConfigMap outlives its Widget | pending |") || !strings.Contains(string(summary), "Runs that failed:\n\n- seed 1: boom\n") {
+		t.Errorf("When seed 2's replay ran, summary.md was:\n%s\nwant seed 2's finding pending and seed 1's failure.", summary)
 	}
 }
 
@@ -571,7 +632,7 @@ func TestHuntLogsAReplayErrorOnlyWhenThereIsOne(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"seed 1: 1 new finding\n", "replay 1: reproduced 1 of 1\n", "replay 2: reproduced 0 of 1, boom\n"} {
+	for _, want := range []string{"seed 1: 1 new finding\n", "replay 1: reproduced finding 1\n", "replay 2: reproduced no finding, since its run failed: boom\n"} {
 		if !strings.Contains(log.String(), want) {
 			t.Errorf("The log lacks %q:\n%s", want, log.String())
 		}

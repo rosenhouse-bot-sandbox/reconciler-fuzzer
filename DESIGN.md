@@ -441,8 +441,8 @@ periods.
 
 **Hunt.** `hunt.Hunt` runs each seed, keeps runs with a new signature, replays
 each `--replays` times (5) and shrinks it (`shrink.go`), trying at most
-`--candidates` (16) candidates per finding. It rewrites `summary.md`, which
-lists the findings with seed, reproduction rate and shrunk plan, as they finish.
+`--candidates` (16) smaller plans per finding. It rewrites `summary.md`, a
+table of the findings, as their replays and shrinks finish.
 
 ## 15. Commands
 

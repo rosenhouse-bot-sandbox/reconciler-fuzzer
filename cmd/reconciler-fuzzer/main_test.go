@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -92,8 +94,9 @@ func TestHuntAndShrinkRefuseANegativeCountOrOnePastAnInt(t *testing.T) {
 		append(shrink, "--candidates", "-1"),
 		append(shrink, "--candidates", "9223372036854775808"),
 	} {
-		if code, _, stderr := cliOutput(append(args, "--out", t.TempDir())...); code != 2 || !strings.Contains(stderr, "usage:") {
-			t.Errorf("cli(%q) = %d, stderr %q; want 2 and the usage", args, code, stderr)
+		code, _, stderr := cliOutput(append(args, "--out", t.TempDir())...)
+		if want := fmt.Sprintf("want a count from 0 to %d\n", math.MaxInt); code != 2 || !strings.Contains(stderr, want) || !strings.Contains(stderr, "usage:") {
+			t.Errorf("cli(%q) = %d, stderr %q; want 2, %q and the usage", args, code, stderr, want)
 		}
 	}
 }
@@ -157,6 +160,18 @@ func TestHelpShowsTheDefaultOfAFlagThatHasOne(t *testing.T) {
 	for _, flag := range []string{"config", "seeds"} {
 		if regexp.MustCompile(`(?m)^  --` + flag + `  .*\(default`).MatchString(stdout) {
 			t.Errorf("hunt --help gives --%s a default:\n%s", flag, stdout)
+		}
+	}
+}
+
+func TestJudgeHelpSaysItsConfigReplacesTheTracesSettings(t *testing.T) {
+	for command, usage := range map[string]string{
+		"judge": "a config whose ready, stable and budgets replace the trace's",
+		"run":   "the target's config file",
+	} {
+		_, stdout, _ := cliOutput(command, "--help")
+		if !regexp.MustCompile(`(?m)^  --config  +` + regexp.QuoteMeta(usage) + `$`).MatchString(stdout) {
+			t.Errorf("%s --help does not describe --config as %q:\n%s", command, usage, stdout)
 		}
 	}
 }
