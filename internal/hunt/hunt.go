@@ -298,7 +298,7 @@ func (h *hunter) investigate(ctx context.Context, p *plan.Plan, dir, name string
 			return found, err
 		}
 		if f.Shrunk == p {
-			h.logf("%s: saved unchanged to %s, since no candidate gave the finding", finding, path)
+			h.logf("%s: saved unchanged to %s, since the shrink kept no candidate", finding, path)
 		} else {
 			h.logf("%s: shrunk to %s", finding, path)
 		}
