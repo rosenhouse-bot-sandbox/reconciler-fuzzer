@@ -42,6 +42,9 @@ func generator(t *testing.T, path string) (*generate.Generator, []map[string]any
 // so the gate fails if faults stop firing.
 func TestGeneratedPlansWithFaultsPassB0(t *testing.T) {
 	for _, cfg := range configs {
+		if cfg == leaseConfig {
+			continue // It generates config.yaml's plans and differs only in --lease.
+		}
 		t.Run(cfg, func(t *testing.T) {
 			t.Parallel()
 			generatedPlansPassB0(t, cfg)

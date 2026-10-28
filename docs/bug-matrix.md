@@ -5,7 +5,7 @@
 
 | Bug | Description | Plan | Check | Step |
 |---|---|---|---|---|
-| B0 | The correct controller. | all 48 committed plans | none | |
+| B0 | The correct controller. | all 52 committed plans | none | |
 | B1 | Reports children ready before it creates them. | b1 | Converge | 0 |
 | B2 | Creates children with generated names, so it duplicates them. | b2 | Converge | 0 |
 | B3 | Leaves child 0 without an owner reference. | b3 | Clean | 1 |
@@ -21,6 +21,7 @@
 | B12 | Divides by a count of zero and crashes. | b12 | Crash | 1 |
 | B12 | Divides by a count of zero and crashes. | b12-fault | Crash | 1 |
 | B13 | Never cleans up a deleted Widget. | b13 | Converge | 1 |
+| B13 | Never cleans up a deleted Widget. | kill-delete | Converge | 1 |
 | B14 | Does not watch the label source, so a changed label reaches no child. | b14 | Restore | 2 |
 | B15 | Names children after the kind, so two Widgets share them. | b15 | Converge | 0 |
 | B16 | Writes status with Update, which its RBAC does not allow. | b16 | Converge | 0 |
@@ -31,6 +32,7 @@
 | B21 | Updates its Gadget on every reconcile and requeues after 100 ms. | gadget/b21 | Converge | 0 |
 | B22 | Orphans its Gadget on delete instead of deleting it. | gadget/b22 | Clean | 1 |
 | B23 | Gives up on cleanup for good when its Gadget outlives the delete, so the finalizer stays. | gadget/b23 | Converge | 1 |
+| B23 | Gives up on cleanup for good when its Gadget outlives the delete, so the finalizer stays. | gadget/foreground-slow-delete | Converge | 1 |
 | B24 | Never recreates a missing Gadget once it reported it ready. | gadget/b24 | Restore | 1 |
 | B25 | Retries a forbidden Gadget status patch every 10 ms while the Gadget has Ready False. | gadget/b25 | Backoff | 1 |
 | B26 | Gives a Tenant's ClusterRole no owner reference, so it outlives the Tenant. | tenant/b26 | Clean | 1 |

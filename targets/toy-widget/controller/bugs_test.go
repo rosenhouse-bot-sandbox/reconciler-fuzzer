@@ -648,18 +648,21 @@ func TestB22OrphansTheGadgetOnDelete(t *testing.T) {
 	}
 }
 
-func TestB23GivesUpOnAGadgetItsDeleteDidNotRemove(t *testing.T) {
+func TestB23GivesUpOnAGadgetThatOutlivesTheWidgetsDelete(t *testing.T) {
 	for _, testCase := range []struct {
 		name       string
 		bug        Bug
+		gadget     func(*testing.T, *toyv1.Widget) *toyv1.Gadget
 		wantWidget bool
 	}{
-		{"the correct controller releases the Widget once the Gadget goes", 0, false},
-		{"B23 keeps the finalizer for good", B23, true},
+		{"the correct controller releases the Widget once the Gadget goes", 0, heldGadget, false},
+		{"B23 keeps the finalizer for good", B23, heldGadget, true},
+		{"the correct controller waits for a Gadget deleted by another client", 0, deletingGadget, false},
+		{"B23 gives up on a Gadget deleted by another client", B23, deletingGadget, true},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			widget := deletingWidget(0)
-			r := gadgetFixture(t, testCase.bug, interceptor.Funcs{}, widget, heldGadget(t, widget))
+			r := gadgetFixture(t, testCase.bug, interceptor.Funcs{}, widget, testCase.gadget(t, widget))
 
 			mustReconcile(t, r, widget)
 			release(t, r.Client, widget)

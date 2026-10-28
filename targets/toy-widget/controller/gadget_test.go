@@ -163,6 +163,16 @@ func heldGadget(t *testing.T, widget *toyv1.Widget) *toyv1.Gadget {
 	return gadget
 }
 
+// deletingGadget is a held Gadget that another client deleted, as the garbage
+// collector does in a Foreground deletion of its Widget.
+func deletingGadget(t *testing.T, widget *toyv1.Widget) *toyv1.Gadget {
+	t.Helper()
+	gadget := heldGadget(t, widget)
+	deletedAt := metav1.Now()
+	gadget.DeletionTimestamp = &deletedAt
+	return gadget
+}
+
 func release(t *testing.T, c client.Client, widget *toyv1.Widget) {
 	t.Helper()
 	gadget := readGadget(t, c, widget)

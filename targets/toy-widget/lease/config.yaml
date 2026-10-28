@@ -1,0 +1,29 @@
+# config.yaml with --lease=2s: the toy elects a leader through a Lease.
+# Paths resolve against this file's directory.
+launch:
+  binary: ../../../bin/toy-widget
+  args:
+    - --label-from=widget-config
+    - --lease=2s
+    - --bug=0                      # A later --launch-arg --bug=N wins.
+  env:
+    KUBECONFIG: ${systems.kube.kubeconfig}
+    WATCH_NAMESPACE: ${systems.kube.namespace}
+  rbac:
+    - ../rbac/role.yaml
+crds:
+  - ../crds/
+primary:
+  kind: toy.reconciler-fuzzer/v1/Widget
+  sample: ../widget.yaml
+  ready: >-
+    has(self.status) && has(self.status.observedGeneration) && self.status.observedGeneration == self.metadata.generation
+    && has(self.status.ready) && self.status.ready == self.spec.count
+fixtures:
+  - ../widget-config.yaml
+timeouts:
+  settle: 10s                      # A restarted toy waits 2 to 3 s for the old Lease to expire.
+  stable: 2s
+values:
+  fixtures:
+    ../widget-config.yaml: [data.label]

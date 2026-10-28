@@ -118,26 +118,30 @@ func (r *Reconciler) deleteGadget(ctx context.Context, widget *toyv1.Widget) (bo
 	key := client.ObjectKeyFromObject(widget)
 	gadget := &toyv1.Gadget{}
 	gone, err := r.gadgetGone(ctx, key, gadget)
-	if gone || err != nil || !gadget.DeletionTimestamp.IsZero() {
+	if gone || err != nil {
 		return gone, err
 	}
-	if r.Bug == B22 {
-		// B22: the Gadget is orphaned, not deleted.
-		base := gadget.DeepCopy()
-		gadget.OwnerReferences = nil
-		if err := r.Patch(ctx, gadget, client.MergeFrom(base)); err != nil {
-			return false, fmt.Errorf("orphaning Gadget %s: %w", gadget.Name, err)
+	if gadget.DeletionTimestamp.IsZero() {
+		if r.Bug == B22 {
+			// B22: the Gadget is orphaned, not deleted.
+			base := gadget.DeepCopy()
+			gadget.OwnerReferences = nil
+			if err := r.Patch(ctx, gadget, client.MergeFrom(base)); err != nil {
+				return false, fmt.Errorf("orphaning Gadget %s: %w", gadget.Name, err)
+			}
+			return true, nil
 		}
-		return true, nil
+		if err := r.Delete(ctx, gadget); client.IgnoreNotFound(err) != nil {
+			return false, fmt.Errorf("deleting Gadget %s: %w", gadget.Name, err)
+		}
+		if gone, err := r.gadgetGone(ctx, key, gadget); gone || err != nil {
+			return gone, err
+		}
 	}
-	if err := r.Delete(ctx, gadget); client.IgnoreNotFound(err) != nil {
-		return false, fmt.Errorf("deleting Gadget %s: %w", gadget.Name, err)
+	if r.Bug == B23 {
+		r.giveUpOn(key) // B23: a Gadget that outlives the Widget's delete is never waited for.
 	}
-	gone, err = r.gadgetGone(ctx, key, gadget)
-	if !gone && err == nil && r.Bug == B23 {
-		r.giveUpOn(key) // B23: a Gadget its delete did not remove is never waited for.
-	}
-	return gone, err
+	return false, nil
 }
 
 func (r *Reconciler) gadgetGone(ctx context.Context, key types.NamespacedName, gadget *toyv1.Gadget) (bool, error) {

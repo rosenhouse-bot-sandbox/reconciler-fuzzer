@@ -1,0 +1,14 @@
+{
+  "steps": [
+    {"actions": [{"do": "create", "slot": "a"}]},
+    {
+      "period": "3s",
+      "faults": [
+        {"match": {"verb": "update", "group": "coordination.k8s.io", "resource": "leases"}, "error": {"code": 500}}
+      ],
+      "actions": [
+        {"at": "2s", "do": "update", "slot": "a", "patch": {"spec": {"count": 2}}}
+      ]
+    }
+  ]
+}
