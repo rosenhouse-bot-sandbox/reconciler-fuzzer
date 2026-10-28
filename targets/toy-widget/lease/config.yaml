@@ -22,7 +22,7 @@ primary:
 fixtures:
   - ../widget-config.yaml
 timeouts:
-  settle: 10s                      # A restarted toy waits 2 to 3 s for the old process's Lease to expire.
+  settle: 10s                      # A new toy process takes the Lease 2 to 3 s after it first reads it.
   stable: 2s
 values:
   fixtures:

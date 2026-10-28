@@ -121,14 +121,18 @@ func TestTheLeaseConfigIsConfigYamlWithALease(t *testing.T) {
 	if !slices.Contains(c.Launch.Args, "--lease=2s") {
 		t.Errorf("Launch args %v lack --lease=2s.", c.Launch.Args)
 	}
+	// A new toy process takes the Lease 2 to 3 s after it first reads it.
+	if floor := widget.Timeouts.Settle + 3*time.Second; c.Timeouts.Settle < floor {
+		t.Errorf("%s allows %v to settle, want at least %v.", leaseConfig, c.Timeouts.Settle, floor)
+	}
 	c.Launch.Args = slices.DeleteFunc(c.Launch.Args, func(arg string) bool { return arg == "--lease=2s" })
 	c.Timeouts.Settle = widget.Timeouts.Settle
 	// JSON leaves out the compiled CEL, which reflect.DeepEqual cannot compare.
-	got, err := json.Marshal(c)
+	got, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err := json.Marshal(widget)
+	want, err := json.MarshalIndent(widget, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
