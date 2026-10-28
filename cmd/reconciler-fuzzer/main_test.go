@@ -5,9 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -58,6 +62,14 @@ func TestUsageErrors(t *testing.T) {
 		"hunt overflow":     {"hunt", "--config", toyConfig, "--from", "5", "--seeds", "18446744073709551615", "--out", "dir"},
 		"shrink no plan":    {"shrink", "--config", toyConfig, "--out", "dir"},
 		"run extra args":    {"run", "--config", toyConfig, "--plan", "p.json", "--out", "dir", "more"},
+		"run replays":       {"run", "--config", toyConfig, "--seed", "1", "--replays", "2", "--out", "dir"},
+		"plan no seed":      {"plan", "--config", toyConfig},
+		"plan no config":    {"plan", "--seed", "1"},
+		"plan bad seed":     {"plan", "--config", toyConfig, "--seed", "-1"},
+		"plan out":          {"plan", "--config", toyConfig, "--seed", "1", "--out", "dir"},
+		"shrink candidates": {"shrink", "--config", toyConfig, "--plan", "p.json", "--candidates", "x", "--out", "dir"},
+		"help of a typo":    {"help", "fuzz"},
+		"help of two":       {"help", "run", "hunt"},
 	}
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -69,12 +81,165 @@ func TestUsageErrors(t *testing.T) {
 	}
 }
 
+func TestHuntAndShrinkRefuseANegativeCountOrOnePastAnInt(t *testing.T) {
+	runPlan = func(context.Context, run.Options) (check.Report, error) {
+		t.Error("cli ran a plan")
+		return check.Report{}, errors.New("cli ran a plan")
+	}
+	t.Cleanup(func() { runPlan = run.Run })
+	shrink := []string{"shrink", "--config", toyConfig, "--plan", "../../targets/toy-widget/plans/b13.json"}
+	for _, args := range [][]string{
+		{"hunt", "--config", toyConfig, "--seeds", "1", "--replays", "-1"},
+		{"hunt", "--config", toyConfig, "--seeds", "1", "--replays", "9223372036854775808"},
+		append(shrink, "--candidates", "-1"),
+		append(shrink, "--candidates", "9223372036854775808"),
+	} {
+		code, _, stderr := cliOutput(append(args, "--out", t.TempDir())...)
+		if want := fmt.Sprintf("want a count from 0 to %d\n", math.MaxInt); code != 2 || !strings.Contains(stderr, want) || !strings.Contains(stderr, "usage:") {
+			t.Errorf("cli(%q) = %d, stderr %q; want 2, %q and the usage", args, code, stderr, want)
+		}
+	}
+}
+
 func TestUsageNamesTheMissingFlag(t *testing.T) {
 	if code, _, stderr := cliOutput("run", "--config", toyConfig, "--out", "dir"); code != 2 || !strings.Contains(stderr, "exactly one of --plan and --seed") {
 		t.Errorf("cli = %d, stderr %q; want 2 naming --plan and --seed", code, stderr)
 	}
 	if code, _, stderr := cliOutput("shrink", "--config", toyConfig, "--out", "dir"); code != 2 || !strings.Contains(stderr, "--plan is required") {
 		t.Errorf("cli = %d, stderr %q; want 2 naming --plan", code, stderr)
+	}
+	if code, _, stderr := cliOutput("plan", "--config", toyConfig); code != 2 || !strings.Contains(stderr, "--seed is required") {
+		t.Errorf("cli = %d, stderr %q; want 2 naming --seed", code, stderr)
+	}
+}
+
+func TestHelpPrintsTheUsageOnStdout(t *testing.T) {
+	for _, args := range [][]string{{"help"}, {"-h"}, {"-help"}, {"--help"}, {"help", "help"}, {"help", "--help"}} {
+		if code, stdout, stderr := cliOutput(args...); code != 0 || stdout != usage || stderr != "" {
+			t.Errorf("cli(%q) = %d, stdout %q, stderr %q; want 0 and the usage on stdout", args, code, stdout, stderr)
+		}
+	}
+}
+
+// commandHelp is a command's usage line, what it does, and one line for each
+// flag with a description.
+var commandHelp = regexp.MustCompile(`^usage: (.+)\n\n[A-Z][^\n]*(?:\n[^\n]+)*\.\n\n((?:  --[a-z-]+  +\S.*\n)+)$`)
+
+func TestACommandsHelpDescribesEachFlagOfItsUsageLine(t *testing.T) {
+	lines := map[string]bool{}
+	for line := range strings.Lines(usage) {
+		lines[strings.Join(strings.Fields(line), " ")] = true
+	}
+	for _, command := range []string{"run", "plan", "judge", "hunt", "shrink"} {
+		for _, args := range [][]string{{command, "--help"}, {command, "-h"}, {"help", command}} {
+			code, stdout, stderr := cliOutput(args...)
+			help := commandHelp.FindStringSubmatch(stdout)
+			if code != 0 || stderr != "" || help == nil || !lines[help[1]] || !strings.HasPrefix(help[1], "reconciler-fuzzer "+command+" ") {
+				t.Errorf("cli(%q) = %d, stdout %q, stderr %q; want 0 and the command's help on stdout", args, code, stdout, stderr)
+				continue
+			}
+			want := slices.Compact(slices.Sorted(slices.Values(regexp.MustCompile(`--[a-z][\w-]*`).FindAllString(help[1], -1))))
+			var got []string
+			for _, flag := range regexp.MustCompile(`(?m)^  (--[a-z-]+)`).FindAllStringSubmatch(help[2], -1) {
+				got = append(got, flag[1])
+			}
+			if !slices.Equal(got, want) {
+				t.Errorf("cli(%q) describes %q, want the flags of its usage line, %q", args, got, want)
+			}
+		}
+	}
+}
+
+func TestACommandsHelpFitsIn80ColumnsBelowItsUsageLine(t *testing.T) {
+	for _, command := range []string{"run", "plan", "judge", "hunt", "shrink"} {
+		_, stdout, _ := cliOutput(command, "--help")
+		for line := range strings.Lines(stdout) {
+			if line = strings.TrimSuffix(line, "\n"); !strings.HasPrefix(line, "usage: ") && len(line) > 80 {
+				t.Errorf("%s --help has a line of %d columns: %q", command, len(line), line)
+			}
+		}
+	}
+}
+
+func TestHelpShowsTheDefaultOfAFlagThatHasOne(t *testing.T) {
+	_, stdout, _ := cliOutput("hunt", "--help")
+	for flag, value := range map[string]string{"from": "1", "replays": "5", "candidates": "16"} {
+		if !regexp.MustCompile(`(?m)^  --` + flag + `  .*\(default ` + value + `\)$`).MatchString(stdout) {
+			t.Errorf("hunt --help does not give --%s a default of %s:\n%s", flag, value, stdout)
+		}
+	}
+	for _, flag := range []string{"config", "seeds"} {
+		if regexp.MustCompile(`(?m)^  --` + flag + `  .*\(default`).MatchString(stdout) {
+			t.Errorf("hunt --help gives --%s a default:\n%s", flag, stdout)
+		}
+	}
+}
+
+func TestJudgeHelpSaysItsConfigReplacesTheTracesSettings(t *testing.T) {
+	for command, usage := range map[string]string{
+		"judge": "a config whose ready, stable and budgets replace the trace's",
+		"run":   "the target's config file",
+	} {
+		_, stdout, _ := cliOutput(command, "--help")
+		if !regexp.MustCompile(`(?m)^  --config  +` + regexp.QuoteMeta(usage) + `$`).MatchString(stdout) {
+			t.Errorf("%s --help does not describe --config as %q:\n%s", command, usage, stdout)
+		}
+	}
+}
+
+func TestPlanPrintsThePlanThatRunDrawsWithoutRunningIt(t *testing.T) {
+	got := fakeRun(t)
+	cliOutput("run", "--config", toyConfig, "--seed", "3", "--out", t.TempDir())
+	if len(*got) != 1 {
+		t.Fatalf("run --seed 3 ran %d plans, want 1", len(*got))
+	}
+	path := filepath.Join(t.TempDir(), "plan.json")
+	if err := plan.Save(path, (*got)[0].Plan); err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr := cliOutput("plan", "--config", toyConfig, "--seed", "3")
+	if runs := len(*got) - 1; code != 0 || stdout != string(want) || stderr != "" || runs != 0 {
+		t.Errorf("cli = %d, stdout %q, stderr %q, %d runs; want 0, the plan of seed 3 as plan.json holds it, and no run", code, stdout, stderr, runs)
+	}
+}
+
+func TestPlanExits2WhenTheConfigDoesNotLoad(t *testing.T) {
+	code, stdout, stderr := cliOutput("plan", "--config", filepath.Join(t.TempDir(), "missing.yaml"), "--seed", "1")
+	if code != 2 || stdout != "" || !strings.Contains(stderr, "missing.yaml") || strings.Contains(stderr, usage) {
+		t.Errorf("cli = %d, stdout %q, stderr %q; want 2 naming the config, without the usage", code, stdout, stderr)
+	}
+}
+
+func TestHuntAndShrinkTryTheGivenReplaysAndCandidates(t *testing.T) {
+	var runs []string
+	runPlan = func(_ context.Context, o run.Options) (check.Report, error) {
+		runs = append(runs, filepath.Base(o.Out))
+		return check.Report{Findings: []check.Finding{{Check: "Clean"}}}, os.MkdirAll(o.Out, 0o755)
+	}
+	t.Cleanup(func() { runPlan = run.Run })
+	for _, args := range [][]string{
+		{"hunt", "--config", toyConfig, "--seeds", "1"},
+		{"shrink", "--config", toyConfig, "--plan", "../../targets/toy-widget/plans/b13.json"},
+	} {
+		runs = nil
+		cliOutput(append(args, "--out", t.TempDir(), "--replays", "2", "--candidates", "1")...)
+		replays, candidates := 0, 0
+		for _, name := range runs {
+			if strings.HasPrefix(name, "replay-") {
+				replays++
+			}
+			// Each candidate fails on its first run.
+			if strings.HasPrefix(name, "shrink-") {
+				candidates++
+			}
+		}
+		if replays != 2 || candidates != 1 {
+			t.Errorf("%s ran %d replays and %d candidates, want 2 and 1: %q", args[0], replays, candidates, runs)
+		}
 	}
 }
 
@@ -130,7 +295,7 @@ func TestHuntRunsTheSeedsAndPrintsTheSummary(t *testing.T) {
 		t.Errorf("hunt ran seeds %v, want 5 to 7.", seeds)
 	}
 	summary, _ := os.ReadFile(filepath.Join(out, "summary.md"))
-	if code != 1 || stdout != string(summary) || !strings.Contains(stdout, "over 3 seeds") || !strings.Contains(stdout, "a ConfigMap stays") {
+	if code != 1 || stdout != string(summary) || !strings.Contains(stdout, "over 3 seeds") || !strings.Contains(stdout, "| a ConfigMap stays | 5/5 |") {
 		t.Errorf("cli = %d, stdout %q, stderr %q; want 1 and the summary", code, stdout, stderr)
 	}
 }
