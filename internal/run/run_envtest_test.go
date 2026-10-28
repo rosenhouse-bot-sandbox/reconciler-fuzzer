@@ -137,7 +137,7 @@ properties:
 	}
 }
 
-// TestClientGoLogsToHarnessLog deletes the grants CRD, a fixture, at step 2.
+// TestClientGoLogsToHarnessLog deletes the grants CRD, a fixture, at step 1.
 // The harness watches grants after a request for them that comes once
 // discovery serves them, so the controller requests grants each second.
 // client-go writes its failed watch of grants to harness.log, not to stderr.

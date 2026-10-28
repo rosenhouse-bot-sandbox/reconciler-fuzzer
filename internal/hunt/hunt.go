@@ -50,8 +50,7 @@ type Options struct {
 	// candidates skip the shrink.
 	Replays, Candidates int
 	Run                 RunPlan
-	// Log hears one line for each run, and the name of each new finding. It
-	// may be nil.
+	// Log hears the hunt's progress, one line at a time. It may be nil.
 	Log io.Writer
 }
 
@@ -298,7 +297,11 @@ func (h *hunter) investigate(ctx context.Context, p *plan.Plan, dir, name string
 			f.Shrunk = nil
 			return found, err
 		}
-		h.logf("%s: shrunk to %s", finding, path)
+		if f.Shrunk == p {
+			h.logf("%s: saved unchanged to %s, since no candidate gave the finding", finding, path)
+		} else {
+			h.logf("%s: shrunk to %s", finding, path)
+		}
 		f.ShrunkPath = path
 		f.shrinking = false
 		h.progress(found)

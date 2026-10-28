@@ -675,8 +675,9 @@ func TestAShrinkStopsAfterItsCandidates(t *testing.T) {
 		t.Fatal(err)
 	}
 	seed := uint64(1)
+	var p *plan.Plan
 	for ; ; seed++ {
-		if p, _ := g.Plan(seed); len(Candidates(p, samples)) > DefaultCandidates {
+		if p, _ = g.Plan(seed); len(Candidates(p, samples)) > DefaultCandidates {
 			break
 		}
 	}
@@ -686,15 +687,20 @@ func TestAShrinkStopsAfterItsCandidates(t *testing.T) {
 		}
 		return []check.Finding{clean}
 	})
-	if tried := len(candidates(fake.dirs)); tried != DefaultCandidates || len(found) != 1 || found[0].Shrunk == nil {
+	if tried := len(candidates(fake.dirs)); tried != DefaultCandidates || len(found) != 1 || encoded(t, found[0].Shrunk) != encoded(t, p) {
 		t.Errorf("The shrink of seed %d tried %d candidates and found %+v, want %d and the plan kept.", seed, tried, found, DefaultCandidates)
 	}
 	for _, want := range []string{
 		fmt.Sprintf("seed %d, finding 1, candidate 1: rejected, since none of its 2 runs gave the finding\n", seed),
 		fmt.Sprintf("seed %d, finding 1: shrink stopped after 16 candidates\n", seed),
+		fmt.Sprintf("seed %d, finding 1: saved unchanged to %s, since no candidate gave the finding\n", seed,
+			filepath.Join(fake.out, fmt.Sprintf("seed-%d", seed), "shrunk.json")),
 	} {
 		if !strings.Contains(fake.log.String(), want) {
 			t.Errorf("The log lacks %q:\n%s", want, fake.log.String())
 		}
+	}
+	if strings.Contains(fake.log.String(), "shrunk to") {
+		t.Errorf("The log says that the unchanged plan shrank:\n%s", fake.log.String())
 	}
 }
