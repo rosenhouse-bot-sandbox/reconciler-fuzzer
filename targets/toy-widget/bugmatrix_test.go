@@ -111,7 +111,7 @@ var bugs = map[int]string{
 	20: "Creates no Gadget and reports it ready.",
 	21: "Updates its Gadget on every reconcile and requeues after 100 ms.",
 	22: "Orphans its Gadget on delete instead of deleting it.",
-	23: "Gives up on cleanup for good when its Gadget outlives the Widget's delete, so the finalizer stays.",
+	23: "Gives up on cleanup for good when its Gadget is still there after being deleted, so the finalizer stays.",
 	24: "Never recreates a missing Gadget once it reported it ready.",
 	25: "Retries a forbidden Gadget status patch every 10 ms while the Gadget has Ready False.",
 	26: "Gives a Tenant's ClusterRole no owner reference, so it outlives the Tenant.",

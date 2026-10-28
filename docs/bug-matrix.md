@@ -31,8 +31,8 @@
 | B20 | Creates no Gadget and reports it ready. | gadget/b20 | Honest | 0 |
 | B21 | Updates its Gadget on every reconcile and requeues after 100 ms. | gadget/b21 | Converge | 0 |
 | B22 | Orphans its Gadget on delete instead of deleting it. | gadget/b22 | Clean | 1 |
-| B23 | Gives up on cleanup for good when its Gadget outlives the Widget's delete, so the finalizer stays. | gadget/b23 | Converge | 1 |
-| B23 | Gives up on cleanup for good when its Gadget outlives the Widget's delete, so the finalizer stays. | gadget/foreground-slow-delete | Converge | 1 |
+| B23 | Gives up on cleanup for good when its Gadget is still there after being deleted, so the finalizer stays. | gadget/b23 | Converge | 1 |
+| B23 | Gives up on cleanup for good when its Gadget is still there after being deleted, so the finalizer stays. | gadget/foreground-slow-delete | Converge | 1 |
 | B24 | Never recreates a missing Gadget once it reported it ready. | gadget/b24 | Restore | 1 |
 | B25 | Retries a forbidden Gadget status patch every 10 ms while the Gadget has Ready False. | gadget/b25 | Backoff | 1 |
 | B26 | Gives a Tenant's ClusterRole no owner reference, so it outlives the Tenant. | tenant/b26 | Clean | 1 |

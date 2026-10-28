@@ -16,7 +16,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	toyv1 "github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/targets/toy-widget/api/v1"
 )
@@ -258,16 +257,8 @@ func TestB7KeepsTheSurplusChildrenOnScaleDown(t *testing.T) {
 }
 
 func TestB9ReleasesTheWidgetBeforeDeletingItsChildren(t *testing.T) {
-	scheme, err := NewScheme()
-	if err != nil {
-		t.Fatal(err)
-	}
 	widget := deletingWidget(1)
-	configMap := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: widget.Namespace, Name: "w-0"}}
-	if err := controllerutil.SetControllerReference(widget, configMap, scheme); err != nil {
-		t.Fatal(err)
-	}
-	r := fixture(t, B9, interceptor.Funcs{}, widget, configMap)
+	r := fixture(t, B9, interceptor.Funcs{}, widget, controlledChild(t, widget))
 
 	mustReconcile(t, r, widget)
 
@@ -402,21 +393,13 @@ func TestB13NeverCleansUpADeletedWidget(t *testing.T) {
 		{"B13 keeps both", B13, true, []string{"w-0"}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			scheme, err := NewScheme()
-			if err != nil {
-				t.Fatal(err)
-			}
 			widget := deletingWidget(1)
-			configMap := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: widget.Namespace, Name: "w-0"}}
-			if err := controllerutil.SetControllerReference(widget, configMap, scheme); err != nil {
-				t.Fatal(err)
-			}
-			r := fixture(t, testCase.bug, interceptor.Funcs{}, widget, configMap)
+			r := fixture(t, testCase.bug, interceptor.Funcs{}, widget, controlledChild(t, widget))
 
 			mustReconcile(t, r, widget)
 			mustReconcile(t, r, widget)
 
-			err = r.Get(t.Context(), client.ObjectKeyFromObject(widget), &toyv1.Widget{})
+			err := r.Get(t.Context(), client.ObjectKeyFromObject(widget), &toyv1.Widget{})
 			if present := err == nil; present != testCase.wantWidget || (err != nil && !apierrors.IsNotFound(err)) {
 				t.Errorf("Getting the Widget returned %v, want it present: %t.", err, testCase.wantWidget)
 			}
@@ -646,7 +629,7 @@ func TestB22OrphansTheGadgetOnDelete(t *testing.T) {
 	}
 }
 
-func TestB23GivesUpOnAGadgetThatOutlivesTheWidgetsDelete(t *testing.T) {
+func TestB23GivesUpOnAGadgetStillThereAfterBeingDeleted(t *testing.T) {
 	for _, testCase := range []struct {
 		name       string
 		bug        Bug

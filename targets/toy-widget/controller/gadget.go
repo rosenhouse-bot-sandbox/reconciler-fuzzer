@@ -139,7 +139,7 @@ func (r *Reconciler) deleteGadget(ctx context.Context, widget *toyv1.Widget) (bo
 		}
 	}
 	if r.Bug == B23 {
-		r.giveUpOn(key) // B23: a Gadget that outlives the Widget's delete is never waited for.
+		r.giveUpOn(key) // B23: a Gadget still there after being deleted is never waited for.
 	}
 	return false, nil
 }

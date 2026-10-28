@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -211,16 +210,10 @@ func TestCleanUpReleasesTheWidgetOnceItsDeleteRemovesTheGadget(t *testing.T) {
 		{"B23", B23},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			scheme, err := NewScheme()
-			if err != nil {
-				t.Fatal(err)
-			}
 			widget := deletingWidget(1)
-			child := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: widget.Namespace, Name: "w-0"}}
-			if err := controllerutil.SetControllerReference(widget, child, scheme); err != nil {
-				t.Fatal(err)
-			}
-			r := gadgetFixture(t, testCase.bug, interceptor.Funcs{}, widget, child, ownedGadget(t, widget))
+			// The child holds the release until the second reconcile, which
+			// skips the cleanup if B23 gave up on the Widget.
+			r := gadgetFixture(t, testCase.bug, interceptor.Funcs{}, widget, controlledChild(t, widget), ownedGadget(t, widget))
 
 			mustReconcile(t, r, widget)
 			mustReconcile(t, r, widget)
