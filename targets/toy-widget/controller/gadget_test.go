@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -210,12 +211,21 @@ func TestCleanUpReleasesTheWidgetOnceItsDeleteRemovesTheGadget(t *testing.T) {
 		{"B23", B23},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			widget := deletingWidget(0)
-			r := gadgetFixture(t, testCase.bug, interceptor.Funcs{}, widget, ownedGadget(t, widget))
+			scheme, err := NewScheme()
+			if err != nil {
+				t.Fatal(err)
+			}
+			widget := deletingWidget(1)
+			child := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: widget.Namespace, Name: "w-0"}}
+			if err := controllerutil.SetControllerReference(widget, child, scheme); err != nil {
+				t.Fatal(err)
+			}
+			r := gadgetFixture(t, testCase.bug, interceptor.Funcs{}, widget, child, ownedGadget(t, widget))
 
 			mustReconcile(t, r, widget)
+			mustReconcile(t, r, widget)
 			if !widgetGone(t, r, widget) {
-				t.Error("The cleanup kept the Widget after its delete removed the Gadget.")
+				t.Error("The cleanup kept the Widget after its deletes removed the child and the Gadget.")
 			}
 		})
 	}
@@ -251,6 +261,43 @@ func TestCleanUpFailsTheReconcileWhenAGadgetReadFails(t *testing.T) {
 				t.Errorf("Reconcile returned %v, want the refused read.", err)
 			}
 		})
+	}
+}
+
+func TestCleanUpFailsTheReconcileWhenTheGadgetDeleteFails(t *testing.T) {
+	refused := errors.New("the API server refused the delete")
+	widget := deletingWidget(0)
+	r := gadgetFixture(t, 0, interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if _, isGadget := obj.(*toyv1.Gadget); isGadget {
+				return refused
+			}
+			return c.Delete(ctx, obj, opts...)
+		},
+	}, widget, ownedGadget(t, widget))
+
+	if err := reconcile(t, r, widget); !errors.Is(err, refused) {
+		t.Errorf("Reconcile returned %v, want the refused delete.", err)
+	}
+}
+
+// The cleanup's delete finds no Gadget when the garbage collector removed it
+// after the cleanup read it.
+func TestCleanUpReleasesTheWidgetWhenItsGadgetDeleteFindsNoGadget(t *testing.T) {
+	widget := deletingWidget(0)
+	r := gadgetFixture(t, 0, interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			err := c.Delete(ctx, obj, opts...)
+			if _, isGadget := obj.(*toyv1.Gadget); isGadget && err == nil {
+				return apierrors.NewNotFound(toyv1.GroupVersion.WithResource("gadgets").GroupResource(), obj.GetName())
+			}
+			return err
+		},
+	}, widget, ownedGadget(t, widget))
+
+	mustReconcile(t, r, widget)
+	if !widgetGone(t, r, widget) {
+		t.Error("The cleanup kept the Widget after its Gadget was gone.")
 	}
 }
 

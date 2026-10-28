@@ -633,9 +633,7 @@ func TestB21UpdatesTheGadgetOnEveryReconcileAndRequeuesSoon(t *testing.T) {
 
 func TestB22OrphansTheGadgetOnDelete(t *testing.T) {
 	widget := deletingWidget(0)
-	gadget := heldGadget(t, widget)
-	gadget.Finalizers = nil
-	r := gadgetFixture(t, B22, interceptor.Funcs{}, widget, gadget)
+	r := gadgetFixture(t, B22, interceptor.Funcs{}, widget, ownedGadget(t, widget))
 
 	mustReconcile(t, r, widget)
 
@@ -655,7 +653,7 @@ func TestB23GivesUpOnAGadgetThatOutlivesTheWidgetsDelete(t *testing.T) {
 		gadget     func(*testing.T, *toyv1.Widget) *toyv1.Gadget
 		wantWidget bool
 	}{
-		{"the correct controller releases the Widget once the Gadget goes", 0, heldGadget, false},
+		{"the correct controller releases the Widget once the Gadget is gone", 0, heldGadget, false},
 		{"B23 keeps the finalizer for good", B23, heldGadget, true},
 		{"the correct controller waits for a Gadget deleted by another client", 0, deletingGadget, false},
 		{"B23 gives up on a Gadget deleted by another client", B23, deletingGadget, true},
