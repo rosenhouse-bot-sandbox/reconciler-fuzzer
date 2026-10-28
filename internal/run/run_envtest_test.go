@@ -137,9 +137,10 @@ properties:
 	}
 }
 
-// TestClientGoLogsToHarnessLog deletes the grants CRD, a fixture, after the
-// controller's request for grants made the harness watch them. client-go's
-// failed watch of grants goes to harness.log, not to stderr.
+// TestClientGoLogsToHarnessLog deletes the grants CRD, a fixture, at step 2.
+// The harness watches grants after a request for them that comes once
+// discovery serves them, so the controller requests grants each second.
+// client-go writes its failed watch of grants to harness.log, not to stderr.
 func TestClientGoLogsToHarnessLog(t *testing.T) {
 	toyDir, err := filepath.Abs(toy)
 	if err != nil {
@@ -148,7 +149,7 @@ func TestClientGoLogsToHarnessLog(t *testing.T) {
 	dir := t.TempDir()
 	config := fmt.Sprintf(`launch:
   binary: /bin/sh
-  args: [-c, 'curl -s ${systems.kube.url}/apis/toy.reconciler-fuzzer/v1/grants >/dev/null; while true; do curl -sf ${systems.kube.url}/apis/toy.reconciler-fuzzer/v1/widgets >/dev/null; sleep 1; done']
+  args: [-c, 'while true; do curl -s ${systems.kube.url}/apis/toy.reconciler-fuzzer/v1/grants >/dev/null; curl -sf ${systems.kube.url}/apis/toy.reconciler-fuzzer/v1/widgets >/dev/null; sleep 1; done']
   rbac: [%[1]s/rbac/role.yaml]
 crds: [%[1]s/crds/toy.reconciler-fuzzer_widgets.yaml]
 fixtures: [%[1]s/crds/toy.reconciler-fuzzer_grants.yaml]
