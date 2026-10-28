@@ -426,7 +426,7 @@ func TestHuntWithoutReplaysStillShrinks(t *testing.T) {
 	}
 }
 
-func TestHuntUpdatesTheSummaryAsItGoes(t *testing.T) {
+func TestHuntUpdatesTheSummaryWhileItRuns(t *testing.T) {
 	restore := check.Finding{Check: "Restore", Summary: "a ConfigMap stays changed", Kind: "kube/configmaps"}
 	fake := &fakeRun{out: t.TempDir()}
 	summaries := map[string]string{}
@@ -540,7 +540,7 @@ func TestShrinkPlanResetsACreateTowardTheSample(t *testing.T) {
 	}
 }
 
-func TestShrinkPlanUpdatesTheSummaryAsItGoes(t *testing.T) {
+func TestShrinkPlanUpdatesTheSummaryWhileItRuns(t *testing.T) {
 	out := t.TempDir()
 	path := filepath.Join(t.TempDir(), "plan.json")
 	if err := plan.Save(path, parsePlan(t, `{"steps":[{"actions":[`+create+`]}]}`)); err != nil {
