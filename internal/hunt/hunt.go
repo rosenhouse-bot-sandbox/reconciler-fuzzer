@@ -241,7 +241,7 @@ func (h *hunter) investigate(ctx context.Context, p *plan.Plan, dir, name string
 		f.replaying = false
 		switch {
 		case h.candidates == 0:
-			h.logf("%s, finding %d: not shrunk, since --candidates is 0", name, j+1)
+			h.logf("%s, finding %d: not shrunk, since the candidate limit is 0", name, j+1)
 		case h.replays > 0 && f.Reproduced == 0:
 			h.logf("%s, finding %d: not shrunk, since no replay reproduced it", name, j+1)
 			f.shrinking = false

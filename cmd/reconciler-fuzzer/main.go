@@ -49,11 +49,15 @@ const usage = `usage:
 
 // purposes say what each command does, for its help.
 var purposes = map[string]string{
-	"run":    "Run runs one plan against the controller and prints the report of its trace.",
-	"plan":   "Plan prints the plan that run --seed n runs, without running it.",
-	"judge":  "Judge judges a stored trace and prints its report.",
-	"hunt":   "Hunt runs the plans of n seeds from s on and prints summary.md. It replays the plan of a seed with new findings r times. For each finding, it then tries up to c smaller plans, called shrink candidates, and runs each at most 4 times.",
-	"shrink": "Shrink runs a plan and prints summary.md. It replays a plan with findings r times. For each finding, it then tries up to c smaller plans, called shrink candidates, and runs each at most 4 times.",
+	"run":   "Run runs one plan against the controller and prints the report of its trace.",
+	"plan":  "Plan prints the plan that run --seed n runs, without running it.",
+	"judge": "Judge judges a stored trace and prints its report.",
+	"hunt": `Hunt runs the plans of n seeds from s on and prints summary.md. It replays the
+plan of a seed with new findings r times. For each finding, it then tries up to
+c smaller plans, called shrink candidates, and runs each at most 4 times.`,
+	"shrink": `Shrink runs a plan and prints summary.md. It replays a plan with findings r
+times. For each finding, it then tries up to c smaller plans, called shrink
+candidates, and runs each at most 4 times.`,
 }
 
 // helpWords ask for help in place of a command.

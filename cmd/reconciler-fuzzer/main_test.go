@@ -123,7 +123,7 @@ func TestHelpPrintsTheUsageOnStdout(t *testing.T) {
 
 // commandHelp is a command's usage line, what it does, and one line for each
 // flag with a description.
-var commandHelp = regexp.MustCompile(`^usage: (.+)\n\n[A-Z][^\n]*\.\n\n((?:  --[a-z-]+  +\S.*\n)+)$`)
+var commandHelp = regexp.MustCompile(`^usage: (.+)\n\n[A-Z][^\n]*(?:\n[^\n]+)*\.\n\n((?:  --[a-z-]+  +\S.*\n)+)$`)
 
 func TestACommandsHelpDescribesEachFlagOfItsUsageLine(t *testing.T) {
 	lines := map[string]bool{}
@@ -145,6 +145,17 @@ func TestACommandsHelpDescribesEachFlagOfItsUsageLine(t *testing.T) {
 			}
 			if !slices.Equal(got, want) {
 				t.Errorf("cli(%q) describes %q, want the flags of its usage line, %q", args, got, want)
+			}
+		}
+	}
+}
+
+func TestACommandsHelpFitsIn80ColumnsBelowItsUsageLine(t *testing.T) {
+	for _, command := range []string{"run", "plan", "judge", "hunt", "shrink"} {
+		_, stdout, _ := cliOutput(command, "--help")
+		for line := range strings.Lines(stdout) {
+			if line = strings.TrimSuffix(line, "\n"); !strings.HasPrefix(line, "usage: ") && len(line) > 80 {
+				t.Errorf("%s --help has a line of %d columns: %q", command, len(line), line)
 			}
 		}
 	}

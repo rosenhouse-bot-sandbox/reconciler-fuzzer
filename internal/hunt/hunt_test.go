@@ -404,7 +404,7 @@ func TestHuntWithoutCandidatesDoesNotShrink(t *testing.T) {
 	if len(found) != 1 || len(candidates(fake.dirs)) > 0 || found[0].Shrunk != nil || !os.IsNotExist(statErr) || !strings.Contains(string(summary), "| 5/5 | not shrunk |") {
 		t.Errorf("Hunt ran %v, found %+v and wrote:\n%s", fake.dirs, found, summary)
 	}
-	if want := "seed 1, finding 1: not shrunk, since --candidates is 0\n"; !strings.Contains(fake.log.String(), want) {
+	if want := "seed 1, finding 1: not shrunk, since the candidate limit is 0\n"; !strings.Contains(fake.log.String(), want) {
 		t.Errorf("The log lacks %q:\n%s", want, fake.log.String())
 	}
 }
