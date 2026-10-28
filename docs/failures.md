@@ -24,7 +24,7 @@ past the first. `shrink-<f>-<c>-<r>` is run r of candidate c in the shrink
 of finding f, and stays only when it gave the finding. `summary.md` has one
 row per distinct finding: seed, check, summary, replays that reproduced it,
 and the shrunk plan. It also lists seeds whose run failed. `hunt` rewrites
-it as it goes, and a cell says `pending` until its replays or shrink end.
+it while it runs, and a cell says `pending` until its replays or shrink end.
 
 ## report.md
 

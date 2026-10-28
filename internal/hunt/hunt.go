@@ -74,7 +74,7 @@ type Found struct {
 // Hunt runs each seed's plan into <Out>/seed-<n>. For each finding whose
 // signature no earlier seed found, it replays the plan Replays times and
 // shrinks it. It removes the run of a seed that found nothing new. A seed
-// whose run fails is noted, and the hunt goes on. It writes summary.md under
+// whose run fails is noted, and the hunt continues. It writes summary.md under
 // Out after each seed, and as the replays and shrinks of a seed's findings
 // finish. It returns the distinct findings, and an error when a seed failed
 // or the context ended.
@@ -192,8 +192,9 @@ func (h *hunter) logf(format string, args ...any) {
 // finding, c the candidate and r the run. It removes each candidate run that
 // did not fail. A replay or candidate whose run fails counts as not failing.
 // A finding that no replay reproduced is not shrunk, unless it had no
-// replays. Only the run of p itself returns its error. When the context ends or a shrunk plan fails to save,
-// it returns the findings so far with the error.
+// replays. Only the run of p itself returns its error. When the context ends
+// or a shrunk plan fails to save, it returns the findings so far with the
+// error.
 func (h *hunter) investigate(ctx context.Context, p *plan.Plan, dir, name string) ([]Found, error) {
 	report, err := h.run(ctx, p, dir)
 	if err != nil {
