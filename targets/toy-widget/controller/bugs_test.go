@@ -16,7 +16,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	toyv1 "github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/targets/toy-widget/api/v1"
 )
@@ -258,16 +257,8 @@ func TestB7KeepsTheSurplusChildrenOnScaleDown(t *testing.T) {
 }
 
 func TestB9ReleasesTheWidgetBeforeDeletingItsChildren(t *testing.T) {
-	scheme, err := NewScheme()
-	if err != nil {
-		t.Fatal(err)
-	}
 	widget := deletingWidget(1)
-	configMap := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: widget.Namespace, Name: "w-0"}}
-	if err := controllerutil.SetControllerReference(widget, configMap, scheme); err != nil {
-		t.Fatal(err)
-	}
-	r := fixture(t, B9, interceptor.Funcs{}, widget, configMap)
+	r := fixture(t, B9, interceptor.Funcs{}, widget, controlledChild(t, widget))
 
 	mustReconcile(t, r, widget)
 
@@ -402,21 +393,13 @@ func TestB13NeverCleansUpADeletedWidget(t *testing.T) {
 		{"B13 keeps both", B13, true, []string{"w-0"}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			scheme, err := NewScheme()
-			if err != nil {
-				t.Fatal(err)
-			}
 			widget := deletingWidget(1)
-			configMap := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: widget.Namespace, Name: "w-0"}}
-			if err := controllerutil.SetControllerReference(widget, configMap, scheme); err != nil {
-				t.Fatal(err)
-			}
-			r := fixture(t, testCase.bug, interceptor.Funcs{}, widget, configMap)
+			r := fixture(t, testCase.bug, interceptor.Funcs{}, widget, controlledChild(t, widget))
 
 			mustReconcile(t, r, widget)
 			mustReconcile(t, r, widget)
 
-			err = r.Get(t.Context(), client.ObjectKeyFromObject(widget), &toyv1.Widget{})
+			err := r.Get(t.Context(), client.ObjectKeyFromObject(widget), &toyv1.Widget{})
 			if present := err == nil; present != testCase.wantWidget || (err != nil && !apierrors.IsNotFound(err)) {
 				t.Errorf("Getting the Widget returned %v, want it present: %t.", err, testCase.wantWidget)
 			}
@@ -633,9 +616,7 @@ func TestB21UpdatesTheGadgetOnEveryReconcileAndRequeuesSoon(t *testing.T) {
 
 func TestB22OrphansTheGadgetOnDelete(t *testing.T) {
 	widget := deletingWidget(0)
-	gadget := heldGadget(t, widget)
-	gadget.Finalizers = nil
-	r := gadgetFixture(t, B22, interceptor.Funcs{}, widget, gadget)
+	r := gadgetFixture(t, B22, interceptor.Funcs{}, widget, ownedGadget(t, widget))
 
 	mustReconcile(t, r, widget)
 
@@ -648,20 +629,26 @@ func TestB22OrphansTheGadgetOnDelete(t *testing.T) {
 	}
 }
 
-func TestB23GivesUpOnAGadgetItsDeleteDidNotRemove(t *testing.T) {
+func TestB23GivesUpOnAGadgetStillThereAfterBeingDeleted(t *testing.T) {
 	for _, testCase := range []struct {
 		name       string
 		bug        Bug
+		gadget     func(*testing.T, *toyv1.Widget) *toyv1.Gadget
 		wantWidget bool
 	}{
-		{"the correct controller releases the Widget once the Gadget goes", 0, false},
-		{"B23 keeps the finalizer for good", B23, true},
+		{"the correct controller releases the Widget once the Gadget is gone", 0, heldGadget, false},
+		{"B23 keeps the finalizer for good", B23, heldGadget, true},
+		{"the correct controller waits for a Gadget deleted by another client", 0, deletingGadget, false},
+		{"B23 gives up on a Gadget deleted by another client", B23, deletingGadget, true},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			widget := deletingWidget(0)
-			r := gadgetFixture(t, testCase.bug, interceptor.Funcs{}, widget, heldGadget(t, widget))
+			r := gadgetFixture(t, testCase.bug, interceptor.Funcs{}, widget, testCase.gadget(t, widget))
 
 			mustReconcile(t, r, widget)
+			if widgetGone(t, r, widget) {
+				t.Fatal("The cleanup released the Widget while its Gadget remained.")
+			}
 			release(t, r.Client, widget)
 			mustReconcile(t, r, widget)
 

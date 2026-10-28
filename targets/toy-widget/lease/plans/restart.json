@@ -1,0 +1,11 @@
+{
+  "steps": [
+    {"actions": [{"do": "create", "slot": "a"}]},
+    {
+      "actions": [
+        {"do": "restart"},
+        {"at": "100ms", "do": "update", "slot": "a", "patch": {"spec": {"count": 2}}}
+      ]
+    }
+  ]
+}

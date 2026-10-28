@@ -26,10 +26,11 @@ const (
 	gadgetConfig = "gadget/config.yaml"
 	tenantConfig = "tenant/config.yaml"
 	grantConfig  = "grant/config.yaml"
+	leaseConfig  = "lease/config.yaml"
 )
 
 // configs are the toy's configs.
-var configs = []string{"config.yaml", gadgetConfig, tenantConfig, grantConfig}
+var configs = []string{"config.yaml", gadgetConfig, tenantConfig, grantConfig, leaseConfig}
 
 func (g gateRow) configPath() string { return cmp.Or(g.config, "config.yaml") }
 
@@ -67,6 +68,7 @@ var gate = []gateRow{
 	{"b12", 12, "Crash: the controller exited", 1, "exit status 2", ""},
 	{"b12-fault", 12, "Crash: the controller exited", 1, "exit status 2", ""},
 	{"b13", 13, "Converge: did not settle", 1, "is being deleted", ""},
+	{"kill-delete", 13, "Converge: did not settle", 1, "is being deleted", ""},
 	{"b15", 15, "Converge: did not settle", 0, "is not ready", ""},
 	{"b16", 16, "Converge: did not settle", 0, "is not ready", ""},
 	{"b3", 3, "Clean: left resources behind", 1, "widget-0 (rule 4, slot a)", ""},
@@ -80,6 +82,7 @@ var gate = []gateRow{
 	{"b21", 21, "Converge: did not settle", 0, "over the budget", gadgetConfig},
 	{"b22", 22, "Clean: left resources behind", 1, "gadgets.toy.reconciler-fuzzer", gadgetConfig},
 	{"b23", 23, "Converge: did not settle", 1, "is being deleted", gadgetConfig},
+	{"foreground-slow-delete", 23, "Converge: did not settle", 1, "is being deleted", gadgetConfig},
 	{"b24", 24, "Restore: did not restore damaged resources", 1, "gadgets.toy.reconciler-fuzzer", gadgetConfig},
 	{"b25", 25, "Backoff: retried a failing request in a tight loop", 1, "patch gadgets.toy.reconciler-fuzzer", gadgetConfig},
 	{"b26", 26, "Clean: left resources behind", 1, "clusterroles.rbac.authorization.k8s.io tenant-tenant (rule 3, slot a)", tenantConfig},

@@ -35,6 +35,20 @@ func deletingWidget(count int32) *toyv1.Widget {
 	return widget
 }
 
+// controlledChild is the first ConfigMap that widget controls.
+func controlledChild(t *testing.T, widget *toyv1.Widget) *corev1.ConfigMap {
+	t.Helper()
+	scheme, err := NewScheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	configMap := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: widget.Namespace, Name: widget.Name + "-0"}}
+	if err := controllerutil.SetControllerReference(widget, configMap, scheme); err != nil {
+		t.Fatal(err)
+	}
+	return configMap
+}
+
 func TestDesiredChildrenNamesAndIndexesOnePerCount(t *testing.T) {
 	children := desiredChildren(newWidget(3), 3, "")
 
@@ -236,10 +250,7 @@ func TestCleanUpFindsChildrenTheCacheHasMissed(t *testing.T) {
 		t.Fatal(err)
 	}
 	widget := deletingWidget(1)
-	child := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: widget.Namespace, Name: "w-0"}}
-	if err := controllerutil.SetControllerReference(widget, child, scheme); err != nil {
-		t.Fatal(err)
-	}
+	child := controlledChild(t, widget)
 	cache := fake.NewClientBuilder().WithScheme(scheme).WithObjects(widget.DeepCopy()).Build()
 	apiServer := fake.NewClientBuilder().WithScheme(scheme).WithObjects(widget.DeepCopy(), child).Build()
 	reconciler := &Reconciler{Client: cache, APIReader: apiServer, Scheme: scheme}
@@ -277,11 +288,7 @@ func TestCleanUpWaitsOutTheCleanupDelay(t *testing.T) {
 			}
 			widget := deletingWidget(1)
 			widget.DeletionTimestamp = &metav1.Time{Time: time.Now().Add(-testCase.deletedAgo)}
-			configMap := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: widget.Namespace, Name: "w-0"}}
-			if err := controllerutil.SetControllerReference(widget, configMap, scheme); err != nil {
-				t.Fatal(err)
-			}
-			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(widget, configMap).Build()
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(widget, controlledChild(t, widget)).Build()
 			r := &Reconciler{Client: c, APIReader: c, Scheme: scheme, CleanupDelay: testCase.delay}
 
 			result, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(widget)})
