@@ -20,8 +20,9 @@ define the clauses and checks.
 `hunt --out <out>` writes one `seed-<n>` directory per seed that found
 something new, and `summary.md`. Each seed directory holds a run's files,
 `replay-<i>` runs, and `shrunk.json`, or `shrunk-<f>.json` for finding f
-past the first. `shrink-<f>-<c>-<r>` is run r of candidate c in the shrink
-of finding f, and stays only when it gave the finding. `summary.md` has one
+past the first. A shrink that keeps no candidate saves the plan unchanged.
+`shrink-<f>-<c>-<r>` is run r of candidate c in the shrink of finding f, and
+stays only when it gave the finding. `summary.md` has one
 row per distinct finding: seed, check, summary, replays that reproduced it,
 and the shrunk plan. It also lists seeds whose run failed. `hunt` rewrites
 it while it runs, and a cell says `pending` until its replays or shrink end.
