@@ -665,6 +665,9 @@ func TestB23GivesUpOnAGadgetThatOutlivesTheWidgetsDelete(t *testing.T) {
 			r := gadgetFixture(t, testCase.bug, interceptor.Funcs{}, widget, testCase.gadget(t, widget))
 
 			mustReconcile(t, r, widget)
+			if widgetGone(t, r, widget) {
+				t.Fatal("The cleanup released the Widget while its Gadget remained.")
+			}
 			release(t, r.Client, widget)
 			mustReconcile(t, r, widget)
 
