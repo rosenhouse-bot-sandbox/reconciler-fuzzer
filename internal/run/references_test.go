@@ -192,6 +192,18 @@ func TestReferenceKindsAreTheKubeKindsReferencesName(t *testing.T) {
 	}
 }
 
+func TestBlockKindsAreTheFromKindsOfBlockReferences(t *testing.T) {
+	secretKind := schema.GroupVersionKind{Version: "v1", Kind: "Secret"}
+	references := []config.Reference{
+		{From: sprocketKind, To: gadgetKind, Name: "spec.gadget", Block: true},
+		{From: gadgetKind, To: secretKind, Name: "spec.secret"},
+		{From: sprocketKind, To: secretKind, Name: "spec.secret", Block: true},
+	}
+	if got, want := blockKinds(references), []schema.GroupVersionKind{sprocketKind}; !reflect.DeepEqual(got, want) {
+		t.Errorf("blockKinds = %v, want %v", got, want)
+	}
+}
+
 func TestFakeOptionsSeeAllOfAFakeAReferenceNames(t *testing.T) {
 	s := config.System{Name: "cloud", API: "crud", Process: &config.Process{Command: []string{"/bin/crudfake"}}}
 	for system, want := range map[string]bool{"cloud": true, "other": false} {
@@ -215,6 +227,22 @@ func TestKubeOptionsWatchAndSeeEachReferencedKind(t *testing.T) {
 		t.Errorf("Watch = %v, want %v", o.Watch, want)
 	}
 	if want := []schema.GroupVersionKind{gadgetKind, secretKind}; !reflect.DeepEqual(o.Seen, want) {
+		t.Errorf("Seen = %v, want %v", o.Seen, want)
+	}
+}
+
+func TestKubeOptionsSeeTheFromKindOfABlockReference(t *testing.T) {
+	widgetKind := schema.GroupVersionKind{Group: "toy.reconciler-fuzzer", Version: "v1", Kind: "Widget"}
+	secretKind := schema.GroupVersionKind{Version: "v1", Kind: "Secret"}
+	cfg := &config.Config{
+		Primaries:  []config.Primary{{Kind: widgetKind}},
+		References: []config.Reference{{From: widgetKind, To: secretKind, Name: "spec.secret", Block: true}},
+	}
+	o := kubeOptions(cfg, nil, nil)
+	if want := []schema.GroupVersionKind{widgetKind, secretKind}; !reflect.DeepEqual(o.Watch, want) {
+		t.Errorf("Watch = %v, want %v, which already lists the from kind", o.Watch, want)
+	}
+	if want := []schema.GroupVersionKind{secretKind, widgetKind}; !reflect.DeepEqual(o.Seen, want) {
 		t.Errorf("Seen = %v, want %v", o.Seen, want)
 	}
 }
