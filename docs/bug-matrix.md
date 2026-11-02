@@ -65,7 +65,7 @@ Each Cluster owns Volumes of a third party's kind, which a model sets ready. A D
 
 | Bug | Description | Plan | Check | Step |
 |---|---|---|---|---|
-| B0 | The correct controller. | all 35 plans of config.yaml, database/config.yaml, protect/config.yaml, upgrade/config.yaml | none | |
+| B0 | The correct controller. | all 36 plans of config.yaml, database/config.yaml, protect/config.yaml, secret/config.yaml, upgrade/config.yaml | none | |
 | B0 | The correct controller. | uninstall/crd-first-stop | none | |
 | B0 | The correct controller. | uninstall/kill-recreate | none | |
 | B0 | The correct controller. | uninstall/recreate | none | |
@@ -74,10 +74,16 @@ Each Cluster owns Volumes of a third party's kind, which a model sets ready. A D
 | B0 | The correct controller. | upgrade/properties/upgrade-and-update | none | |
 | B116 | Removes every finalizer from a deleting Volume while its Cluster is deleted. | protect/b0 | Finalizers | 2 |
 | B116 | Removes every finalizer from a deleting Volume while its Cluster is deleted. | slow-delete | Finalizers | 1 |
+| B120 | Releases a Cluster while a Database names it. | blocked-delete | Ordered | 1 |
+| B120 | Releases a Cluster while a Database names it. | database/cluster-delete | Converge | 1 |
+| B120 | Releases a Cluster while a Database names it. | delete-cluster-first | Ordered | 1 |
+| B121 | Releases a Database while a User names it. | delete-database-first | Ordered | 1 |
+| B122 | Does not requeue Users when their Database changes. | user-first | Converge | 0 |
 | B123 | Readies a Database on a Cluster that is not Ready. | create-together | Honest | 0 |
 | B124 | Readies a Database without checking its Secret. | secret-late | Honest | 0 |
 | B125 | Keeps a Ready Database ready after its Secret is deleted. | secret-deleted-while-down | Honest | 1 |
 | B125 | Keeps a Ready Database ready after its Secret is deleted. | secret-recreate | Honest | 1 |
+| B126 | Under --protect-secrets, never puts the in-use finalizer on the Secret a Database names. | secret/secret-first | Ordered | 1 |
 | B140 | Under version 2, keeps the version 1 finalizer, so a deleted Cluster is never removed. | upgrade/delete | Converge | 2 |
 | B141 | Under version 2, names its Volumes `<cluster>-data-<i>` and sees only those, so it makes new ones and leaves version 1's. | upgrade/properties/upgrade-and-update | Property | 2 |
 | B141 | Under version 2, names its Volumes `<cluster>-data-<i>` and sees only those, so it makes new ones and leaves version 1's. | upgrade/update | Restore | 1 |

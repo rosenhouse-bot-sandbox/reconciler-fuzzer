@@ -23,7 +23,7 @@ const (
 )
 
 // configs are the configs whose every plan B0 passes with no notes.
-var configs = []string{"config.yaml", databaseConfig, protectConfig, upgradeConfig}
+var configs = []string{"config.yaml", databaseConfig, protectConfig, secretConfig, upgradeConfig}
 
 type gateRow struct {
 	plan    string
@@ -52,11 +52,19 @@ func (g gateRow) planPath() string { return planPath(g.configPath(), g.plan) }
 var gate = []gateRow{
 	{plan: "slow-delete", bug: 116, finding: "Finalizers: removed another caller's finalizer", step: 1, detail: "cluster-vol-0: reconciler-fuzzer.dev/slow-delete, added by model:volumes.storage.thirdparty, removed by update"},
 	{plan: "b0", bug: 116, finding: "Finalizers: removed another caller's finalizer", step: 2, detail: "cluster-vol-0: storage.thirdparty/protect, added by model:volumes.storage.thirdparty, removed by update", config: protectConfig},
+	{plan: "delete-cluster-first", bug: 120, finding: "Ordered: released an object that another names", step: 1, detail: "/cluster: slot b names it"},
+	{plan: "blocked-delete", bug: 120, finding: "Ordered: released an object that another names", step: 1, detail: "/cluster: slot b names it"},
+	// database/config.yaml has no reference to the Cluster, so Converge
+	// catches B120 there.
+	{plan: "cluster-delete", bug: 120, finding: "Converge: did not settle (clause 1)", step: 1, detail: "/db is not ready", config: databaseConfig},
+	{plan: "delete-database-first", bug: 121, finding: "Ordered: released an object that another names", step: 1, detail: "/db: slot c names it"},
+	{plan: "user-first", bug: 122, finding: "Converge: did not settle (clause 1)", step: 0, detail: "/alice is not ready"},
 	{plan: "create-together", bug: 123, finding: "Honest: reported ready before seeing its dependency ready", step: 0, detail: "slot b: clusters.toy.reconciler-fuzzer "},
 	{plan: "secret-late", bug: 124, finding: "Honest: reported ready with no dependency", step: 0, detail: "slot b: secrets "},
 	{plan: "secret-recreate", bug: 125, finding: "Honest: stayed ready after seeing its dependency not ready", step: 1, detail: "slot b: secrets "},
 	// The restarted controller's watch shows the Secret missing.
 	{plan: "secret-deleted-while-down", bug: 125, finding: "Honest: stayed ready after seeing its dependency not ready", step: 1, detail: "slot b: secrets "},
+	{plan: "secret-first", bug: 126, finding: "Ordered: released an object that another names", step: 1, detail: "/admin-password: slot a names it", config: secretConfig},
 	// Each plan under upgrade/ restarts the controller as version 2.
 	{plan: "delete", bug: 140, finding: "Converge: did not settle (clause 2)", step: 2, detail: "cluster is being deleted", config: upgradeConfig},
 	{plan: "update", bug: 141, finding: "Restore: replaced resources", step: 1, detail: "/cluster-data-0 (rule 1, slot a)", config: upgradeConfig},
@@ -80,21 +88,6 @@ var gate = []gateRow{
 	// B0 updates no Volume while it deletes them.
 	{plan: "stop-after-delete", config: uninstallConfig, note: "fault 1 (error(500) on verb=update group=storage.thirdparty resource=volumes) picked no request"},
 	{plan: "stop-first", config: uninstallConfig, note: "cluster is not judged: the stop did not wait for it"},
-}
-
-// orderedGate holds the rows of #126's last step. The toy-fleet package
-// moves its bug rows into gate, adds secretConfig to configs, and drops its
-// B0 rows, which TestGate then runs as plans of configs.
-var orderedGate = []gateRow{
-	{plan: "blocked-delete"},
-	{plan: "blocked-cluster-delete"},
-	{plan: "secret-first", config: secretConfig},
-	{plan: "delete-cluster-first", bug: 120, finding: "Ordered: released an object that another names", step: 1, detail: "/cluster: slot b names it"},
-	{plan: "blocked-delete", bug: 120, finding: "Ordered: released an object that another names", step: 1, detail: "/cluster: slot b names it"},
-	{plan: "cluster-delete", bug: 120, finding: "Converge: did not settle (clause 1)", step: 1, detail: "/db is not ready", config: databaseConfig},
-	{plan: "delete-database-first", bug: 121, finding: "Ordered: released an object that another names", step: 1, detail: "/db: slot c names it"},
-	{plan: "user-first", bug: 122, finding: "Converge: did not settle (clause 1)", step: 0, detail: "/alice is not ready"},
-	{plan: "secret-first", bug: 126, finding: "Ordered: released an object that another names", step: 1, detail: "/admin-password: slot a names it", config: secretConfig},
 }
 
 func planPath(config, plan string) string {
