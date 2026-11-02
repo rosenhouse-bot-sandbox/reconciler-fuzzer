@@ -66,8 +66,8 @@ type Options struct {
 	// that trace.Ignored does not ignore. It adds any other kind a listener
 	// sees a request for.
 	Watch []schema.GroupVersionKind
-	// Seen lists the dependency kinds whose objects the controller
-	// listener records as Seen events.
+	// Seen lists the kinds whose objects the controller listener records
+	// as Seen events.
 	Seen []schema.GroupVersionKind
 	// Warm holds objects that Start creates with a server-side dry run as
 	// admin. The API server's first create of a new kind can take seconds,
