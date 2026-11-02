@@ -45,7 +45,7 @@ func unmetClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 				unmets = append(unmets, crClauses(ix, p, cr, t, s)...)
 			}
 		case step.Step == stop.Action.Step:
-			unmets = append(unmets, unfinalized(ix, live)...)
+			unmets = append(unmets, unfinalized(ix, live, t, s)...)
 		}
 		crs += len(live)
 	}
@@ -58,11 +58,12 @@ func unmetClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 	return append(unmets, quietClauses(ix, t, s, max(1, crs))...)
 }
 
-// unfinalized are the CRs of live being deleted that the stop waited for.
-func unfinalized(ix *trace.Index, live []trace.Version) []unmet {
+// unfinalized are the CRs of live being deleted at t that the stop waited
+// for, unless one is in use.
+func unfinalized(ix *trace.Index, live []trace.Version, t time.Duration, s Spec) []unmet {
 	var unmets []unmet
 	for _, cr := range live {
-		if deleting(cr.Body) && ix.StopWaitedFor(cr.UID) {
+		if deleting(cr.Body) && ix.StopWaitedFor(cr.UID) && !s.inUse(ix, cr.Ref, t) {
 			unmets = append(unmets, unmet{2, kind(cr.Ref), describe(cr.Ref) + " is being deleted"})
 		}
 	}
@@ -164,7 +165,8 @@ func looksAt(c trace.Call, ref trace.Ref) bool {
 }
 
 // crClauses says whether cr, a CR of p's kind, is done at t, and not being
-// deleted: ready, halted, or held back by a reference.
+// deleted: ready, halted, or held back by a reference. A CR in use waits in
+// deletion, and is done.
 func crClauses(ix *trace.Index, p Primary, cr trace.Version, t time.Duration, s Spec) []unmet {
 	name, k := describe(cr.Ref), kind(cr.Ref)
 	var body map[string]any
@@ -172,6 +174,9 @@ func crClauses(ix *trace.Index, p Primary, cr trace.Version, t time.Duration, s 
 		return []unmet{{1, k, fmt.Sprintf("%s has a body that is not a JSON object: %v", name, err)}}
 	}
 	if metadata, _ := body["metadata"].(map[string]any); metadata["deletionTimestamp"] != nil {
+		if s.inUse(ix, cr.Ref, t) {
+			return nil
+		}
 		return []unmet{{2, k, name + " is being deleted"}}
 	}
 	if ready, err := p.Ready(body); err != nil {

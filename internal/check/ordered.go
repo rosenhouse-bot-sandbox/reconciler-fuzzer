@@ -96,33 +96,20 @@ func (s Spec) claims(versions []trace.Event) []claim {
 	return claims
 }
 
-// blocked are the objects that body, a version of the CR at cr, names by
-// block references, so that their deletion waits for the CR.
-func (s Spec) blocked(cr trace.Ref, body map[string]any) []trace.Ref {
-	var objects []trace.Ref
-	for _, n := range s.names(cr, body) {
-		if s.References[n.ref].Block {
-			objects = append(objects, n.object)
-		}
-	}
-	return objects
-}
-
-// kept reports whether a CR kept object until r: one of seens, the
-// controller's seens of the CR, by bound showed a version that names object,
-// and each later version before r names it too.
+// kept reports whether a CR, whose versions make claims, kept object until
+// r: by bound, one of seens, the controller's seens of the CR, showed a
+// version that names object, and each later version before r names it too.
 func kept(seens []trace.Event, claims []claim, object trace.Ref, r release, bound time.Duration) bool {
-	// Each version above since and below the release names object.
+	before := slices.DeleteFunc(slices.Clone(claims), func(c claim) bool { return c.rv >= r.rv })
+	// Each version before the release and after since names object.
 	since := uint64(0)
-	for _, c := range claims {
-		if c.rv < r.rv && !slices.Contains(c.objects, object) {
+	for _, c := range before {
+		if !slices.Contains(c.objects, object) {
 			since = max(since, c.rv)
 		}
 	}
-	return slices.ContainsFunc(seens, func(e trace.Event) bool {
-		rv := revision(e.Seen.RV)
-		n := slices.IndexFunc(claims, func(c claim) bool { return c.rv == rv })
-		return e.At <= bound && rv > since && n >= 0 && slices.Contains(claims[n].objects, object)
+	return slices.ContainsFunc(before, func(c claim) bool {
+		return c.rv > since && slices.ContainsFunc(seens, func(e trace.Event) bool { return e.At <= bound && revision(e.Seen.RV) == c.rv })
 	})
 }
 

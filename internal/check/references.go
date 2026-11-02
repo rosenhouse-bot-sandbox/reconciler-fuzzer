@@ -3,6 +3,7 @@ package check
 import (
 	"cmp"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -39,6 +40,28 @@ func (s Spec) names(cr trace.Ref, body map[string]any) []named {
 	return objects
 }
 
+// blocked are the objects that body, a version of the CR at cr, names by
+// block references, so that their deletion waits for the CR.
+func (s Spec) blocked(cr trace.Ref, body map[string]any) []trace.Ref {
+	var objects []trace.Ref
+	for _, n := range s.names(cr, body) {
+		if s.References[n.ref].Block {
+			objects = append(objects, n.object)
+		}
+	}
+	return objects
+}
+
+// inUse reports whether a live CR names the object at ref by a block
+// reference at t, so that the object's deletion waits for it.
+func (s Spec) inUse(ix *trace.Index, ref trace.Ref, t time.Duration) bool {
+	return slices.ContainsFunc(s.Primaries, func(p Primary) bool {
+		return slices.ContainsFunc(ix.Live(p.Kind.Group, p.Kind.Resource, t), func(cr trace.Version) bool {
+			return slices.Contains(s.blocked(cr.Ref, decode(cr.Body)), ref)
+		})
+	})
+}
+
 // state is what a look at a named object shows.
 type state struct{ missing, ready bool }
 
@@ -59,11 +82,11 @@ func (st state) describe() string {
 }
 
 // sight is what the controller knows of a named object: the state its last
-// look, at at, showed, or, if it never looked, the object's state.
+// look showed, or, if it never looked, the object's state.
 type sight struct {
 	state
 	looked bool
-	at     time.Duration
+	look   trace.Event
 	// unknown says an opaque response may have shown the object since.
 	unknown bool
 }
@@ -94,7 +117,7 @@ func (s Spec) sight(ix *trace.Index, n named, t time.Duration) sight {
 	if !looked {
 		return sight{state: s.world(ix, n, t), unknown: ix.Opaque(trace.Controller, n.object, -1, t)}
 	}
-	return sight{state: s.shown(ix, n, look), looked: true, at: look.At, unknown: ix.Opaque(trace.Controller, n.object, look.At, t)}
+	return sight{state: s.shown(ix, n, look), looked: true, look: look, unknown: ix.Opaque(trace.Controller, n.object, look.At, t)}
 }
 
 // shown is what look, one of the controller's looks at n, showed. The
@@ -142,7 +165,7 @@ func (s Spec) describeLooks(ix *trace.Index, cr trace.Ref, body map[string]any, 
 		case !g.ready:
 			shown = "not ready"
 		}
-		fmt.Fprintf(&seen, "; the controller last saw %s %s at %v", describe(n.object), shown, g.at)
+		fmt.Fprintf(&seen, "; the controller last saw %s %s at %v", describe(n.object), shown, g.look.At)
 	}
 	return seen.String()
 }
