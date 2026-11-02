@@ -29,6 +29,8 @@ const (
 	Provisioning Phase = "Provisioning"
 	Ready        Phase = "Ready"
 	Deleting     Phase = "Deleting"
+	// Creating replaces Provisioning in version 2.
+	Creating Phase = "Creating"
 )
 
 // CommonStatus is every fleet kind's status, so one ready expression fits

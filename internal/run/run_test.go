@@ -22,10 +22,10 @@ func TestExpandLaunch(t *testing.T) {
 		Args:   []string{"--namespace=${systems.kube.namespace}", "--bug=0", "--cloud=${systems.cloud.url}"},
 		Env:    map[string]string{"KUBECONFIG": "${systems.kube.kubeconfig}", "CLOUD": "${systems.cloud.url}/v1"},
 	}
-	vars := map[string]map[string]string{
+	vars := flatten(map[string]map[string]string{
 		"kube":  {"namespace": "rf-1", "kubeconfig": "/out/kubeconfig"},
 		"cloud": {"url": "http://127.0.0.1:1"},
-	}
+	})
 	o, err := expandLaunch(l, []string{"--bug=3"}, vars)
 	if err != nil {
 		t.Fatal(err)

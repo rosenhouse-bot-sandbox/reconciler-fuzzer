@@ -24,13 +24,15 @@ const shortestPeriod = plan.Duration(500 * time.Millisecond)
 // pass order: drop a step, drop an action or fault, halve a fault period
 // (or clear the period of a step without faults), reset a spec field to its
 // value in the sample of the CR's kind, merge two slots. Every candidate is
-// valid.
+// valid, and its restarts upgrade to a prefix of p's versions, in order.
 func Candidates(p *plan.Plan, samples []map[string]any) []*plan.Plan {
 	var valid []*plan.Plan
+	versions := upgrades(clone(p))
 	try := func(change func(c *plan.Plan)) {
 		c := clone(p)
 		change(c)
-		if c.Validate() == nil {
+		kept := upgrades(c)
+		if c.Validate() == nil && slices.EqualFunc(kept, versions[:len(kept)], func(a, b plan.Upgrade) bool { return reflect.DeepEqual(a, b) }) {
 			valid = append(valid, c)
 		}
 	}
@@ -92,6 +94,20 @@ func Shrink(ctx context.Context, p *plan.Plan, samples []map[string]any, fails F
 			return p, nil
 		}
 	}
+}
+
+// upgrades lists, in order, the Upgrades that p's restarts set. A plain
+// restart sets none.
+func upgrades(p *plan.Plan) []plan.Upgrade {
+	var found []plan.Upgrade
+	for _, step := range p.Steps {
+		for _, a := range step.Actions {
+			if a.Upgrades() {
+				found = append(found, a.Upgrade)
+			}
+		}
+	}
+	return found
 }
 
 func clone(p *plan.Plan) *plan.Plan {

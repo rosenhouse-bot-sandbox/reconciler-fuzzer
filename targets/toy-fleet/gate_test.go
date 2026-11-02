@@ -13,15 +13,17 @@ import (
 )
 
 const (
-	clusterConfig   = "cluster/config.yaml"
-	databaseConfig  = "database/config.yaml"
-	protectConfig   = "protect/config.yaml"
-	secretConfig    = "secret/config.yaml"
-	uninstallConfig = "uninstall/config.yaml"
+	clusterConfig           = "cluster/config.yaml"
+	databaseConfig          = "database/config.yaml"
+	protectConfig           = "protect/config.yaml"
+	secretConfig            = "secret/config.yaml"
+	uninstallConfig         = "uninstall/config.yaml"
+	upgradeConfig           = "upgrade/config.yaml"
+	upgradePropertiesConfig = "upgrade/properties/config.yaml"
 )
 
 // configs are the configs whose every plan B0 passes with no notes.
-var configs = []string{"config.yaml", databaseConfig, protectConfig}
+var configs = []string{"config.yaml", databaseConfig, protectConfig, upgradeConfig}
 
 type gateRow struct {
 	plan    string
@@ -55,6 +57,14 @@ var gate = []gateRow{
 	{plan: "secret-recreate", bug: 125, finding: "Honest: stayed ready after seeing its dependency not ready", step: 1, detail: "slot b: secrets "},
 	// The restarted controller's watch shows the Secret missing.
 	{plan: "secret-deleted-while-down", bug: 125, finding: "Honest: stayed ready after seeing its dependency not ready", step: 1, detail: "slot b: secrets "},
+	// Each plan under upgrade/ restarts the controller as version 2.
+	{plan: "delete", bug: 140, finding: "Converge: did not settle (clause 2)", step: 2, detail: "cluster is being deleted", config: upgradeConfig},
+	{plan: "update", bug: 141, finding: "Restore: replaced resources", step: 1, detail: "/cluster-data-0 (rule 1, slot a)", config: upgradeConfig},
+	{plan: "mid-provisioning", bug: 142, finding: "Converge: did not settle (clause 1)", step: 0, detail: "cluster is not ready", config: upgradeConfig},
+	{plan: "upgrade-and-update", bug: 141, finding: "Property: property volumes-go-first does not hold", step: 2, detail: "is false", config: upgradePropertiesConfig},
+	// The slowDelete keeps each Volume being deleted for 2 s before its
+	// Cluster is gone, so this row does not race the two kinds' watches.
+	{plan: "upgrade-and-update", config: upgradePropertiesConfig},
 	{plan: "restart-cluster-delete", bug: 150, finding: "Converge: did not settle (clause 1)", step: 1, detail: "db is not ready", config: databaseConfig},
 	// The kill comes after the update that releases the Cluster, so B151
 	// never strips its Volumes' finalizers.

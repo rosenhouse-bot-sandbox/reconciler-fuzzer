@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -19,8 +20,12 @@ import (
 	storagev1 "github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/targets/toy-fleet/thirdparty/storage/v1"
 )
 
-// ClusterLabel names a Volume's Cluster.
-const ClusterLabel = "fleet.toy/cluster"
+// ClusterLabel names a Volume's Cluster. Version 2 also sets VersionLabel to
+// 2, as a release often labels its children with its version.
+const (
+	ClusterLabel = "fleet.toy/cluster"
+	VersionLabel = "fleet.toy/version"
+)
 
 // ClusterReconciler moves a Cluster through its phases and keeps its Volumes.
 type ClusterReconciler struct{ reconciler }
@@ -46,13 +51,20 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if !cluster.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, r.finalize(ctx, cluster)
 	}
-	if controllerutil.AddFinalizer(cluster, fleetv1.ClusterFinalizer) {
+	if controllerutil.AddFinalizer(cluster, r.finalizer()) {
+		if r.migrates() {
+			// One write moves the Cluster to version 2's finalizer.
+			controllerutil.RemoveFinalizer(cluster, fleetv1.ClusterFinalizer)
+		}
 		return ctrl.Result{}, r.Update(ctx, cluster)
 	}
 	old := cluster.Status
-	if old.Phase == "" {
+	switch {
+	case old.Phase == "":
 		cluster.Status.Phase = fleetv1.Pending
 		return ctrl.Result{}, r.writeStatus(ctx, cluster, old, cluster.Status)
+	case r.Version == 2 && r.Bug == B142 && old.Phase == fleetv1.Provisioning:
+		return ctrl.Result{}, nil // B142 leaves a Cluster that version 1 was provisioning.
 	}
 	ready, err := r.syncVolumes(ctx, cluster)
 	if err != nil {
@@ -60,12 +72,54 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 	status := fleetv1.ClusterStatus{ReadyVolumes: ready}
 	status.ObservedGeneration = cluster.Generation
-	status.Phase, status.Message = fleetv1.Provisioning, fmt.Sprintf("%d of %d Volumes ready", ready, cluster.Spec.Volumes)
+	status.Phase, status.Message = r.provisioning(), fmt.Sprintf("%d of %d Volumes ready", ready, cluster.Spec.Volumes)
 	if ready == cluster.Spec.Volumes {
 		status.Phase, status.Message = fleetv1.Ready, ""
 	}
 	cluster.Status = status
 	return ctrl.Result{}, r.writeStatus(ctx, cluster, old, status)
+}
+
+// migrates says whether this version moves the Cluster from version 1's
+// finalizer to its own. B140 never removes version 1's.
+func (r *ClusterReconciler) migrates() bool { return r.Version == 2 && r.Bug != B140 }
+
+// finalizer is the finalizer this version adds.
+func (r *ClusterReconciler) finalizer() string {
+	if r.Version == 2 {
+		return fleetv1.ClusterFinalizerV2
+	}
+	return fleetv1.ClusterFinalizer
+}
+
+// finalizers are the finalizers this version removes once the Cluster is
+// finalized. Version 2 also removes version 1's, which a Cluster deleted
+// before the upgrade still carries.
+func (r *ClusterReconciler) finalizers() []string {
+	if r.migrates() {
+		return []string{fleetv1.ClusterFinalizerV2, fleetv1.ClusterFinalizer}
+	}
+	return []string{r.finalizer()}
+}
+
+// provisioning is the phase this version writes while a Volume is not ready.
+func (r *ClusterReconciler) provisioning() fleetv1.Phase {
+	if r.Version == 2 {
+		return fleetv1.Creating
+	}
+	return fleetv1.Provisioning
+}
+
+// renames says whether this version renames the Cluster's Volumes. B141
+// then sees only the Volumes it names, and misses version 1's.
+func (r *ClusterReconciler) renames() bool { return r.Version == 2 && r.Bug == B141 }
+
+// volumePrefix starts the names of the Volumes this version makes.
+func (r *ClusterReconciler) volumePrefix(cluster *fleetv1.Cluster) string {
+	if r.renames() {
+		return cluster.Name + "-data-"
+	}
+	return cluster.Name + "-vol-"
 }
 
 // syncVolumes creates, updates and deletes the Cluster's Volumes to match its
@@ -78,7 +132,7 @@ func (r *ClusterReconciler) syncVolumes(ctx context.Context, cluster *fleetv1.Cl
 	want := map[string]bool{}
 	var ready int32
 	for i := range cluster.Spec.Volumes {
-		name := fmt.Sprintf("%s-vol-%d", cluster.Name, i)
+		name := fmt.Sprintf("%s%d", r.volumePrefix(cluster), i)
 		want[name] = true
 		volume := &storagev1.Volume{ObjectMeta: metav1.ObjectMeta{Namespace: cluster.Namespace, Name: name}}
 		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, volume, func() error {
@@ -87,6 +141,9 @@ func (r *ClusterReconciler) syncVolumes(ctx context.Context, cluster *fleetv1.Cl
 				volume.Labels = map[string]string{}
 			}
 			volume.Labels[ClusterLabel] = cluster.Name
+			if r.Version == 2 {
+				volume.Labels[VersionLabel] = "2"
+			}
 			if r.Bug == B151 {
 				controllerutil.AddFinalizer(volume, VolumeFinalizer)
 			}
@@ -109,9 +166,10 @@ func (r *ClusterReconciler) syncVolumes(ctx context.Context, cluster *fleetv1.Cl
 }
 
 // finalize waits until no Database names the Cluster, deletes its Volumes,
-// waits until none remains, and then removes its finalizer.
+// waits until none remains, and then removes its finalizers.
 func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Cluster) error {
-	if !controllerutil.ContainsFinalizer(cluster, fleetv1.ClusterFinalizer) {
+	mine := r.finalizers()
+	if !slices.ContainsFunc(mine, func(f string) bool { return controllerutil.ContainsFinalizer(cluster, f) }) {
 		return nil
 	}
 	databases := &fleetv1.DatabaseList{}
@@ -154,7 +212,9 @@ func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Clust
 	if len(volumes) > 0 && r.Bug != B151 {
 		return nil // A Volume's deletion requeues the Cluster.
 	}
-	controllerutil.RemoveFinalizer(cluster, fleetv1.ClusterFinalizer)
+	for _, f := range mine {
+		controllerutil.RemoveFinalizer(cluster, f)
+	}
 	return client.IgnoreNotFound(r.Update(ctx, cluster))
 }
 
@@ -182,7 +242,7 @@ func (r *ClusterReconciler) ownedVolumes(ctx context.Context, reader client.Read
 	}
 	var owned []storagev1.Volume
 	for _, v := range list.Items {
-		if metav1.IsControlledBy(&v, cluster) {
+		if metav1.IsControlledBy(&v, cluster) && (!r.renames() || strings.HasPrefix(v.Name, r.volumePrefix(cluster))) {
 			owned = append(owned, v)
 		}
 	}

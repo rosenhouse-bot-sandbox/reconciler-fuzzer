@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"time"
@@ -41,6 +42,7 @@ type Process interface {
 	Stop(ctx context.Context) error
 	Kill(ctx context.Context) error
 	Supervise(on bool) error
+	SetCommand(path string, args []string)
 }
 
 // Cluster applies CR actions as the harness. *kube.Kube implements it.
@@ -50,6 +52,7 @@ type Cluster interface {
 	Delete(ctx context.Context, ref trace.Ref, propagation plan.Propagation) error
 	Gone(ctx context.Context, ref trace.Ref, uid string) (bool, error)
 	WaitGone(ctx context.Context, ref trace.Ref, uid string) error
+	InstallCRDs(ctx context.Context, paths []string) error
 	// CreateFixture creates the fixture at ref again, as its file declares
 	// it, and returns the created object's ref.
 	CreateFixture(ctx context.Context, ref trace.Ref) (trace.Ref, error)
@@ -91,6 +94,11 @@ type Runner struct {
 	// Failed returns the error of a failed system, such as a fake that
 	// exited. Nil means none can fail.
 	Failed func() error
+	// Vars expand as ${key} in a restart's args, such as
+	// systems.kube.kubeconfig.
+	Vars map[string]string
+	// LaunchArgs follow a restart's args, as they follow the launch's.
+	LaunchArgs []string
 }
 
 func (r *Runner) failed() error {
@@ -157,6 +165,9 @@ func Run(ctx context.Context, o Options) (check.Report, error) {
 	if err := p.ValidateKinds(cfg.ListedKinds()); err != nil {
 		return check.Report{}, err
 	}
+	if err := checkUpgrades(cfg, p); err != nil {
+		return check.Report{}, err
+	}
 	samples, err := loadSamples(cfg.Primaries)
 	if err != nil {
 		return check.Report{}, err
@@ -188,6 +199,42 @@ func Run(ctx context.Context, o Options) (check.Report, error) {
 		return check.Report{}, err
 	}
 	return report, nil
+}
+
+// checkUpgrades refuses an upgrade, in launch.upgrades or a restart of p,
+// whose binary is not an executable file or whose crds path holds no CRD. It
+// also refuses a restart arg that config.CheckArgs refuses.
+func checkUpgrades(cfg *config.Config, p *plan.Plan) error {
+	for i, u := range cfg.Launch.Upgrades {
+		if err := checkPaths(u); err != nil {
+			return fmt.Errorf("launch.upgrades[%d]: %w", i, err)
+		}
+	}
+	for i, step := range p.Steps {
+		for j, a := range step.Actions {
+			if err := checkPaths(a.Upgrade); err != nil {
+				return fmt.Errorf("steps[%d].actions[%d]: %w", i, j, err)
+			}
+			if err := cfg.CheckArgs(a.Args); err != nil {
+				return fmt.Errorf("steps[%d].actions[%d].%w", i, j, err)
+			}
+		}
+	}
+	return nil
+}
+
+func checkPaths(u plan.Upgrade) error {
+	if u.Binary != "" {
+		if _, err := exec.LookPath(u.Binary); err != nil {
+			return err
+		}
+	}
+	for _, path := range u.CRDs {
+		if err := kube.CheckCRDs(path); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // execute starts the fake services, the Kubernetes system, the models and
@@ -252,7 +299,8 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 		return err
 	}
 	defer func() { err = errors.Join(err, log.Close()) }()
-	launchOptions, err := expandLaunch(cfg.Launch, o.LaunchArgs, vars)
+	launchVars := flatten(vars)
+	launchOptions, err := expandLaunch(cfg.Launch, o.LaunchArgs, launchVars)
 	if err != nil {
 		return err
 	}
@@ -297,6 +345,8 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 		Select: func(ix *trace.Index, creator trace.Caller, target plan.Target, slot string, t time.Duration) (trace.Ref, error) {
 			return owner.New(ix, spec.Owners).Select(creator, target, slot, t)
 		},
+		Vars:       launchVars,
+		LaunchArgs: o.LaunchArgs,
 	}
 	if err := runner.Quiet(ctx); err != nil {
 		return err
@@ -470,17 +520,13 @@ func primaryKinds(primaries []config.Primary) []schema.GroupVersionKind {
 }
 
 // expandLaunch expands ${systems.<name>.<key>} in the launch args, with
-// extra appended, and in the env. systemVars maps a system to its Vars.
-func expandLaunch(l config.Launch, extra []string, systemVars map[string]map[string]string) (launch.Options, error) {
-	vars := flatten(systemVars)
-	o := launch.Options{Path: l.Binary, Env: map[string]string{}}
-	for _, arg := range append(slices.Clone(l.Args), extra...) {
-		expanded, err := config.Expand(arg, vars)
-		if err != nil {
-			return launch.Options{}, fmt.Errorf("launch args: %w", err)
-		}
-		o.Args = append(o.Args, expanded)
+// extra appended, and in the env.
+func expandLaunch(l config.Launch, extra []string, vars map[string]string) (launch.Options, error) {
+	args, err := expandArgs(l.Args, extra, vars)
+	if err != nil {
+		return launch.Options{}, fmt.Errorf("launch args: %w", err)
 	}
+	o := launch.Options{Path: l.Binary, Args: args, Env: map[string]string{}}
 	for name, value := range l.Env {
 		expanded, err := config.Expand(value, vars)
 		if err != nil {
@@ -489,6 +535,20 @@ func expandLaunch(l config.Launch, extra []string, systemVars map[string]map[str
 		o.Env[name] = expanded
 	}
 	return o, nil
+}
+
+// expandArgs expands ${key} in each of args, then in each of extra. It never
+// returns nil, so a restart's empty args replace the current ones.
+func expandArgs(args, extra []string, vars map[string]string) ([]string, error) {
+	out := []string{}
+	for _, arg := range slices.Concat(args, extra) {
+		expanded, err := config.Expand(arg, vars)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, expanded)
+	}
+	return out, nil
 }
 
 // loadSamples reads each entry's sample, in config order. A sample of
