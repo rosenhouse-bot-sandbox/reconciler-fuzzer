@@ -1,6 +1,7 @@
 package check_test
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 
@@ -171,7 +172,9 @@ func TestOrderedOrdersVersionsOfTwoKindsByResourceVersion(t *testing.T) {
 	})
 }
 
-func TestACRWaitingInDeletionForACRThatNamesItMeetsClause2(t *testing.T) {
+// The deleting Cluster reports itself not ready, as toy-fleet's does. After
+// a stop, clause 2 judges it as a CR the stop waited for.
+func TestACRWaitingInDeletionForACRThatNamesItSettles(t *testing.T) {
 	t.Skip("enabled by the judge package")
 	for name, c := range map[string]struct {
 		block bool
@@ -182,21 +185,26 @@ func TestACRWaitingInDeletionForACRThatNamesItMeetsClause2(t *testing.T) {
 		"named without block":    {false, func(*tt.Script) {}, []string{"clusters.toy ns/a is being deleted"}},
 		"after its last CR left": {true, func(r *tt.Script) { r.DeleteCR("b", databaseB) }, []string{"clusters.toy ns/a is being deleted"}},
 	} {
-		t.Run(name, func(t *testing.T) {
-			r := fleetRun(1, clusters, databases)
-			r.Spec.References = []trace.Reference{clusterRef(r, c.block)}
-			r.Begin()
-			r.CreateCR("a", clusterA)
-			r.Ready(clusterA)
-			r.Create(trace.Harness, databaseB, databaseOn(true, "a"))
-			r.Act("create", "b", &databaseB)
-			r.Update(trace.Harness, clusterA, tt.Deleting(tt.CR("a", true))).Act("delete", "a", &clusterA)
-			c.after(r)
-			r.EndFaults()
-			if unmet := settledAt(t, r, r.Now+5*s); !slices.Equal(unmet, c.unmet) {
-				t.Errorf("unmet = %q, want %q.", unmet, c.unmet)
-			}
-		})
+		for _, stop := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s, stopped %t", name, stop), func(t *testing.T) {
+				r := fleetRun(1, clusters, databases)
+				r.Spec.References = []trace.Reference{clusterRef(r, c.block)}
+				r.Begin()
+				r.CreateCR("a", clusterA)
+				r.Ready(clusterA)
+				r.Create(trace.Harness, databaseB, databaseOn(true, "a"))
+				r.Act("create", "b", &databaseB)
+				r.Update(trace.Harness, clusterA, tt.Deleting(tt.CR("a", false))).Act("delete", "a", &clusterA)
+				c.after(r)
+				if stop {
+					r.Stop(r.UID(clusterA))
+				}
+				r.EndFaults()
+				if unmet := settledAt(t, r, r.Now+5*s); !slices.Equal(unmet, c.unmet) {
+					t.Errorf("unmet = %q, want %q.", unmet, c.unmet)
+				}
+			})
+		}
 	}
 }
 
