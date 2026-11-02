@@ -224,15 +224,16 @@ type Phase struct {
 // Action records one plan action as the harness applied it. Ref is the CR
 // of a CR action, and the object a damage, changeFixture or createFixture
 // action changed. Waited holds the UIDs of the deleted CRs that a stop
-// waited for.
+// waited for. Upgrade says that a restart set a binary, args or crds.
 type Action struct {
-	Step   int      `json:"step"`
-	Index  int      `json:"index"`
-	Do     string   `json:"do"`
-	Slot   string   `json:"slot,omitempty"`
-	Ref    *Ref     `json:"ref,omitempty"`
-	Waited []string `json:"waited,omitempty"`
-	Error  string   `json:"error,omitempty"`
+	Step    int      `json:"step"`
+	Index   int      `json:"index"`
+	Do      string   `json:"do"`
+	Slot    string   `json:"slot,omitempty"`
+	Ref     *Ref     `json:"ref,omitempty"`
+	Waited  []string `json:"waited,omitempty"`
+	Upgrade bool     `json:"upgrade,omitempty"`
+	Error   string   `json:"error,omitempty"`
 }
 
 // SlowDeleteFinalizer is the finalizer a slowDelete fault holds objects

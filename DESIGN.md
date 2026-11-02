@@ -60,14 +60,12 @@ Only `check` decides what is a bug.
 
 ## 3. The System interface
 
-`system.System` has `Name() string`, `Start(ctx, env) (Endpoints, error)`,
-`Snapshot(ctx) ([]Resource, error)`, `Pending() bool` and `Fault(plan.Fault)
-(end func(), err error)`. `Endpoints` holds the controller and harness
-listeners and `Vars`, which expand as `${systems.<name>.<key>}` in launch args
-and env, and kube fixtures. Request faults go to a system's controller
-listener. Model faults go to the first stage model or fake service that
-`Takes` them. Damage goes to the system the target names. Checks read `work`
-events, never `Pending`.
+`system.System` has `Name`, `Start`, `Snapshot`, `Pending` and `Fault`. Its
+`Endpoints` hold the controller and harness listeners and `Vars`, which expand
+as `${systems.<name>.<key>}` in launch and restart args, env and kube fixtures.
+Request faults go to a system's controller listener, model faults to the first
+stage model or fake service that `Takes` them, and damage to the system the
+target names. Checks read `work` events, never `Pending`.
 
 ## 4. Trace
 
@@ -144,14 +142,15 @@ name, and `update` otherwise.
 ## 6. Kubernetes system
 
 `kube.Start` starts envtest, the run namespace, the controller's identity, both
-listeners and the observer, and creates the fixtures. Fixtures expand
-`${systems.<fake>.<key>}`. `Vars` holds `kubeconfig`, `namespace` and `url`.
-Harness actions return once the observer has recorded their effect. The
-observer list-watches cluster-wide each installed CRD, each served kind the
-config or a fixture names, and each served kind `launch.rbac` names that is not
-ignored (§10). These are the run event's `kinds`. It then watches any kind a
-listener records a call on, and records one `version` per
-(ref, resourceVersion).
+listeners and the observer, and creates the fixtures. `Vars` holds `kubeconfig`,
+`namespace` and `url`. Harness actions return once the observer has recorded
+their effect. The observer list-watches cluster-wide each installed CRD, each
+served kind the config or a fixture names, and each served kind `launch.rbac`
+names that is not ignored (§10). These are the run event's `kinds`. It then
+watches any kind a listener records a call on, and records one `version` per
+(ref, resourceVersion). `InstallCRDs` creates or updates CRDs as admin, waits
+for discovery, and watches their kinds, which the run event omits. It refuses
+CRDs that stop serving a watched version. Watches lag a new schema by a second.
 
 ## 7. Models and fake services
 
@@ -169,24 +168,17 @@ fields. A stage model keeps its `finalizer:` on each live object, and removes it
 `finalizer.after` past the first deleting version. Each hold is pending work.
 
 **Fake services.** `fake.New` makes a System of a `systems:` entry with a
-`process`. Start runs it in the config's directory with
-`RECONCILER_FUZZER_ADDR=127.0.0.1:<port>`, and `${addr}` and `${port}` in its
-command expanded, logging to `<out>/<name>.log`. It opens a controller and a
-harness listener with the entry's map, with `SeenAll` under `dependency`, and
-creates the entry's fixtures through the harness listener. `Vars` holds `url`,
-the controller listener, and `token`. An exit the harness did not cause, an
-unreadable listing, and an id listed again after it was gone are harness
-errors; the runner checks for them at each settle poll. A `crud` fake serves
-`fake.ResourcesPath` and `fake.FaultsPath` on its own address, which only the
-harness uses; the controller listener answers 404 there.
+`process`, which it runs in the config's directory on the address in
+`fake.AddrEnv`. It opens a controller and a harness listener with the entry's
+map, and creates the entry's fixtures through the harness listener. `Vars`
+holds `url`, the controller listener, and `token`. An exit the harness did not
+cause, an unreadable listing, and an id listed again after it was gone are
+harness errors, which each settle poll checks for (`fake.go`).
 
-An emulator's map is a `fake.Lister`, which lists it through its own API. The
-observer lists every 20 ms and hears `Shown`. It records each object's version
-when newer than the last recorded, a deleted version when a known object leaves
-the listing, and `work` when `pending` changes. `Takes` accepts a model fault
-on a `crud` fake. `Patch` and `Delete` send the map's `Write` through the
-harness listener, and return after an observer pass that started after the
-answer. An answer the map's `Gone` accepts is `system.ErrGone`.
+The observer lists a fake every 20 ms, through `fake.ResourcesPath` or an
+emulator's `fake.Lister`, and hears `Shown`. It records versions, deletions and
+`work`. `Takes` accepts a model fault on a `crud` fake. `Patch` and `Delete`
+return after an observer pass that started after the answer.
 
 ## 8. Plans
 
@@ -213,6 +205,11 @@ refuses an unknown one. On `kube`, a model fault and a target need a
 decodes strictly and validates each action's slot and fields (`plan.go`). Two
 slots' CRs clash only with equal group, kind, namespace and name. `run.Run`
 refuses a plan that creates an object of an unlisted kind (`ValidateKinds`).
+
+**Upgrades.** A `restart` may take `binary`, `args` and `crds`, relative to the
+plan's directory. It installs the `crds` while the old controller runs; a failed
+install is a harness error. A set `binary` or `args` replaces the old one for
+every later start, with `--launch-arg`s after the args. Env and RBAC stay fixed.
 
 ## 9. Step runner
 
@@ -316,10 +313,9 @@ steps (§17, entry 15).
 **Converge.** The settle condition holds by the deadline, and still holds at
 `t* + stable`. The summary names the first unmet clause, such as `did not
 settle (clause 7)`. `backoff-bound` labels a finding whose deadline
-`backoffCap` set. `converge.go` suggests missing `models:`. A step whose record
-ends too early gets a note that names that end: its confirm window's end, the
-next step's start, or the trace's last event. A CR that a `stop` did not wait
-for, still being deleted at the trace's last event, gets one too.
+`backoffCap` set. `converge.go` suggests missing `models:`. It notes a step
+whose record ends too early, and a CR still being deleted at the trace's last
+event that a `stop` did not wait for.
 
 **Crash.** A controller exit the harness did not cause fails its step.
 
@@ -335,12 +331,12 @@ and those of an unlisted owner not at all. Summary: `left resources behind`.
 `changeFixture` or `createFixture` action after a settled step, comparing the
 controller's resources at the two ends by group, without volatile fields
 (entries 21 and 40, the map's, and a CR kind's `periodic.paths`). Where no
-`damage` touched the root, each instance must stay, with no new one and an
-equal body: `replaced resources`, `changed resources`. Where one did, each
-group's kind must stay under the root. A damaged group must be live again
-while its owner lives, or else a CR made in the step must own its kind and
-role there: `did not restore damaged resources` (entries 22 and 82). A group
-whose CRs are all not ready but halted or held back may empty (entry 83).
+`damage` touched the root, each instance must stay, with no new one and, except
+at an upgrade, an equal body: `replaced resources`, `changed resources`. Where
+one did, each group's kind must stay under the root. A damaged group must be
+live again while its owner lives, or else a CR made in the step must own its
+kind and role there: `did not restore damaged resources` (entries 22 and 82). A
+group whose CRs are all not ready but halted or held back may empty (entry 83).
 
 **Unique.** At each settled step's end, a group holds at most one live
 controller instance. Summary: `duplicate resources`.
@@ -389,12 +385,10 @@ added (entry 85): `removed another caller's finalizer`.
 and `world.<system>.<key>`, the live instances' bodies, where a key is
 `<resource>` or `<resource>.<group>` on kube and the collection on a fake. Each
 kind in the run event's `kinds` or in an entry's `owns` has a key.
-`firstWrittenUnder(object, path)` takes a kube body and a list of keys. It
-finds the earliest version of the object's ref, of any instance, with the
-object's value at the path, and returns the UID of that version's owning CR by
-rules 1 to 3, or `""`; a finding's details say where such values came from. The
-string and base64 CEL extensions apply. Summaries: `property <name> does not
-hold`, `could not be evaluated`.
+`firstWrittenUnder(object, path)` returns the UID of the rule 1 to 3 owning CR
+of the earliest version of the object's ref with its value at the path, or `""`
+(`property.go`). The string and base64 CEL extensions apply. Summaries:
+`property <name> does not hold`, `could not be evaluated`.
 
 **Corpus.** `check/testdata/corpus/` holds traces of known bugs and false
 positives (`corpus_test.go`).
@@ -410,6 +404,7 @@ launch:
   args: [--bug=0]
   env: {CLOUD_ENDPOINT: "${systems.cloud.url}"}   # KUBECONFIG defaults to ${systems.kube.kubeconfig}
   rbac: [rbac/role.yaml]
+  upgrades: [{binary: ../../bin/toy-bucket-v2, args: [--bug=0], crds: [v2/crds/]}]   # optional (§14)
 crds: [crds/]
 primaries:                                  # every kind the controller serves
   - kind: toy.reconciler-fuzzer/v1/Bucket
@@ -493,6 +488,10 @@ it again. Plans of a config without references are as before.
 each 5 times and shrinks it (`shrink.go`), trying at most 16 candidates.
 `summary.md` lists the findings with seed, reproduction rate and shrunk plan.
 
+**Upgrades.** Each `launch.upgrades` entry becomes a restart that ends a step drawn
+from the previous upgrade's step on, 0 to `stable` after its last action. Drawn
+last, they only add restarts to a plan. Shrinking drops them from the last back.
+
 ## 15. Commands
 
 ```
@@ -514,14 +513,15 @@ nightly call. A toy is a directory in `targets/` with a `main.go`. `build`,
 and `tenant/` and `grant/` cross scopes. In `targets/toy-bucket`, each Bucket CR
 owns one bucket in the `crudfake` system `cloud`; its bugs start at B30, and
 `halted/` runs `--halt` under `primary.halted`. In `targets/toy-fleet`, a
-Cluster owns modelled third-party Volumes, a Database names a Cluster and
-maybe a Secret, and a User a Database. Its bugs start at B100. `config.yaml`
-lists all three kinds and their references. The generated test fuzzes
-`cluster/`, which lists Clusters alone, `database/`, which lists Databases on
-a fixture Cluster, and `protect/`, whose Volume model holds each Volume's
-deletion with its finalizer. Under `config.yaml`, a Cluster's deletion waits
-for the Databases that name it, which fails clause 2. `uninstall/` makes the
-Database CRD a fixture, which a plan may delete.
+Cluster owns modelled third-party Volumes, a Database names a Cluster and maybe
+a Secret, and a User a Database. Its bugs start at B100. `config.yaml` lists all
+three kinds and their references. The generated test fuzzes `cluster/`, which
+lists Clusters alone, `database/`, which lists Databases on a fixture Cluster,
+`protect/`, whose Volume model holds each Volume's deletion with its finalizer,
+and `upgrade/`, `cluster/` with an upgrade to `--version=2`. Under
+`config.yaml`, a Cluster's deletion waits for the Databases that name it, which
+fails clause 2. Only gate rows run `upgrade/properties/`, which adds a property,
+and `uninstall/`, whose Database CRD a plan may delete.
 
 Each config's `plans/` holds its gated bugs' and B0's plans. A toy's
 `gate_envtest_test.go` runs `gate_test.go`'s rows, and its `bugmatrix_test.go`
@@ -530,9 +530,8 @@ plans of the configs that `configs` lists, and no findings on the 20 faulted
 seeds that the toy's generated test runs for each config it fuzzes.
 
 **Examples.** `examples/<name>` adopts cert-manager, external-secrets on Vault,
-and ACK's s3-controller on moto. Plans and listed seeds give no findings,
-negative controls fail Clean or a property, and `bugs/` plans find known real
-bugs, such as cert-manager's #63; `repro-<name>` prints their rates.
+and ACK's s3-controller on moto. Their plans and seeds pass, negative controls
+fail, and `bugs/` plans find real bugs such as cert-manager's #63.
 
 **Testing.** Red/green TDD: a test must fail when its code is mutated. Envtest
 tests, few, live in `*_envtest_test.go` behind `//go:build envtest`. Root tests
@@ -582,3 +581,4 @@ Each entry changes a check, exception, `System` interface or ignore list.
 84. A 2xx kube list that is not `Partial` and lacks an object shows it missing, as does the `k8s.io/initial-events-end` bookmark of such a watch, since client-go's informers open a watch with `sendInitialEvents` instead of a list. So a restart or a dropped watch counts. Kube listeners ask for JSON of Seen kinds, so built-in kinds' lists and watches decode.
 85. A kube write's call records its answer's finalizers, for Finalizers (#133), since an update that empties a deleting object's finalizers deletes it and answers with the old version. The gc owns `foregroundDeletion` and `orphan`, which the API server adds for whoever deletes. A finalizer the harness wrote, from a sample, a fixture or a plan, may be the controller's own. Listeners record answers in no fixed order, so a version that overlapping writes of two callers carry may be either's. After an answer names a version the observer missed, the trace may lack a change, so the object's later writes pass. A CRD's status write keeps its metadata.
 86. Honest excuses a `ready` write that the controller sends within 2×`stable` of a look, after an earlier look that let the CR be `ready`, with no `start` since, and retracts within `stable` of the write's response, by writing the CR not `ready` or naming another object. A reconcile may read its cache before the look reaches the cache, the cache holds what an earlier look showed, and the CR's next reconcile starts only once the write returns. Neither window, nor a `track`, counts time in which a step's faults stall the controller, or between an exit and its next start, since a reconcile that a fault holds keeps the CRs queued behind it waiting. A step's faults stall it only if a fault altered one of the controller's requests in them, so a model fault, such as `stuck`, and a held watch stall it not at all. The retraction window starts again at a `start`, since a restart loses the reconcile, and a write of the CR that failed or had an unknown outcome, the `ready` write itself or one in the window, such as a conflict from a cache that lacks the `ready` write, gives the controller the `backoff` of the step that answered it and `stable` from its response. A killed write gives none, since the controller starts again with an empty backoff.
+87. At a step whose restart upgrades the controller, Restore allows changed resources but not replaced ones, since a release often rewrites its children's labels or templates (#137).
