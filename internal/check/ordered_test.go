@@ -44,7 +44,6 @@ func ordered(t *testing.T, r *tt.Script) []check.Finding {
 }
 
 func TestOrderedFailsAReleaseWhileASeenCRNamesIt(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	for name, before := range map[string]func(r *tt.Script){
 		"a live CR": func(*tt.Script) {},
 		"a CR being deleted": func(r *tt.Script) {
@@ -64,14 +63,12 @@ func TestOrderedFailsAReleaseWhileASeenCRNamesIt(t *testing.T) {
 }
 
 func TestOrderedJudgesOnlyBlockReferences(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	r := secretRun(secretRef(), secret(true))
 	seeBoth(r).Delete(ctl, pw)
 	requireNone(t, ordered(t, r))
 }
 
 func TestOrderedPassesAReleaseTheControllerHadNoTimeToHold(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	for name, see := range map[string]func(r *tt.Script){
 		"a CR it never saw":                        func(r *tt.Script) { r.See(ctl, pw).Tick(r.Spec.Stable) },
 		"a CR it saw less than stable before":      func(r *tt.Script) { r.See(ctl, pw).Tick(r.Spec.Stable).See(ctl, databaseB) },
@@ -88,7 +85,6 @@ func TestOrderedPassesAReleaseTheControllerHadNoTimeToHold(t *testing.T) {
 }
 
 func TestOrderedPassesAReleaseThatNoCRNamesThroughout(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	for name, before := range map[string]func(r *tt.Script){
 		"a CR gone first":                     func(r *tt.Script) { r.Delete(trace.Harness, databaseB) },
 		"a CR that moved its reference first": func(r *tt.Script) { r.Update(trace.Harness, databaseB, database(false, "other")) },
@@ -109,7 +105,6 @@ func TestOrderedPassesAReleaseThatNoCRNamesThroughout(t *testing.T) {
 }
 
 func TestOrderedIgnoresACRCreatedOnceTheDeletionStarted(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	r := fleetRun(1, databases)
 	r.Spec.References = []trace.Reference{blockRef()}
 	r.Begin()
@@ -122,7 +117,6 @@ func TestOrderedIgnoresACRCreatedOnceTheDeletionStarted(t *testing.T) {
 }
 
 func TestOrderedJudgesEachInstanceApart(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	t.Run("an object made again", func(t *testing.T) {
 		r := secretRun(blockRef(), secret(true))
 		seeBoth(r).Update(trace.Harness, pw, tt.Deleting(secret(true))).
@@ -155,7 +149,6 @@ func TestOrderedJudgesEachInstanceApart(t *testing.T) {
 // one kind before an earlier version of another. Ordered orders them by
 // resourceVersion, as integers.
 func TestOrderedOrdersVersionsOfTwoKindsByResourceVersion(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	move := func(r *tt.Script, rv string) trace.Event {
 		return tt.Version(databaseB, r.UID(databaseB), rv, database(false, "other"))
 	}
@@ -175,7 +168,6 @@ func TestOrderedOrdersVersionsOfTwoKindsByResourceVersion(t *testing.T) {
 // The deleting Cluster reports itself not ready, as toy-fleet's does. After
 // a stop, clause 2 judges it as a CR the stop waited for.
 func TestACRWaitingInDeletionForACRThatNamesItSettles(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	for name, c := range map[string]struct {
 		block bool
 		after func(r *tt.Script)
@@ -209,7 +201,6 @@ func TestACRWaitingInDeletionForACRThatNamesItSettles(t *testing.T) {
 }
 
 func TestHonestJudgesAnObjectWaitingInDeletionByItsVersionBefore(t *testing.T) {
-	t.Skip("enabled by the judge package")
 	for name, c := range map[string]struct{ block, wasReady, finding bool }{
 		"under block, once ready":   {true, true, false},
 		"under block, never ready":  {true, false, true},

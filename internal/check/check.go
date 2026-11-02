@@ -267,7 +267,7 @@ func compileReferences(references []trace.Reference) ([]Reference, error) {
 			return nil, fmt.Errorf("ready of references[%d]: %w", i, err)
 		}
 		compiled = append(compiled, Reference{From: r.From, To: r.ToRef(), Namespaced: r.Namespaced, Name: r.Name, Namespace: r.Namespace,
-			Ready: ready, Required: r.Required, Track: r.Track})
+			Ready: ready, Required: r.Required, Track: r.Track, Block: r.Block})
 	}
 	return compiled, nil
 }
