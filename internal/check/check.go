@@ -224,8 +224,9 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 }
 
 // configReferences compiles c's references. The run event's references must
-// name each kube To kind and each fake To system, since the listeners
-// recorded seens of no other.
+// name each kube To kind and each fake To system, and name or block on each
+// block reference's From kind, since the listeners recorded seens of no
+// other.
 func configReferences(c *config.Config, run trace.Run) ([]Reference, error) {
 	for i, r := range c.References {
 		if !slices.ContainsFunc(run.References, func(recorded trace.Reference) bool {
@@ -236,6 +237,13 @@ func configReferences(c *config.Config, run trace.Run) ([]Reference, error) {
 				to = kindName(trace.Kind{Group: r.To.Group, Version: r.To.Version, Kind: r.To.Kind})
 			}
 			return nil, fmt.Errorf("the config's references[%d] names %s, but no reference of the trace's run event does, so the trace holds no seens of it", i, to)
+		}
+		if r.Block && !slices.ContainsFunc(run.References, func(recorded trace.Reference) bool {
+			return recorded.To.Group == r.From.Group && recorded.To.Kind == r.From.Kind ||
+				recorded.Block && recorded.From.Group == r.From.Group && recorded.From.Kind == r.From.Kind
+		}) {
+			from := kindName(trace.Kind{Group: r.From.Group, Version: r.From.Version, Kind: r.From.Kind})
+			return nil, fmt.Errorf("the config's references[%d] blocks on %s, but no reference of the trace's run event names it or blocks on it, so the trace holds no seens of it", i, from)
 		}
 	}
 	references, err := owner.References(c, recordedResource(run))
