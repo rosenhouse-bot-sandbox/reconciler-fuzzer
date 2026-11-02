@@ -90,6 +90,29 @@ func TestAModelFaultComesWithTheActionItExercises(t *testing.T) {
 	}
 }
 
+// toy-fleet's Role serves the reconcilers of three kinds, but a Cluster owns
+// only Volumes, which a model plays. Faults and damage should favor them over
+// the Secrets and Users a Cluster never touches.
+func TestTheFleetToyFavorsTheModelKindOverOtherRBACKinds(t *testing.T) {
+	ps := plans(t, fleetClusterConfig, 200)
+	counts := map[string]int{}
+	for _, f := range faults(ps) {
+		if !f.ModelFault() {
+			counts[f.Match.Resource]++
+		}
+	}
+	for _, a := range actions(ps) {
+		if a.Do == plan.Damage {
+			counts[a.Target.Resource]++
+		}
+	}
+	for _, other := range []string{"secrets", "configmaps", "users", "databases"} {
+		if counts["volumes"] < 2*counts[other] {
+			t.Errorf("Faults and damage name resources %v, want volumes over twice as often as %s.", counts, other)
+		}
+	}
+}
+
 func TestTheGadgetToyDrawsBothModelFaultsOnGadgets(t *testing.T) {
 	gadgets := plan.Match{Group: "toy.reconciler-fuzzer", Resource: "gadgets"}
 	drawn := map[string]bool{}

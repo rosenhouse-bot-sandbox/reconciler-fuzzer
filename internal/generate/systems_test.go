@@ -73,7 +73,7 @@ func TestAHoldWatchWithoutALiveCRComesWithACreate(t *testing.T) {
 	}
 }
 
-func TestHoldWatchesFavorThePrimaryAndTheCoreKindsTheControllerCreates(t *testing.T) {
+func TestHoldWatchesFavorThePrimaryAndTheOwnedKinds(t *testing.T) {
 	counts := map[string]int{}
 	for _, f := range faults(plans(t, "../../examples/cert-manager/config.yaml", 400)) {
 		if f.HoldWatch {
@@ -155,18 +155,6 @@ func TestEveryHoldWatchComesWithARecreateOrACreate(t *testing.T) {
 	}
 }
 
-func TestHoldWatchesFavorThePrimaryAndTheOwnedKinds(t *testing.T) {
-	cfg := loadConfig(t, "../../examples/cert-manager/config.yaml")
-	g := newGenerator(t, cfg)
-	counts := map[string]int{}
-	for _, gr := range g.watchable {
-		counts[gr.Resource]++
-	}
-	if counts["secrets"] != favored || counts["certificates"] != favored || counts["orders"] != 1 {
-		t.Errorf("watchable = %v, want secrets and certificates %d times and orders once", counts, favored)
-	}
-}
-
 func TestAWildcardVerbLetsTheControllerWatch(t *testing.T) {
 	for _, f := range faults(plans(t, "testdata/systems/star.yaml", 100)) {
 		if f.HoldWatch && f.Match == (plan.Match{Resource: "secrets"}) {
@@ -174,6 +162,32 @@ func TestAWildcardVerbLetsTheControllerWatch(t *testing.T) {
 		}
 	}
 	t.Error("No fault holds the watch of secrets, which the RBAC grants with *.")
+}
+
+func TestAWildcardVerbLetsTheControllerCreate(t *testing.T) {
+	for _, a := range actions(plans(t, "testdata/systems/star.yaml", 100)) {
+		if a.Do == plan.Damage && a.Target.Resource == "secrets" {
+			return
+		}
+	}
+	t.Error("No damage targets secrets, which the RBAC grants with *.")
+}
+
+func TestWithoutAKindTheControllerMayCreateEachDamageNamesAFake(t *testing.T) {
+	cfg := loadConfig(t, systemsConfig)
+	cfg.Launch.RBAC = []string{"testdata/systems/read-role.yaml"}
+	damages := 0
+	for _, a := range actions(drawPlans(t, newGenerator(t, cfg), 100)) {
+		if a.Do == plan.Damage {
+			damages++
+			if a.Target.System != "vault" {
+				t.Errorf("A damage targets %+v, want vault.", *a.Target)
+			}
+		}
+	}
+	if damages == 0 {
+		t.Error("No plan draws a damage.")
+	}
 }
 
 func TestAReadOnlyFakeTakesNoDamageAndOnlyReadFaults(t *testing.T) {
