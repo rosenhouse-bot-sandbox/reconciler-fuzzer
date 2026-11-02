@@ -24,6 +24,9 @@ const (
 	// B152 errors when a dependent kind is not served, as after its CRD is
 	// deleted, so the parent's deletion never ends.
 	B152 Bug = 152
+	// B162 requeues a Cluster being deleted every 1 ms while its Volumes
+	// remain, and deletes them again each time.
+	B162 Bug = 162
 )
 
 // B140 to B142 are bugs of version 2 that show only on a Cluster that
@@ -40,7 +43,7 @@ const (
 )
 
 // bugs holds every seeded bug ID.
-var bugs = map[Bug]bool{B116: true, B123: true, B124: true, B125: true, B140: true, B141: true, B142: true, B150: true, B151: true, B152: true}
+var bugs = map[Bug]bool{B116: true, B123: true, B124: true, B125: true, B140: true, B141: true, B142: true, B150: true, B151: true, B152: true, B162: true}
 
 // ParseBug converts a --bug value into a Bug.
 func ParseBug(id int) (Bug, error) {

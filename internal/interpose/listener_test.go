@@ -277,6 +277,63 @@ func TestAProtobufCreateRecordsTheResultingObject(t *testing.T) {
 	}
 }
 
+// A deletecollection answers with the list it deleted.
+func TestADeleteCollectionRecordsItsListsResourceVersion(t *testing.T) {
+	list := &corev1.ConfigMapList{ListMeta: metav1.ListMeta{ResourceVersion: "7"},
+		Items: []corev1.ConfigMap{{ObjectMeta: metav1.ObjectMeta{Name: "cm", UID: "u-1", ResourceVersion: "5"}}}}
+	raw, err := list.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := (&runtime.Unknown{TypeMeta: runtime.TypeMeta{APIVersion: "v1", Kind: "ConfigMapList"}, Raw: raw}).Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, upstream := range map[string]http.Handler{
+		"json":     respondOK("application/json", "", `{"kind":"ConfigMapList","metadata":{"resourceVersion":"7"},"items":[{"metadata":{"name":"cm","uid":"u-1","resourceVersion":"5"}}]}`),
+		"protobuf": respondOK("application/vnd.kubernetes.protobuf", "", "k8s\x00"+string(envelope)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			l, recorded := listen(t, upstream)
+
+			do(t, l, "DELETE", "/api/v1/namespaces/ns1/configmaps")
+
+			got := recorded.waitCalls(t, 1)[0]
+			if got.ResultName != "" || got.ResultUID != "" || got.ResultRV != "7" {
+				t.Errorf("Recorded name %q, uid %q, rv %q, want the list's rv 7 alone.", got.ResultName, got.ResultUID, got.ResultRV)
+			}
+		})
+	}
+}
+
+// Each metadata holds a name or a resourceVersion, then a field of wire type
+// 7, which fails to decode.
+func TestAProtobufAnswerWithBadMetadataRecordsNoResult(t *testing.T) {
+	for _, c := range []struct {
+		kind, path string
+		metadata   []byte
+	}{
+		{"ConfigMap", "/api/v1/namespaces/ns1/configmaps/cm", []byte{0x0a, 2, 'c', 'm', 0x0f}},
+		{"ConfigMapList", "/api/v1/namespaces/ns1/configmaps", []byte{0x12, 1, '7', 0x0f}},
+	} {
+		t.Run(c.kind, func(t *testing.T) {
+			raw := append([]byte{0x0a, byte(len(c.metadata))}, c.metadata...)
+			envelope, err := (&runtime.Unknown{TypeMeta: runtime.TypeMeta{APIVersion: "v1", Kind: c.kind}, Raw: raw}).Marshal()
+			if err != nil {
+				t.Fatal(err)
+			}
+			l, recorded := listen(t, respondOK("application/vnd.kubernetes.protobuf", "", "k8s\x00"+string(envelope)))
+
+			do(t, l, "DELETE", c.path)
+
+			got := recorded.waitCalls(t, 1)[0]
+			if got.ResultName != "" || got.ResultUID != "" || got.ResultRV != "" {
+				t.Errorf("Recorded name %q, uid %q, rv %q, want none.", got.ResultName, got.ResultUID, got.ResultRV)
+			}
+		})
+	}
+}
+
 func TestAResponseOfAnotherTypeRecordsNoResult(t *testing.T) {
 	for _, c := range []struct{ name, verb, contentType string }{
 		{"protobuf without its magic", "POST", "application/vnd.kubernetes.protobuf"},
