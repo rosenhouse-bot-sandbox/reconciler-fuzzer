@@ -1,7 +1,6 @@
 package check_test
 
 import (
-	"maps"
 	"slices"
 	"testing"
 
@@ -32,13 +31,10 @@ func databaseOn(ready bool, cluster string) map[string]any {
 	return body
 }
 
-// deletingBody is body once its deletion started.
-func deletingBody(body map[string]any) map[string]any {
-	body = maps.Clone(body)
-	metadata := maps.Clone(body["metadata"].(map[string]any))
-	metadata["deletionTimestamp"] = "2026-01-01T00:00:00Z"
-	body["metadata"] = metadata
-	return body
+// seeBoth has the controller see the Secret and slot b's Database, and then
+// gives it stable to hold the Secret.
+func seeBoth(r *tt.Script) *tt.Script {
+	return r.See(ctl, pw).See(ctl, databaseB).Tick(r.Spec.Stable)
 }
 
 func ordered(t *testing.T, r *tt.Script) []check.Finding {
@@ -51,45 +47,60 @@ func TestOrderedFailsAReleaseWhileASeenCRNamesIt(t *testing.T) {
 	for name, before := range map[string]func(r *tt.Script){
 		"a live CR": func(*tt.Script) {},
 		"a CR being deleted": func(r *tt.Script) {
-			r.Update(trace.Harness, databaseB, deletingBody(database(false, "pw")))
+			r.Update(trace.Harness, databaseB, tt.Deleting(database(false, "pw")))
 		},
 		"after the object waited in deletion": func(r *tt.Script) {
-			r.Update(trace.Harness, pw, deletingBody(secret(true)))
+			r.Update(trace.Harness, pw, tt.Deleting(secret(true)))
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := secretRun(blockRef(), secret(true))
-			r.See(ctl, databaseB)
-			before(r)
+			before(seeBoth(r))
 			r.Delete(ctl, pw)
 			requireFinding(t, ordered(t, r), "Ordered", 0, released, "kube/secrets", "secrets ns/pw: slot b names it")
 		})
 	}
 }
 
-func TestOrderedPassesAReleaseThatNoSeenCRNamesThen(t *testing.T) {
+func TestOrderedJudgesOnlyBlockReferences(t *testing.T) {
 	t.Skip("enabled by the judge package")
-	for name, c := range map[string]struct {
-		ref    trace.Reference
-		before func(r *tt.Script)
-	}{
-		"without block":                 {secretRef(), func(r *tt.Script) { r.See(ctl, databaseB) }},
-		"a CR the controller never saw": {blockRef(), func(*tt.Script) {}},
-		"a CR gone first": {blockRef(), func(r *tt.Script) {
-			r.See(ctl, databaseB).Delete(trace.Harness, databaseB)
-		}},
-		"a CR that moved its reference first": {blockRef(), func(r *tt.Script) {
-			r.See(ctl, databaseB).Update(trace.Harness, databaseB, database(false, "other"))
-		}},
-		"a CR that named it again once its deletion started": {blockRef(), func(r *tt.Script) {
-			r.See(ctl, databaseB).Update(trace.Harness, databaseB, database(false, "other")).
-				Update(trace.Harness, pw, deletingBody(secret(true))).
-				Update(trace.Harness, databaseB, database(false, "pw")).See(ctl, databaseB)
-		}},
+	r := secretRun(secretRef(), secret(true))
+	seeBoth(r).Delete(ctl, pw)
+	requireNone(t, ordered(t, r))
+}
+
+func TestOrderedPassesAReleaseTheControllerHadNoTimeToHold(t *testing.T) {
+	t.Skip("enabled by the judge package")
+	for name, see := range map[string]func(r *tt.Script){
+		"a CR it never saw":                        func(r *tt.Script) { r.See(ctl, pw).Tick(r.Spec.Stable) },
+		"a CR it saw less than stable before":      func(r *tt.Script) { r.See(ctl, pw).Tick(r.Spec.Stable).See(ctl, databaseB) },
+		"an object it never saw":                   func(r *tt.Script) { r.See(ctl, databaseB).Tick(r.Spec.Stable) },
+		"an object it saw less than stable before": func(r *tt.Script) { r.See(ctl, databaseB).Tick(r.Spec.Stable).See(ctl, pw) },
 	} {
 		t.Run(name, func(t *testing.T) {
-			r := secretRun(c.ref, secret(true))
-			c.before(r)
+			r := secretRun(blockRef(), secret(true))
+			see(r)
+			r.Delete(ctl, pw)
+			requireNone(t, ordered(t, r))
+		})
+	}
+}
+
+func TestOrderedPassesAReleaseThatNoCRNamesThroughout(t *testing.T) {
+	t.Skip("enabled by the judge package")
+	for name, before := range map[string]func(r *tt.Script){
+		"a CR gone first":                     func(r *tt.Script) { r.Delete(trace.Harness, databaseB) },
+		"a CR that moved its reference first": func(r *tt.Script) { r.Update(trace.Harness, databaseB, database(false, "other")) },
+		"a CR that named it again after its deletion started": func(r *tt.Script) {
+			r.Update(trace.Harness, databaseB, database(false, "other")).
+				Update(trace.Harness, pw, tt.Deleting(secret(true))).
+				Update(trace.Harness, databaseB, database(false, "pw"))
+			seeBoth(r)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := secretRun(blockRef(), secret(true))
+			before(seeBoth(r))
 			r.Delete(ctl, pw)
 			requireNone(t, ordered(t, r))
 		})
@@ -102,11 +113,41 @@ func TestOrderedIgnoresACRCreatedOnceTheDeletionStarted(t *testing.T) {
 	r.Spec.References = []trace.Reference{blockRef()}
 	r.Begin()
 	r.Create(trace.Harness, pw, secret(true))
-	r.Update(trace.Harness, pw, deletingBody(secret(true)))
+	r.Update(trace.Harness, pw, tt.Deleting(secret(true)))
 	r.Create(trace.Harness, databaseB, database(false, "pw"))
-	r.Act("create", "b", &databaseB).See(ctl, databaseB)
+	seeBoth(r.Act("create", "b", &databaseB))
 	r.Delete(ctl, pw)
 	requireNone(t, ordered(t, r))
+}
+
+func TestOrderedJudgesEachInstanceApart(t *testing.T) {
+	t.Skip("enabled by the judge package")
+	t.Run("an object made again", func(t *testing.T) {
+		r := secretRun(blockRef(), secret(true))
+		seeBoth(r).Update(trace.Harness, pw, tt.Deleting(secret(true))).
+			Update(trace.Harness, databaseB, database(false, "other")).
+			Delete(ctl, pw)
+		r.Create(trace.Harness, pw, secret(true))
+		seeBoth(r.Update(trace.Harness, databaseB, database(false, "pw")))
+		r.Delete(ctl, pw)
+		requireFinding(t, ordered(t, r), "Ordered", 0, released, "kube/secrets", "secrets ns/pw: slot b names it")
+	})
+	t.Run("an object made again that the controller never saw", func(t *testing.T) {
+		r := secretRun(blockRef(), secret(true))
+		seeBoth(r).Update(trace.Harness, databaseB, database(false, "other")).Delete(ctl, pw)
+		r.Create(trace.Harness, pw, secret(true))
+		r.Update(trace.Harness, databaseB, database(false, "pw")).See(ctl, databaseB).Tick(r.Spec.Stable)
+		r.Delete(ctl, pw)
+		requireNone(t, ordered(t, r))
+	})
+	t.Run("a CR made again that the controller never saw", func(t *testing.T) {
+		r := secretRun(blockRef(), secret(true))
+		seeBoth(r).Delete(trace.Harness, databaseB)
+		r.Create(trace.Harness, databaseB, database(false, "pw"))
+		r.Act("create", "b", &databaseB).Tick(r.Spec.Stable)
+		r.Delete(ctl, pw)
+		requireNone(t, ordered(t, r))
+	})
 }
 
 // The observer watches each kind apart, so it may record a later version of
@@ -114,26 +155,20 @@ func TestOrderedIgnoresACRCreatedOnceTheDeletionStarted(t *testing.T) {
 // resourceVersion, as integers.
 func TestOrderedOrdersVersionsOfTwoKindsByResourceVersion(t *testing.T) {
 	t.Skip("enabled by the judge package")
-	for name, c := range map[string]struct {
-		moved, release string
-		finding        bool
-	}{
-		"a move before the release, recorded after it": {"99", "100", false},
-		"a move after the release, recorded before it": {"101", "100", true},
-	} {
-		t.Run(name, func(t *testing.T) {
-			r := secretRun(blockRef(), secret(true))
-			r.See(ctl, databaseB)
-			r.Add(tt.Version(databaseB, r.UID(databaseB), c.moved, database(false, "other")))
-			r.Add(tt.Deleted(pw, r.UID(pw), c.release, secret(true)))
-			findings := ordered(t, r)
-			if !c.finding {
-				requireNone(t, findings)
-				return
-			}
-			requireFinding(t, findings, "Ordered", 0, released, "kube/secrets", "secrets ns/pw: slot b names it")
-		})
+	move := func(r *tt.Script, rv string) trace.Event {
+		return tt.Version(databaseB, r.UID(databaseB), rv, database(false, "other"))
 	}
+	release := func(r *tt.Script) trace.Event { return tt.Deleted(pw, r.UID(pw), "100", secret(true)) }
+	t.Run("a move before the release, recorded after it", func(t *testing.T) {
+		r := secretRun(blockRef(), secret(true))
+		seeBoth(r).Add(release(r)).Add(move(r, "99"))
+		requireNone(t, ordered(t, r))
+	})
+	t.Run("a move after the release, recorded before it", func(t *testing.T) {
+		r := secretRun(blockRef(), secret(true))
+		seeBoth(r).Add(move(r, "101")).Add(release(r))
+		requireFinding(t, ordered(t, r), "Ordered", 0, released, "kube/secrets", "secrets ns/pw: slot b names it")
+	})
 }
 
 func TestACRWaitingInDeletionForACRThatNamesItMeetsClause2(t *testing.T) {
@@ -155,7 +190,7 @@ func TestACRWaitingInDeletionForACRThatNamesItMeetsClause2(t *testing.T) {
 			r.Ready(clusterA)
 			r.Create(trace.Harness, databaseB, databaseOn(true, "a"))
 			r.Act("create", "b", &databaseB)
-			r.Update(trace.Harness, clusterA, deletingBody(tt.CR("a", true))).Act("delete", "a", &clusterA)
+			r.Update(trace.Harness, clusterA, tt.Deleting(tt.CR("a", true))).Act("delete", "a", &clusterA)
 			c.after(r)
 			r.EndFaults()
 			if unmet := settledAt(t, r, r.Now+5*s); !slices.Equal(unmet, c.unmet) {
@@ -165,20 +200,27 @@ func TestACRWaitingInDeletionForACRThatNamesItMeetsClause2(t *testing.T) {
 	}
 }
 
-func TestHonestCountsAnObjectWaitingInDeletionUnderBlockAsReady(t *testing.T) {
+func TestHonestJudgesAnObjectWaitingInDeletionByItsVersionBefore(t *testing.T) {
 	t.Skip("enabled by the judge package")
-	for name, block := range map[string]bool{"under block": true, "without block": false} {
+	for name, c := range map[string]struct{ block, wasReady, finding bool }{
+		"under block, once ready":   {true, true, false},
+		"under block, never ready":  {true, false, true},
+		"without block, once ready": {false, true, true},
+	} {
 		t.Run(name, func(t *testing.T) {
 			r := fleetRun(1, clusters, databases)
-			r.Spec.References = []trace.Reference{clusterRef(r, block)}
+			r.Spec.References = []trace.Reference{clusterRef(r, c.block)}
 			r.Begin()
 			r.CreateCR("a", clusterA)
+			if c.wasReady {
+				r.Ready(clusterA)
+			}
 			r.Create(trace.Harness, databaseB, databaseOn(false, "a"))
 			r.Act("create", "b", &databaseB)
-			r.Update(trace.Harness, clusterA, deletingBody(tt.CR("a", false))).See(ctl, clusterA)
+			r.Update(ctl, clusterA, tt.Deleting(tt.CR("a", false))).See(ctl, clusterA)
 			r.Update(ctl, databaseB, databaseOn(true, "a"))
 			findings := honest(t, r)
-			if block {
+			if !c.finding {
 				requireNone(t, findings)
 				return
 			}

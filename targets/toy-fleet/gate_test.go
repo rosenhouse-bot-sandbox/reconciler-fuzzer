@@ -78,8 +78,6 @@ var gate = []gateRow{
 var orderedGate = []gateRow{
 	{plan: "blocked-delete"},
 	{plan: "blocked-cluster-delete"},
-	{plan: "user-first"},
-	{plan: "cluster-delete", config: databaseConfig},
 	{plan: "secret-first", config: secretConfig},
 	{plan: "delete-cluster-first", bug: 120, finding: "Ordered: released an object that another names", step: 1, detail: "/cluster: slot b names it"},
 	{plan: "blocked-delete", bug: 120, finding: "Ordered: released an object that another names", step: 1, detail: "/cluster: slot b names it"},

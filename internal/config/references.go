@@ -33,8 +33,8 @@ type Reference struct {
 	Required bool
 	// Track is zero when unset.
 	Track time.Duration
-	// Block says, under onDelete: block, that the to object's deletion
-	// waits for the from CRs that name it.
+	// Block says the to object's deletion waits for the from CRs that name
+	// it (onDelete: block).
 	Block bool
 }
 

@@ -372,15 +372,15 @@ with no dependency` if missing, else `reported ready before seeing its
 dependency ready`. With `track: d`, a CR fails that stays `ready`, naming the
 object, `d`, stalls aside, after a look that held it back: `stayed ready after
 seeing its dependency not ready`. Each finding takes the `to` kind. Under
-`onDelete: block`, a look that shows the object being deleted holds the CR back
-only for Converge and Restore, since the object's deletion waits for the CR.
+`onDelete: block`, Honest, unlike Converge and Restore, judges a look that shows
+the object being deleted by its last version before the deletion started.
 
-**Ordered.** A `to` object's **release** is its deleted version. Under
-`onDelete: block`, Ordered fails a release while a `from` CR that the
-controller saw by then names the object, in both the CR's last version before
-the release and its last version at the object's first `deletionTimestamp`, or
-at the release if it had none: `released an object that another names`. It
-orders versions of two kinds by resourceVersion, as integers (entry 89).
+**Ordered.** Under `onDelete: block`, a `to` instance's **release** is its
+deleted version, and its deletion starts at its first `deletionTimestamp`, or
+else at the release. Ordered fails a release if, `stable` or more before the
+deletion started, the controller saw the instance and a version of a `from` CR
+that names it, and the CR stays live and names the instance in each later
+version up to the release: `released an object that another names` (entry 89).
 
 **Backoff.** Failing controller calls with one system, verb, object,
 subresource and status form a **run**; a create's object is its `requestName`.
@@ -431,8 +431,7 @@ primaries:                                  # every kind the controller serves
   - {kind: toy.reconciler-fuzzer/v1/Policy, sample: policy.yaml, ready: has(self.status)}
 references:                                 # fields by which a CR names what it does not own
   - {from: toy.reconciler-fuzzer/v1/Bucket, to: v1/Secret, name: "spec.keys[*].secretName",
-     ready: has(self.data.key), required: false, track: 2s,   # required defaults to true
-     onDelete: block}                       # the Secret's deletion waits for the Bucket
+     ready: has(self.data.key), required: false, track: 2s, onDelete: block}   # required defaults to true
 values: {fixtures: {kv.yaml: [value]}}              # with primaries, only fixtures
 models: [{kind: toy.reconciler-fuzzer/v1/Gadget, after: 200ms, dependency: {track: 1s}}]
 systems:
@@ -469,10 +468,9 @@ field paths as in `values.mutate`; `[*]` names a field of each list item. An
 empty or absent value names nothing. `config.Load` reads each kind's scope from
 `crds` and a table of the kinds Kubernetes serves without a CRD. The `from`
 CRD's schema must describe each path as a string. A `name` that an `owns` entry
-of the `from` entry reads is refused, since the CR owns that object.
-`onDelete: block` says the `to` object's deletion waits for its `from` CRs, as
-`kubernetes.io/pvc-protection` does; a fake's `to` cannot take it.
-`references.go` holds the other refusals.
+of the `from` entry reads is refused, since the CR owns that object. Under
+`onDelete: block`, the `to` object's deletion waits for its `from` CRs, as
+`kubernetes.io/pvc-protection` does. `references.go` holds the other refusals.
 
 ## 14. Generation, replay and shrinking
 
@@ -596,4 +594,4 @@ Each entry changes a check, exception, `System` interface or ignore list.
 84. A 2xx kube list that is not `Partial` and lacks an object shows it missing, as does the `k8s.io/initial-events-end` bookmark of such a watch, since client-go's informers open a watch with `sendInitialEvents` instead of a list. So a restart or a dropped watch counts. Kube listeners ask for JSON of Seen kinds, so built-in kinds' lists and watches decode.
 85. A kube write's call records its answer's finalizers, for Finalizers (#133), since an update that empties a deleting object's finalizers deletes it and answers with the old version. The gc owns `foregroundDeletion` and `orphan`, which the API server adds for whoever deletes. A finalizer the harness wrote, from a sample, a fixture or a plan, may be the controller's own. Listeners record answers in no fixed order, so a version that overlapping writes of two callers carry may be either's. After an answer names a version the observer missed, the trace may lack a change, so the object's later writes pass. A CRD's status write keeps its metadata.
 86. Honest excuses a `ready` write that the controller sends within 2×`stable` of a look, after an earlier look that let the CR be `ready`, with no `start` since, and retracts within `stable` of the write's response, by writing the CR not `ready` or naming another object. A reconcile may read its cache before the look reaches the cache, the cache holds what an earlier look showed, and the CR's next reconcile starts only once the write returns. Neither window, nor a `track`, counts time in which a step's faults stall the controller, or between an exit and its next start, since a reconcile that a fault holds keeps the CRs queued behind it waiting. A step's faults stall it only if a fault altered one of the controller's requests in them, so a model fault, such as `stuck`, and a held watch stall it not at all. The retraction window starts again at a `start`, since a restart loses the reconcile, and a write of the CR that failed or had an unknown outcome, the `ready` write itself or one in the window, such as a conflict from a cache that lacks the `ready` write, gives the controller the `backoff` of the step that answered it and `stable` from its response. A killed write gives none, since the controller starts again with an empty backoff.
-89. Under `onDelete: block` (#126, #127), a `to` CR that waits in deletion while a live `from` CR names it meets clause 2. Ordered judges the `from` CR's last version, so a moved reference releases the old object, and skips a CR that names the object only once its deletion started, a race that only admission control closes. It compares resourceVersions as integers, as etcd assigns them, since the observer's watches order no events across kinds. Honest lets a CR be `ready` on an object that waits in deletion for it, which a controller may still use, and Converge and Restore still excuse the CR if it is not `ready`.
+89. Under `onDelete: block` (#126, #127), a `to` CR that waits in deletion while a live `from` CR names it meets clause 2. Ordered needs the `from` CR to name the instance in each version up to the release, so a moved reference releases the old object, and a CR being deleted still names it. It needs the controller's seens of the instance and the CR `stable` before the deletion started, since a controller that adds its finalizer in a reconcile cannot hold an object deleted first; only admission control closes that race. It compares resourceVersions as integers, as etcd assigns them, since the observer's watches order no events across kinds. Honest judges an object that waits in deletion by its last version before the deletion, which a controller may still use, so a CR may become `ready` on it only if it was `ready`. Converge and Restore still excuse a CR that is not `ready`.

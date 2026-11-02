@@ -54,7 +54,7 @@ type Reference struct {
 	Required        bool
 	Track           time.Duration
 	// Block says the To object's deletion waits for the From CRs that name
-	// it, which Ordered judges.
+	// it (onDelete: block).
 	Block bool
 }
 
