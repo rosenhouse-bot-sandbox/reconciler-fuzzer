@@ -490,7 +490,7 @@ each 5 times and shrinks it (`shrink.go`), trying at most 16 candidates.
 `summary.md` lists the findings with seed, reproduction rate and shrunk plan.
 
 **Upgrades.** Each `launch.upgrades` entry becomes a restart that ends a step drawn
-from the previous upgrade's step on, 0 to `stable` after its last action. Drawn
+from the previous upgrade's step on, 0 to `stable` after its latest offset. Drawn
 last, they only add restarts to a plan. Shrinking drops them from the last back.
 
 ## 15. Commands

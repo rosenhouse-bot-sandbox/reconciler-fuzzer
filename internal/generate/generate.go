@@ -3,6 +3,7 @@
 package generate
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -480,17 +481,17 @@ func (g *Generator) plan(t *rapid.T) *plan.Plan {
 
 // upgrade appends one restart per config upgrade, in order. Each ends a step
 // drawn from the previous upgrade's step on, 0 to stable after the step's
-// last action. These draws come after all others, so upgrades only add
+// latest offset. These draws come after all others, so upgrades only add
 // restarts to a seed's plan.
 func (g *Generator) upgrade(t *rapid.T, p *plan.Plan) {
 	from := 0
 	for _, u := range g.upgrades {
 		from += uniform(t, len(p.Steps)-from, "upgrade step")
 		step := &p.Steps[from]
-		last := step.Actions[len(step.Actions)-1].At
+		latest := slices.MaxFunc(step.Actions, func(a, b plan.Action) int { return cmp.Compare(a.At, b.At) }).At
 		delay := plan.Duration(uniform(t, 11, "upgrade delay")) * plan.Duration(g.stable) / 10
 		u.Args, u.CRDs = slices.Clone(u.Args), slices.Clone(u.CRDs)
-		step.Actions = append(step.Actions, plan.Action{At: last + delay, Do: plan.Restart, Upgrade: u})
+		step.Actions = append(step.Actions, plan.Action{At: latest + delay, Do: plan.Restart, Upgrade: u})
 	}
 }
 
