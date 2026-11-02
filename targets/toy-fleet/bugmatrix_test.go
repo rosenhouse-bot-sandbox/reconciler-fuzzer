@@ -31,6 +31,8 @@ var bugs = map[int]string{
 	150: "Strips its finalizers from deleting CRs when it shuts down.",
 	151: "Puts a finalizer on each Volume, and releases a deleted Cluster before its Volumes, whose finalizers it strips only afterwards.",
 	152: "Errors when a dependent kind is not served, as after its CRD is deleted, so the parent's deletion never ends.",
+	160: "Gives Volumes no owner, and releases a deleted Cluster before it deletes them. A kill between the two leaks them.",
+	161: "Finalizes only Clusters whose finalization this process began.",
 	162: "Requeues a Cluster being deleted every 1 ms while its Volumes remain, and deletes them again each time.",
 }
 

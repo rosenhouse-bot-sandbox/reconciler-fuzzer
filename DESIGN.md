@@ -466,14 +466,15 @@ actions and at most one fault each. A create draws its kind uniformly from
 About 30% of steps hold one `restart`, `kill` or `damage`, for Restore to judge.
 A kube fault draws a request `launch.rbac` grants, creates weighted most (§17,
 entry 20), holds a kind it lets the controller watch, with the traffic
-`holdTraffic` documents, or is a model fault (§7). A kube `damage` deletes an
-object of an unlisted kind `launch.rbac` lets the controller create. Faults
-favor the listed kinds. Faults and `damage` favor the kinds the CRs own: kube
-`owns` kinds and model kinds with a `dependency`. Without owned kinds, the core
-kinds the controller may create stand in. With fakes, half of the fault draws
-name a fake. So do half of the `damage` draws, or all when no unlisted kind is
-creatable. A read-only fake takes no damage and only read faults. `generate.go`
-documents the weights, bursts and fault periods.
+`holdTraffic` documents, or is a model fault (§7). `restartMidDelete` adds a
+restart or kill mid-delete to model-fault steps that delete and have room. A
+kube `damage` deletes an object of an unlisted kind `launch.rbac` lets the
+controller create. Faults favor the listed kinds. Faults and `damage` favor the
+kinds the CRs own: kube `owns` kinds and model kinds with a `dependency`.
+Without owned kinds, the core kinds the controller may create stand in. With
+fakes, half of the fault draws name a fake. So do half of the `damage` draws, or
+all when no unlisted kind is creatable. A read-only fake takes no damage and
+only read faults. `generate.go` documents the weights, bursts and fault periods.
 
 A create, or an update that draws a `mutate` path at or above a reference's
 `name`, writes a **candidate** at the `name` under each parent the drawn value
@@ -489,7 +490,7 @@ each 5 times and shrinks it (`shrink.go`), trying at most 16 candidates.
 `summary.md` lists the findings with seed, reproduction rate and shrunk plan.
 
 **Upgrades.** Each `launch.upgrades` entry becomes a restart that ends a step drawn
-from the previous upgrade's step on, 0 to `stable` after its last action. Drawn
+from the previous upgrade's step on, 0 to `stable` after its latest offset. Drawn
 last, they only add restarts to a plan. Shrinking drops them from the last back.
 
 ## 15. Commands
@@ -518,10 +519,9 @@ a Secret, and a User a Database. Its bugs start at B100. `config.yaml` lists all
 three kinds and their references. The generated test fuzzes `cluster/`, which
 lists Clusters alone, `database/`, which lists Databases on a fixture Cluster,
 `protect/`, whose Volume model holds each Volume's deletion with its finalizer,
-and `upgrade/`, `cluster/` with an upgrade to `--version=2`. Under
-`config.yaml`, a Cluster's deletion waits for the Databases that name it, which
-fails clause 2. Only gate rows run `upgrade/properties/`, which adds a property,
-and `uninstall/`, whose Database CRD a plan may delete.
+and `upgrade/`, `cluster/` with an upgrade to `--version=2`. `config.yaml`'s
+header says why the test skips it. Only gate rows run `upgrade/properties/`,
+which adds a property, and `uninstall/`, whose Database CRD a plan may delete.
 
 Each config's `plans/` holds its gated bugs' and B0's plans. A toy's
 `gate_envtest_test.go` runs `gate_test.go`'s rows, and its `bugmatrix_test.go`

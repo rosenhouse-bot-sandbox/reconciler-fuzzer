@@ -29,16 +29,31 @@ const (
 )
 
 // ClusterReconciler moves a Cluster through its phases and keeps its Volumes.
-type ClusterReconciler struct{ reconciler }
+type ClusterReconciler struct {
+	reconciler
+	// finalizing holds, under B161, the Clusters this process began to finalize.
+	finalizing map[types.NamespacedName]bool
+}
 
 func (r *ClusterReconciler) SetupWithManager(m ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(m).
+	b := ctrl.NewControllerManagedBy(m).
 		For(&fleetv1.Cluster{}).
-		Owns(&storagev1.Volume{}).
 		Watches(&fleetv1.Database{}, handler.EnqueueRequestsFromMapFunc(func(_ context.Context, o client.Object) []reconcile.Request {
 			return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: o.GetNamespace(), Name: o.(*fleetv1.Database).Spec.ClusterRef}}}
-		})).
-		Complete(r)
+		}))
+	if r.Bug == B160 {
+		return b.Watches(&storagev1.Volume{}, handler.EnqueueRequestsFromMapFunc(clusterOfVolume)).Complete(r)
+	}
+	return b.Owns(&storagev1.Volume{}).Complete(r)
+}
+
+// clusterOfVolume maps a Volume to the Cluster its label names.
+func clusterOfVolume(_ context.Context, o client.Object) []reconcile.Request {
+	name := o.GetLabels()[ClusterLabel]
+	if name == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: o.GetNamespace(), Name: name}}}
 }
 
 func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -148,6 +163,9 @@ func (r *ClusterReconciler) syncVolumes(ctx context.Context, cluster *fleetv1.Cl
 			if r.Bug == B151 {
 				controllerutil.AddFinalizer(volume, VolumeFinalizer)
 			}
+			if r.Bug == B160 {
+				return nil
+			}
 			return controllerutil.SetControllerReference(cluster, volume, r.Scheme)
 		}); err != nil {
 			return 0, fmt.Errorf("ensuring Volume %s: %w", name, err)
@@ -172,6 +190,16 @@ func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Clust
 	mine := r.finalizers()
 	if !slices.ContainsFunc(mine, func(f string) bool { return controllerutil.ContainsFinalizer(cluster, f) }) {
 		return ctrl.Result{}, nil
+	}
+	if r.Bug == B161 {
+		key := client.ObjectKeyFromObject(cluster)
+		if cluster.Status.Phase == fleetv1.Deleting && !r.finalizing[key] {
+			return ctrl.Result{}, nil
+		}
+		if r.finalizing == nil {
+			r.finalizing = map[types.NamespacedName]bool{}
+		}
+		r.finalizing[key] = true
 	}
 	databases := &fleetv1.DatabaseList{}
 	if err := r.APIReader.List(ctx, databases, client.InNamespace(cluster.Namespace)); err != nil && !r.unserved(err) {
@@ -198,6 +226,11 @@ func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Clust
 	if named {
 		return ctrl.Result{}, nil // A Database's deletion requeues the Cluster.
 	}
+	if r.Bug == B160 {
+		if err := r.release(ctx, cluster); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
 	for i := range volumes {
 		if v := &volumes[i]; v.DeletionTimestamp.IsZero() || r.Bug == B162 {
 			if err := r.Delete(ctx, v); client.IgnoreNotFound(err) != nil {
@@ -211,15 +244,22 @@ func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Clust
 		}
 	}
 	switch {
+	case r.Bug == B160:
+		return ctrl.Result{}, nil // It released the Cluster above.
 	case len(volumes) > 0 && r.Bug == B162:
 		return ctrl.Result{RequeueAfter: time.Millisecond}, nil
 	case len(volumes) > 0 && r.Bug != B151:
 		return ctrl.Result{}, nil // A Volume's deletion requeues the Cluster.
 	}
-	for _, f := range mine {
+	return ctrl.Result{}, r.release(ctx, cluster)
+}
+
+// release removes this version's finalizers from the Cluster.
+func (r *ClusterReconciler) release(ctx context.Context, cluster *fleetv1.Cluster) error {
+	for _, f := range r.finalizers() {
 		controllerutil.RemoveFinalizer(cluster, f)
 	}
-	return ctrl.Result{}, client.IgnoreNotFound(r.Update(ctx, cluster))
+	return client.IgnoreNotFound(r.Update(ctx, cluster))
 }
 
 // releaseVolumes strips VolumeFinalizer from the gone Cluster's Volumes.
@@ -238,7 +278,8 @@ func (r *ClusterReconciler) releaseVolumes(ctx context.Context, cluster types.Na
 	return nil
 }
 
-// ownedVolumes lists, through reader, the Volumes the Cluster controls.
+// ownedVolumes lists, through reader, the Volumes the Cluster controls, or
+// under B160 those its label names.
 func (r *ClusterReconciler) ownedVolumes(ctx context.Context, reader client.Reader, cluster *fleetv1.Cluster) ([]storagev1.Volume, error) {
 	list := &storagev1.VolumeList{}
 	if err := reader.List(ctx, list, client.InNamespace(cluster.Namespace), client.MatchingLabels{ClusterLabel: cluster.Name}); err != nil {
@@ -246,7 +287,7 @@ func (r *ClusterReconciler) ownedVolumes(ctx context.Context, reader client.Read
 	}
 	var owned []storagev1.Volume
 	for _, v := range list.Items {
-		if metav1.IsControlledBy(&v, cluster) && (!r.renames() || strings.HasPrefix(v.Name, r.volumePrefix(cluster))) {
+		if (metav1.IsControlledBy(&v, cluster) || r.Bug == B160) && (!r.renames() || strings.HasPrefix(v.Name, r.volumePrefix(cluster))) {
 			owned = append(owned, v)
 		}
 	}

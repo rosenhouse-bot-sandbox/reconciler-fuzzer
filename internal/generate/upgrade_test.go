@@ -5,6 +5,9 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+	"time"
+
+	"pgregory.net/rapid"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 )
@@ -66,6 +69,36 @@ func TestUpgradeDelaysRunFromZeroToStable(t *testing.T) {
 	}
 	if stable := plan.Duration(cfg.Timeouts.Stable); !delays[0] || !delays[stable] {
 		t.Errorf("Upgrade delays %v lack 0 or %v.", slices.Sorted(maps.Keys(delays)), stable)
+	}
+}
+
+// A restart or kill mid-delete may hold a later offset than the step's last
+// action. Each upgrade still comes 0 to stable after the step's latest offset.
+func TestAnUpgradeComesAfterTheLatestOffsetInItsStep(t *testing.T) {
+	cfg := loadConfig(t, upgradesConfig)
+	g := newGenerator(t, cfg)
+	const killAt = plan.Duration(3 * time.Second)
+	for seed := range 20 {
+		p := example(t, seed, func(rt *rapid.T) *plan.Plan {
+			p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{
+				{Do: plan.Delete, Slot: "a"},
+				{At: killAt, Do: plan.Kill},
+				{Do: plan.Create, Slot: "a"},
+			}}}}
+			g.upgrade(rt, p)
+			return p
+		})
+		upgrades := p.Steps[0].Actions[3:]
+		if len(upgrades) != len(cfg.Launch.Upgrades) {
+			t.Fatalf("Seed %d's step holds %d upgrades, want %d.", seed, len(upgrades), len(cfg.Launch.Upgrades))
+		}
+		latest := killAt
+		for i, a := range upgrades {
+			if a.At < latest || a.At > latest+plan.Duration(cfg.Timeouts.Stable) {
+				t.Errorf("Seed %d's upgrade %d comes at %v, after actions as late as %v; want 0 to %v later.", seed, i+1, time.Duration(a.At), time.Duration(latest), cfg.Timeouts.Stable)
+			}
+			latest = max(latest, a.At)
+		}
 	}
 }
 

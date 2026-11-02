@@ -104,6 +104,18 @@ func TestAFakeModelFaultPeriodAddsTheFakesTrack(t *testing.T) {
 	}
 }
 
+func TestARestartOrKillComesWhileAFakeHoldsADelete(t *testing.T) {
+	for _, p := range plans(t, fakesConfig, 200) {
+		for _, step := range p.Steps {
+			if len(step.Faults) == 1 && step.Faults[0].System != "" && step.Faults[0].SlowDelete &&
+				slices.ContainsFunc(step.Actions, func(a plan.Action) bool { return a.At > 0 && (a.Do == plan.Restart || a.Do == plan.Kill) }) {
+				return
+			}
+		}
+	}
+	t.Error("No restart or kill over 200 plans comes at an offset while a fake's slowDelete holds a delete.")
+}
+
 func TestAFakeFaultComesWithTheActionItExercises(t *testing.T) {
 	g := newGenerator(t, loadConfig(t, fakesConfig))
 	request := func(verb string) plan.Fault {
