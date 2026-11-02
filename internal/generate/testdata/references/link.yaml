@@ -1,0 +1,9 @@
+apiVersion: test.reconciler-fuzzer/v1
+kind: Link
+metadata:
+  name: link
+spec:
+  clusters: [{name: cluster}]
+  bucket: shared
+  secretName: admin-password
+  short: ab

@@ -34,20 +34,31 @@ type Generator struct {
 	// other kind.
 	listed []gvk.GroupKind
 	// resources are the listed kinds first, then the fixture and RBAC
-	// resources, which damage targets.
+	// resources.
 	resources []gvk.GroupResource
 	// granted holds the verbs the RBAC grants on each resource and
 	// subresource, such as "widgets/status".
 	granted map[gvk.GroupResource][]string
 	// requests are what faults match, each with the weight of its draw.
 	requests []request
+	// fixtures are those whose strings changeFixture may set.
 	fixtures []fixture
+	// referenced are the kube fixtures of a reference's to kind other than
+	// core Namespaces, which changeFixture deletes and createFixture makes
+	// again.
+	referenced []plan.Target
 	// watchable are the resources the RBAC lets the controller watch,
-	// which holdWatch faults hold. A kind appears once per unit of its
-	// holdWeight.
+	// which holdWatch faults hold.
 	watchable []gvk.GroupResource
-	// owned are the kube kinds that the entries' owns name.
-	owned []gvk.GroupResource
+	// favors holds the kinds the controller deals with, which faults and
+	// damage favor: the listed kinds and the kinds their CRs own. Without
+	// owned kinds, the core kinds the RBAC lets the controller create stand
+	// in for those.
+	favors map[gvk.GroupResource]bool
+	// creatable are the unlisted resources the RBAC lets the controller
+	// create, which damage targets. A damage deletes only what the
+	// controller made.
+	creatable []gvk.GroupResource
 	// models are the resources of the model kinds, which model faults match.
 	models []gvk.GroupResource
 	// fakes are the fake services' names. modelFakes take model faults,
@@ -59,7 +70,10 @@ type Generator struct {
 	// adds.
 	track  time.Duration
 	stable time.Duration
-	plans  *rapid.Generator[*plan.Plan]
+	// upgrades are the config's launch.upgrades, which each plan applies
+	// in order.
+	upgrades []plan.Upgrade
+	plans    *rapid.Generator[*plan.Plan]
 }
 
 // crKind is what the generator draws the CRs of one listed kind from.
@@ -71,9 +85,12 @@ type crKind struct {
 	fields    []field
 	leftAlone []string
 	distinct  [][]string
+	// references are the config's references from this kind.
+	references []*reference
 }
 
-// fixture is one fixture whose strings changeFixture may set.
+// fixture is one fixture that changeFixture patches at one of its paths, or
+// deletes when it has none.
 type fixture struct {
 	target plan.Target
 	paths  [][]string
@@ -81,8 +98,8 @@ type fixture struct {
 
 var slots = []string{"a", "b", "c"}
 
-// New reads each listed kind's CRD schema, sample and values, and the
-// fixtures of cfg.
+// New reads each listed kind's CRD schema, sample and values, the fixtures
+// and the references of cfg.
 func New(cfg *config.Config) (*Generator, error) {
 	g, err := build(cfg)
 	if err != nil {
@@ -92,9 +109,13 @@ func New(cfg *config.Config) (*Generator, error) {
 }
 
 func build(cfg *config.Config) (*Generator, error) {
-	g := &Generator{listed: cfg.ListedKinds(), stable: cfg.Timeouts.Stable, granted: map[gvk.GroupResource][]string{}, modelFakes: map[string]bool{}, readOnly: map[string]bool{}}
+	g := &Generator{listed: cfg.ListedKinds(), stable: cfg.Timeouts.Stable, upgrades: cfg.Launch.Upgrades, granted: map[gvk.GroupResource][]string{}, modelFakes: map[string]bool{}, readOnly: map[string]bool{}}
+	crds, err := config.ReadManifests(cfg.CRDs)
+	if err != nil {
+		return nil, fmt.Errorf("reading the CRDs: %w", err)
+	}
 	for i, p := range cfg.Primaries {
-		k, err := newCRKind(cfg.CRDs, p)
+		k, err := newCRKind(crds, p)
 		if err != nil {
 			if len(cfg.Primaries) > 1 {
 				err = fmt.Errorf("primaries[%d]: %w", i, err)
@@ -103,29 +124,22 @@ func build(cfg *config.Config) (*Generator, error) {
 		}
 		g.kinds = append(g.kinds, k)
 		g.resources = append(g.resources, k.resource)
-		for _, o := range p.Owns {
-			if o.System == "" {
-				gvr, _ := meta.UnsafeGuessKindToResource(o.Kind)
-				g.owned = append(g.owned, gvr.GroupResource())
-			}
-		}
 	}
-	if err := g.readFixtures(cfg); err != nil {
+	fixtures, err := g.readFixtures(cfg)
+	if err != nil {
 		return nil, err
 	}
+	g.readReferences(cfg, fixtures)
 	if err := g.readRBAC(cfg.Launch.RBAC); err != nil {
 		return nil, err
 	}
+	g.readModels(cfg.Models, crds)
+	g.favorKinds(cfg, crds)
 	g.addRequests()
-	for n, gr := range g.resources {
-		if verbs := g.granted[gr]; slices.Contains(verbs, "watch") || slices.Contains(verbs, "*") {
-			for range g.holdWeight(n, gr) {
-				g.watchable = append(g.watchable, gr)
-			}
+	for _, gr := range g.resources {
+		if g.grants(gr, "watch") {
+			g.watchable = append(g.watchable, gr)
 		}
-	}
-	if err := g.readModels(cfg); err != nil {
-		return nil, err
 	}
 	for _, f := range cfg.Fakes() {
 		g.fakes = append(g.fakes, f.Name)
@@ -141,7 +155,7 @@ func build(cfg *config.Config) (*Generator, error) {
 
 // newCRKind reads one entry's CRD rules and schema, its sample, and the
 // fields and distinct paths its values name.
-func newCRKind(crds []string, p config.Primary) (*crKind, error) {
+func newCRKind(crds []map[string]any, p config.Primary) (*crKind, error) {
 	crd, plural, err := primaryCRD(crds, p.Kind)
 	if err != nil {
 		return nil, err
@@ -243,24 +257,27 @@ func (g *Generator) addResource(gr gvk.GroupResource) {
 	}
 }
 
-func (g *Generator) readFixtures(cfg *config.Config) error {
+// readFixtures reads the fixtures whose strings changeFixture may set, and
+// returns the target of each kube and system fixture.
+func (g *Generator) readFixtures(cfg *config.Config) ([]plan.Target, error) {
+	var targets []plan.Target
 	for _, path := range cfg.Fixtures {
-		documents, err := readDocuments(path)
+		documents, err := config.ReadManifests([]string{path})
 		if err != nil {
-			return err
+			return nil, err
 		}
 		paths := cfg.FixtureValues[path]
 		if len(paths) > 0 && len(documents) != 1 {
-			return fmt.Errorf("values.fixtures %s: the file holds %d objects, want 1", path, len(documents))
+			return nil, fmt.Errorf("values.fixtures %s: the file holds %d objects, want 1", path, len(documents))
 		}
 		for _, document := range documents {
-			object := unstructured.Unstructured{Object: document}
-			gvr, _ := meta.UnsafeGuessKindToResource(object.GroupVersionKind())
-			g.addResource(gvr.GroupResource())
+			target := kubeFixture(document)
+			targets = append(targets, target)
+			g.addResource(gvk.GroupResource{Group: target.Group, Resource: target.Resource})
 			if len(paths) == 0 {
 				continue
 			}
-			f := fixture{target: plan.Target{Group: gvr.Group, Resource: gvr.Resource, Namespace: object.GetNamespace(), Name: object.GetName()}}
+			f := fixture{target: target}
 			for _, dotted := range paths {
 				f.paths = append(f.paths, strings.Split(dotted, "."))
 			}
@@ -269,16 +286,18 @@ func (g *Generator) readFixtures(cfg *config.Config) error {
 	}
 	for _, s := range cfg.Systems {
 		for _, path := range s.Fixtures {
-			paths := cfg.FixtureValues[path]
-			if len(paths) == 0 {
-				continue
-			}
 			entries, err := config.ReadSystemFixtures(path)
 			if err != nil {
-				return err
+				return nil, err
 			}
+			paths := cfg.FixtureValues[path]
 			for _, entry := range entries {
-				f := fixture{target: plan.Target{System: s.Name, Resource: entry.Resource, Name: entry.Name}}
+				target := plan.Target{System: s.Name, Resource: entry.Resource, Name: entry.Name}
+				targets = append(targets, target)
+				if len(paths) == 0 {
+					continue
+				}
+				f := fixture{target: target}
 				for _, dotted := range paths {
 					f.paths = append(f.paths, strings.Split(dotted, "."))
 				}
@@ -286,13 +305,20 @@ func (g *Generator) readFixtures(cfg *config.Config) error {
 			}
 		}
 	}
-	return nil
+	return targets, nil
+}
+
+// kubeFixture is the target of a fixture's object.
+func kubeFixture(document map[string]any) plan.Target {
+	object := unstructured.Unstructured{Object: document}
+	gvr, _ := meta.UnsafeGuessKindToResource(object.GroupVersionKind())
+	return plan.Target{Group: gvr.Group, Resource: gvr.Resource, Namespace: object.GetNamespace(), Name: object.GetName()}
 }
 
 // readRBAC adds the resources the rules name, without wildcards and
 // subresources, and records the verbs each rule grants.
 func (g *Generator) readRBAC(paths []string) error {
-	documents, err := readManifests(paths)
+	documents, err := config.ReadManifests(paths)
 	if err != nil {
 		return fmt.Errorf("launch.rbac: %w", err)
 	}
@@ -325,28 +351,69 @@ func (g *Generator) readRBAC(paths []string) error {
 	return nil
 }
 
-// readModels reads each model kind's resource from its CRD, or guesses it,
-// and the longest dependency track.
-func (g *Generator) readModels(cfg *config.Config) error {
-	if len(cfg.Models) == 0 {
-		return nil
-	}
-	crds, err := readManifests(cfg.CRDs)
-	if err != nil {
-		return fmt.Errorf("reading the CRDs: %w", err)
-	}
-	for _, m := range cfg.Models {
-		gvr, _ := meta.UnsafeGuessKindToResource(m.Kind)
-		gr := gvr.GroupResource()
-		if plural := pluralOf(crds, m.Kind.GroupKind()); plural != "" {
-			gr.Resource = plural
-		}
-		g.models = append(g.models, gr)
+// readModels records each model kind's resource and the longest dependency
+// track.
+func (g *Generator) readModels(models []config.Model, crds []map[string]any) {
+	for _, m := range models {
+		g.models = append(g.models, resourceOf(crds, m.Kind))
 		if m.Dependency != nil {
 			g.track = max(g.track, m.Dependency.Track)
 		}
 	}
-	return nil
+}
+
+// resourceOf is the resource of kind: the plural its CRD names, or else a
+// guess.
+func resourceOf(crds []map[string]any, kind gvk.GroupVersionKind) gvk.GroupResource {
+	gvr, _ := meta.UnsafeGuessKindToResource(kind)
+	gr := gvr.GroupResource()
+	if plural := pluralOf(crds, kind.GroupKind()); plural != "" {
+		gr.Resource = plural
+	}
+	return gr
+}
+
+// favorKinds records the kinds that faults and damage favor, and the
+// resources that damage targets.
+func (g *Generator) favorKinds(cfg *config.Config, crds []map[string]any) {
+	owned := ownedKinds(cfg, crds)
+	g.favors = map[gvk.GroupResource]bool{}
+	for _, gr := range slices.Concat(g.resources[:len(g.kinds)], owned) {
+		g.favors[gr] = true
+	}
+	for _, gr := range g.unlisted() {
+		if g.grants(gr, "create") {
+			g.creatable = append(g.creatable, gr)
+			if len(owned) == 0 && gr.Group == "" {
+				g.favors[gr] = true
+			}
+		}
+	}
+}
+
+// ownedKinds are the kinds the listed CRs own: the kube kinds that owns
+// entries name, and the model kinds that are dependencies. A model without
+// a dependency can serve a fixture instead.
+func ownedKinds(cfg *config.Config, crds []map[string]any) []gvk.GroupResource {
+	var owned []gvk.GroupResource
+	for _, p := range cfg.Primaries {
+		for _, o := range p.Owns {
+			if o.System == "" {
+				owned = append(owned, resourceOf(crds, o.Kind))
+			}
+		}
+	}
+	for _, m := range cfg.Models {
+		if m.Dependency != nil {
+			owned = append(owned, resourceOf(crds, m.Kind))
+		}
+	}
+	return owned
+}
+
+// grants says whether the RBAC grants the verb on the resource.
+func (g *Generator) grants(gr gvk.GroupResource, verb string) bool {
+	return slices.Contains(g.granted[gr], verb) || slices.Contains(g.granted[gr], "*")
 }
 
 // Plan draws the plan for seed. The same seed draws the same plan.
@@ -364,16 +431,24 @@ func (g *Generator) Plan(seed uint64) (p *plan.Plan, err error) {
 	return p, nil
 }
 
-// state is what the plan so far leaves each slot holding: its CR as last
-// written, or nil once deleted.
-type state map[string]map[string]any
+// state is what the plan so far leaves each slot holding, its CR as last
+// written or nil once deleted, and the referenced fixtures it deleted and
+// did not create again.
+type state struct {
+	slots   map[string]map[string]any
+	deleted map[plan.Target]bool
+}
+
+func newState() state {
+	return state{slots: map[string]map[string]any{}, deleted: map[plan.Target]bool{}}
+}
 
 func (s state) live() []string {
-	return slices.DeleteFunc(slices.Clone(slots), func(slot string) bool { return s[slot] == nil })
+	return slices.DeleteFunc(slices.Clone(slots), func(slot string) bool { return s.slots[slot] == nil })
 }
 
 func (s state) free() []string {
-	return slices.DeleteFunc(slices.Clone(slots), func(slot string) bool { return s[slot] != nil })
+	return slices.DeleteFunc(slices.Clone(slots), func(slot string) bool { return s.slots[slot] != nil })
 }
 
 // kindOf is the listed kind of a CR the plan holds, by its apiVersion and
@@ -385,21 +460,38 @@ func (g *Generator) kindOf(cr map[string]any) *crKind {
 
 // updatable are the live slots whose kind has fields to change.
 func (g *Generator) updatable(at state) []string {
-	return slices.DeleteFunc(at.live(), func(slot string) bool { return len(g.kindOf(at[slot]).fields) == 0 })
+	return slices.DeleteFunc(at.live(), func(slot string) bool { return len(g.kindOf(at.slots[slot]).fields) == 0 })
 }
 
 // ofResource are the slots in from whose CR is of the resource gr.
 func (g *Generator) ofResource(at state, from []string, gr gvk.GroupResource) []string {
-	return slices.DeleteFunc(slices.Clone(from), func(slot string) bool { return g.kindOf(at[slot]).resource != gr })
+	return slices.DeleteFunc(slices.Clone(from), func(slot string) bool { return g.kindOf(at.slots[slot]).resource != gr })
 }
 
 func (g *Generator) plan(t *rapid.T) *plan.Plan {
-	at := state{}
+	at := newState()
 	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{g.create(t, at, "a")}}}}
 	for range 2 + uniform(t, 6, "steps") {
 		p.Steps = append(p.Steps, g.step(t, at))
 	}
+	g.upgrade(t, p)
 	return p
+}
+
+// upgrade appends one restart per config upgrade, in order. Each ends a step
+// drawn from the previous upgrade's step on, 0 to stable after the step's
+// last action. These draws come after all others, so upgrades only add
+// restarts to a seed's plan.
+func (g *Generator) upgrade(t *rapid.T, p *plan.Plan) {
+	from := 0
+	for _, u := range g.upgrades {
+		from += uniform(t, len(p.Steps)-from, "upgrade step")
+		step := &p.Steps[from]
+		last := step.Actions[len(step.Actions)-1].At
+		delay := plan.Duration(uniform(t, 11, "upgrade delay")) * plan.Duration(g.stable) / 10
+		u.Args, u.CRDs = slices.Clone(u.Args), slices.Clone(u.CRDs)
+		step.Actions = append(step.Actions, plan.Action{At: last + delay, Do: plan.Restart, Upgrade: u})
+	}
 }
 
 // maxActions bounds the actions of a step.
@@ -476,7 +568,7 @@ func restartMidDelete(t *rapid.T, step plan.Step) []plan.Action {
 // within 50 ms.
 func (g *Generator) burst(t *rapid.T, at state) []plan.Action {
 	slot := sampled(t, at.live(), "slot")
-	k := g.kindOf(at[slot])
+	k := g.kindOf(at.slots[slot])
 	if len(k.fields) > 0 && rapid.Bool().Draw(t, "updates") {
 		return within50ms(t, []plan.Action{g.update(t, at, slot), g.update(t, at, slot)})
 	}
@@ -500,9 +592,9 @@ func (g *Generator) holdTraffic(t *rapid.T, at state, f plan.Fault) []plan.Actio
 		return []plan.Action{g.create(t, at, sampled(t, free, "slot"))}
 	}
 	slot := sampled(t, live, "slot")
-	cr := at[slot]
+	cr := at.slots[slot]
 	deleted := g.delete(t, at, slot)
-	at[slot] = cr
+	at.slots[slot] = cr
 	return within50ms(t, []plan.Action{deleted, {Do: plan.Create, Slot: slot, Object: marshal(cr)}})
 }
 
@@ -529,8 +621,13 @@ func (g *Generator) action(t *rapid.T, at state) plan.Action {
 	if g.damageable() {
 		legal = append(legal, plan.Damage)
 	}
-	if len(g.fixtures) > 0 {
+	changes := g.fixtureChanges(at)
+	if len(changes) > 0 {
 		legal = append(legal, plan.ChangeFixture)
+	}
+	deleted := g.deletedFixtures(at)
+	if len(deleted) > 0 {
+		legal = append(legal, plan.CreateFixture)
 	}
 	switch do := sampled(t, legal, "do"); do {
 	case plan.Create:
@@ -542,9 +639,11 @@ func (g *Generator) action(t *rapid.T, at state) plan.Action {
 	case plan.Damage:
 		return g.damage(t, at)
 	case plan.ChangeFixture:
-		f := sampled(t, g.fixtures, "fixture")
-		target := f.target
-		return plan.Action{Do: do, Target: &target, Patch: marshal(nest(sampled(t, f.paths, "path"), fixtureWords.Draw(t, "word")))}
+		return changeFixture(t, at, sampled(t, changes, "fixture"))
+	case plan.CreateFixture:
+		target := sampled(t, deleted, "fixture")
+		delete(at.deleted, target)
+		return plan.Action{Do: do, Target: &target}
 	default:
 		return plan.Action{Do: do}
 	}
@@ -555,24 +654,37 @@ func (g *Generator) create(t *rapid.T, at state, slot string) plan.Action {
 	return g.createOf(t, at, slot, sampled(t, g.kinds, "kind"))
 }
 
+// createOf creates the slot's CR of kind k. It writes candidates at each
+// reference's name, unless the CRD refuses them.
 func (g *Generator) createOf(t *rapid.T, at state, slot string, k *crKind) plan.Action {
-	cr := k.cr(t, slot)
-	at[slot] = cr.Object
-	return plan.Action{Do: plan.Create, Slot: slot, Object: marshal(cr.Object)}
+	cr := k.cr(t, slot).Object
+	for _, r := range k.references {
+		if written := g.refer(t, at, r, nil, cr).(map[string]any); k.rules.refusal(written, nil) == nil {
+			cr = written
+		}
+	}
+	at.slots[slot] = cr
+	return plan.Action{Do: plan.Create, Slot: slot, Object: marshal(cr)}
 }
 
 // update changes one field of the slot's CR, or restarts the controller
-// when its CRD refused every patch drawn.
+// when its CRD refused every patch drawn. A drawn field at or above a
+// reference's name holds a candidate there.
 func (g *Generator) update(t *rapid.T, at state, slot string) plan.Action {
-	k := g.kindOf(at[slot])
+	k := g.kindOf(at.slots[slot])
 	for range updateDraws {
 		mutable := sampled(t, k.fields, "field")
-		value, _ := mutable.draw(t)
+		value, present := mutable.draw(t)
+		if present {
+			for _, r := range k.references {
+				value = g.refer(t, at, r, mutable.path, value)
+			}
+		}
 		// A merge patch removes the field where the draw left it absent.
 		patch := nest(mutable.path, value)
-		patched := mergePatch(runtime.DeepCopyJSON(at[slot]), patch)
-		if k.rules.refusal(patched, at[slot]) == nil {
-			at[slot] = patched
+		patched := mergePatch(runtime.DeepCopyJSON(at.slots[slot]), patch)
+		if k.rules.refusal(patched, at.slots[slot]) == nil {
+			at.slots[slot] = patched
 			return plan.Action{Do: plan.Update, Slot: slot, Patch: marshal(patch)}
 		}
 	}
@@ -581,7 +693,7 @@ func (g *Generator) update(t *rapid.T, at state, slot string) plan.Action {
 
 // delete deletes the slot's CR, with Foreground propagation 1 time in 4.
 func (g *Generator) delete(t *rapid.T, at state, slot string) plan.Action {
-	at[slot] = nil
+	at.slots[slot] = nil
 	a := plan.Action{Do: plan.Delete, Slot: slot}
 	if uniform(t, 4, "propagation") == 0 {
 		a.Propagation = plan.Foreground
@@ -589,25 +701,26 @@ func (g *Generator) delete(t *rapid.T, at state, slot string) plan.Action {
 	return a
 }
 
-// unlisted are the resources after the listed kinds, which damage targets.
+// unlisted are the resources after the listed kinds.
 func (g *Generator) unlisted() []gvk.GroupResource { return g.resources[len(g.kinds):] }
 
 // damageable says whether a kube resource or a fake can take damage.
-func (g *Generator) damageable() bool { return len(g.unlisted()) > 0 || len(g.writable()) > 0 }
+func (g *Generator) damageable() bool { return len(g.creatable) > 0 || len(g.writable()) > 0 }
 
 // writable are the fakes that are not read-only.
 func (g *Generator) writable() []string {
 	return slices.DeleteFunc(slices.Clone(g.fakes), func(name string) bool { return g.readOnly[name] })
 }
 
-// damage deletes an object of a drawn resource, of a live slot when one is.
-// With writable fakes, half the draws, or all without a kube resource,
-// target one drawn uniformly.
+// damage deletes an object of a creatable resource, drawn by its
+// kindWeight, of a live slot when one is. With writable fakes, half the
+// draws, or all of them without a creatable resource, target a fake drawn
+// uniformly.
 func (g *Generator) damage(t *rapid.T, at state) plan.Action {
-	if fakes := g.writable(); len(fakes) > 0 && (len(g.unlisted()) == 0 || uniform(t, 2, "damage a fake") == 0) {
+	if fakes := g.writable(); len(fakes) > 0 && (len(g.creatable) == 0 || uniform(t, 2, "damage a fake") == 0) {
 		return g.damageOf(t, at, plan.Target{System: sampled(t, fakes, "fake")})
 	}
-	gr := sampled(t, g.unlisted(), "resource")
+	gr := weighted(t, g.creatable, g.kindWeight, "resource")
 	return g.damageOf(t, at, plan.Target{Group: gr.Group, Resource: gr.Resource})
 }
 
@@ -620,11 +733,12 @@ func (g *Generator) damageOf(t *rapid.T, at state, target plan.Target) plan.Acti
 }
 
 // traffic is an action that exercises a fault during its period. A request
-// fault takes a damage of its resource or, on a listed kind, an update of a
-// live CR of that kind. Stuck takes an update of a live CR, which gives its
-// dependencies a new generation to keep not ready, or else a create.
-// SlowDelete takes a delete of a live CR, whose dependencies' deletion it
-// holds; a later step may create the slot again. Otherwise a restart.
+// fault takes a damage of its resource if creatable or, on a listed kind,
+// an update of a live CR of that kind. Stuck takes an update of a live CR,
+// which gives its dependencies a new generation to keep not ready, or else
+// a create. SlowDelete takes a delete of a live CR, whose dependencies'
+// deletion it holds; a later step may create the slot again. Otherwise a
+// restart.
 func (g *Generator) traffic(t *rapid.T, at state, f plan.Fault) plan.Action {
 	if f.System != "" {
 		return g.fakeTraffic(t, at, f)
@@ -641,7 +755,7 @@ func (g *Generator) traffic(t *rapid.T, at state, f plan.Fault) plan.Action {
 		return g.delete(t, at, sampled(t, at.live(), "slot"))
 	case f.ModelFault():
 		return plan.Action{Do: plan.Restart}
-	case slices.Contains(g.unlisted(), gr):
+	case slices.Contains(g.creatable, gr):
 		return g.damageOf(t, at, plan.Target{Group: gr.Group, Resource: gr.Resource})
 	case len(ofFault) > 0:
 		return g.update(t, at, sampled(t, ofFault, "slot"))
@@ -688,27 +802,13 @@ type request struct {
 // verbWeights favor the writes whose outcome a fault can hide, creates most.
 var verbWeights = map[string]int{"get": 1, "list": 1, "create": 6, "update": 2, "patch": 2, "delete": 2}
 
-// favored is how much more often faults match the listed kinds and the
-// core kinds the controller may create, such as Secrets.
+// favored is how much more often faults and damage name a kind that
+// g.favors holds.
 const favored = 4
 
-// holdWeight is favored for the listed kinds, g.resources[:len(g.kinds)],
-// and for the kube kinds the entries' owns name, else 1. Without owned
-// kinds it is kindWeight.
-func (g *Generator) holdWeight(n int, gr gvk.GroupResource) int {
-	if len(g.owned) == 0 {
-		return g.kindWeight(n, gr)
-	}
-	if n < len(g.kinds) || slices.Contains(g.owned, gr) {
-		return favored
-	}
-	return 1
-}
-
-// kindWeight is favored for the listed kinds, g.resources[:len(g.kinds)],
-// and for core kinds the RBAC lets the controller create, else 1.
-func (g *Generator) kindWeight(n int, gr gvk.GroupResource) int {
-	if n < len(g.kinds) || gr.Group == "" && slices.Contains(g.granted[gr], "create") {
+// kindWeight is favored for a kind that g.favors holds, else 1.
+func (g *Generator) kindWeight(gr gvk.GroupResource) int {
+	if g.favors[gr] {
 		return favored
 	}
 	return 1
@@ -719,8 +819,8 @@ func (g *Generator) kindWeight(n int, gr gvk.GroupResource) int {
 // resource's match has an empty subresource, so it also matches the
 // resource's status requests.
 func (g *Generator) addRequests() {
-	for n, gr := range g.resources {
-		kindWeight := g.kindWeight(n, gr)
+	for _, gr := range g.resources {
+		kindWeight := g.kindWeight(gr)
 		for _, subresource := range []string{"", "status"} {
 			named := gr
 			if subresource != "" {
@@ -750,22 +850,14 @@ func (g *Generator) addRequests() {
 // fault draws a request and one of five request effects. With models, it
 // draws one of seven effects instead, and the last two are stuck and
 // slowDelete on a model kind drawn uniformly. With a watchable kind, two
-// more effects are a holdWatch of one drawn uniformly. With fakes, half the
-// draws are a fake fault instead.
+// more effects are a holdWatch of one drawn by its kindWeight. With fakes,
+// half the draws are a fake fault instead.
 func (g *Generator) fault(t *rapid.T) plan.Fault {
 	if len(g.fakes) > 0 && uniform(t, 2, "fault on a fake") == 0 {
 		return g.fakeFault(t)
 	}
-	total := 0
-	for _, r := range g.requests {
-		total += r.weight
-	}
-	n := uniform(t, total, "request")
-	i := 0
-	for ; n >= g.requests[i].weight; i++ {
-		n -= g.requests[i].weight
-	}
-	f := plan.Fault{Match: g.requests[i].match, Nth: sampled(t, nths, "nth")}
+	r := weighted(t, g.requests, func(r request) int { return r.weight }, "request")
+	f := plan.Fault{Match: r.match, Nth: sampled(t, nths, "nth")}
 	effects := 5
 	if len(g.models) > 0 {
 		effects = 7
@@ -775,7 +867,7 @@ func (g *Generator) fault(t *rapid.T) plan.Fault {
 	}
 	switch effect := uniform(t, effects, "effect"); {
 	case effect >= effects-2 && len(g.watchable) > 0:
-		gr := sampled(t, g.watchable, "hold")
+		gr := weighted(t, g.watchable, g.kindWeight, "hold")
 		return plan.Fault{Match: plan.Match{Group: gr.Group, Resource: gr.Resource}, HoldWatch: true}
 	case effect == 0:
 		f.Error = &plan.Error{Code: sampled(t, []int{500, 503, 429}, "code")}
@@ -923,6 +1015,23 @@ func uniform(t *rapid.T, n int, label string) int {
 // sampled draws an element of the slice, each with equal chance.
 func sampled[E any](t *rapid.T, slice []E, label string) E {
 	return slice[uniform(t, len(slice), label)]
+}
+
+// weighted draws an element of the slice, each with a chance in proportion
+// to its weight. Like sampled, it draws nothing from one element.
+func weighted[E any](t *rapid.T, slice []E, weight func(E) int, label string) E {
+	if len(slice) == 1 {
+		return slice[0]
+	}
+	total := 0
+	for _, e := range slice {
+		total += weight(e)
+	}
+	i := 0
+	for n := uniform(t, total, label); n >= weight(slice[i]); i++ {
+		n -= weight(slice[i])
+	}
+	return slice[i]
 }
 
 // fixtureWords are short words whose length is a multiple of four, so that

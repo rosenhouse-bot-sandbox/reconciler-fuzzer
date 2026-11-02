@@ -309,7 +309,7 @@ func newStaticMapper() staticMapper {
 func TestObserverRetriesAKindItCouldNotMap(t *testing.T) {
 	o := &observer{ctx: context.Background(), mapper: newStaticMapper(), kinds: map[schema.GroupResource]schema.GroupVersionResource{}}
 	gr := schema.GroupResource{Group: "toy", Resource: "widgets"}
-	if err := o.watch(gr); err == nil {
+	if err := o.watch(t.Context(), gr); err == nil {
 		t.Fatal("watch mapped an unknown kind")
 	}
 	if _, kept := o.kinds[gr]; kept {
@@ -317,18 +317,20 @@ func TestObserverRetriesAKindItCouldNotMap(t *testing.T) {
 	}
 }
 
-// servesDeployments is a discovery client whose every group version serves
-// deployments.
-type servesDeployments struct{ discovery.DiscoveryInterface }
+// serves is a discovery client whose every group version serves resource.
+type serves struct {
+	discovery.DiscoveryInterface
+	resource string
+}
 
-func (servesDeployments) ServerResourcesForGroupVersion(string) (*metav1.APIResourceList, error) {
-	return &metav1.APIResourceList{APIResources: []metav1.APIResource{{Name: "deployments", Verbs: []string{"list", "watch"}}}}, nil
+func (s serves) ServerResourcesForGroupVersion(string) (*metav1.APIResourceList, error) {
+	return &metav1.APIResourceList{APIResources: []metav1.APIResource{{Name: s.resource, Verbs: []string{"list", "watch"}}}}, nil
 }
 
 func TestObserverCannotWatchAKindTheMapperFindsInAnotherGroup(t *testing.T) {
 	mapper := meta.NewDefaultRESTMapper(nil)
 	mapper.Add(schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}, meta.RESTScopeNamespace)
-	o := &observer{mapper: staticMapper{mapper}, discovery: servesDeployments{}}
+	o := &observer{mapper: staticMapper{mapper}, discovery: serves{resource: "deployments"}}
 	want := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 	if gvr, err := o.watchable(want.GroupResource()); gvr != want || err != nil {
 		t.Errorf("watchable(deployments.apps) = %v, %v, want %v", gvr, err, want)
@@ -360,10 +362,10 @@ func TestObserverWatchesKindsTogether(t *testing.T) {
 	var callers sync.WaitGroup
 	callers.Add(len(kinds))
 	// The server serves neither kind, so no informer starts.
-	o := &observer{mapper: gatheringMapper{staticMapper{mapper}, &callers}, discovery: servesDeployments{}, kinds: map[schema.GroupResource]schema.GroupVersionResource{}}
+	o := &observer{mapper: gatheringMapper{staticMapper{mapper}, &callers}, discovery: serves{resource: "deployments"}, kinds: map[schema.GroupResource]schema.GroupVersionResource{}}
 	done := make(chan struct{})
 	go func() {
-		o.watchAll(kinds)
+		o.watchAll(t.Context(), kinds)
 		close(done)
 	}()
 	select {
@@ -385,7 +387,7 @@ func (slowFailingDiscovery) ServerResourcesForGroupVersion(string) (*metav1.APIR
 func TestObserverReportsWatchErrorsOtherThanNoMatch(t *testing.T) {
 	o := &observer{mapper: newStaticMapper(), discovery: slowFailingDiscovery{}, kinds: map[schema.GroupResource]schema.GroupVersionResource{}}
 	// The mapper knows no widgets.
-	err := o.watchAll([]schema.GroupResource{{Resource: "configmaps"}, {Group: "toy", Resource: "widgets"}})
+	err := o.watchAll(t.Context(), []schema.GroupResource{{Resource: "configmaps"}, {Group: "toy", Resource: "widgets"}})
 	if err == nil || !strings.Contains(err.Error(), "discovery failed") || strings.Contains(err.Error(), "widgets") {
 		t.Errorf("watchAll = %v, want the discovery error alone", err)
 	}
@@ -536,5 +538,64 @@ func TestDeleteSendsPropagationAndTheUIDPrecondition(t *testing.T) {
 		if got != want || options.Preconditions == nil || *options.Preconditions.UID != "u" {
 			t.Errorf("Delete with %q sent %+v, want propagation %q and UID u.", propagation, options, want)
 		}
+	}
+}
+
+func TestCheckCRDsRefusesAPathWithNoCRD(t *testing.T) {
+	for _, path := range []string{"testdata/upgrade/v2/", "testdata/upgrade/v1/things.yaml"} {
+		if err := CheckCRDs(path); err != nil {
+			t.Errorf("CheckCRDs(%s) = %v, want nil", path, err)
+		}
+	}
+	crd, err := os.ReadFile("testdata/upgrade/v1/things.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	noYAMLExtension, malformed := t.TempDir(), t.TempDir()
+	for path, data := range map[string][]byte{
+		filepath.Join(noYAMLExtension, "things.yaml.in"): crd,
+		filepath.Join(malformed, "things.yaml"):          crd,
+		filepath.Join(malformed, "bad.yaml"):             []byte("kind: [unclosed\n"),
+	} {
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{noYAMLExtension, "testdata/objects.yaml"} {
+		if err := CheckCRDs(path); err == nil || err.Error() != path+" holds no CustomResourceDefinition" {
+			t.Errorf("CheckCRDs(%s) = %v, want a refusal", path, err)
+		}
+	}
+	for _, path := range []string{"testdata/missing/", "testdata/objects.yaml/crds/", malformed} {
+		if err := CheckCRDs(path); err == nil || !strings.Contains(err.Error(), path) {
+			t.Errorf("CheckCRDs(%s) = %v, want an error that names the path", path, err)
+		}
+	}
+}
+
+func TestWatchAllStopsWaitingForTheFirstListsWithItsContext(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
+	defer server.Close()
+	defer close(release)
+	client, err := dynamic.NewForConfig(&rest.Config{Host: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := newObserver()
+	o.ctx, o.cancel = context.WithCancel(context.Background())
+	defer o.cancel()
+	o.client, o.mapper, o.discovery = client, newStaticMapper(), serves{resource: "configmaps"}
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- o.watchAll(ctx, []schema.GroupResource{{Resource: "configmaps"}}) }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("watchAll = %v, want the context's error", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("watchAll waits for a list that never ends after its context is done")
 	}
 }

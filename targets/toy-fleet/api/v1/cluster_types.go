@@ -7,6 +7,9 @@ import (
 // ClusterFinalizer holds a Cluster until its Databases and Volumes are gone.
 const ClusterFinalizer = "fleet.toy/cleanup"
 
+// ClusterFinalizerV2 replaces ClusterFinalizer in version 2.
+const ClusterFinalizerV2 = "fleet.toy/finalizer"
+
 type ClusterSpec struct {
 	// Volumes is how many Volumes the Cluster owns.
 	// +kubebuilder:validation:Minimum=1

@@ -1,7 +1,8 @@
-# This config lists Clusters, Databases and Users. Fuzz cluster/ or
-# database/ instead: a generated Database or User here can name a missing
-# Cluster or Database, and then never gets ready. Paths resolve against this
-# file's directory.
+# This config lists Clusters, Databases and Users. Its references say that a
+# Database names a Cluster and the fixture Secret, and a User a Database.
+# Fuzz cluster/ or database/ instead: a generated plan here can delete a
+# Cluster that a Database names, and the Cluster then waits in deletion,
+# which Converge fails. Paths resolve against this file's directory.
 launch:
   binary: ../../bin/toy-fleet
   args:
@@ -20,8 +21,20 @@ primaries:
       has(self.status) && has(self.status.observedGeneration) && self.status.observedGeneration == self.metadata.generation
       && has(self.status.phase) && self.status.phase == 'Ready'
     values: {mutate: [spec.volumes, spec.volumeSize]}
-  - {kind: toy.reconciler-fuzzer/v1/Database, sample: database/database.yaml, ready: *ready}
-  - {kind: toy.reconciler-fuzzer/v1/User, sample: user.yaml, ready: *ready}
+  - kind: toy.reconciler-fuzzer/v1/Database
+    sample: database/database.yaml
+    ready: *ready
+    values: {mutate: [spec.engine, spec.clusterRef, spec.passwordSecretRef]}
+  - {kind: toy.reconciler-fuzzer/v1/User, sample: user.yaml, ready: *ready, values: {mutate: [spec.databaseRef]}}
+fixtures: [admin-password.yaml]
+references:
+  - {from: toy.reconciler-fuzzer/v1/Database, to: toy.reconciler-fuzzer/v1/Cluster, name: spec.clusterRef}
+  - from: toy.reconciler-fuzzer/v1/Database
+    to: v1/Secret
+    name: spec.passwordSecretRef.name
+    ready: has(self.data) && has(self.data.password)
+    track: 1s                      # The Database is ready only while its Secret holds a password.
+  - {from: toy.reconciler-fuzzer/v1/User, to: toy.reconciler-fuzzer/v1/Database, name: spec.databaseRef}
 models:
   - kind: storage.thirdparty/v1/Volume
     stages: readyCondition

@@ -38,6 +38,21 @@ type Spec struct {
 	Ignore map[string][]string
 	// Properties come from the config, or else the Run event.
 	Properties []PropertySpec
+	// References come from the config, or else the Run event.
+	References []Reference
+}
+
+// Reference is a config reference as Honest and Converge judge it.
+type Reference struct {
+	From trace.Kind
+	// To names the to kind by a ref with no namespace or name.
+	To         trace.Ref
+	Namespaced bool
+	// Name and Namespace are field paths in the From CR.
+	Name, Namespace string
+	Ready           func(obj map[string]any) (bool, error)
+	Required        bool
+	Track           time.Duration
 }
 
 // Primary is one listed kind as the checks judge its CRs.
@@ -49,6 +64,9 @@ type Primary struct {
 	Retain, Halted func(cr map[string]any) (bool, error)
 	Periodic       *trace.Periodic
 }
+
+// ready reports whether p's ready accepts cr.
+func (p Primary) ready(cr map[string]any) bool { return satisfies(p.Ready, cr) }
 
 // primary is the entry of ref's kind, if ref names a CR.
 func (s Spec) primary(ref trace.Ref) (Primary, bool) {
@@ -131,7 +149,8 @@ type Model struct {
 
 // SpecFor builds a Spec from c, or from the trace's Run event when c is nil.
 // The status kinds always come from the Run event, and c must list the Run
-// event's kinds.
+// event's kinds. Each To kind of c's references must be one the Run event's
+// references name, since the listeners record seens of no other kind.
 func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 	run, ok := ix.Run()
 	if !ok {
@@ -166,6 +185,9 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 		if s.Properties, err = compileProperties(owner.Properties(c)); err != nil {
 			return Spec{}, fmt.Errorf("the config's properties: %w", err)
 		}
+		if s.References, err = configReferences(c, run); err != nil {
+			return Spec{}, err
+		}
 		return s, nil
 	}
 	if run.Stable <= 0 || run.Reads <= 0 || run.Writes <= 0 {
@@ -192,7 +214,50 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 	if s.Properties, err = compileProperties(run.Properties); err != nil {
 		return Spec{}, fmt.Errorf("the trace's properties: %w", err)
 	}
+	if s.References, err = compileReferences(run.References); err != nil {
+		return Spec{}, fmt.Errorf("the trace's references: %w", err)
+	}
 	return s, nil
+}
+
+// configReferences compiles c's references. The run event's references must
+// name each kube To kind and each fake To system, since the listeners
+// recorded seens of no other.
+func configReferences(c *config.Config, run trace.Run) ([]Reference, error) {
+	for i, r := range c.References {
+		if !slices.ContainsFunc(run.References, func(recorded trace.Reference) bool {
+			return recorded.System == r.System && recorded.To.Group == r.To.Group && recorded.To.Kind == r.To.Kind
+		}) {
+			to := r.System + ":" + r.Collection
+			if r.System == "" {
+				to = kindName(trace.Kind{Group: r.To.Group, Version: r.To.Version, Kind: r.To.Kind})
+			}
+			return nil, fmt.Errorf("the config's references[%d] names %s, but no reference of the trace's run event does, so the trace holds no seens of it", i, to)
+		}
+	}
+	references, err := owner.References(c, recordedResource(run))
+	if err != nil {
+		return nil, fmt.Errorf("the config: %w", err)
+	}
+	compiled, err := compileReferences(references)
+	if err != nil {
+		return nil, fmt.Errorf("the config's references: %w", err)
+	}
+	return compiled, nil
+}
+
+// compileReferences compiles each reference's ready.
+func compileReferences(references []trace.Reference) ([]Reference, error) {
+	var compiled []Reference
+	for i, r := range references {
+		ready, err := config.CompileReady(r.Ready)
+		if err != nil {
+			return nil, fmt.Errorf("ready of references[%d]: %w", i, err)
+		}
+		compiled = append(compiled, Reference{From: r.From, To: r.ToRef(), Namespaced: r.Namespaced, Name: r.Name, Namespace: r.Namespace,
+			Ready: ready, Required: r.Required, Track: r.Track})
+	}
+	return compiled, nil
 }
 
 // listedKinds names each entry's kind as resource.group, in order.
@@ -236,6 +301,15 @@ func (s Spec) poll(system string) time.Duration {
 	return s.Stable
 }
 
+// longestPoll is the longest of Stable and every fake's poll interval.
+func (s Spec) longestPoll() time.Duration {
+	longest := s.Stable
+	for _, p := range s.Polls {
+		longest = max(longest, p)
+	}
+	return longest
+}
+
 // covers reports whether ref is of m's kind: on m's system, and of its
 // resource when Kind sets one.
 func (m Model) covers(ref trace.Ref) bool {
@@ -257,9 +331,9 @@ func (s Spec) modelled(ref trace.Ref) bool {
 	})
 }
 
-// recordedResource maps a listed or owns kind to the run event's resource
-// for it, or else a guess. It counts every kind as namespaced, since the run
-// refused a namespace on a cluster-scoped kind.
+// recordedResource maps a listed, owns or reference kind to the run event's
+// resource for it, or else a guess. It counts every kind as namespaced, since
+// the run refused a namespace on a cluster-scoped kind.
 func recordedResource(run trace.Run) func(schema.GroupVersionKind) (string, bool, error) {
 	var recorded []trace.Kind
 	for _, p := range run.Primaries {
@@ -267,6 +341,9 @@ func recordedResource(run trace.Run) func(schema.GroupVersionKind) (string, bool
 		for _, o := range p.Owns {
 			recorded = append(recorded, o.Kind)
 		}
+	}
+	for _, r := range run.References {
+		recorded = append(recorded, r.To)
 	}
 	return func(gvk schema.GroupVersionKind) (string, bool, error) {
 		if i := slices.IndexFunc(recorded, func(k trace.Kind) bool { return k.Group == gvk.Group && k.Kind == gvk.Kind }); i >= 0 {

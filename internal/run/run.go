@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"time"
@@ -41,6 +42,7 @@ type Process interface {
 	Stop(ctx context.Context) error
 	Kill(ctx context.Context) error
 	Supervise(on bool) error
+	SetCommand(path string, args []string)
 }
 
 // Cluster applies CR actions as the harness. *kube.Kube implements it.
@@ -50,6 +52,10 @@ type Cluster interface {
 	Delete(ctx context.Context, ref trace.Ref, propagation plan.Propagation) error
 	Gone(ctx context.Context, ref trace.Ref, uid string) (bool, error)
 	WaitGone(ctx context.Context, ref trace.Ref, uid string) error
+	InstallCRDs(ctx context.Context, paths []string) error
+	// CreateFixture creates the fixture at ref again, as its file declares
+	// it, and returns the created object's ref.
+	CreateFixture(ctx context.Context, ref trace.Ref) (trace.Ref, error)
 }
 
 var (
@@ -88,6 +94,11 @@ type Runner struct {
 	// Failed returns the error of a failed system, such as a fake that
 	// exited. Nil means none can fail.
 	Failed func() error
+	// Vars expand as ${key} in a restart's args, such as
+	// systems.kube.kubeconfig.
+	Vars map[string]string
+	// LaunchArgs follow a restart's args, as they follow the launch's.
+	LaunchArgs []string
 }
 
 func (r *Runner) failed() error {
@@ -154,6 +165,9 @@ func Run(ctx context.Context, o Options) (check.Report, error) {
 	if err := p.ValidateKinds(cfg.ListedKinds()); err != nil {
 		return check.Report{}, err
 	}
+	if err := checkUpgrades(cfg, p); err != nil {
+		return check.Report{}, err
+	}
 	samples, err := loadSamples(cfg.Primaries)
 	if err != nil {
 		return check.Report{}, err
@@ -187,6 +201,42 @@ func Run(ctx context.Context, o Options) (check.Report, error) {
 	return report, nil
 }
 
+// checkUpgrades refuses an upgrade, in launch.upgrades or a restart of p,
+// whose binary is not an executable file or whose crds path holds no CRD. It
+// also refuses a restart arg that config.CheckArgs refuses.
+func checkUpgrades(cfg *config.Config, p *plan.Plan) error {
+	for i, u := range cfg.Launch.Upgrades {
+		if err := checkPaths(u); err != nil {
+			return fmt.Errorf("launch.upgrades[%d]: %w", i, err)
+		}
+	}
+	for i, step := range p.Steps {
+		for j, a := range step.Actions {
+			if err := checkPaths(a.Upgrade); err != nil {
+				return fmt.Errorf("steps[%d].actions[%d]: %w", i, j, err)
+			}
+			if err := cfg.CheckArgs(a.Args); err != nil {
+				return fmt.Errorf("steps[%d].actions[%d].%w", i, j, err)
+			}
+		}
+	}
+	return nil
+}
+
+func checkPaths(u plan.Upgrade) error {
+	if u.Binary != "" {
+		if _, err := exec.LookPath(u.Binary); err != nil {
+			return err
+		}
+	}
+	for _, path := range u.CRDs {
+		if err := kube.CheckCRDs(path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // execute starts the fake services, the Kubernetes system, the models and
 // the controller, runs the plan and stops them. samples are the entries'
 // samples, in config order.
@@ -198,7 +248,7 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 	var targets []ModelTarget
 	var fakes []*fake.Fake
 	for _, s := range cfg.Fakes() {
-		fo, err := fakeOptions(s)
+		fo, err := fakeOptions(s, cfg.References)
 		if err != nil {
 			return err
 		}
@@ -211,11 +261,7 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 		vars[s.Name], controllerListeners[s.Name], actors[s.Name] = fakeEndpoints.Vars, fakeEndpoints.Controller, f
 		targets, fakes = append(targets, f), append(fakes, f)
 	}
-	watch, seen := modelKinds(cfg.Models)
-	k := kube.New(kube.Options{
-		CRDs: cfg.CRDs, RBAC: cfg.Launch.RBAC, Fixtures: cfg.Fixtures, Vars: flatten(vars), Warm: samples,
-		Watch: slices.Concat(primaryKinds(cfg.Primaries), watch), Seen: seen,
-	})
+	k := kube.New(kubeOptions(cfg, flatten(vars), samples))
 	endpoints, err := k.Start(ctx, env)
 	if err != nil {
 		return err
@@ -253,7 +299,8 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 		return err
 	}
 	defer func() { err = errors.Join(err, log.Close()) }()
-	launchOptions, err := expandLaunch(cfg.Launch, o.LaunchArgs, vars)
+	launchVars := flatten(vars)
+	launchOptions, err := expandLaunch(cfg.Launch, o.LaunchArgs, launchVars)
 	if err != nil {
 		return err
 	}
@@ -298,6 +345,8 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 		Select: func(ix *trace.Index, creator trace.Caller, target plan.Target, slot string, t time.Duration) (trace.Ref, error) {
 			return owner.New(ix, spec.Owners).Select(creator, target, slot, t)
 		},
+		Vars:       launchVars,
+		LaunchArgs: o.LaunchArgs,
 	}
 	if err := runner.Quiet(ctx); err != nil {
 		return err
@@ -305,13 +354,28 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 	return runner.Execute(ctx, p)
 }
 
-// fakeOptions configure the fake of s, with its fixtures and token.
-func fakeOptions(s config.System) (fake.Options, error) {
+// kubeOptions configure the kube system, which expands vars in the
+// fixtures and warms up with samples. Its observer watches the listed,
+// owned, modelled and referenced kinds from the start. Its controller
+// listener records Seen events of the dependency and referenced kinds.
+func kubeOptions(cfg *config.Config, vars map[string]string, samples []map[string]any) kube.Options {
+	watch, seen := modelKinds(cfg.Models)
+	referenced := referenceKinds(cfg.References)
+	return kube.Options{
+		CRDs: cfg.CRDs, RBAC: cfg.Launch.RBAC, Fixtures: cfg.Fixtures, Vars: vars, Warm: samples,
+		Watch: slices.Concat(primaryKinds(cfg.Primaries), watch, referenced), Seen: slices.Concat(seen, referenced),
+	}
+}
+
+// fakeOptions configure the fake of s, with its fixtures and token. It sees
+// every object when s is a dependency or a reference names it.
+func fakeOptions(s config.System, references []config.Reference) (fake.Options, error) {
 	api, err := apiMap(s)
 	if err != nil {
 		return fake.Options{}, err
 	}
-	o := fake.Options{Name: s.Name, Command: s.Process.Command, Dir: s.Process.Dir, API: api, SeenAll: s.Dependency != nil, ModelFaults: s.Map().ModelFaults}
+	referenced := slices.ContainsFunc(references, func(r config.Reference) bool { return r.System == s.Name })
+	o := fake.Options{Name: s.Name, Command: s.Process.Command, Dir: s.Process.Dir, API: api, SeenAll: s.Dependency != nil || referenced, ModelFaults: s.Map().ModelFaults}
 	if s.Token != "" {
 		o.Vars = map[string]string{"token": s.Token}
 	}
@@ -361,10 +425,15 @@ func runEvent(cfg *config.Config, k *kube.Kube, planSteps int) (trace.Event, err
 	if err != nil {
 		return trace.Event{}, err
 	}
-	owners, primaries, err := owner.Sources(cfg, func(gvk schema.GroupVersionKind) (string, bool, error) {
+	resource := func(gvk schema.GroupVersionKind) (string, bool, error) {
 		ref, err := k.Ref(gvk, "")
 		return ref.Resource, ref.Namespace != "", err
-	})
+	}
+	owners, primaries, err := owner.Sources(cfg, resource)
+	if err != nil {
+		return trace.Event{}, err
+	}
+	references, err := owner.References(cfg, resource)
 	if err != nil {
 		return trace.Event{}, err
 	}
@@ -372,7 +441,7 @@ func runEvent(cfg *config.Config, k *kube.Kube, planSteps int) (trace.Event, err
 		Namespace: k.Namespace(), Primaries: primaries, PlanSteps: planSteps,
 		Stable: cfg.Timeouts.Stable, Reads: cfg.Budgets.Reads, Writes: cfg.Budgets.Writes,
 		Models: models, StatusKinds: k.StatusKinds(), Kinds: k.Kinds(),
-		Owners: owners, Systems: owner.Systems(cfg), Properties: owner.Properties(cfg),
+		Owners: owners, Systems: owner.Systems(cfg), Properties: owner.Properties(cfg), References: references,
 	}}, nil
 }
 
@@ -386,6 +455,19 @@ func modelKinds(models []config.Model) (watch, seen []schema.GroupVersionKind) {
 		}
 	}
 	return watch, seen
+}
+
+// referenceKinds returns the kube kinds that references name as To, once
+// each, in config order. The observer watches them, and the controller
+// listener records Seen events of them.
+func referenceKinds(references []config.Reference) []schema.GroupVersionKind {
+	var kinds []schema.GroupVersionKind
+	for _, r := range references {
+		if r.System == "" && !slices.Contains(kinds, r.To) {
+			kinds = append(kinds, r.To)
+		}
+	}
+	return kinds
 }
 
 // traceModels describes the models for the run event. ref maps a kind to
@@ -424,17 +506,13 @@ func primaryKinds(primaries []config.Primary) []schema.GroupVersionKind {
 }
 
 // expandLaunch expands ${systems.<name>.<key>} in the launch args, with
-// extra appended, and in the env. systemVars maps a system to its Vars.
-func expandLaunch(l config.Launch, extra []string, systemVars map[string]map[string]string) (launch.Options, error) {
-	vars := flatten(systemVars)
-	o := launch.Options{Path: l.Binary, Env: map[string]string{}}
-	for _, arg := range append(slices.Clone(l.Args), extra...) {
-		expanded, err := config.Expand(arg, vars)
-		if err != nil {
-			return launch.Options{}, fmt.Errorf("launch args: %w", err)
-		}
-		o.Args = append(o.Args, expanded)
+// extra appended, and in the env.
+func expandLaunch(l config.Launch, extra []string, vars map[string]string) (launch.Options, error) {
+	args, err := expandArgs(l.Args, extra, vars)
+	if err != nil {
+		return launch.Options{}, fmt.Errorf("launch args: %w", err)
 	}
+	o := launch.Options{Path: l.Binary, Args: args, Env: map[string]string{}}
 	for name, value := range l.Env {
 		expanded, err := config.Expand(value, vars)
 		if err != nil {
@@ -443,6 +521,20 @@ func expandLaunch(l config.Launch, extra []string, systemVars map[string]map[str
 		o.Env[name] = expanded
 	}
 	return o, nil
+}
+
+// expandArgs expands ${key} in each of args, then in each of extra. It never
+// returns nil, so a restart's empty args replace the current ones.
+func expandArgs(args, extra []string, vars map[string]string) ([]string, error) {
+	out := []string{}
+	for _, arg := range slices.Concat(args, extra) {
+		expanded, err := config.Expand(arg, vars)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, expanded)
+	}
+	return out, nil
 }
 
 // loadSamples reads each entry's sample, in config order. A sample of
