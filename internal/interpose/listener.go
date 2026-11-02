@@ -723,7 +723,9 @@ const (
 var protobufMagic = []byte("k8s\x00")
 
 // protobufMeta decodes the metadata of a Kubernetes protobuf object, which
-// is field 1 of every object inside the runtime.Unknown envelope.
+// is field 1 of every object inside the runtime.Unknown envelope. A list
+// kind's metadata is a ListMeta, so of a list it returns only the
+// resourceVersion.
 func protobufMeta(body io.Reader) (metav1.ObjectMeta, error) {
 	data, err := io.ReadAll(body)
 	if err != nil {
@@ -746,7 +748,14 @@ func protobufMeta(body io.Reader) (metav1.ObjectMeta, error) {
 	if m <= 0 || uint64(len(raw[n+m:])) < size {
 		return meta, errors.New("truncated metadata")
 	}
-	return meta, meta.Unmarshal(raw[n+m : n+m+int(size)])
+	field := raw[n+m : n+m+int(size)]
+	if strings.HasSuffix(envelope.Kind, "List") {
+		var listMeta metav1.ListMeta
+		err := listMeta.Unmarshal(field)
+		meta.ResourceVersion = listMeta.ResourceVersion
+		return meta, err
+	}
+	return meta, meta.Unmarshal(field)
 }
 
 func (rec *recorder) record() {
