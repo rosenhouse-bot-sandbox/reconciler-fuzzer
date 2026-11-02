@@ -226,10 +226,10 @@ details say which. `make repro-cert-manager` runs it 20 times.
 - Every failure came by write-back.
 - In the run without the hold that applied the data, `fresh-key` still held at the step's
   end.
-- Generated plans find it too. A scan of the first 3000 cert-manager seeds found 279 that
+- Generated plans find it too. A scan of the first 3000 cert-manager seeds found 257 that
   draw a step holding the Secret watch while it deletes a CR and creates it again. The
-  first six, seeds 14, 40, 53, 54, 55 and 66, each failed `fresh-key` at that step in one
-  run, by write-back.
+  first six, seeds 8, 9, 40, 54, 55 and 86, each failed `fresh-key` at that step by
+  write-back. Seed 9 failed in 2 of 3 runs, and each other seed in its one run.
 - The program's `-collect` deletes what the old Certificate controls, much as
   kube-controller-manager would. On envtest with `-policy Always -algorithm RSA`, it kept the
   key in 3 of 10 runs.

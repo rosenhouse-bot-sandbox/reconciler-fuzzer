@@ -51,6 +51,11 @@ func (g gateRow) planPath() string { return planPath(g.configPath(), g.plan) }
 var gate = []gateRow{
 	{plan: "slow-delete", bug: 116, finding: "Finalizers: removed another caller's finalizer", step: 1, detail: "cluster-vol-0: reconciler-fuzzer.dev/slow-delete, added by model:volumes.storage.thirdparty, removed by update"},
 	{plan: "b0", bug: 116, finding: "Finalizers: removed another caller's finalizer", step: 2, detail: "cluster-vol-0: storage.thirdparty/protect, added by model:volumes.storage.thirdparty, removed by update", config: protectConfig},
+	{plan: "create-together", bug: 123, finding: "Honest: reported ready before seeing its dependency ready", step: 0, detail: "slot b: clusters.toy.reconciler-fuzzer "},
+	{plan: "secret-late", bug: 124, finding: "Honest: reported ready with no dependency", step: 0, detail: "slot b: secrets "},
+	{plan: "secret-recreate", bug: 125, finding: "Honest: stayed ready after seeing its dependency not ready", step: 1, detail: "slot b: secrets "},
+	// The restarted controller's watch shows the Secret missing.
+	{plan: "secret-deleted-while-down", bug: 125, finding: "Honest: stayed ready after seeing its dependency not ready", step: 1, detail: "slot b: secrets "},
 	// Each plan under upgrade/ restarts the controller as version 2.
 	{plan: "delete", bug: 140, finding: "Converge: did not settle (clause 2)", step: 2, detail: "cluster is being deleted", config: upgradeConfig},
 	{plan: "update", bug: 141, finding: "Restore: replaced resources", step: 1, detail: "/cluster-data-0 (rule 1, slot a)", config: upgradeConfig},

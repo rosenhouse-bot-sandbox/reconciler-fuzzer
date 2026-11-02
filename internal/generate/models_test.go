@@ -78,14 +78,37 @@ func TestAModelFaultComesWithTheActionItExercises(t *testing.T) {
 	} {
 		action := example(t, 0, func(rt *rapid.T) plan.Action {
 			rapid.Bool().Draw(rt, "rapid needs a draw")
-			at := state{}
+			at := newState()
 			if c.live {
-				at["a"] = g.kinds[0].base("a").Object
+				at.slots["a"] = g.kinds[0].base("a").Object
 			}
 			return g.traffic(rt, at, c.fault)
 		})
 		if action.Do != c.want {
 			t.Errorf("%s with a live CR %t comes with %s, want %s.", c.fault, c.live, action.Do, c.want)
+		}
+	}
+}
+
+// toy-fleet's Role serves the reconcilers of three kinds, but a Cluster owns
+// only Volumes, which a model plays. Faults and damage should favor them over
+// the Secrets and Users a Cluster never touches.
+func TestTheFleetToyFavorsTheModelKindOverOtherRBACKinds(t *testing.T) {
+	ps := plans(t, fleetClusterConfig, 200)
+	counts := map[string]int{}
+	for _, f := range faults(ps) {
+		if !f.ModelFault() {
+			counts[f.Match.Resource]++
+		}
+	}
+	for _, a := range actions(ps) {
+		if a.Do == plan.Damage {
+			counts[a.Target.Resource]++
+		}
+	}
+	for _, other := range []string{"secrets", "configmaps", "users", "databases"} {
+		if counts["volumes"] < 2*counts[other] {
+			t.Errorf("Faults and damage name resources %v, want volumes over twice as often as %s.", counts, other)
 		}
 	}
 }

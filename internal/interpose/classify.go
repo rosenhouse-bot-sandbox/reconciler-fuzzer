@@ -19,6 +19,9 @@ type Request struct {
 	// RequestName is a create's requested name, read by an API map.
 	RequestName string
 	Unmapped    bool
+	// Partial says a list or watch has a label or field selector, or a
+	// continue token, so it may leave objects out.
+	Partial bool
 }
 
 // namespaceSubresources follow a namespace name instead of scoping a resource.
@@ -29,10 +32,13 @@ var namespaceSubresources = map[string]bool{"status": true, "finalize": true}
 // non-resource URL leaves Ref.Resource empty and takes the lowercased method
 // as its verb. A namespace is cluster-scoped, so its Ref has no Namespace.
 func Classify(r *http.Request) Request {
-	watch, err := strconv.ParseBool(r.URL.Query().Get("watch"))
+	query := r.URL.Query()
+	watch, err := strconv.ParseBool(query.Get("watch"))
 	req := Request{Watch: err == nil && watch}
 	req.parsePath(strings.Split(strings.Trim(r.URL.Path, "/"), "/"))
 	req.Verb = verb(r.Method, req)
+	req.Partial = (req.Verb == "list" || req.Verb == "watch") &&
+		(query.Get("labelSelector") != "" || query.Get("fieldSelector") != "" || query.Get("continue") != "")
 	return req
 }
 

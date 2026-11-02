@@ -65,9 +65,11 @@ func TestAppendMatchesNewIndex(t *testing.T) {
 }
 
 func TestSteps(t *testing.T) {
+	endFaults := tt.EndFaults(0, 9*s, true)
+	endFaults.Phase.Backoff = 4 * s
 	var b tt.Builder
 	b.At(1 * s).Add(tt.Phase(0, trace.FaultPeriod)).
-		At(2 * s).Add(tt.EndFaults(0, 9*s, true)).
+		At(2 * s).Add(endFaults).
 		At(3 * s).Add(tt.Phase(0, trace.Settled)).
 		At(5 * s).Add(tt.Phase(0, trace.Confirmed)).
 		At(6 * s).Add(tt.Phase(1, trace.FaultPeriod)).
@@ -75,7 +77,7 @@ func TestSteps(t *testing.T) {
 		At(20 * s).Add(tt.Phase(1, trace.TimedOut))
 	steps := b.Index().Steps()
 	want := []trace.StepSpan{
-		{Step: 0, Start: 1 * s, EndFaults: 2 * s, Deadline: 9 * s, BackoffBound: true, WaitEnd: 3 * s, Settled: true, ConfirmEnd: 5 * s,
+		{Step: 0, Start: 1 * s, EndFaults: 2 * s, Deadline: 9 * s, Backoff: 4 * s, BackoffBound: true, WaitEnd: 3 * s, Settled: true, ConfirmEnd: 5 * s,
 			Reached: map[trace.PhaseName]bool{trace.FaultPeriod: true, trace.EndFaults: true, trace.Settled: true, trace.Confirmed: true}},
 		{Step: 1, Start: 6 * s, EndFaults: 7 * s, Deadline: 20 * s, WaitEnd: 20 * s,
 			Reached: map[trace.PhaseName]bool{trace.FaultPeriod: true, trace.EndFaults: true, trace.TimedOut: true}},
@@ -87,7 +89,7 @@ func TestSteps(t *testing.T) {
 		got := steps[i]
 		w := want[i]
 		if got.Step != w.Step || got.Start != w.Start || got.EndFaults != w.EndFaults || got.Deadline != w.Deadline ||
-			got.BackoffBound != w.BackoffBound || got.WaitEnd != w.WaitEnd || got.Settled != w.Settled ||
+			got.Backoff != w.Backoff || got.BackoffBound != w.BackoffBound || got.WaitEnd != w.WaitEnd || got.Settled != w.Settled ||
 			got.ConfirmEnd != w.ConfirmEnd || !mapsEqual(got.Reached, w.Reached) {
 			t.Errorf("step %d = %+v, want %+v", i, got, w)
 		}
@@ -431,6 +433,21 @@ func TestLatest(t *testing.T) {
 	}
 	if v, found := ix.Latest(cm); found {
 		t.Errorf("Latest(c) = %+v, want none", v)
+	}
+}
+
+func TestLatestAt(t *testing.T) {
+	var b tt.Builder
+	b.At(1*s).Add(tt.Version(widgetA, "u", "1", nil)).
+		At(2*s).Add(tt.Version(widgetA, "u", "2", nil), tt.Version(widgetB, "w", "5", nil))
+	ix := b.Index()
+	for at, want := range map[time.Duration]string{999 * time.Millisecond: "", 1 * s: "1", 1999 * time.Millisecond: "1", 2 * s: "2"} {
+		if v, _ := ix.LatestAt(widgetA, at); v.RV != want {
+			t.Errorf("LatestAt(a, %v) = version %q, want %q", at, v.RV, want)
+		}
+	}
+	if v, found := ix.LatestAt(cm, 2*s); found {
+		t.Errorf("LatestAt(c) = %+v, want none", v)
 	}
 }
 
