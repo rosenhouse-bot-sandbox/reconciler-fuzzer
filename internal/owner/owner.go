@@ -201,7 +201,7 @@ func References(c *config.Config, resource func(schema.GroupVersionKind) (string
 	var references []trace.Reference
 	for i, r := range c.References {
 		entry := trace.Reference{System: r.System, Namespaced: r.Namespaced, Name: r.Name, Namespace: r.Namespace,
-			Ready: r.Ready, Required: r.Required, Track: r.Track}
+			Ready: r.Ready, Required: r.Required, Track: r.Track, Block: r.Block}
 		var err error
 		if entry.From, err = kind(r.From); err != nil {
 			return nil, fmt.Errorf("references[%d] from kind %s: %w", i, r.From.Kind, err)

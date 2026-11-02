@@ -17,7 +17,7 @@ func TestReferencesDescribeEachEntry(t *testing.T) {
 	secretKind := schema.GroupVersionKind{Version: "v1", Kind: "Secret"}
 	c := &config.Config{References: []config.Reference{
 		{From: databaseKind, To: widgetKind, Namespaced: true, Name: "spec.widget", Ready: "self.ok", Required: true},
-		{From: databaseKind, To: secretKind, Namespaced: true, Name: "spec.keys[*].name", Namespace: "spec.keys[*].namespace", Ready: "has(self.data)", Track: time.Second},
+		{From: databaseKind, To: secretKind, Namespaced: true, Name: "spec.keys[*].name", Namespace: "spec.keys[*].namespace", Ready: "has(self.data)", Track: time.Second, Block: true},
 		{From: widgetKind, System: "cloud", Collection: "buckets", Name: "spec.bucket", Ready: "true", Required: true},
 	}}
 	got, err := owner.References(c, resolver(map[string]string{"Widget": "widgetries", "Database": "databases", "Secret": "secrets"}))
@@ -27,7 +27,7 @@ func TestReferencesDescribeEachEntry(t *testing.T) {
 	database := trace.Kind{Group: "toy", Version: "v1", Kind: "Database", Resource: "databases"}
 	want := []trace.Reference{
 		{From: database, To: trace.Kind{Group: "toy", Version: "v1", Kind: "Widget", Resource: "widgetries"}, Namespaced: true, Name: "spec.widget", Ready: "self.ok", Required: true},
-		{From: database, To: trace.Kind{Version: "v1", Kind: "Secret", Resource: "secrets"}, Namespaced: true, Name: "spec.keys[*].name", Namespace: "spec.keys[*].namespace", Ready: "has(self.data)", Track: time.Second},
+		{From: database, To: trace.Kind{Version: "v1", Kind: "Secret", Resource: "secrets"}, Namespaced: true, Name: "spec.keys[*].name", Namespace: "spec.keys[*].namespace", Ready: "has(self.data)", Track: time.Second, Block: true},
 		{From: trace.Kind{Group: "toy", Version: "v1", Kind: "Widget", Resource: "widgetries"}, System: "cloud", To: trace.Kind{Resource: "buckets"}, Name: "spec.bucket", Ready: "true", Required: true},
 	}
 	if !reflect.DeepEqual(got, want) {
