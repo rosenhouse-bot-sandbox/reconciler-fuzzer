@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/check"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
@@ -257,6 +258,44 @@ func TestACRWaitingInDeletionForACRThatNamesItSettles(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// The controller may write the Cluster as it starts to wait, so clause 7
+// must see stable after the deletion starts.
+func TestACRWaitingInDeletionSettlesStableAfterItsDeletionStarted(t *testing.T) {
+	for name, deleteA := range map[string]func(r *tt.Script) (start time.Duration){
+		"after its creation": func(r *tt.Script) time.Duration {
+			r.CreateCR("a", clusterA)
+			r.Ready(clusterA).Tick(5 * s)
+			start := r.Now
+			r.Update(trace.Harness, clusterA, tt.Deleting(tt.CR("a", true)))
+			return start
+		},
+		"seen first deleting, after another instance": func(r *tt.Script) time.Duration {
+			r.CreateCR("a", clusterA)
+			r.Update(trace.Harness, clusterA, tt.Deleting(tt.CR("a", true))).Delete(ctl, clusterA).Tick(5 * s)
+			start := r.Now
+			r.Create(trace.Harness, clusterA, tt.Deleting(tt.CR("a", true)))
+			return start
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := fleetRun(1, clusters, databases)
+			r.Spec.References = []trace.Reference{clusterRef(r, true)}
+			r.Begin()
+			r.Create(trace.Harness, databaseB, databaseOn(true, "a"))
+			r.Act("create", "b", &databaseB).EndFaults()
+			start := deleteA(r)
+			r.Update(trace.Harness, clusterA, tt.Deleting(tt.CR("a", false)))
+			want := []string{fmt.Sprintf("clusters.toy ns/a got its deletionTimestamp at %v, less than stable ago", start)}
+			if unmet := settledAt(t, r, start+r.Spec.Stable-tt.Tick); !slices.Equal(unmet, want) {
+				t.Errorf("Just before stable: unmet = %q, want %q.", unmet, want)
+			}
+			if unmet := settledAt(t, r, start+r.Spec.Stable); len(unmet) != 0 {
+				t.Errorf("At stable: unmet = %q, want none.", unmet)
+			}
+		})
 	}
 }
 

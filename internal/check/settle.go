@@ -166,7 +166,8 @@ func looksAt(c trace.Call, ref trace.Ref) bool {
 
 // crClauses says whether cr, a CR of p's kind, is done at t, and not being
 // deleted: ready, halted, or held back by a reference. A CR in use waits in
-// deletion, and is done.
+// deletion, and is done from stable after the deletion started, so that
+// clause 7 sees the controller's reaction.
 func crClauses(ix *trace.Index, p Primary, cr trace.Version, t time.Duration, s Spec) []unmet {
 	name, k := describe(cr.Ref), kind(cr.Ref)
 	var body map[string]any
@@ -174,10 +175,13 @@ func crClauses(ix *trace.Index, p Primary, cr trace.Version, t time.Duration, s 
 		return []unmet{{1, k, fmt.Sprintf("%s has a body that is not a JSON object: %v", name, err)}}
 	}
 	if metadata, _ := body["metadata"].(map[string]any); metadata["deletionTimestamp"] != nil {
-		if s.inUse(ix, cr.Ref, t) {
-			return nil
+		if !s.inUse(ix, cr.Ref, t) {
+			return []unmet{{2, k, name + " is being deleted"}}
 		}
-		return []unmet{{2, k, name + " is being deleted"}}
+		if start := deletionStart(ix, cr, t); t < start+s.Stable {
+			return []unmet{{2, k, fmt.Sprintf("%s got its deletionTimestamp at %v, less than stable ago", name, start)}}
+		}
+		return nil
 	}
 	if ready, err := p.Ready(body); err != nil {
 		return []unmet{{1, k, fmt.Sprintf("%s: ready: %v", name, err)}}
@@ -185,6 +189,19 @@ func crClauses(ix *trace.Index, p Primary, cr trace.Version, t time.Duration, s 
 		return []unmet{{1, k, name + " is not ready" + s.describeLooks(ix, cr.Ref, body, t)}}
 	}
 	return nil
+}
+
+// deletionStart is when the instance of cr, its version live at t, got its
+// deletionTimestamp: the time of its first version by t that has one.
+func deletionStart(ix *trace.Index, cr trace.Version, t time.Duration) time.Duration {
+	start := t
+	for _, e := range slices.Backward(ix.VersionsAt(cr.Ref, t)) {
+		if e.Version.UID != cr.UID || !deleting(e.Version.Body) {
+			break
+		}
+		start = e.At
+	}
+	return start
 }
 
 // halted reports whether p.Halted accepts cr's body and the controller
