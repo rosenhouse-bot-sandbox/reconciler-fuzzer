@@ -96,21 +96,21 @@ func (s Spec) claims(versions []trace.Event) []claim {
 	return claims
 }
 
-// kept reports whether a CR, whose versions make claims, kept object until
-// r: by bound, one of seens, the controller's seens of the CR, showed a
-// version that names object, and each later version before r names it too.
+// kept reports whether a CR, whose versions make claims in order, kept
+// object until r: by bound, one of seens, the controller's seens of the CR,
+// showed a version that names object, and each later version before r names
+// it too.
 func kept(seens []trace.Event, claims []claim, object trace.Ref, r release, bound time.Duration) bool {
-	before := slices.DeleteFunc(slices.Clone(claims), func(c claim) bool { return c.rv >= r.rv })
-	// Each version before the release and after since names object.
-	since := uint64(0)
-	for _, c := range before {
-		if !slices.Contains(c.objects, object) {
-			since = max(since, c.rv)
+	held := false
+	for _, c := range claims {
+		if c.rv >= r.rv {
+			break
 		}
+		held = slices.Contains(c.objects, object) && (held || slices.ContainsFunc(seens, func(e trace.Event) bool {
+			return e.At <= bound && revision(e.Seen.RV) == c.rv
+		}))
 	}
-	return slices.ContainsFunc(before, func(c claim) bool {
-		return c.rv > since && slices.ContainsFunc(seens, func(e trace.Event) bool { return e.At <= bound && revision(e.Seen.RV) == c.rv })
-	})
+	return held
 }
 
 // revision is a resourceVersion as the integer etcd assigns, which orders

@@ -74,6 +74,9 @@ func TestOrderedPassesAReleaseTheControllerHadNoTimeToHold(t *testing.T) {
 		"a CR it saw less than stable before":      func(r *tt.Script) { r.See(ctl, pw).Tick(r.Spec.Stable).See(ctl, databaseB) },
 		"an object it never saw":                   func(r *tt.Script) { r.See(ctl, databaseB).Tick(r.Spec.Stable) },
 		"an object it saw less than stable before": func(r *tt.Script) { r.See(ctl, databaseB).Tick(r.Spec.Stable).See(ctl, pw) },
+		"an object it saw only once its deletion started": func(r *tt.Script) {
+			r.See(ctl, databaseB).Tick(r.Spec.Stable).Update(trace.Harness, pw, tt.Deleting(secret(true))).See(ctl, pw).Tick(r.Spec.Stable)
+		},
 		"a CR it saw naming another": func(r *tt.Script) {
 			seeBoth(r.Update(trace.Harness, databaseB, database(false, "other"))).Update(trace.Harness, databaseB, database(false, "pw"))
 		},
@@ -184,7 +187,8 @@ func TestOrderedReportsAReleaseInItsStepWithEachCRThatNamesIt(t *testing.T) {
 	body := database(false, "pw")
 	body["metadata"] = map[string]any{"name": "c"}
 	r.Create(trace.Harness, databaseC, body)
-	seeBoth(r.Act("create", "c", &databaseC).See(ctl, databaseC)).EndFaults().Settle()
+	// The deletion starts in step 0, and the release is in step 1.
+	seeBoth(r.Act("create", "c", &databaseC).See(ctl, databaseC)).Update(trace.Harness, pw, tt.Deleting(secret(true))).EndFaults().Settle()
 	release := r.Begin().Now
 	findings := ordered(t, r.Delete(ctl, pw))
 	requireFinding(t, findings, "Ordered", 1, released, "kube/secrets", "secrets ns/pw: slot b names it", "secrets ns/pw: slot c names it")
