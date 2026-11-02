@@ -470,7 +470,7 @@ last one back, so the versions stay in order.
 
 The checks judge an upgrade's step as they judge any restart's, except that Restore lets the new
 version change the old version's resources but not replace them. Restore judges a generated
-upgrade only when its step changes no CR. Only some seeds draw such a step.
+upgrade only when its step changes no CR or fixture. Only some seeds draw such a step.
 [targets/toy-fleet/upgrade](targets/toy-fleet/upgrade/config.yaml) upgrades toy-fleet to
 `--version=2`, which labels each Volume with its version. Its bugs B140 to B142 mishandle the
 Clusters that version 1 made.

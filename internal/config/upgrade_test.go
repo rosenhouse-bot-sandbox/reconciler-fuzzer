@@ -35,6 +35,18 @@ func TestLaunchUpgradesRefuseAMissingCRDPath(t *testing.T) {
 	}
 }
 
+func TestALaunchUpgradeThatChangesNothingIsRefused(t *testing.T) {
+	for upgrades, want := range map[string]string{
+		"[{}]":                         "launch.upgrades[0] sets no binary, args or CRD path",
+		"[{args: [--v2]}, {crds: []}]": "launch.upgrades[1] sets no binary, args or CRD path",
+	} {
+		_, err := config.Load(writeConfig(t, withUpgrades(t, upgrades)))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v, want one containing %q", upgrades, err, want)
+		}
+	}
+}
+
 func TestLaunchUpgradeArgsNameDeclaredSystems(t *testing.T) {
 	if _, err := config.Load(writeConfig(t, withUpgrades(t, "[{args: ['${systems.cloud.url}']}]"))); err != nil {
 		t.Error(err)

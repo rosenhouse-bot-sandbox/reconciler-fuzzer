@@ -412,11 +412,15 @@ func load(path string) (*Config, error) {
 		return nil, err
 	}
 	for i, u := range d.Launch.Upgrades {
+		key := fmt.Sprintf("launch.upgrades[%d]", i)
 		if u.Binary != "" {
 			u.Binary = resolve(dir, u.Binary)
 		}
-		if u.CRDs, err = existing(dir, fmt.Sprintf("launch.upgrades[%d].crds", i), u.CRDs); err != nil {
+		if u.CRDs, err = existing(dir, key+".crds", u.CRDs); err != nil {
 			return nil, err
+		}
+		if !u.Upgrades() {
+			return nil, fmt.Errorf("%s sets no binary, args or CRD path", key)
 		}
 		c.Launch.Upgrades = append(c.Launch.Upgrades, u)
 	}
