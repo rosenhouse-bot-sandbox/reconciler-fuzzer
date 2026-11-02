@@ -152,8 +152,9 @@ type Model struct {
 
 // SpecFor builds a Spec from c, or from the trace's Run event when c is nil.
 // The status kinds always come from the Run event, and c must list the Run
-// event's kinds. Each To kind of c's references must be one the Run event's
-// references name, since the listeners record seens of no other kind.
+// event's kinds. The Run event's references must name each To kind of c's
+// references, and name each From kind of c's block references or have one
+// from it with onDelete: block, so that the trace holds seens of them.
 func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 	run, ok := ix.Run()
 	if !ok {
@@ -224,9 +225,9 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 }
 
 // configReferences compiles c's references. The run event's references must
-// name each kube To kind and each fake To system, and name or block on each
-// block reference's From kind, since the listeners recorded seens of no
-// other.
+// name each kube To kind and each fake To system, and name each From kind of
+// a block reference or have one from it with onDelete: block, so that the
+// trace holds seens of them.
 func configReferences(c *config.Config, run trace.Run) ([]Reference, error) {
 	for i, r := range c.References {
 		if !slices.ContainsFunc(run.References, func(recorded trace.Reference) bool {
@@ -243,7 +244,7 @@ func configReferences(c *config.Config, run trace.Run) ([]Reference, error) {
 				recorded.Block && recorded.From.Group == r.From.Group && recorded.From.Kind == r.From.Kind
 		}) {
 			from := kindName(trace.Kind{Group: r.From.Group, Version: r.From.Version, Kind: r.From.Kind})
-			return nil, fmt.Errorf("the config's references[%d] blocks on %s, but no reference of the trace's run event names it or blocks on it, so the trace holds no seens of it", i, from)
+			return nil, fmt.Errorf("the config's references[%d] from %s has onDelete: block, but no reference of the trace's run event names that kind, and none from it has onDelete: block, so the trace holds no seens of it", i, from)
 		}
 	}
 	references, err := owner.References(c, recordedResource(run))

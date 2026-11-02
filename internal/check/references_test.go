@@ -1367,7 +1367,7 @@ func TestSpecForRefusesAConfigReferenceToAKindTheTraceDidNotSee(t *testing.T) {
 }
 
 // The listener records seens of a block reference's from kind only where a
-// reference of the run names it or blocks on it.
+// reference of the run names it, or one from it has onDelete: block.
 func TestSpecForRefusesAConfigBlockReferenceFromAKindTheTraceDidNotSee(t *testing.T) {
 	cfg, err := config.Load("../../targets/toy-widget/config.yaml")
 	if err != nil {
@@ -1400,7 +1400,7 @@ func TestSpecForRefusesAConfigBlockReferenceFromAKindTheTraceDidNotSee(t *testin
 		run.Run.References = c.recorded
 		var b tt.Builder
 		_, err := check.SpecFor(cfg, b.Add(run).Index())
-		const want = "references[0] blocks on toy.reconciler-fuzzer/v1/Widget"
+		const want = "references[0] from toy.reconciler-fuzzer/v1/Widget has onDelete: block, but no reference of the trace's run event names that kind"
 		switch {
 		case !c.refused && err != nil:
 			t.Errorf("%s: SpecFor = %v, want no error.", name, err)

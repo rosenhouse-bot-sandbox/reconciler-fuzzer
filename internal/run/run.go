@@ -315,7 +315,7 @@ func kubeOptions(cfg *config.Config, vars map[string]string, samples []map[strin
 	return kube.Options{
 		CRDs: cfg.CRDs, RBAC: cfg.Launch.RBAC, Fixtures: cfg.Fixtures, Vars: vars, Warm: samples,
 		Watch: slices.Concat(primaryKinds(cfg.Primaries), watch, referenced),
-		Seen:  slices.Concat(seen, referenced, blockKinds(cfg.References)),
+		Seen:  appendBlockKinds(slices.Concat(seen, referenced), cfg.References),
 	}
 }
 
@@ -422,11 +422,10 @@ func referenceKinds(references []config.Reference) []schema.GroupVersionKind {
 	return kinds
 }
 
-// blockKinds returns the from kinds of block references, once each, in
-// config order. The controller listener records Seen events of them, for
-// Ordered.
-func blockKinds(references []config.Reference) []schema.GroupVersionKind {
-	var kinds []schema.GroupVersionKind
+// appendBlockKinds appends to kinds the from kind of each block reference
+// that kinds lacks, in config order. Ordered judges the controller's seens
+// of them.
+func appendBlockKinds(kinds []schema.GroupVersionKind, references []config.Reference) []schema.GroupVersionKind {
 	for _, r := range references {
 		if r.Block && !slices.Contains(kinds, r.From) {
 			kinds = append(kinds, r.From)
