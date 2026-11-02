@@ -27,7 +27,7 @@ const (
 	// B160 gives Volumes no owner, and releases a deleted Cluster before it
 	// deletes them. A kill between the two leaks them.
 	B160 Bug = 160
-	// B161 finalizes only Clusters whose deletion this process started.
+	// B161 finalizes only Clusters whose finalization this process began.
 	B161 Bug = 161
 	// B162 requeues a Cluster being deleted every 1 ms while its Volumes
 	// remain, and deletes them again each time.

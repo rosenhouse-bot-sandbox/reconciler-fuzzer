@@ -412,7 +412,7 @@ func TestB160MapsAVolumeToTheClusterItsLabelNames(t *testing.T) {
 	}
 }
 
-// B161 keeps in memory the deletions that its process started.
+// B161 keeps in memory the finalizations that its process began.
 func TestB161ForgetsAPendingDeletionAfterARestart(t *testing.T) {
 	for _, c := range []struct {
 		bug     Bug

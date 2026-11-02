@@ -31,8 +31,7 @@ const (
 // ClusterReconciler moves a Cluster through its phases and keeps its Volumes.
 type ClusterReconciler struct {
 	reconciler
-	// finalizing holds, under B161, the Clusters whose deletion this process
-	// started.
+	// finalizing holds, under B161, the Clusters this process began to finalize.
 	finalizing map[types.NamespacedName]bool
 }
 

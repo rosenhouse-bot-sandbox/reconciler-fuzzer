@@ -1,7 +1,6 @@
 package generate
 
 import (
-	"cmp"
 	"maps"
 	"reflect"
 	"slices"
@@ -89,12 +88,16 @@ func TestAnUpgradeComesAfterTheLatestOffsetInItsStep(t *testing.T) {
 			g.upgrade(rt, p)
 			return p
 		})
-		actions := p.Steps[0].Actions
-		for i := 3; i < len(actions); i++ {
-			latest := slices.MaxFunc(actions[:i], func(a, b plan.Action) int { return cmp.Compare(a.At, b.At) }).At
-			if a := actions[i]; a.At < latest || a.At > latest+plan.Duration(cfg.Timeouts.Stable) {
-				t.Errorf("Seed %d's upgrade %d comes at %v, after actions as late as %v; want 0 to %v later.", seed, i-2, time.Duration(a.At), time.Duration(latest), cfg.Timeouts.Stable)
+		upgrades := p.Steps[0].Actions[3:]
+		if len(upgrades) != len(cfg.Launch.Upgrades) {
+			t.Fatalf("Seed %d's step holds %d upgrades, want %d.", seed, len(upgrades), len(cfg.Launch.Upgrades))
+		}
+		latest := killAt
+		for i, a := range upgrades {
+			if a.At < latest || a.At > latest+plan.Duration(cfg.Timeouts.Stable) {
+				t.Errorf("Seed %d's upgrade %d comes at %v, after actions as late as %v; want 0 to %v later.", seed, i+1, time.Duration(a.At), time.Duration(latest), cfg.Timeouts.Stable)
 			}
+			latest = max(latest, a.At)
 		}
 	}
 }

@@ -467,8 +467,8 @@ About 30% of steps hold one `restart`, `kill` or `damage`, for Restore to judge.
 A kube fault draws a request `launch.rbac` grants, creates weighted most (§17,
 entry 20), holds a kind it lets the controller watch, with the traffic
 `holdTraffic` documents, or is a model fault (§7). `restartMidDelete` adds a
-restart or kill mid-delete to model-fault steps, and later actions wait for it.
-A kube `damage` deletes an object of an unlisted kind `launch.rbac` lets the
+restart or kill mid-delete to model-fault steps that delete and have room. A
+kube `damage` deletes an object of an unlisted kind `launch.rbac` lets the
 controller create. Faults favor the listed kinds. Faults and `damage` favor the
 kinds the CRs own: kube `owns` kinds and model kinds with a `dependency`.
 Without owned kinds, the core kinds the controller may create stand in. With
@@ -519,9 +519,9 @@ a Secret, and a User a Database. Its bugs start at B100. `config.yaml` lists all
 three kinds and their references. The generated test fuzzes `cluster/`, which
 lists Clusters alone, `database/`, which lists Databases on a fixture Cluster,
 `protect/`, whose Volume model holds each Volume's deletion with its finalizer,
-and `upgrade/`, `cluster/` with an upgrade to `--version=2`. Only gate rows run
-`upgrade/properties/`, which adds a property, and `uninstall/`, whose Database
-CRD a plan may delete.
+and `upgrade/`, `cluster/` with an upgrade to `--version=2`. `config.yaml`'s
+header says why the test skips it. Only gate rows run `upgrade/properties/`,
+which adds a property, and `uninstall/`, whose Database CRD a plan may delete.
 
 Each config's `plans/` holds its gated bugs' and B0's plans. A toy's
 `gate_envtest_test.go` runs `gate_test.go`'s rows, and its `bugmatrix_test.go`
