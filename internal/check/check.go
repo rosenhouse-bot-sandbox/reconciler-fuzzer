@@ -425,8 +425,9 @@ func Judge(ix *trace.Index, s Spec) Report {
 }
 
 // failedRoles notes each kind whose role CEL failed on every resource the
-// controller created, with the first error. A role guarded by kind fails on
-// the kinds it describes, so one note per system would miss it.
+// controller created, with the first error. A broken role guarded by kind
+// fails only on the kinds it describes and yields "" on the rest, so one note
+// per system would miss it.
 func failedRoles(ix *trace.Index, s Spec) []string {
 	w := owner.New(ix, s.Owners)
 	failed, worked := map[trace.Ref]error{}, map[trace.Ref]bool{}
