@@ -165,6 +165,36 @@ func TestOrderedOrdersVersionsOfTwoKindsByResourceVersion(t *testing.T) {
 	})
 }
 
+func TestOrderedReportsAReleaseInItsStepWithEachCRThatNamesIt(t *testing.T) {
+	r := secretRun(blockRef(), secret(true))
+	body := database(false, "pw")
+	body["metadata"] = map[string]any{"name": "c"}
+	r.Create(trace.Harness, databaseC, body)
+	seeBoth(r.Act("create", "c", &databaseC).See(ctl, databaseC)).EndFaults().Settle()
+	release := r.Begin().Now
+	findings := ordered(t, r.Delete(ctl, pw))
+	requireFinding(t, findings, "Ordered", 1, released, "kube/secrets", "secrets ns/pw: slot b names it", "secrets ns/pw: slot c names it")
+	if findings[0].At != release {
+		t.Errorf("at = %v, want the release at %v.", findings[0].At, release)
+	}
+}
+
+func TestOrderedReportsAStepsReleasesOfAKindInOneFinding(t *testing.T) {
+	r := secretRun(blockRef(), secret(true))
+	pw2 := tt.Ref("secrets", "ns", "pw2")
+	r.Create(trace.Harness, pw2, secret(true))
+	body := database(false, "pw2")
+	body["metadata"] = map[string]any{"name": "c"}
+	r.Create(trace.Harness, databaseC, body)
+	seeBoth(r.Act("create", "c", &databaseC).See(ctl, pw2).See(ctl, databaseC))
+	first := r.Now
+	findings := ordered(t, r.Delete(ctl, pw2).Delete(ctl, pw))
+	requireFinding(t, findings, "Ordered", 0, released, "kube/secrets", "secrets ns/pw: slot b names it", "secrets ns/pw2: slot c names it")
+	if findings[0].At != first {
+		t.Errorf("at = %v, want the first release at %v.", findings[0].At, first)
+	}
+}
+
 // The deleting Cluster reports itself not ready, as toy-fleet's does. After
 // a stop, clause 2 judges it as a CR the stop waited for.
 func TestACRWaitingInDeletionForACRThatNamesItSettles(t *testing.T) {
@@ -173,9 +203,15 @@ func TestACRWaitingInDeletionForACRThatNamesItSettles(t *testing.T) {
 		after func(r *tt.Script)
 		unmet []string
 	}{
-		"named by a live CR":     {true, func(*tt.Script) {}, nil},
-		"named without block":    {false, func(*tt.Script) {}, []string{"clusters.toy ns/a is being deleted"}},
+		"named by a live CR":  {true, func(*tt.Script) {}, nil},
+		"named without block": {false, func(*tt.Script) {}, []string{"clusters.toy ns/a is being deleted"}},
+		"named by a CR being deleted": {true, func(r *tt.Script) {
+			r.Update(trace.Harness, databaseB, tt.Deleting(databaseOn(true, "a")))
+		}, []string{"databases.toy ns/b is being deleted"}},
 		"after its last CR left": {true, func(r *tt.Script) { r.DeleteCR("b", databaseB) }, []string{"clusters.toy ns/a is being deleted"}},
+		"after its CR named another": {true, func(r *tt.Script) {
+			r.Update(trace.Harness, databaseB, databaseOn(true, "c"))
+		}, []string{"clusters.toy ns/a is being deleted"}},
 	} {
 		for _, stop := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s, stopped %t", name, stop), func(t *testing.T) {
@@ -189,7 +225,7 @@ func TestACRWaitingInDeletionForACRThatNamesItSettles(t *testing.T) {
 				r.Update(trace.Harness, clusterA, tt.Deleting(tt.CR("a", false))).Act("delete", "a", &clusterA)
 				c.after(r)
 				if stop {
-					r.Stop(r.UID(clusterA))
+					r.Stop(r.UID(clusterA), r.UID(databaseB))
 				}
 				r.EndFaults()
 				if unmet := settledAt(t, r, r.Now+5*s); !slices.Equal(unmet, c.unmet) {
@@ -224,6 +260,56 @@ func TestHonestJudgesAnObjectWaitingInDeletionByItsVersionBefore(t *testing.T) {
 				return
 			}
 			requireFinding(t, findings, "Honest", 0, beforeSeeing, "kube/toy/clusters", "slot b: clusters.toy ns/a seen not ready")
+		})
+	}
+}
+
+// The controller saw the Cluster only while it waited in deletion, and then
+// saw it released. A reconcile that read the cache before that wrote the
+// Database ready, and the controller corrected the write in time.
+func TestHonestExcusesAStaleReadyWriteOnAnObjectThatWaitedInDeletion(t *testing.T) {
+	for name, block := range map[string]bool{"under block": true, "without block": false} {
+		t.Run(name, func(t *testing.T) {
+			r := fleetRun(1, clusters, databases)
+			r.Spec.References = []trace.Reference{clusterRef(r, block)}
+			r.Begin()
+			r.CreateCR("a", clusterA)
+			r.Ready(clusterA)
+			r.Create(trace.Harness, databaseB, databaseOn(false, "a"))
+			r.Act("create", "b", &databaseB)
+			r.Update(ctl, clusterA, tt.Deleting(tt.CR("a", false))).See(ctl, clusterA)
+			r.Delete(ctl, clusterA).SeeDeleted(ctl, clusterA)
+			r.UpdateInFlight(ctl, databaseB, databaseOn(true, "a"), 500*ms).Tick(500*ms).Update(ctl, databaseB, databaseOn(false, "a"))
+			findings := honest(t, r)
+			if block {
+				requireNone(t, findings)
+				return
+			}
+			requireFinding(t, findings, "Honest", 0, noDependency, "kube/toy/clusters", "slot b: clusters.toy ns/a seen missing")
+		})
+	}
+}
+
+func TestHonestWithTrackPassesACRReadyWhileWhatItNamesWaitsInDeletion(t *testing.T) {
+	for name, block := range map[string]bool{"under block": true, "without block": false} {
+		t.Run(name, func(t *testing.T) {
+			r := fleetRun(1, clusters, databases)
+			tracked := clusterRef(r, block)
+			tracked.Track = 500 * ms
+			r.Spec.References = []trace.Reference{tracked}
+			r.Begin()
+			r.CreateCR("a", clusterA)
+			r.Ready(clusterA).See(ctl, clusterA)
+			r.Create(trace.Harness, databaseB, databaseOn(false, "a"))
+			r.Act("create", "b", &databaseB)
+			r.Update(ctl, databaseB, databaseOn(true, "a"))
+			r.Update(ctl, clusterA, tt.Deleting(tt.CR("a", false))).See(ctl, clusterA)
+			findings := honest(t, r)
+			if block {
+				requireNone(t, findings)
+				return
+			}
+			requireFinding(t, findings, "Honest", 0, stayedReady, "kube/toy/clusters", "slot b: clusters.toy ns/a seen not ready at")
 		})
 	}
 }
