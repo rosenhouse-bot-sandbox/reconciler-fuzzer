@@ -10,6 +10,12 @@ const (
 	// B116 removes every finalizer from a deleting Volume while its Cluster is
 	// deleted.
 	B116 Bug = 116
+	// B123 readies a Database on a Cluster that is not Ready.
+	B123 Bug = 123
+	// B124 readies a Database without checking its Secret.
+	B124 Bug = 124
+	// B125 keeps a Ready Database ready after its Secret is deleted.
+	B125 Bug = 125
 	// B150 strips its finalizers from deleting CRs when it shuts down.
 	B150 Bug = 150
 	// B151 puts a finalizer on each Volume, and releases a deleted Cluster
@@ -21,7 +27,7 @@ const (
 )
 
 // bugs holds every seeded bug ID.
-var bugs = map[Bug]bool{B116: true, B150: true, B151: true, B152: true}
+var bugs = map[Bug]bool{B116: true, B123: true, B124: true, B125: true, B150: true, B151: true, B152: true}
 
 // ParseBug converts a --bug value into a Bug.
 func ParseBug(id int) (Bug, error) {

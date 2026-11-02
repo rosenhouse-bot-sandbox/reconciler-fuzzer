@@ -191,6 +191,31 @@ func Systems(c *config.Config) []trace.System {
 	return systems
 }
 
+// References returns c's references for the run event. resource maps a
+// kube kind to its resource.
+func References(c *config.Config, resource func(schema.GroupVersionKind) (string, bool, error)) ([]trace.Reference, error) {
+	kind := func(gvk schema.GroupVersionKind) (trace.Kind, error) {
+		r, _, err := resource(gvk)
+		return trace.Kind{Group: gvk.Group, Version: gvk.Version, Kind: gvk.Kind, Resource: r}, err
+	}
+	var references []trace.Reference
+	for i, r := range c.References {
+		entry := trace.Reference{System: r.System, Namespaced: r.Namespaced, Name: r.Name, Namespace: r.Namespace,
+			Ready: r.Ready, Required: r.Required, Track: r.Track}
+		var err error
+		if entry.From, err = kind(r.From); err != nil {
+			return nil, fmt.Errorf("references[%d] from kind %s: %w", i, r.From.Kind, err)
+		}
+		if r.System != "" {
+			entry.To = trace.Kind{Resource: r.Collection}
+		} else if entry.To, err = kind(r.To); err != nil {
+			return nil, fmt.Errorf("references[%d] to kind %s: %w", i, r.To.Kind, err)
+		}
+		references = append(references, entry)
+	}
+	return references, nil
+}
+
 // Properties returns c's properties for the run event.
 func Properties(c *config.Config) []trace.Property {
 	var properties []trace.Property

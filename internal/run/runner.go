@@ -1,15 +1,19 @@
 package run
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
+	"path"
 	"slices"
 	"time"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/kube"
@@ -25,10 +29,13 @@ import (
 // It returns an error only when the harness itself fails; a controller that
 // does not settle is a finding, not an error.
 func (r *Runner) Execute(ctx context.Context, p *plan.Plan) error {
-	e := &execution{Runner: r, live: map[string]trace.Ref{}, deleted: map[string]deletion{}, ix: trace.NewIndex(nil)}
+	e := &execution{
+		Runner: r, live: map[string]slotCR{}, deleted: map[string]deletion{},
+		fixtures: map[plan.Target]deletion{}, ix: trace.NewIndex(nil),
+	}
 	for n, step := range p.Steps {
 		err := e.step(ctx, n, step)
-		if errors.Is(err, errSlotTaken) {
+		if errors.Is(err, errStillTaken) {
 			break
 		}
 		if err != nil {
@@ -40,7 +47,7 @@ func (r *Runner) Execute(ctx context.Context, p *plan.Plan) error {
 	}
 	n := len(p.Steps)
 	var deleteAll plan.Step
-	for _, slot := range slices.Sorted(maps.Keys(e.live)) {
+	for _, slot := range e.deleteOrder() {
 		deleteAll.Actions = append(deleteAll.Actions, plan.Action{Do: plan.Delete, Slot: slot})
 	}
 	if err := e.step(ctx, n, deleteAll); err != nil {
@@ -71,35 +78,62 @@ func (r *Runner) Quiet(ctx context.Context) error {
 	}
 }
 
-// errSlotTaken says that a create's wait for its slot's previous CR timed
-// out. The step still settles, and then the plan skips to the steps that
-// Execute appends.
-var errSlotTaken = errors.New("the slot's name is still taken")
+// errStillTaken says that a create's or a createFixture's wait for the
+// object its name last held timed out. The step still settles, and then the
+// plan skips to the steps that Execute appends.
+var errStillTaken = errors.New("is still taken")
 
 // Deadline is end faults + settle + min(faultsLasted, backoffCap) + the
 // longest poll interval of the systems the step touched. faultsLasted is the
 // time from the step's start until its faults ended. backoffBound says that
 // backoffCap was the smaller.
 func Deadline(endFaults, faultsLasted, maxPoll time.Duration, t config.Timeouts) (deadline time.Duration, backoffBound bool) {
-	return endFaults + t.Settle + min(faultsLasted, t.BackoffCap) + maxPoll, t.BackoffCap < faultsLasted
+	return endFaults + t.Settle + backoff(faultsLasted, t) + maxPoll, t.BackoffCap < faultsLasted
+}
+
+// backoff is how long after the faults end a controller in backoff may
+// retry what failed during them: min(faultsLasted, backoffCap).
+func backoff(faultsLasted time.Duration, t config.Timeouts) time.Duration {
+	return min(faultsLasted, t.BackoffCap)
 }
 
 type execution struct {
 	*Runner
-	live map[string]trace.Ref
+	live map[string]slotCR
 	// deleted holds the last deletion from each slot, which a later create
 	// of the slot or a stop waits out.
 	deleted map[string]deletion
-	ix      *trace.Index
+	// fixtures holds, by the Key of its target, each fixture that a
+	// changeFixture deleted and no createFixture has made again.
+	fixtures map[plan.Target]deletion
+	ix       *trace.Index
 	// stopped says that a stop action stopped the controller for good.
 	stopped bool
 }
 
-// deletion is a CR that a delete action removed from its slot, and when.
+// slotCR is the live CR a slot holds, and its kind.
+type slotCR struct {
+	ref  trace.Ref
+	kind schema.GroupKind
+}
+
+// deletion is an object that a delete or changeFixture action removed, and
+// when.
 type deletion struct {
 	ref trace.Ref
 	uid string
 	at  time.Time
+}
+
+// deleteOrder is the slots that hold a live CR, by Config.DeleteOrder of the
+// kind each created, and else by name.
+func (e *execution) deleteOrder() []string {
+	order := e.Config.DeleteOrder()
+	slots := slices.Sorted(maps.Keys(e.live))
+	slices.SortStableFunc(slots, func(a, b string) int {
+		return cmp.Compare(slices.Index(order, e.live[a].kind), slices.Index(order, e.live[b].kind))
+	})
+	return slots
 }
 
 func (e *execution) phase(step int, name trace.PhaseName) {
@@ -113,7 +147,7 @@ func (e *execution) step(ctx context.Context, n int, step plan.Step) error {
 		return err
 	}
 	err := s.faultPeriod(ctx)
-	if err != nil && !errors.Is(err, errSlotTaken) {
+	if err != nil && !errors.Is(err, errStillTaken) {
 		s.stopFaults()
 		return err
 	}
@@ -123,7 +157,8 @@ func (e *execution) step(ctx context.Context, n int, step plan.Step) error {
 	}
 	allowance, backoffBound := s.allowance()
 	deadline := e.Recorder.Now() + allowance
-	e.Recorder.Record(trace.Event{Phase: &trace.Phase{Step: n, Name: trace.EndFaults, Deadline: deadline, BackoffBound: backoffBound}})
+	e.Recorder.Record(trace.Event{Phase: &trace.Phase{Step: n, Name: trace.EndFaults, Deadline: deadline,
+		Backoff: backoff(s.faultsLasted(), e.Config.Timeouts), BackoffBound: backoffBound}})
 	if err := e.settle(ctx, n, deadline); err != nil {
 		return err
 	}
@@ -131,8 +166,8 @@ func (e *execution) step(ctx context.Context, n int, step plan.Step) error {
 }
 
 // maxPoll is the longest poll interval of the systems the step's faults,
-// damage and changeFixture actions name, and of every fake when the step
-// changes a CR, since the controller then polls its fakes.
+// damage, changeFixture and createFixture actions name, and of every fake
+// when the step changes a CR, since the controller then polls its fakes.
 func (e *execution) maxPoll(step plan.Step) time.Duration {
 	var systems []string
 	for _, f := range step.Faults {
@@ -140,7 +175,7 @@ func (e *execution) maxPoll(step plan.Step) time.Duration {
 	}
 	for _, a := range step.Actions {
 		switch a.Do {
-		case plan.Damage, plan.ChangeFixture:
+		case plan.Damage, plan.ChangeFixture, plan.CreateFixture:
 			systems = append(systems, a.Target.System)
 		case plan.Create, plan.Update, plan.Delete:
 			for _, s := range e.Config.Fakes() {
@@ -161,9 +196,9 @@ type startedFault struct {
 	model string
 }
 
-// stepRun is step n while it runs. Its faults stop once: when a create or a
-// stop still waits for a deleted CR after Period has passed, or else when
-// the fault period ends.
+// stepRun is step n while it runs. Its faults stop once: when a create, a
+// createFixture or a stop still waits for a deleted object after Period has
+// passed, or else when the fault period ends.
 type stepRun struct {
 	*execution
 	n             int
@@ -203,8 +238,11 @@ func (s *stepRun) resume() error {
 // stopped: its Deadline less end faults. bounded says that backoffCap
 // bounded it.
 func (s *stepRun) allowance() (allowance time.Duration, bounded bool) {
-	return Deadline(0, s.faultsStopped.Sub(s.start), s.maxPoll(s.step), s.Config.Timeouts)
+	return Deadline(0, s.faultsLasted(), s.maxPoll(s.step), s.Config.Timeouts)
 }
+
+// faultsLasted is the time from the step's start until its faults stopped.
+func (s *stepRun) faultsLasted() time.Duration { return s.faultsStopped.Sub(s.start) }
 
 // faultPeriod starts the step's faults, applies its actions and waits until
 // Period has passed.
@@ -241,14 +279,15 @@ func (s *stepRun) faultPeriod(ctx context.Context) error {
 	return sleepUntil(ctx, s.periodEnd())
 }
 
-// awaitGone waits until no object holds the name of d's CR, the slot's
-// previous one, and fails with errSlotTaken when it gives up.
-func (s *stepRun) awaitGone(ctx context.Context, d deletion) error {
+// awaitGone waits until no object holds the name of d's object, which
+// action a, a create or a createFixture, needs. It fails with errStillTaken
+// when it gives up.
+func (s *stepRun) awaitGone(ctx context.Context, a plan.Action, d deletion) error {
 	begun := time.Now()
 	if timedOut, err := s.outwait(ctx, d.ref, "", d.at); !timedOut {
 		return err
 	}
-	return s.slotTaken(d.ref, time.Since(begun))
+	return s.stillTaken(a, d.ref, time.Since(begun))
 }
 
 // outwait waits until Gone holds for ref and uid. The step's faults or a
@@ -305,11 +344,17 @@ func (e *execution) waitGone(ctx context.Context, ref trace.Ref, uid string, unt
 	return false, err
 }
 
-// slotTaken is the error of a create that waited for ref, the slot's
-// previous CR, and gave up. The error describes the last version of ref that
-// the observer recorded, which may be of another CR with the same name.
-func (e *execution) slotTaken(ref trace.Ref, waited time.Duration) error {
-	taken := fmt.Errorf("%w after the create waited %v", errSlotTaken, waited.Round(time.Millisecond))
+// stillTaken is the error of action a, a create or a createFixture, that
+// waited for ref, the object whose name it needs, and gave up. The error
+// describes the last version of ref that the observer recorded, which may be
+// of another object with the same name.
+func (e *execution) stillTaken(a plan.Action, ref trace.Ref, waited time.Duration) error {
+	name, holder := "the slot's name", "the CR"
+	if a.Do == plan.CreateFixture {
+		resource := schema.GroupResource{Group: ref.Group, Resource: ref.Resource}
+		name, holder = fmt.Sprintf("the name of %s %s", resource, path.Join(ref.Namespace, ref.Name)), "the object"
+	}
+	taken := fmt.Errorf("%s %w after the %s waited %v", name, errStillTaken, a.Do, waited.Round(time.Millisecond))
 	e.ix.Append(e.Recorder.EventsSince(e.ix.Len())...)
 	var cr struct {
 		Metadata struct {
@@ -322,9 +367,9 @@ func (e *execution) slotTaken(ref trace.Ref, waited time.Duration) error {
 	case !found || v.Deleted || json.Unmarshal(v.Body, &cr) != nil:
 		return taken
 	case cr.Metadata.DeletionTimestamp == "":
-		return fmt.Errorf("%w: the CR with that name is not being deleted", taken)
+		return fmt.Errorf("%w: %s with that name is not being deleted", taken, holder)
 	}
-	return fmt.Errorf("%w: the CR with that name has deletionTimestamp %s and finalizers %v", taken, cr.Metadata.DeletionTimestamp, cr.Metadata.Finalizers)
+	return fmt.Errorf("%w: %s with that name has deletionTimestamp %s and finalizers %v", taken, holder, cr.Metadata.DeletionTimestamp, cr.Metadata.Finalizers)
 }
 
 // faultEvent records a fault's start or end. A holdWatch's names its kind.
@@ -368,16 +413,17 @@ func (e *execution) act(ctx context.Context, a plan.Action, s *stepRun) (*trace.
 			return nil, err
 		}
 		if previous, found := e.deleted[a.Slot]; found {
-			if err := s.awaitGone(ctx, previous); err != nil {
+			if err := s.awaitGone(ctx, a, previous); err != nil {
 				return nil, err
 			}
 			delete(e.deleted, a.Slot)
 		}
+		kind := (&unstructured.Unstructured{Object: obj}).GroupVersionKind().GroupKind()
 		ref, err := e.Cluster.Create(ctx, obj)
 		if err != nil {
 			return nil, err
 		}
-		e.live[a.Slot] = ref
+		e.live[a.Slot] = slotCR{ref, kind}
 		return &ref, nil
 	case plan.Update:
 		ref, err := e.slot(a)
@@ -427,11 +473,30 @@ func (e *execution) act(ctx context.Context, a plan.Action, s *stepRun) (*trace.
 		if a.Patch != nil {
 			return &ref, actor.Patch(ctx, ref, a.Patch)
 		}
+		deleted := deletion{ref: ref, at: time.Now()}
 		err = actor.Delete(ctx, ref, "")
 		if errors.Is(err, system.ErrGone) {
 			return nil, fmt.Errorf("%w: %w", owner.ErrNoMatch, err)
 		}
+		if a.Do == plan.ChangeFixture {
+			e.fixtures[a.Target.Key()] = deleted
+		}
 		return &ref, err
+	case plan.CreateFixture:
+		key := a.Target.Key()
+		deleted, found := e.fixtures[key]
+		if !found {
+			return nil, fmt.Errorf("%w: no changeFixture deleted it", owner.ErrNoMatch)
+		}
+		delete(e.fixtures, key)
+		if err := s.awaitGone(ctx, a, deleted); err != nil {
+			return nil, err
+		}
+		ref, err := e.Cluster.CreateFixture(ctx, deleted.ref)
+		if err != nil {
+			return nil, err
+		}
+		return &ref, nil
 	}
 	return nil, fmt.Errorf("unknown do %q", a.Do)
 }
@@ -448,11 +513,11 @@ func (e *execution) object(a plan.Action) (map[string]any, error) {
 }
 
 func (e *execution) slot(a plan.Action) (trace.Ref, error) {
-	ref, found := e.live[a.Slot]
+	cr, found := e.live[a.Slot]
 	if !found {
 		return trace.Ref{}, fmt.Errorf("slot %q holds no CR", a.Slot)
 	}
-	return ref, nil
+	return cr.ref, nil
 }
 
 // settle waits until the settle condition holds or the deadline passes. Each

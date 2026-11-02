@@ -41,7 +41,10 @@ func gadget(r *tt.Script, ready bool) map[string]any {
 
 func honest(t *testing.T, r *tt.Script) []check.Finding {
 	t.Helper()
-	return judgeWith(t, r.EndFaults().Settle(), check.Honest)
+	if step, _ := r.Index().Step(r.Step); !step.Reached[trace.EndFaults] {
+		r.EndFaults()
+	}
+	return judgeWith(t, r.Settle(), check.Honest)
 }
 
 func TestHonestPassesACRReadyAfterSeeingItsDependencyReady(t *testing.T) {
@@ -175,7 +178,7 @@ func TestHonestWithTrackFailsACRThatStaysReady(t *testing.T) {
 
 func TestHonestWithTrackPasses(t *testing.T) {
 	for name, then := range map[string]func(r *tt.Script){
-		"the CR goes not ready in time": func(r *tt.Script) {
+		"the CR turns not ready in time": func(r *tt.Script) {
 			r.Tick(400*ms).Update(ctl, widgetA, tt.CR("a", false))
 		},
 		"the controller sees it ready in time": func(r *tt.Script) {
@@ -443,11 +446,36 @@ func TestHonestWithTrackExcuses(t *testing.T) {
 		"a kill":                   func(r *tt.Script) { r.Add(tt.Exit("signal: killed", true, "")) },
 		"a restart":                func(r *tt.Script) { r.Add(tt.Exit("signal: killed", true, ""), tt.Start(2)) },
 		"a failed write of the CR": func(r *tt.Script) { r.Add(failed) },
+		"a write of the CR in flight at the deadline": func(r *tt.Script) {
+			r.Tick(400*ms).UpdateInFlight(ctl, widgetA, tt.CR("a", false), 2*s)
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := degrade(true)
 			then(r)
 			requireNone(t, honest(t, r))
+		})
+	}
+}
+
+// A step's faults that start after the controller saw the dependency not
+// ready, and delay its reads, stall it, so track counts no time in them.
+func TestHonestWithTrackCountsNoTimeInWhichTheControllerStallsAfterItsSight(t *testing.T) {
+	const widgetsDelay = "delay(2s) on resource=widgets"
+	for name, late := range map[string]time.Duration{"track after the sight, stalls aside": 0, "later": tt.Tick} {
+		t.Run(name, func(t *testing.T) {
+			r := degrade(true)
+			seen := r.Now - tt.Tick
+			begin := r.Now
+			r.Add(tt.Fault(r.Step, 0, false, widgetsDelay))
+			end := r.Tick(2 * s).Now
+			r.Add(tt.Fault(r.Step, 0, true, widgetsDelay)).Add(delayedGet(widgetA))
+			r.Tick(seen+500*ms+(end-begin)+late-r.Now).Update(ctl, widgetA, tt.CR("a", false))
+			if findings := honest(t, r); late > 0 {
+				requireFinding(t, findings, "Honest", 0, stayedReady, "kube/toy/gadgets", "slot a", "gadgets.toy ns/a")
+			} else {
+				requireNone(t, findings)
+			}
 		})
 	}
 }

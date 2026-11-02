@@ -11,7 +11,7 @@ import (
 func primarySchemaOf(t *testing.T, path string) *schema {
 	t.Helper()
 	cfg := loadConfig(t, path)
-	crds, err := readManifests(cfg.CRDs)
+	crds, err := config.ReadManifests(cfg.CRDs)
 	if err != nil {
 		t.Fatal(err)
 	}
