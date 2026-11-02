@@ -77,9 +77,7 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		db.Status.Message = fmt.Sprintf("waiting for Cluster %s", db.Spec.ClusterRef)
 	case secretWait != "" && r.Bug != B124 && (r.Bug != B125 || old.Phase != fleetv1.Ready):
 		db.Status.Message = secretWait
-	case !cluster.DeletionTimestamp.IsZero() && old.Phase == fleetv1.Ready:
-		db.Status = old // A deleting Cluster keeps its Ready Databases as they are.
-	case !cluster.Status.ReadyAt(cluster.Generation) && r.Bug != B123:
+	case !hosts(cluster, old.Phase) && r.Bug != B123:
 		db.Status.Message = fmt.Sprintf("waiting for Cluster %s to be Ready", cluster.Name)
 	default:
 		if err := r.syncConfigMap(ctx, db); err != nil {
@@ -88,6 +86,15 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		db.Status.Phase = fleetv1.Ready
 	}
 	return ctrl.Result{}, r.writeStatus(ctx, db, old, db.Status)
+}
+
+// hosts says whether cluster hosts a Database in phase. A Cluster that waits
+// in deletion hosts only a Database that is already Ready.
+func hosts(cluster *fleetv1.Cluster, phase fleetv1.Phase) bool {
+	if !cluster.DeletionTimestamp.IsZero() {
+		return phase == fleetv1.Ready
+	}
+	return cluster.Status.ReadyAt(cluster.Generation)
 }
 
 // secretWait says what the Database waits for in the Secret it names, or ""

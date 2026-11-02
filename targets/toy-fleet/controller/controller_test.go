@@ -434,20 +434,24 @@ func TestDatabaseWaitsForItsClusterToReportItsGenerationReady(t *testing.T) {
 }
 
 // Deletion raises a CR's generation before its controller writes Deleting.
-// A deleting Cluster readies no Database, and leaves a Ready one as it is,
-// even after its spec changes.
-func TestADeletingClusterReadiesNoDatabase(t *testing.T) {
+// A Cluster that waits in deletion readies no new Database, and keeps a Ready
+// one Ready through a change to its spec.
+func TestADeletingClusterKeepsOnlyItsReadyDatabasesReady(t *testing.T) {
 	cluster := deleting(readyCluster(), fleetv1.ClusterFinalizer)
 	cluster.Generation = 2
 	ready := databaseObj()
-	ready.Generation, ready.Status = 2, readyStatus()
+	ready.Generation, ready.Spec.Engine, ready.Status = 2, "mysql", readyStatus()
 	pending := databaseObj()
 	pending.Name = "pending"
 	f := newFleet(t, cluster, ready, pending)
 	f.settle(f.databases, "db")
 	f.settle(f.databases, "pending")
-	if got := f.database().Status; got != readyStatus() {
-		t.Errorf("On a deleting Cluster, the Ready Database of generation 2 is %+v, want it Ready for generation 1.", got)
+	if got, want := f.database().Status, (fleetv1.CommonStatus{Phase: fleetv1.Ready, ObservedGeneration: 2}); got != want {
+		t.Errorf("On a deleting Cluster, the Ready Database of generation 2 is %+v, want %+v.", got, want)
+	}
+	cm := &corev1.ConfigMap{}
+	if err := f.get("db-db", cm); err != nil || cm.Data["engine"] != "mysql" {
+		t.Errorf("On a deleting Cluster, the Ready Database's ConfigMap is %v, %v; want engine mysql.", cm.Data, err)
 	}
 	if err := f.get("pending", pending); err != nil || pending.Status != pendingStatus("waiting for Cluster cluster to be Ready") {
 		t.Errorf("On a deleting Cluster, the new Database is %+v, %v.", pending.Status, err)
