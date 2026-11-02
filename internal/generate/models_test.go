@@ -1,6 +1,8 @@
 package generate
 
 import (
+	"maps"
+	"slices"
 	"testing"
 	"time"
 
@@ -87,6 +89,127 @@ func TestAModelFaultComesWithTheActionItExercises(t *testing.T) {
 		if action.Do != c.want {
 			t.Errorf("%s with a live CR %t comes with %s, want %s.", c.fault, c.live, action.Do, c.want)
 		}
+	}
+}
+
+// A restart or kill while slowDelete holds a deletion finds a controller
+// that keeps finalizer state in memory.
+func TestAQuarterOfSlowDeleteStepsRestartOrKillAfterTheDelete(t *testing.T) {
+	var held, restarted int
+	for _, p := range plans(t, modelsConfig, 400) {
+		for _, step := range p.Steps {
+			if !slices.ContainsFunc(step.Faults, func(f plan.Fault) bool { return f.SlowDelete }) {
+				continue
+			}
+			del := slices.IndexFunc(step.Actions, func(a plan.Action) bool { return a.Do == plan.Delete })
+			if del < 0 {
+				continue
+			}
+			held++
+			if slices.ContainsFunc(step.Actions[del:], func(a plan.Action) bool { return a.Do == plan.Restart || a.Do == plan.Kill }) {
+				restarted++
+			}
+		}
+	}
+	if restarted*4 < held {
+		t.Errorf("%d of %d slowDelete steps with a delete restart or kill after it, want a quarter.", restarted, held)
+	}
+}
+
+// A restart that follows a delete within milliseconds comes before the
+// controller has begun to finalize, so it tests nothing about finalizers.
+func TestSomeRestartsOrKillsComeWhileADeleteIsFinalizing(t *testing.T) {
+	var late int
+	for _, p := range plans(t, modelsConfig, 400) {
+		for _, step := range p.Steps {
+			del := slices.IndexFunc(step.Actions, func(a plan.Action) bool { return a.Do == plan.Delete })
+			if del < 0 {
+				continue
+			}
+			for _, a := range step.Actions[del:] {
+				if (a.Do == plan.Restart || a.Do == plan.Kill) && time.Duration(a.At-step.Actions[del].At) >= 300*time.Millisecond {
+					late++
+				}
+			}
+		}
+	}
+	if late < 20 {
+		t.Errorf("%d restarts or kills over 400 plans come 300ms or more after a delete in their step, want 20.", late)
+	}
+}
+
+// A restart or kill at an offset directly follows the step's first delete,
+// so no action between them delays it past the model fault.
+func TestARestartOrKillAtAnOffsetFollowsTheFirstDeleteWhileAModelFaultLasts(t *testing.T) {
+	drawn := map[plan.Do]int{}
+	for _, p := range plans(t, modelsConfig, 400) {
+		for _, step := range p.Steps {
+			for i, a := range step.Actions {
+				if a.At == 0 || a.Do != plan.Restart && a.Do != plan.Kill {
+					continue
+				}
+				drawn[a.Do]++
+				del := slices.IndexFunc(step.Actions, func(a plan.Action) bool { return a.Do == plan.Delete })
+				if del < 0 || del != i-1 || len(step.Faults) == 0 || !step.Faults[0].ModelFault() || time.Duration(a.At-step.Actions[del].At) < 300*time.Millisecond || a.At >= step.Period {
+					t.Errorf("Seed %d draws a %s at %v, with faults %v, actions %+v and period %v.", p.Seed, a.Do, time.Duration(a.At), step.Faults, step.Actions, time.Duration(step.Period))
+				}
+			}
+		}
+	}
+	if drawn[plan.Restart] == 0 || drawn[plan.Kill] == 0 {
+		t.Errorf("Restarts and kills at an offset are %v, want both.", drawn)
+	}
+}
+
+func TestARestartOrKillMidDeleteDrawsEachTickFrom300msPastTheDeleteToPeriod(t *testing.T) {
+	step := plan.Step{Period: plan.Duration(600 * time.Millisecond), Actions: []plan.Action{
+		{Do: plan.Update, Slot: "a"},
+		{At: plan.Duration(100 * time.Millisecond), Do: plan.Delete, Slot: "b"},
+	}}
+	drawn := map[time.Duration]bool{}
+	for seed := range 20 {
+		actions := example(t, seed, func(rt *rapid.T) []plan.Action { return restartMidDelete(rt, step) })
+		if len(actions) != 3 || actions[2].Do != plan.Restart && actions[2].Do != plan.Kill {
+			t.Fatalf("Seed %d turns %+v into %+v, want a restart or kill after the delete.", seed, step.Actions, actions)
+		}
+		drawn[time.Duration(actions[2].At)] = true
+	}
+	want := map[time.Duration]bool{400 * time.Millisecond: true, 500 * time.Millisecond: true}
+	if !maps.Equal(drawn, want) {
+		t.Errorf("A delete at 100ms in a 600ms period draws restarts or kills at %v, want %v.", slices.Sorted(maps.Keys(drawn)), slices.Sorted(maps.Keys(want)))
+	}
+}
+
+func TestEveryModelFaultStepThatDeletesAndHasRoomRestartsOrKillsMidDelete(t *testing.T) {
+	for _, p := range plans(t, modelsConfig, 400) {
+		for i, step := range p.Steps {
+			drawn := slices.DeleteFunc(slices.Clone(step.Actions), func(a plan.Action) bool { return a.At > 0 })
+			if len(step.Faults) == 0 || !step.Faults[0].ModelFault() || len(drawn) == maxActions || !slices.ContainsFunc(drawn, func(a plan.Action) bool { return a.Do == plan.Delete }) {
+				continue
+			}
+			if late := len(step.Actions) - len(drawn); late != 1 {
+				t.Errorf("Seed %d step %d holds %d actions at an offset, want 1.", p.Seed, i, late)
+			}
+		}
+	}
+}
+
+// A model fault's period ends with the longest track, and a restart or kill
+// mid-delete may come in it.
+func TestSomeRestartsOrKillsMidDeleteComeInTheLongestTrack(t *testing.T) {
+	const longestTrack = 3 * time.Second
+	beforeEnd := time.Hour
+	for _, p := range plans(t, modelsConfig, 400) {
+		for _, step := range p.Steps {
+			for _, a := range step.Actions {
+				if a.At > 0 && (a.Do == plan.Restart || a.Do == plan.Kill) {
+					beforeEnd = min(beforeEnd, time.Duration(step.Period-a.At))
+				}
+			}
+		}
+	}
+	if beforeEnd >= longestTrack {
+		t.Errorf("Restarts or kills mid-delete come %v or more before their period ends, want some within the longest track, %v.", beforeEnd, longestTrack)
 	}
 }
 

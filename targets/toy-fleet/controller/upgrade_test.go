@@ -12,7 +12,7 @@ import (
 // as switches f to the controllers of version, with bug.
 func (f *fleet) as(version int, bug Bug) *fleet {
 	base := reconciler{Client: f.c, APIReader: f.c, Scheme: f.c.Scheme(), Bug: bug, Version: version}
-	f.clusters, f.databases, f.users = &ClusterReconciler{base}, &DatabaseReconciler{base}, &UserReconciler{base}
+	f.clusters, f.databases, f.users = &ClusterReconciler{reconciler: base}, &DatabaseReconciler{base}, &UserReconciler{base}
 	return f
 }
 

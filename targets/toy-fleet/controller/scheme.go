@@ -62,7 +62,7 @@ func Setup(m ctrl.Manager, bug Bug, version int, protectSecrets bool) error {
 	}
 	base := reconciler{Client: m.GetClient(), APIReader: m.GetAPIReader(), Scheme: m.GetScheme(), Bug: bug, Version: version}
 	reconcilers := []interface{ SetupWithManager(ctrl.Manager) error }{
-		&ClusterReconciler{base}, &DatabaseReconciler{base}, &UserReconciler{base},
+		&ClusterReconciler{reconciler: base}, &DatabaseReconciler{base}, &UserReconciler{base},
 	}
 	if protectSecrets {
 		reconcilers = append(reconcilers, &SecretReconciler{base})
