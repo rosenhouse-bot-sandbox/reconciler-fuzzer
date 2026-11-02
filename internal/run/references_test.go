@@ -1,0 +1,220 @@
+package run
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"reflect"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/owner"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/system"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
+)
+
+var passwordSecret = trace.Ref{System: "kube", Resource: "secrets", Namespace: "ns", Name: "pw"}
+
+// recreatePassword deletes the fixture pw in step 0 and creates it again in
+// step 1, naming it the second time with its system.
+func recreatePassword() *plan.Plan {
+	return &plan.Plan{Steps: []plan.Step{
+		{Actions: []plan.Action{{Do: plan.ChangeFixture, Target: &plan.Target{Resource: "secrets", Name: "pw"}}}},
+		{Actions: []plan.Action{{Do: plan.CreateFixture, Target: &plan.Target{System: "kube", Resource: "secrets", Name: "pw"}}}},
+	}}
+}
+
+func TestExecuteCreatesADeletedFixtureAgain(t *testing.T) {
+	f := newFixture(t, nil)
+	selecting(f, map[string]trace.Ref{"secrets": passwordSecret})
+	if err := f.runner.Execute(context.Background(), recreatePassword()); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := f.cluster.all(), []string{"delete pw", "gone pw", "createFixture pw"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("cluster calls = %q, want %q", got, want)
+	}
+	events := f.rec.Events()
+	if a, _ := findAction(events, 1, 0); a.Action == nil || a.Action.Error != "" || a.Action.Ref == nil || *a.Action.Ref != passwordSecret {
+		t.Errorf("createFixture action = %+v, want one of %+v without an error", a.Action, passwordSecret)
+	}
+	start, _ := find(events, 1, trace.FaultPeriod)
+	endFaults, _ := find(events, 1, trace.EndFaults)
+	if want, _ := Deadline(endFaults.At, endFaults.At-start.At, timeouts.Stable, timeouts); (endFaults.Phase.Deadline - want).Abs() > 5*time.Millisecond {
+		t.Errorf("deadline = %v, want about %v, which adds kube's poll", endFaults.Phase.Deadline, want)
+	}
+}
+
+func TestExecuteWaitsForADeletedFixtureToGoBeforeCreatingIt(t *testing.T) {
+	f := newFixture(t, nil)
+	selecting(f, map[string]trace.Ref{"secrets": passwordSecret})
+	f.cluster.waitGone = func(context.Context) error { return nil }
+	if err := f.runner.Execute(context.Background(), recreatePassword()); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := f.cluster.all(), []string{"delete pw", "gone pw", "waitGone pw", "createFixture pw"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("cluster calls = %q, want %q", got, want)
+	}
+}
+
+func TestExecuteEndsThePlanWhenADeletedFixtureStays(t *testing.T) {
+	f := newFixture(t, nil)
+	selecting(f, map[string]trace.Ref{"secrets": passwordSecret})
+	f.cluster.waitGone = func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }
+	p := recreatePassword()
+	p.Steps = append(p.Steps, plan.Step{Actions: []plan.Action{{Do: plan.Create, Slot: "a", Object: widget("never")}}})
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := f.cluster.all(), []string{"delete pw", "gone pw", "waitGone pw"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("cluster calls = %q, want %q", got, want)
+	}
+	if a, _ := findAction(f.rec.Events(), 1, 0); a.Action == nil || !strings.Contains(a.Action.Error, "pw") {
+		t.Errorf("createFixture action = %+v, want an error that names pw", a.Action)
+	}
+}
+
+func TestExecuteNotesACreateFixtureWhoseChangeFixtureDeletedNothing(t *testing.T) {
+	for name, c := range map[string]struct {
+		found     map[string]trace.Ref
+		deleteErr error
+		want      []string
+	}{
+		"no instance matched":  {nil, nil, nil},
+		"the fixture was gone": {map[string]trace.Ref{"secrets": passwordSecret}, system.ErrGone, []string{"delete pw"}},
+	} {
+		f := newFixture(t, nil)
+		selecting(f, c.found)
+		f.cluster.deleteErr = c.deleteErr
+		if err := f.runner.Execute(context.Background(), recreatePassword()); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := f.cluster.all(); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: cluster calls = %q, want %q", name, got, c.want)
+		}
+		if a, _ := findAction(f.rec.Events(), 1, 0); a.Action == nil || a.Action.Error == "" || a.Action.Ref != nil {
+			t.Errorf("%s: createFixture action = %+v, want an error and no ref", name, a.Action)
+		}
+	}
+}
+
+func TestExecuteNotesACreateFixtureWhoseLastChangeFixtureDeletedNothing(t *testing.T) {
+	f := newFixture(t, nil)
+	selecting(f, map[string]trace.Ref{"secrets": passwordSecret})
+	selected := f.runner.Select
+	f.runner.Select = func(ix *trace.Index, creator trace.Caller, target plan.Target, slot string, at time.Duration) (trace.Ref, error) {
+		if slices.Contains(f.cluster.all(), "createFixture pw") {
+			return trace.Ref{}, owner.ErrNoMatch
+		}
+		return selected(ix, creator, target, slot, at)
+	}
+	p := recreatePassword()
+	p.Steps = append(p.Steps, recreatePassword().Steps...)
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := f.cluster.all(), []string{"delete pw", "gone pw", "createFixture pw"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("cluster calls = %q, want %q", got, want)
+	}
+	if a, _ := findAction(f.rec.Events(), 3, 0); a.Action == nil || a.Action.Error == "" || a.Action.Ref != nil {
+		t.Errorf("second createFixture action = %+v, want an error and no ref", a.Action)
+	}
+}
+
+func TestExecuteCreatesAgainOnlyWhatAChangeFixtureDeleted(t *testing.T) {
+	f := newFixture(t, nil)
+	made := trace.Ref{System: "kube", Resource: "secrets", Namespace: "ns", Name: "made"}
+	f.runner.Select = func(_ *trace.Index, creator trace.Caller, _ plan.Target, _ string, _ time.Duration) (trace.Ref, error) {
+		if creator == trace.Controller {
+			return made, nil
+		}
+		return passwordSecret, nil
+	}
+	p := recreatePassword()
+	p.Steps = slices.Insert(p.Steps, 1, plan.Step{Actions: []plan.Action{{Do: plan.Damage, Target: &plan.Target{Resource: "secrets", Name: "pw"}}}})
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := f.cluster.all(), []string{"delete pw", "delete made", "gone pw", "createFixture pw"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("cluster calls = %q, want %q", got, want)
+	}
+}
+
+func TestExecuteFailsWhenItCannotCreateAFixtureAgain(t *testing.T) {
+	f := newFixture(t, nil)
+	selecting(f, map[string]trace.Ref{"secrets": passwordSecret})
+	f.cluster.createErr = errors.New("refused")
+	if err := f.runner.Execute(context.Background(), recreatePassword()); err == nil || !strings.Contains(err.Error(), "refused") {
+		t.Errorf("Execute = %v, want the createFixture's error", err)
+	}
+}
+
+func TestExecuteDeletesEachReferencingKindBeforeTheKindItNames(t *testing.T) {
+	f := newFixture(t, nil)
+	toy := func(kind string) schema.GroupVersionKind {
+		return schema.GroupVersionKind{Group: "toy", Version: "v1", Kind: kind}
+	}
+	f.runner.Config.Primaries = []config.Primary{{Kind: toy("Cluster")}, {Kind: toy("Database")}}
+	f.runner.Config.References = []config.Reference{{From: toy("Database"), To: toy("Cluster"), Name: "spec.clusterRef"}}
+	object := func(kind, name string) json.RawMessage {
+		return json.RawMessage(fmt.Sprintf(`{"apiVersion":"toy/v1","kind":%q,"metadata":{"name":%q}}`, kind, name))
+	}
+	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{
+		{Do: plan.Create, Slot: "a", Object: object("Database", "d1")},
+		{Do: plan.Create, Slot: "b", Object: object("Cluster", "c")},
+		{Do: plan.Create, Slot: "c", Object: object("Database", "d2")},
+	}}}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"create d1", "create c", "create d2", "delete d1", "delete d2", "delete c"}
+	if got := f.cluster.all(); !reflect.DeepEqual(got, want) {
+		t.Errorf("cluster calls = %q, want %q", got, want)
+	}
+}
+
+func TestReferenceKindsAreTheKubeKindsReferencesName(t *testing.T) {
+	secretKind := schema.GroupVersionKind{Version: "v1", Kind: "Secret"}
+	references := []config.Reference{
+		{From: sprocketKind, To: gadgetKind, Name: "spec.gadget"},
+		{From: sprocketKind, System: "cloud", Collection: "buckets", Name: "spec.bucket"},
+		{From: gadgetKind, To: secretKind, Name: "spec.secret"},
+		{From: sprocketKind, To: secretKind, Name: "spec.secret"},
+	}
+	if got, want := referenceKinds(references), []schema.GroupVersionKind{gadgetKind, secretKind}; !reflect.DeepEqual(got, want) {
+		t.Errorf("referenceKinds = %v, want %v", got, want)
+	}
+}
+
+func TestFakeOptionsSeeAllOfAFakeAReferenceNames(t *testing.T) {
+	s := config.System{Name: "cloud", API: "crud", Process: &config.Process{Command: []string{"/bin/crudfake"}}}
+	for system, want := range map[string]bool{"cloud": true, "other": false} {
+		o, err := fakeOptions(s, []config.Reference{{From: gadgetKind, System: system, Collection: "buckets", Name: "spec.bucket"}})
+		if err != nil || o.SeenAll != want {
+			t.Errorf("fakeOptions with a reference to %s = %+v, %v; want SeenAll %v", system, o, err, want)
+		}
+	}
+}
+
+func TestKubeOptionsWatchAndSeeEachReferencedKind(t *testing.T) {
+	widgetKind := schema.GroupVersionKind{Group: "toy.reconciler-fuzzer", Version: "v1", Kind: "Widget"}
+	secretKind := schema.GroupVersionKind{Version: "v1", Kind: "Secret"}
+	cfg := &config.Config{
+		Primaries:  []config.Primary{{Kind: widgetKind}},
+		Models:     testModels,
+		References: []config.Reference{{From: widgetKind, To: secretKind, Name: "spec.secret"}},
+	}
+	o := kubeOptions(cfg, nil, nil)
+	if want := []schema.GroupVersionKind{widgetKind, gadgetKind, sprocketKind, secretKind}; !reflect.DeepEqual(o.Watch, want) {
+		t.Errorf("Watch = %v, want %v", o.Watch, want)
+	}
+	if want := []schema.GroupVersionKind{gadgetKind, secretKind}; !reflect.DeepEqual(o.Seen, want) {
+		t.Errorf("Seen = %v, want %v", o.Seen, want)
+	}
+}

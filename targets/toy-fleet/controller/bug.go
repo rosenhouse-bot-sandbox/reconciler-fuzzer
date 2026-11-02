@@ -10,6 +10,12 @@ const (
 	// B116 removes every finalizer from a deleting Volume while its Cluster is
 	// deleted.
 	B116 Bug = 116
+	// B123 readies a Database on a Cluster that is not Ready.
+	B123 Bug = 123
+	// B124 readies a Database without checking its Secret.
+	B124 Bug = 124
+	// B125 keeps a Ready Database ready after its Secret is deleted.
+	B125 Bug = 125
 	// B135 ends each Volume's name with a suffix that each process picks, and
 	// deletes only Volumes with its own suffix. So a restart makes a second
 	// set.
@@ -22,10 +28,31 @@ const (
 	// B152 errors when a dependent kind is not served, as after its CRD is
 	// deleted, so the parent's deletion never ends.
 	B152 Bug = 152
+	// B160 gives Volumes no owner, and releases a deleted Cluster before it
+	// deletes them. A kill between the two leaks them.
+	B160 Bug = 160
+	// B161 finalizes only Clusters whose finalization this process began.
+	B161 Bug = 161
+	// B162 requeues a Cluster being deleted every 1 ms while its Volumes
+	// remain, and deletes them again each time.
+	B162 Bug = 162
+)
+
+// B140 to B142 are bugs of version 2 that show only on a Cluster that
+// version 1 made.
+const (
+	// B140 never removes the version 1 finalizer, so the Cluster's delete
+	// hangs.
+	B140 Bug = 140
+	// B141 names its Volumes <cluster>-data-<i> and sees only those, so it
+	// makes new ones and leaves the version 1 ones.
+	B141 Bug = 141
+	// B142 leaves the Cluster in the version 1 phase Provisioning.
+	B142 Bug = 142
 )
 
 // bugs holds every seeded bug ID.
-var bugs = map[Bug]bool{B116: true, B135: true, B150: true, B151: true, B152: true}
+var bugs = map[Bug]bool{B116: true, B123: true, B124: true, B125: true, B135: true, B140: true, B141: true, B142: true, B150: true, B151: true, B152: true, B160: true, B161: true, B162: true}
 
 // ParseBug converts a --bug value into a Bug.
 func ParseBug(id int) (Bug, error) {

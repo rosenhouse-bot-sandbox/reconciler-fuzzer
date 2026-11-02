@@ -14,16 +14,19 @@ import (
 
 // Restore fails a settled step without a create, update, delete or fixture
 // change whose controller resources differ from the previous settled step's.
-// A damage touches each group under its root, so a damage under a CR that the
-// controller made touches that CR's owner too.
+// A step whose restart upgrades the controller may change them, but not
+// replace them. A damage touches each group under its root, so a damage under
+// a CR that the controller made touches that CR's owner too.
 func Restore(ix *trace.Index, s Spec) []Finding {
 	v := newView(ix, s)
 	var findings []Finding
 	for n, step := range v.steps {
-		if n == 0 || v.steps[n-1].Step != step.Step-1 || v.has(step.Step, "create", "update", "delete", "changeFixture") {
+		if n == 0 || v.steps[n-1].Step != step.Step-1 || v.has(step.Step, "create", "update", "delete", "changeFixture", "createFixture") {
 			continue
 		}
 		from, to := v.steps[n-1].ConfirmEnd, step.ConfirmEnd
+		// A new version may rewrite the resources the old one made.
+		upgraded := slices.ContainsFunc(v.ix.Actions(step.Step), func(e trace.Event) bool { return e.Action.Upgrade })
 		damaged, touched := v.damaged(step.Step, from)
 		before, after := v.groups(from), v.groups(to)
 		// kinds holds each kind under a root, and remade each kind and role
@@ -43,12 +46,14 @@ func Restore(ix *trace.Index, s Spec) []Finding {
 				// A damaged group must be live again while its owner lives. Once
 				// its owner is gone, a CR made since from must own its kind and
 				// role under its root. A touched group that empties must leave
-				// its kind there.
+				// its kind there. A group may stay empty while its CRs are all
+				// not ready but halted or held back, since their controller
+				// stops on purpose.
 				restored := kinds[group{kind: g.kind, root: g.root}]
 				if o, hit := damaged[g]; hit {
 					restored = !v.lives(o, to) && remade[group{kind: g.kind, root: g.root, role: g.role}]
 				}
-				if len(was) > 0 && len(is) == 0 && !restored {
+				if len(was) > 0 && len(is) == 0 && !restored && !v.stopped(v.w.Owner(was[0], from), to) {
 					missing[k] = append(missing[k], v.describeAll(was[:1], from)...)
 				}
 				continue
@@ -56,7 +61,7 @@ func Restore(ix *trace.Index, s Spec) []Finding {
 			for _, i := range was {
 				if j := slices.IndexFunc(is, func(j owner.Instance) bool { return j.UID == i.UID }); j < 0 {
 					replaced[k] = append(replaced[k], v.describeAll([]owner.Instance{i}, from)...)
-				} else if paths := differ(v.w.Body(i, from), v.w.Body(is[j], to), v.s.modelled(i.Ref), v.s.Ignore[i.Ref.System], v.s.periodicPaths(i.Ref)); len(paths) > 0 {
+				} else if paths := differ(v.w.Body(i, from), v.w.Body(is[j], to), v.s.modelled(i.Ref), v.s.Ignore[i.Ref.System], v.s.periodicPaths(i.Ref)); len(paths) > 0 && !upgraded {
 					changed[k] = append(changed[k], v.describeAll([]owner.Instance{i}, from)[0]+": "+strings.Join(paths, ", "))
 				}
 			}
@@ -94,6 +99,18 @@ func (v *view) damaged(step int, t time.Duration) (map[group]owner.Owner, func(r
 	return groups, func(root string) bool {
 		return keys[root] || slices.ContainsFunc(v.roots[root].CRs, func(uid string) bool { return crs[uid] })
 	}
+}
+
+// stopped reports whether o names CRs, and each, by its latest body at t, is
+// not ready but halted or held back by a reference, as the settle condition
+// allows.
+func (v *view) stopped(o owner.Owner, t time.Duration) bool {
+	return len(o.CRs) > 0 && !slices.ContainsFunc(o.CRs, func(uid string) bool {
+		cr, _ := v.w.Instance(uid)
+		p, _ := v.s.primary(cr.Ref)
+		body := v.w.Object(cr, t)
+		return p.ready(body) || !halted(v.ix, p, trace.Version{Ref: cr.Ref, UID: uid}, body, t, v.s) && !v.s.heldBack(v.ix, cr.Ref, body, t)
+	})
 }
 
 // lives reports whether o names no CR, or a CR live at t.

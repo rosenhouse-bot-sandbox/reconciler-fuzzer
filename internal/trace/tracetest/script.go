@@ -208,9 +208,15 @@ func (r *Script) DeleteCR(slot string, ref trace.Ref) *Script {
 
 // Restart has the harness restart the controller, which lists again what
 // it listed at its first start.
-func (r *Script) Restart() *Script {
+func (r *Script) Restart() *Script { return r.restart(trace.Action{Do: "restart"}) }
+
+// Upgrade restarts the controller as a restart that sets a binary, args or
+// crds does.
+func (r *Script) Upgrade() *Script { return r.restart(trace.Action{Do: "restart", Upgrade: true}) }
+
+func (r *Script) restart(a trace.Action) *Script {
 	r.n++
-	return r.Add(Exit("signal: terminated", true, ""), Start(r.n)).Act("restart", "", nil).
+	return r.Add(Exit("signal: terminated", true, ""), Start(r.n)).act(a).
 		Call(trace.Controller, "list", r.listed, 200)
 }
 
