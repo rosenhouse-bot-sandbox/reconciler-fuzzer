@@ -35,6 +35,7 @@ func run(args []string, out io.Writer) error {
 	kubeconfig := flags.String("kubeconfig", "", "path to a kubeconfig file; defaults to $KUBECONFIG, then the in-cluster configuration, then ~/.kube/config")
 	bugID := flags.Int("bug", 0, "seeded bug to run; 0 is the correct controller")
 	version := flags.Int("version", 1, "controller version to run, 1 or 2")
+	protectSecrets := flags.Bool("protect-secrets", false, "hold each Secret that a Database names with a finalizer until no Database names it")
 	metricsAddress := flags.String("metrics-bind-address", "0", "address the metrics server binds to; 0 disables it")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -68,7 +69,7 @@ func run(args []string, out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("creating the manager: %w", err)
 	}
-	if err := controller.Setup(manager, bug, *version); err != nil {
+	if err := controller.Setup(manager, bug, *version, *protectSecrets); err != nil {
 		return fmt.Errorf("setting up the controllers: %w", err)
 	}
 	ctrl.Log.WithName("toy-fleet").Info("starting", "bug", int(bug), "version", *version)

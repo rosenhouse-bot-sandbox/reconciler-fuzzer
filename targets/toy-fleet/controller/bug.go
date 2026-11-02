@@ -22,7 +22,7 @@ const (
 	B124 Bug = 124
 	// B125 keeps a Ready Database ready after its Secret is deleted.
 	B125 Bug = 125
-	// B126, under --protect-secrets, never puts the in-use finalizer on the
+	// B126, under --protect-secrets, never puts SecretInUseFinalizer on the
 	// Secret a Database names.
 	B126 Bug = 126
 	// B150 strips its finalizers from deleting CRs when it shuts down.
@@ -49,7 +49,10 @@ const (
 )
 
 // bugs holds every seeded bug ID.
-var bugs = map[Bug]bool{B116: true, B123: true, B124: true, B125: true, B140: true, B141: true, B142: true, B150: true, B151: true, B152: true}
+var bugs = map[Bug]bool{
+	B116: true, B120: true, B121: true, B122: true, B123: true, B124: true, B125: true, B126: true,
+	B140: true, B141: true, B142: true, B150: true, B151: true, B152: true,
+}
 
 // ParseBug converts a --bug value into a Bug.
 func ParseBug(id int) (Bug, error) {

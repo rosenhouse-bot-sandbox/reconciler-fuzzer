@@ -34,6 +34,7 @@ type fleet struct {
 	clusters  *ClusterReconciler
 	databases *DatabaseReconciler
 	users     *UserReconciler
+	secrets   *SecretReconciler
 }
 
 func newClient(t *testing.T, objects ...client.Object) client.WithWatch {
@@ -55,7 +56,7 @@ func newFleet(t *testing.T, objects ...client.Object) *fleet { return newBuggyFl
 func newBuggyFleet(t *testing.T, bug Bug, objects ...client.Object) *fleet {
 	c := newClient(t, objects...)
 	base := reconciler{Client: c, APIReader: c, Scheme: c.Scheme(), Bug: bug, Version: 1}
-	return &fleet{t, c, &ClusterReconciler{base}, &DatabaseReconciler{base}, &UserReconciler{base}}
+	return &fleet{t, c, &ClusterReconciler{base}, &DatabaseReconciler{base}, &UserReconciler{base}, &SecretReconciler{base}}
 }
 
 func (f *fleet) reconcileOnce(r reconcile.Reconciler, name string) {
@@ -93,6 +94,15 @@ func (f *fleet) database() *fleetv1.Database {
 		f.t.Fatal(err)
 	}
 	return db
+}
+
+func (f *fleet) secret() *corev1.Secret {
+	f.t.Helper()
+	s := &corev1.Secret{}
+	if err := f.get("admin-password", s); err != nil {
+		f.t.Fatal(err)
+	}
+	return s
 }
 
 func (f *fleet) listVolumes() []storagev1.Volume {
@@ -511,6 +521,68 @@ func TestADatabaseNamingAnEmptySecretNameNeedsNoSecret(t *testing.T) {
 	}
 }
 
+// heldSecret is the admin-password Secret, held by the in-use finalizer.
+func heldSecret() *corev1.Secret {
+	s := passwordSecret(nil)
+	s.Finalizers = []string{fleetv1.SecretInUseFinalizer}
+	return s
+}
+
+func TestASecretIsHeldWhileADatabaseNamesIt(t *testing.T) {
+	f := newFleet(t, passwordSecret(nil), databaseNaming("admin-password"))
+	f.settle(f.secrets, "admin-password")
+	if got := f.secret().Finalizers; !slices.Equal(got, []string{fleetv1.SecretInUseFinalizer}) {
+		t.Fatalf("While a Database names it, the Secret has finalizers %q.", got)
+	}
+	f.delete(f.secret())
+	f.settle(f.secrets, "admin-password")
+	if s := f.secret(); s.DeletionTimestamp.IsZero() || !slices.Equal(s.Finalizers, []string{fleetv1.SecretInUseFinalizer}) {
+		t.Fatalf("While a Database names it, the deleted Secret has finalizers %q.", s.Finalizers)
+	}
+	f.delete(f.database())
+	f.settle(f.secrets, "admin-password")
+	if err := f.get("admin-password", &corev1.Secret{}); !apierrors.IsNotFound(err) {
+		t.Errorf("Once no Database names it, the deleted Secret gives %v, want not found.", err)
+	}
+}
+
+func TestADeletingDatabaseStillHoldsItsSecret(t *testing.T) {
+	f := newFleet(t, passwordSecret(nil), deleting(databaseNaming("admin-password"), fleetv1.DatabaseFinalizer))
+	f.settle(f.secrets, "admin-password")
+	if got := f.secret().Finalizers; !slices.Equal(got, []string{fleetv1.SecretInUseFinalizer}) {
+		t.Errorf("While a deleting Database names it, the Secret has finalizers %q.", got)
+	}
+}
+
+// A Secret takes no new finalizer once its deletion starts.
+func TestADeletingSecretIsNotHeld(t *testing.T) {
+	f := newFleet(t, deleting(passwordSecret(nil), "other.example/hold"), databaseNaming("admin-password"))
+	f.settle(f.secrets, "admin-password")
+	if got := f.secret().Finalizers; !slices.Equal(got, []string{"other.example/hold"}) {
+		t.Errorf("The deleting Secret has finalizers %q, want only its own.", got)
+	}
+}
+
+func TestASecretNoDatabaseNamesIsReleased(t *testing.T) {
+	inOther := databaseNaming("admin-password")
+	inOther.Namespace = "other"
+	f := newFleet(t, heldSecret(), databaseNaming("another"), inOther)
+	f.settle(f.secrets, "admin-password")
+	if got := f.secret().Finalizers; len(got) != 0 {
+		t.Errorf("With no Database in its namespace naming it, the Secret has finalizers %q.", got)
+	}
+}
+
+// The cache can miss a new Database, so the release lists Databases past it.
+func TestSecretReleaseSeesDatabasesTheCacheMisses(t *testing.T) {
+	f := newFleet(t, heldSecret())
+	f.secrets.APIReader = newClient(t, databaseNaming("admin-password"))
+	f.settle(f.secrets, "admin-password")
+	if got := f.secret().Finalizers; !slices.Equal(got, []string{fleetv1.SecretInUseFinalizer}) {
+		t.Errorf("With a Database the cache misses, the Secret has finalizers %q.", got)
+	}
+}
+
 func TestUserWaitsForItsDatabase(t *testing.T) {
 	f := newFleet(t, userObj())
 	f.settle(f.users, "alice")
@@ -574,7 +646,7 @@ func TestDatabaseFinalizeSeesUsersTheCacheMisses(t *testing.T) {
 }
 
 // A change to a Cluster or a Secret requeues the Databases that name it, and
-// a change to a Database the Users.
+// a change to a Database its Users and its Secret.
 func TestAChangeRequeuesWhatNamesIt(t *testing.T) {
 	inOther := func(o client.Object) client.Object {
 		o.SetNamespace("other")
@@ -596,6 +668,12 @@ func TestAChangeRequeuesWhatNamesIt(t *testing.T) {
 	}
 	if got := f.users.usersOf(t.Context(), databaseObj()); !slices.Equal(got, only("alice")) {
 		t.Errorf("A Database's change requeues %v, want its User.", got)
+	}
+	if got := secretOf(t.Context(), databaseNaming("admin-password")); !slices.Equal(got, only("admin-password")) {
+		t.Errorf("A Database's change requeues %v, want the Secret it names.", got)
+	}
+	if got := secretOf(t.Context(), databaseObj()); len(got) != 0 {
+		t.Errorf("A change to a Database that names no Secret requeues %v.", got)
 	}
 }
 
@@ -637,13 +715,13 @@ func TestReconcileWritesNoUnchangedStatus(t *testing.T) {
 // A queued request can outlive its CR.
 func TestReconcileOfAMissingCRSucceeds(t *testing.T) {
 	f := newFleet(t)
-	for _, r := range []reconcile.Reconciler{f.clusters, f.databases, f.users} {
+	for _, r := range []reconcile.Reconciler{f.clusters, f.databases, f.users, f.secrets} {
 		f.reconcileOnce(r, "missing")
 	}
 }
 
 func TestParseBugAcceptsOnlyKnownBugs(t *testing.T) {
-	for _, id := range []int{0, 116, 123, 124, 125, 140, 141, 142, 150, 151, 152} {
+	for _, id := range []int{0, 116, 120, 121, 122, 123, 124, 125, 126, 140, 141, 142, 150, 151, 152} {
 		if b, err := ParseBug(id); int(b) != id || err != nil {
 			t.Errorf("ParseBug(%d) = %v, %v", id, b, err)
 		}
@@ -654,7 +732,6 @@ func TestParseBugAcceptsOnlyKnownBugs(t *testing.T) {
 }
 
 func TestB120ReleasesAClusterWhileADatabaseNamesIt(t *testing.T) {
-	t.Skip("enabled by the toy-fleet package")
 	f := newBuggyFleet(t, B120, clusterObj(), databaseObj())
 	f.settle(f.clusters, "cluster")
 	f.readyVolumes()
@@ -667,13 +744,19 @@ func TestB120ReleasesAClusterWhileADatabaseNamesIt(t *testing.T) {
 }
 
 func TestB121ReleasesADatabaseWhileAUserNamesIt(t *testing.T) {
-	t.Skip("enabled by the toy-fleet package")
 	f := newBuggyFleet(t, B121, databaseObj(), userObj())
 	f.settle(f.databases, "db")
 	f.delete(f.database())
 	f.settle(f.databases, "db")
 	if err := f.get("db", &fleetv1.Database{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("Under B121, with a User, the Database gives %v, want not found.", err)
+	}
+}
+
+func TestB122RequeuesNoUserWhenItsDatabaseChanges(t *testing.T) {
+	f := newBuggyFleet(t, B122, databaseObj(), userObj())
+	if got := f.users.usersOf(t.Context(), databaseObj()); len(got) != 0 {
+		t.Errorf("Under B122, a Database's change requeues %v, want no User.", got)
 	}
 }
 
@@ -712,5 +795,13 @@ func TestB125KeepsADatabaseReadyAfterItsSecretGoes(t *testing.T) {
 	f.settle(f.databases, "db")
 	if got := f.database().Status; got != readyStatus() {
 		t.Errorf("Under B125, after its Secret went, the Database is %+v, want Ready.", got)
+	}
+}
+
+func TestB126NeverHoldsASecret(t *testing.T) {
+	f := newBuggyFleet(t, B126, passwordSecret(nil), databaseNaming("admin-password"))
+	f.settle(f.secrets, "admin-password")
+	if got := f.secret().Finalizers; len(got) != 0 {
+		t.Errorf("Under B126, while a Database names it, the Secret has finalizers %q.", got)
 	}
 }

@@ -176,7 +176,7 @@ func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Clust
 	if err := r.APIReader.List(ctx, databases, client.InNamespace(cluster.Namespace)); err != nil && !r.unserved(err) {
 		return fmt.Errorf("listing Databases: %w", err)
 	}
-	named := slices.ContainsFunc(databases.Items, func(db fleetv1.Database) bool { return db.Spec.ClusterRef == cluster.Name })
+	named := r.Bug != B120 && slices.ContainsFunc(databases.Items, func(db fleetv1.Database) bool { return db.Spec.ClusterRef == cluster.Name })
 	volumes, err := r.ownedVolumes(ctx, r.APIReader, cluster)
 	if err != nil {
 		return err
