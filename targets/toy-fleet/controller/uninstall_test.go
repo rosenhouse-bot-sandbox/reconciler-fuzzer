@@ -85,6 +85,19 @@ func TestDatabaseDeletionEndsWhenUsersAreNotServed(t *testing.T) {
 	}
 }
 
+func TestSecretReleaseEndsWhenDatabasesAreNotServed(t *testing.T) {
+	for name, err := range unservedErrors("databases", "Database") {
+		for bug, wantHeld := range map[Bug]bool{0: false, B152: true} {
+			f := newBuggyFleet(t, bug, heldSecret())
+			f.secrets.APIReader = unserved{f.c, &fleetv1.DatabaseList{}, err}
+			reconcileTenTimes(t, f.secrets, "admin-password")
+			if got := f.secret().Finalizers; (len(got) != 0) != wantHeld {
+				t.Errorf("B%d, Databases %s: the Secret has finalizers %q; want held %v.", bug, name, got, wantHeld)
+			}
+		}
+	}
+}
+
 func TestShutdownStripsDeletingCRsFinalizersOnlyUnderB150(t *testing.T) {
 	for bug, wantStripped := range map[Bug]bool{0: false, B150: true} {
 		live := clusterObj()
