@@ -74,6 +74,9 @@ func TestOrderedPassesAReleaseTheControllerHadNoTimeToHold(t *testing.T) {
 		"a CR it saw less than stable before":      func(r *tt.Script) { r.See(ctl, pw).Tick(r.Spec.Stable).See(ctl, databaseB) },
 		"an object it never saw":                   func(r *tt.Script) { r.See(ctl, databaseB).Tick(r.Spec.Stable) },
 		"an object it saw less than stable before": func(r *tt.Script) { r.See(ctl, databaseB).Tick(r.Spec.Stable).See(ctl, pw) },
+		"a CR it saw naming another": func(r *tt.Script) {
+			seeBoth(r.Update(trace.Harness, databaseB, database(false, "other"))).Update(trace.Harness, databaseB, database(false, "pw"))
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := secretRun(blockRef(), secret(true))
@@ -135,6 +138,17 @@ func TestOrderedJudgesEachInstanceApart(t *testing.T) {
 		r.Delete(ctl, pw)
 		requireNone(t, ordered(t, r))
 	})
+	t.Run("a CR made again after the release", func(t *testing.T) {
+		r := secretRun(blockRef(), secret(true))
+		seeBoth(r).Delete(ctl, pw).Delete(trace.Harness, databaseB)
+		r.Create(trace.Harness, databaseB, database(false, "pw"))
+		r.Act("create", "b", &databaseB).See(ctl, databaseB)
+		findings := ordered(t, r)
+		requireFinding(t, findings, "Ordered", 0, released, "kube/secrets", "secrets ns/pw: slot b names it")
+		if len(findings[0].Details) != 1 {
+			t.Errorf("details = %q, want only the first Database's.", findings[0].Details)
+		}
+	})
 	t.Run("a CR made again that the controller never saw", func(t *testing.T) {
 		r := secretRun(blockRef(), secret(true))
 		seeBoth(r).Delete(trace.Harness, databaseB)
@@ -181,15 +195,21 @@ func TestOrderedReportsAReleaseInItsStepWithEachCRThatNamesIt(t *testing.T) {
 
 func TestOrderedReportsAStepsReleasesOfAKindInOneFinding(t *testing.T) {
 	r := secretRun(blockRef(), secret(true))
-	pw2 := tt.Ref("secrets", "ns", "pw2")
-	r.Create(trace.Harness, pw2, secret(true))
-	body := database(false, "pw2")
-	body["metadata"] = map[string]any{"name": "c"}
-	r.Create(trace.Harness, databaseC, body)
-	seeBoth(r.Act("create", "c", &databaseC).See(ctl, pw2).See(ctl, databaseC))
+	var objects []trace.Ref
+	for n, slot := range []string{"c", "d"} {
+		object, db := tt.Ref("secrets", "ns", fmt.Sprint("pw", n+2)), tt.Ref("toy/databases", "ns", slot)
+		body := database(false, object.Name)
+		body["metadata"] = map[string]any{"name": slot}
+		r.Create(trace.Harness, object, secret(true))
+		r.Create(trace.Harness, db, body)
+		r.Act("create", slot, &db).See(ctl, object).See(ctl, db)
+		objects = append(objects, object)
+	}
+	seeBoth(r)
 	first := r.Now
-	findings := ordered(t, r.Delete(ctl, pw2).Delete(ctl, pw))
-	requireFinding(t, findings, "Ordered", 0, released, "kube/secrets", "secrets ns/pw: slot b names it", "secrets ns/pw2: slot c names it")
+	findings := ordered(t, r.Delete(ctl, objects[0]).Delete(ctl, pw).Delete(ctl, objects[1]))
+	requireFinding(t, findings, "Ordered", 0, released, "kube/secrets",
+		"secrets ns/pw: slot b names it", "secrets ns/pw2: slot c names it", "secrets ns/pw3: slot d names it")
 	if findings[0].At != first {
 		t.Errorf("at = %v, want the first release at %v.", findings[0].At, first)
 	}
@@ -252,7 +272,8 @@ func TestHonestJudgesAnObjectWaitingInDeletionByItsVersionBefore(t *testing.T) {
 			}
 			r.Create(trace.Harness, databaseB, databaseOn(false, "a"))
 			r.Act("create", "b", &databaseB)
-			r.Update(ctl, clusterA, tt.Deleting(tt.CR("a", false))).See(ctl, clusterA)
+			// The look shows the second of two versions that wait in deletion.
+			r.Update(ctl, clusterA, tt.Deleting(tt.CR("a", false))).Update(ctl, clusterA, tt.Deleting(tt.CR("a", false))).See(ctl, clusterA)
 			r.Update(ctl, databaseB, databaseOn(true, "a"))
 			findings := honest(t, r)
 			if !c.finding {
@@ -262,6 +283,19 @@ func TestHonestJudgesAnObjectWaitingInDeletionByItsVersionBefore(t *testing.T) {
 			requireFinding(t, findings, "Honest", 0, beforeSeeing, "kube/toy/clusters", "slot b: clusters.toy ns/a seen not ready")
 		})
 	}
+}
+
+func TestHonestUnderBlockFailsACRReadyAfterSeeingWhatItNamesReleased(t *testing.T) {
+	r := fleetRun(1, clusters, databases)
+	r.Spec.References = []trace.Reference{clusterRef(r, true)}
+	r.Begin()
+	r.CreateCR("a", clusterA)
+	r.Ready(clusterA)
+	r.Create(trace.Harness, databaseB, databaseOn(false, "a"))
+	r.Act("create", "b", &databaseB)
+	r.Update(ctl, clusterA, tt.Deleting(tt.CR("a", false))).Delete(ctl, clusterA).SeeDeleted(ctl, clusterA)
+	r.Update(ctl, databaseB, databaseOn(true, "a"))
+	requireFinding(t, honest(t, r), "Honest", 0, noDependency, "kube/toy/clusters", "slot b: clusters.toy ns/a seen missing")
 }
 
 // The controller saw the Cluster only while it waited in deletion, and then
