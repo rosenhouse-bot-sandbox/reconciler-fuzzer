@@ -16,6 +16,7 @@ const (
 	clusterConfig   = "cluster/config.yaml"
 	databaseConfig  = "database/config.yaml"
 	protectConfig   = "protect/config.yaml"
+	secretConfig    = "secret/config.yaml"
 	uninstallConfig = "uninstall/config.yaml"
 )
 
@@ -69,6 +70,23 @@ var gate = []gateRow{
 	// B0 updates no Volume while it deletes them.
 	{plan: "stop-after-delete", config: uninstallConfig, note: "fault 1 (error(500) on verb=update group=storage.thirdparty resource=volumes) picked no request"},
 	{plan: "stop-first", config: uninstallConfig, note: "cluster is not judged: the stop did not wait for it"},
+}
+
+// orderedGate holds the rows of #126's last step. The toy-fleet package
+// moves its bug rows into gate, adds secretConfig to configs, and drops its
+// B0 rows, which TestGate then runs as plans of configs.
+var orderedGate = []gateRow{
+	{plan: "blocked-delete"},
+	{plan: "blocked-cluster-delete"},
+	{plan: "user-first"},
+	{plan: "cluster-delete", config: databaseConfig},
+	{plan: "secret-first", config: secretConfig},
+	{plan: "delete-cluster-first", bug: 120, finding: "Ordered: released an object that another names", step: 1, detail: "/cluster: slot b names it"},
+	{plan: "blocked-delete", bug: 120, finding: "Ordered: released an object that another names", step: 1, detail: "/cluster: slot b names it"},
+	{plan: "cluster-delete", bug: 120, finding: "Converge: did not settle (clause 1)", step: 1, detail: "/db is not ready", config: databaseConfig},
+	{plan: "delete-database-first", bug: 121, finding: "Ordered: released an object that another names", step: 1, detail: "/db: slot c names it"},
+	{plan: "user-first", bug: 122, finding: "Converge: did not settle (clause 1)", step: 0, detail: "/alice is not ready"},
+	{plan: "secret-first", bug: 126, finding: "Ordered: released an object that another names", step: 1, detail: "/admin-password: slot a names it", config: secretConfig},
 }
 
 func planPath(config, plan string) string {

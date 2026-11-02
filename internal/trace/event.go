@@ -113,6 +113,7 @@ type Reference struct {
 	Ready      string        `json:"ready"`
 	Required   bool          `json:"required,omitempty"`
 	Track      time.Duration `json:"track,omitempty"`
+	Block      bool          `json:"block,omitempty"`
 }
 
 // ToRef names r's To kind by a ref with no namespace or name.

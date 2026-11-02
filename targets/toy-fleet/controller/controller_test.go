@@ -653,6 +653,30 @@ func TestParseBugAcceptsOnlyKnownBugs(t *testing.T) {
 	}
 }
 
+func TestB120ReleasesAClusterWhileADatabaseNamesIt(t *testing.T) {
+	t.Skip("enabled by the toy-fleet package")
+	f := newBuggyFleet(t, B120, clusterObj(), databaseObj())
+	f.settle(f.clusters, "cluster")
+	f.readyVolumes()
+	f.settle(f.clusters, "cluster")
+	f.delete(f.cluster())
+	f.settle(f.clusters, "cluster")
+	if err := f.get("cluster", &fleetv1.Cluster{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("Under B120, with a Database, the Cluster gives %v, want not found.", err)
+	}
+}
+
+func TestB121ReleasesADatabaseWhileAUserNamesIt(t *testing.T) {
+	t.Skip("enabled by the toy-fleet package")
+	f := newBuggyFleet(t, B121, databaseObj(), userObj())
+	f.settle(f.databases, "db")
+	f.delete(f.database())
+	f.settle(f.databases, "db")
+	if err := f.get("db", &fleetv1.Database{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("Under B121, with a User, the Database gives %v, want not found.", err)
+	}
+}
+
 func TestB123ReadiesADatabaseOnAPendingCluster(t *testing.T) {
 	f := newFleet(t, clusterObj(), databaseObj())
 	f.databases.Bug = B123

@@ -53,6 +53,9 @@ type Reference struct {
 	Ready           func(obj map[string]any) (bool, error)
 	Required        bool
 	Track           time.Duration
+	// Block says the To object's deletion waits for the From CRs that name
+	// it, which Ordered judges.
+	Block bool
 }
 
 // Primary is one listed kind as the checks judge its CRs.
@@ -414,6 +417,7 @@ func Judge(ix *trace.Index, s Spec) Report {
 	findings = append(findings, Restore(ix, s)...)
 	findings = append(findings, Unique(ix, s)...)
 	findings = append(findings, Honest(ix, s)...)
+	findings = append(findings, Ordered(ix, s)...)
 	findings = append(findings, Backoff(ix, s)...)
 	findings = append(findings, Finalizers(ix, s)...)
 	findings = append(findings, Property(ix, s)...)

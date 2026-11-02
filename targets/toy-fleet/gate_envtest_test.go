@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/check"
@@ -23,7 +24,36 @@ func TestMain(m *testing.M) {
 }
 
 func TestGate(t *testing.T) {
-	for _, rows := range byRun(gate) {
+	runGate(t, gate)
+	for _, config := range configs {
+		names, err := plans(config)
+		if err != nil || len(names) == 0 {
+			t.Fatalf("Found plans %v, %v.", names, err)
+		}
+		for _, name := range names {
+			t.Run(filepath.Join(filepath.Dir(config), name)+" passes B0", func(t *testing.T) {
+				if slices.ContainsFunc(orderedGate, func(g gateRow) bool { return g.configPath() == config && g.plan == name && g.bug == 0 }) {
+					t.Skip("enabled by the toy-fleet package")
+				}
+				t.Parallel()
+				_, report := run1(t, config, run.Options{PlanPath: planPath(config, name)}, 0)
+				if report != "No findings.\n" {
+					t.Errorf("Want no findings and no notes. report.md:\n%s", report)
+				}
+			})
+		}
+	}
+}
+
+func TestReferencesJudgeTheOrderAcrossKinds(t *testing.T) {
+	t.Skip("enabled by the toy-fleet package, which moves orderedGate into gate")
+	runGate(t, orderedGate)
+}
+
+// runGate runs each row's plan under its bug, and wants the row's findings
+// and no other check's.
+func runGate(t *testing.T, rows []gateRow) {
+	for _, rows := range byRun(rows) {
 		g := rows[0]
 		verb := "catches"
 		if g.finding == "" {
@@ -51,21 +81,6 @@ func TestGate(t *testing.T) {
 				}
 			}
 		})
-	}
-	for _, config := range configs {
-		names, err := plans(config)
-		if err != nil || len(names) == 0 {
-			t.Fatalf("Found plans %v, %v.", names, err)
-		}
-		for _, name := range names {
-			t.Run(filepath.Join(filepath.Dir(config), name)+" passes B0", func(t *testing.T) {
-				t.Parallel()
-				_, report := run1(t, config, run.Options{PlanPath: planPath(config, name)}, 0)
-				if report != "No findings.\n" {
-					t.Errorf("Want no findings and no notes. report.md:\n%s", report)
-				}
-			})
-		}
 	}
 }
 

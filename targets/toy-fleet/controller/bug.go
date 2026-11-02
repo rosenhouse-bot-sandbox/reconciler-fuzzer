@@ -10,12 +10,21 @@ const (
 	// B116 removes every finalizer from a deleting Volume while its Cluster is
 	// deleted.
 	B116 Bug = 116
+	// B120 releases a Cluster while a Database names it.
+	B120 Bug = 120
+	// B121 releases a Database while a User names it.
+	B121 Bug = 121
+	// B122 does not requeue Users when their Database changes.
+	B122 Bug = 122
 	// B123 readies a Database on a Cluster that is not Ready.
 	B123 Bug = 123
 	// B124 readies a Database without checking its Secret.
 	B124 Bug = 124
 	// B125 keeps a Ready Database ready after its Secret is deleted.
 	B125 Bug = 125
+	// B126, under --protect-secrets, never puts the in-use finalizer on the
+	// Secret a Database names.
+	B126 Bug = 126
 	// B150 strips its finalizers from deleting CRs when it shuts down.
 	B150 Bug = 150
 	// B151 puts a finalizer on each Volume, and releases a deleted Cluster

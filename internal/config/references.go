@@ -33,6 +33,9 @@ type Reference struct {
 	Required bool
 	// Track is zero when unset.
 	Track time.Duration
+	// Block says, under onDelete: block, that the to object's deletion
+	// waits for the from CRs that name it.
+	Block bool
 }
 
 type declaredReference struct {
@@ -43,6 +46,7 @@ type declaredReference struct {
 	Ready     string `json:"ready"`
 	Required  *bool  `json:"required"`
 	Track     string `json:"track"`
+	OnDelete  string `json:"onDelete"`
 }
 
 // references loads the references entries. Only a config with entries

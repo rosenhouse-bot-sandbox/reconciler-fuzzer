@@ -1,7 +1,7 @@
 # reconciler-fuzzer design
 
 Issue #114 holds the proposal and its reasons. This document states what the
-code does. It stays under 585 lines. Where the code documents a rule, this
+code does. It stays under 600 lines. Where the code documents a rule, this
 document names it.
 
 ## 1. Terms
@@ -117,14 +117,15 @@ nothing, and at its end each stream delivers what it held, in order.
 
 **Seen.** A listener records a `seen` for each object of its `Seen` kinds, or of
 every kind with `SeenAll`, that a 2xx response shows its caller. These are the
-dependency kinds and the references' `to` kinds. An undecodable response, or a
-Table, records an `opaque` seen of its ref. A kube listener asks for JSON of
-these kinds in place of protobuf or CBOR, with the same parameters, since
-controller-runtime asks for built-in kinds in protobuf, whose lists and watch
-frames it cannot decode. It marks a list or watch that may leave objects out
-(`Call.Partial`): one with a label or field selector, or with a `continue` token
-in its request or decoded answer. A response of unknown outcome shows nothing.
-`Shown` hears every object any response carries, unknown outcomes included.
+dependency kinds, the references' `to` kinds and the `block` references' `from`
+kinds. An undecodable response, or a Table, records an `opaque` seen of its ref.
+A kube listener asks for JSON of these kinds in place of protobuf or CBOR, with
+the same parameters, since controller-runtime asks for built-in kinds in
+protobuf, whose lists and watch frames it cannot decode. It marks a list or
+watch that may leave objects out (`Call.Partial`): one with a label or field
+selector, or with a `continue` token in its request or decoded answer. A
+response of unknown outcome shows nothing. `Shown` hears every object any
+response carries, unknown outcomes included.
 
 **The `crud` map** reads `GET /<c>` as `list`, `POST /<c>` as `create`
 (`requestName` is the body's `name`), and `GET`, `PUT`, `PATCH` and `DELETE
@@ -247,7 +248,7 @@ to the CRs the stop waited for (§9).
    unknown-outcome controller call on it or on an instance only it owns, or,
    from `backoff + stable` after `endFaults`, a reference holds it back, as a
    look at `t` would too, or leaves it unknown (§12), and
-2. carries no `deletionTimestamp`.
+2. carries no `deletionTimestamp`, unless a live CR names it under `block`.
 3. The controller is up at `t` and has been up for at least `stable`.
 4. The controller made a 2xx request, not ignored and not of unknown
    outcome, that it sent since its last start.
@@ -370,7 +371,16 @@ looked at the object and retracts the write in time (entry 86): `reported ready
 with no dependency` if missing, else `reported ready before seeing its
 dependency ready`. With `track: d`, a CR fails that stays `ready`, naming the
 object, `d`, stalls aside, after a look that held it back: `stayed ready after
-seeing its dependency not ready`. Each finding takes the `to` kind.
+seeing its dependency not ready`. Each finding takes the `to` kind. Under
+`onDelete: block`, a look that shows the object being deleted holds the CR back
+only for Converge and Restore, since the object's deletion waits for the CR.
+
+**Ordered.** A `to` object's **release** is its deleted version. Under
+`onDelete: block`, Ordered fails a release while a `from` CR that the
+controller saw by then names the object, in both the CR's last version before
+the release and its last version at the object's first `deletionTimestamp`, or
+at the release if it had none: `released an object that another names`. It
+orders versions of two kinds by resourceVersion, as integers (entry 89).
 
 **Backoff.** Failing controller calls with one system, verb, object,
 subresource and status form a **run**; a create's object is its `requestName`.
@@ -421,7 +431,8 @@ primaries:                                  # every kind the controller serves
   - {kind: toy.reconciler-fuzzer/v1/Policy, sample: policy.yaml, ready: has(self.status)}
 references:                                 # fields by which a CR names what it does not own
   - {from: toy.reconciler-fuzzer/v1/Bucket, to: v1/Secret, name: "spec.keys[*].secretName",
-     ready: has(self.data.key), required: false, track: 2s}   # required defaults to true
+     ready: has(self.data.key), required: false, track: 2s,   # required defaults to true
+     onDelete: block}                       # the Secret's deletion waits for the Bucket
 values: {fixtures: {kv.yaml: [value]}}              # with primaries, only fixtures
 models: [{kind: toy.reconciler-fuzzer/v1/Gadget, after: 200ms, dependency: {track: 1s}}]
 systems:
@@ -459,6 +470,8 @@ empty or absent value names nothing. `config.Load` reads each kind's scope from
 `crds` and a table of the kinds Kubernetes serves without a CRD. The `from`
 CRD's schema must describe each path as a string. A `name` that an `owns` entry
 of the `from` entry reads is refused, since the CR owns that object.
+`onDelete: block` says the `to` object's deletion waits for its `from` CRs, as
+`kubernetes.io/pvc-protection` does; a fake's `to` cannot take it.
 `references.go` holds the other refusals.
 
 ## 14. Generation, replay and shrinking
@@ -486,8 +499,7 @@ holds: the name of any slot's CR of a listed `to` kind, or of a fixture of
 another, live half the time when one is. With `required: false`, 1 in 4
 writes `missing`, a name no object has. `namespace` values stay as drawn.
 `changeFixture` also deletes a live kube fixture of a `to` kind other than a
-Namespace, and `createFixture` makes it again. Plans of a config without
-references are as before.
+Namespace, and `createFixture` makes it again.
 
 **Hunt.** `hunt.Hunt` runs each seed, keeps runs with a new signature, replays
 each 5 times and shrinks it (`shrink.go`), trying at most 16 candidates.
@@ -519,9 +531,10 @@ maybe a Secret, and a User a Database. Its bugs start at B100. `config.yaml`
 lists all three kinds and their references. The generated test fuzzes
 `cluster/`, which lists Clusters alone, `database/`, which lists Databases on
 a fixture Cluster, and `protect/`, whose Volume model holds each Volume's
-deletion with its finalizer. Under `config.yaml`, a Cluster's deletion waits
-for the Databases that name it, which fails clause 2. `uninstall/` makes the
-Database CRD a fixture, which a plan may delete.
+deletion with its finalizer. `config.yaml` blocks a Cluster's deletion on its
+Databases and a Database's on its Users. `secret/` runs `--protect-secrets`, so
+the controller holds the fixture Secret with a finalizer while a Database names
+it. `uninstall/` makes the Database CRD a fixture, which a plan may delete.
 
 Each config's `plans/` holds its gated bugs' and B0's plans. A toy's
 `gate_envtest_test.go` runs `gate_test.go`'s rows, and its `bugmatrix_test.go`
@@ -582,3 +595,4 @@ Each entry changes a check, exception, `System` interface or ignore list.
 84. A 2xx kube list that is not `Partial` and lacks an object shows it missing, as does the `k8s.io/initial-events-end` bookmark of such a watch, since client-go's informers open a watch with `sendInitialEvents` instead of a list. So a restart or a dropped watch counts. Kube listeners ask for JSON of Seen kinds, so built-in kinds' lists and watches decode.
 85. A kube write's call records its answer's finalizers, for Finalizers (#133), since an update that empties a deleting object's finalizers deletes it and answers with the old version. The gc owns `foregroundDeletion` and `orphan`, which the API server adds for whoever deletes. A finalizer the harness wrote, from a sample, a fixture or a plan, may be the controller's own. Listeners record answers in no fixed order, so a version that overlapping writes of two callers carry may be either's. After an answer names a version the observer missed, the trace may lack a change, so the object's later writes pass. A CRD's status write keeps its metadata.
 86. Honest excuses a `ready` write that the controller sends within 2×`stable` of a look, after an earlier look that let the CR be `ready`, with no `start` since, and retracts within `stable` of the write's response, by writing the CR not `ready` or naming another object. A reconcile may read its cache before the look reaches the cache, the cache holds what an earlier look showed, and the CR's next reconcile starts only once the write returns. Neither window, nor a `track`, counts time in which a step's faults stall the controller, or between an exit and its next start, since a reconcile that a fault holds keeps the CRs queued behind it waiting. A step's faults stall it only if a fault altered one of the controller's requests in them, so a model fault, such as `stuck`, and a held watch stall it not at all. The retraction window starts again at a `start`, since a restart loses the reconcile, and a write of the CR that failed or had an unknown outcome, the `ready` write itself or one in the window, such as a conflict from a cache that lacks the `ready` write, gives the controller the `backoff` of the step that answered it and `stable` from its response. A killed write gives none, since the controller starts again with an empty backoff.
+89. Under `onDelete: block` (#126, #127), a `to` CR that waits in deletion while a live `from` CR names it meets clause 2. Ordered judges the `from` CR's last version, so a moved reference releases the old object, and skips a CR that names the object only once its deletion started, a race that only admission control closes. It compares resourceVersions as integers, as etcd assigns them, since the observer's watches order no events across kinds. Honest lets a CR be `ready` on an object that waits in deletion for it, which a controller may still use, and Converge and Restore still excuse the CR if it is not `ready`.

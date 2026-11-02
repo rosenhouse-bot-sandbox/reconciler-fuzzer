@@ -145,11 +145,35 @@ func TestReferencesRefusals(t *testing.T) {
 		"a namespace with an empty field":            {"{from: toy/v1/Database, to: v1/Secret, name: spec.s, namespace: spec..ns, ready: \"true\"}", "references[0].namespace"},
 		"a track of zero":                            {"{from: toy/v1/Database, to: toy/v1/Cluster, name: spec.clusterRef, track: 0s}", "references[0].track"},
 		"a second entry of one name":                 {"{from: toy/v1/Database, to: toy/v1/Cluster, name: spec.clusterRef}\n  - {from: toy/v1/Database, to: toy/v1/User, name: spec.clusterRef}", "references[1].name"},
-		"an unknown key":                             {"{from: toy/v1/Database, to: toy/v1/Cluster, name: spec.clusterRef, onDelete: block}", "references[0].onDelete is not a key; references[0] takes from, to, name, namespace, ready, required and track"},
+		"an unknown key":                             {"{from: toy/v1/Database, to: toy/v1/Cluster, name: spec.clusterRef, selector: app}", "references[0].selector is not a key; references[0] takes from, to, name, namespace, ready, required, track and onDelete"},
 	} {
 		_, err := config.Load(writeReferences(t, "references:\n  - "+c.references+"\n"))
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: Load = %v, want an error that names %s.", name, err, c.want)
+		}
+	}
+}
+
+func TestOnDeleteBlockLoads(t *testing.T) {
+	t.Skip("enabled by the config package")
+	c, err := config.Load(writeReferences(t, "references: [{from: toy/v1/Database, to: toy/v1/Cluster, name: spec.clusterRef, onDelete: block}]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.References[0].Block {
+		t.Error("Block = false, want true under onDelete: block.")
+	}
+}
+
+func TestOnDeleteRefusals(t *testing.T) {
+	t.Skip("enabled by the config package")
+	for name, reference := range map[string]string{
+		"an onDelete other than block": "{from: toy/v1/Database, to: toy/v1/Cluster, name: spec.clusterRef, onDelete: orphan}",
+		"a block on a fake":            "{from: toy/v1/User, to: \"cloud:buckets\", name: spec.bucket, onDelete: block}",
+	} {
+		_, err := config.Load(writeReferences(t, "references:\n  - "+reference+"\n"))
+		if err == nil || !strings.Contains(err.Error(), "references[0].onDelete") {
+			t.Errorf("%s: Load = %v, want an error that names references[0].onDelete.", name, err)
 		}
 	}
 }
