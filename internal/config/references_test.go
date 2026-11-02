@@ -155,7 +155,6 @@ func TestReferencesRefusals(t *testing.T) {
 }
 
 func TestOnDeleteBlockLoads(t *testing.T) {
-	t.Skip("enabled by the config package")
 	c, err := config.Load(writeReferences(t, "references: [{from: toy/v1/Database, to: toy/v1/Cluster, name: spec.clusterRef, onDelete: block}]\n"))
 	if err != nil {
 		t.Fatal(err)
@@ -166,14 +165,13 @@ func TestOnDeleteBlockLoads(t *testing.T) {
 }
 
 func TestOnDeleteRefusals(t *testing.T) {
-	t.Skip("enabled by the config package")
-	for name, reference := range map[string]string{
-		"an onDelete other than block": "{from: toy/v1/Database, to: toy/v1/Cluster, name: spec.clusterRef, onDelete: orphan}",
-		"a block on a fake":            "{from: toy/v1/User, to: \"cloud:buckets\", name: spec.bucket, onDelete: block}",
+	for name, c := range map[string]struct{ reference, want string }{
+		"an onDelete other than block": {"{from: toy/v1/Database, to: toy/v1/Cluster, name: spec.clusterRef, onDelete: orphan}", `references[0].onDelete "orphan": want block`},
+		"a block on a fake":            {"{from: toy/v1/User, to: \"cloud:buckets\", name: spec.bucket, onDelete: block}", "references[0].onDelete: a fake's resources have no finalizers"},
 	} {
-		_, err := config.Load(writeReferences(t, "references:\n  - "+reference+"\n"))
-		if err == nil || !strings.Contains(err.Error(), "references[0].onDelete") {
-			t.Errorf("%s: Load = %v, want an error that names references[0].onDelete.", name, err)
+		_, err := config.Load(writeReferences(t, "references:\n  - "+c.reference+"\n"))
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: Load = %v, want an error that names %s.", name, err, c.want)
 		}
 	}
 }

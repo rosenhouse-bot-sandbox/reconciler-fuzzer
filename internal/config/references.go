@@ -150,6 +150,17 @@ func (c *Config) reference(key string, d declaredReference, crds map[schema.Grou
 			return Reference{}, fmt.Errorf("%s.track %q: want a positive duration", key, d.Track)
 		}
 	}
+
+	switch d.OnDelete {
+	case "":
+	case "block":
+		if r.System != "" {
+			return Reference{}, fmt.Errorf("%s.onDelete: a fake's resources have no finalizers to wait with", key)
+		}
+		r.Block = true
+	default:
+		return Reference{}, fmt.Errorf("%s.onDelete %q: want block", key, d.OnDelete)
+	}
 	return r, nil
 }
 
