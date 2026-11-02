@@ -184,7 +184,7 @@ func passwordSecret(data map[string][]byte) *corev1.Secret {
 // readyCluster is clusterObj reporting Ready for its generation.
 func readyCluster() *fleetv1.Cluster {
 	c := clusterObj()
-	c.Status.CommonStatus = readyStatus()
+	c.Status = fleetv1.ClusterStatus{CommonStatus: readyStatus(), ReadyVolumes: c.Spec.Volumes}
 	return c
 }
 
@@ -479,12 +479,12 @@ func TestDatabaseWaitsForItsClusterToReportItsGenerationReady(t *testing.T) {
 	}
 }
 
-// Deletion raises a CR's generation before its controller writes Deleting.
-// A Cluster that waits in deletion readies no new Database, and keeps a Ready
-// one Ready through a change to its spec.
+// Deletion raises a CR's generation by one, and the Cluster then writes only
+// its phase and message. A Cluster that waits in deletion readies no new
+// Database, and keeps a Ready one Ready through a change to its spec.
 func TestADeletingClusterKeepsOnlyItsReadyDatabasesReady(t *testing.T) {
 	cluster := deleting(readyCluster(), fleetv1.ClusterFinalizer)
-	cluster.Generation = 2
+	cluster.Generation, cluster.Status.Phase = 2, fleetv1.Deleting
 	ready := databaseObj()
 	ready.Generation, ready.Spec.Engine, ready.Status = 2, "mysql", readyStatus()
 	pending := databaseObj()
@@ -501,6 +501,26 @@ func TestADeletingClusterKeepsOnlyItsReadyDatabasesReady(t *testing.T) {
 	}
 	if err := f.get("pending", pending); err != nil || pending.Status != pendingStatus("waiting for Cluster cluster to be Ready") {
 		t.Errorf("On a deleting Cluster, the new Database is %+v, %v.", pending.Status, err)
+	}
+}
+
+// A Cluster that was not Ready when its deletion started keeps no Database
+// Ready through a change to its spec.
+func TestADeletingClusterThatWasNotReadyKeepsNoDatabaseReady(t *testing.T) {
+	for when, status := range map[string]fleetv1.ClusterStatus{
+		"before it saw its spec":       {CommonStatus: fleetv1.CommonStatus{Phase: fleetv1.Deleting, ObservedGeneration: 1}, ReadyVolumes: 2},
+		"while a Volume was not ready": {CommonStatus: fleetv1.CommonStatus{Phase: fleetv1.Deleting, ObservedGeneration: 2}, ReadyVolumes: 1},
+	} {
+		cluster := deleting(readyCluster(), fleetv1.ClusterFinalizer)
+		cluster.Generation, cluster.Status = 3, status
+		db := databaseObj()
+		db.Generation, db.Status = 2, readyStatus()
+		f := newFleet(t, cluster, db)
+		f.settle(f.databases, "db")
+		want := fleetv1.CommonStatus{Phase: fleetv1.Pending, ObservedGeneration: 2, Message: "waiting for Cluster cluster to be Ready"}
+		if got := f.database().Status; got != want {
+			t.Errorf("On a Cluster deleted %s, the Ready Database of generation 2 is %+v, want %+v.", when, got, want)
+		}
 	}
 }
 
@@ -631,6 +651,24 @@ func TestSecretReleaseSeesDatabasesTheCacheMisses(t *testing.T) {
 	if got := f.secret().Finalizers; !slices.Equal(got, []string{fleetv1.SecretInUseFinalizer}) {
 		t.Errorf("With a Database the cache misses, the Secret has finalizers %q.", got)
 	}
+}
+
+// A stale cache can show the finalizer on a Secret that an earlier
+// reconcile released.
+func TestASecretGoneBeforeItsReleaseIsDone(t *testing.T) {
+	f := newFleet(t, deleting(passwordSecret(nil), fleetv1.SecretInUseFinalizer))
+	f.secrets.Client = interceptor.NewClient(f.c, interceptor.Funcs{
+		Update: func(_ context.Context, _ client.WithWatch, obj client.Object, _ ...client.UpdateOption) error {
+			return apierrors.NewNotFound(corev1.Resource("secrets"), obj.GetName())
+		},
+	})
+	f.reconcileOnce(f.secrets, "admin-password")
+}
+
+func TestOnlyAReleaseListsDatabasesPastTheCache(t *testing.T) {
+	f := newFleet(t, passwordSecret(nil), databaseNaming("another"))
+	f.secrets.APIReader = unserved{f.c, &fleetv1.DatabaseList{}, apierrors.NewInternalError(errors.New("injected"))}
+	f.reconcileOnce(f.secrets, "admin-password")
 }
 
 func TestUserWaitsForItsDatabase(t *testing.T) {

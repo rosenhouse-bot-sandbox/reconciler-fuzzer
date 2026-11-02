@@ -531,10 +531,10 @@ three kinds and their references, and blocks a Cluster's deletion on its
 Databases and a Database's on its Users. The generated test fuzzes `cluster/`,
 which lists Clusters alone, `database/`, which lists Databases on a fixture
 Cluster, `protect/`, whose Volume model holds each Volume's deletion with its
-finalizer, and `upgrade/`, `cluster/` with an upgrade to `--version=2`.
-`secret/` runs `--protect-secrets`, which holds the fixture Secret while a
-Database names it. Only gate rows run `upgrade/properties/`, which adds a
-property, and `uninstall/`, whose Database CRD a plan may delete.
+finalizer, and `upgrade/`, `cluster/` with an upgrade to `--version=2`. Only
+gate rows run `config.yaml`, `secret/`, which runs `--protect-secrets` to hold
+the fixture Secret while a Database names it, `upgrade/properties/`, which adds
+a property, and `uninstall/`, whose Database CRD a plan may delete.
 
 Each config's `plans/` holds its gated bugs' and B0's plans. A toy's
 `gate_envtest_test.go` runs `gate_test.go`'s rows, and its `bugmatrix_test.go`

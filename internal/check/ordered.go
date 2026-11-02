@@ -71,8 +71,8 @@ func releaseOf(w *owner.World, i owner.Instance) (release, bool) {
 		return release{}, false
 	}
 	r := release{at: last.At, start: last.At, rv: revision(last.Version.RV)}
-	if n := slices.IndexFunc(versions, func(e trace.Event) bool { return deleting(e.Version.Body) }); n >= 0 {
-		r.start = versions[n].At
+	if start, found := deletionStart(versions); found {
+		r.start = start
 	}
 	return r, true
 }

@@ -178,7 +178,7 @@ func crClauses(ix *trace.Index, p Primary, cr trace.Version, t time.Duration, s 
 		if !s.inUse(ix, cr.Ref, t) {
 			return []unmet{{2, k, name + " is being deleted"}}
 		}
-		if start := deletionStart(ix, cr, t); t < start+s.Stable {
+		if start, _ := deletionStart(ix.Versions(cr.Ref, cr.UID)); t < start+s.Stable {
 			return []unmet{{2, k, fmt.Sprintf("%s got its deletionTimestamp at %v, less than stable ago", name, start)}}
 		}
 		return nil
@@ -191,17 +191,14 @@ func crClauses(ix *trace.Index, p Primary, cr trace.Version, t time.Duration, s 
 	return nil
 }
 
-// deletionStart is when the instance of cr, its version live at t, got its
-// deletionTimestamp: the time of its first version by t that has one.
-func deletionStart(ix *trace.Index, cr trace.Version, t time.Duration) time.Duration {
-	start := t
-	for _, e := range slices.Backward(ix.VersionsAt(cr.Ref, t)) {
-		if e.Version.UID != cr.UID || !deleting(e.Version.Body) {
-			break
-		}
-		start = e.At
+// deletionStart is when an instance got its deletionTimestamp: the time of
+// the first of its versions that has one.
+func deletionStart(versions []trace.Event) (time.Duration, bool) {
+	n := slices.IndexFunc(versions, func(e trace.Event) bool { return deleting(e.Version.Body) })
+	if n < 0 {
+		return 0, false
 	}
-	return start
+	return versions[n].At, true
 }
 
 // halted reports whether p.Halted accepts cr's body and the controller

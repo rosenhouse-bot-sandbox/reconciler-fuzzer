@@ -299,6 +299,23 @@ func TestACRWaitingInDeletionSettlesStableAfterItsDeletionStarted(t *testing.T) 
 	}
 }
 
+func TestAStepThatEndsBeforeItsCRInUseWaitedStableDidNotSettleByClause2(t *testing.T) {
+	r := fleetRun(2, clusters, databases)
+	r.Spec.References = []trace.Reference{clusterRef(r, true)}
+	r.Begin()
+	r.CreateCR("a", clusterA)
+	r.Create(trace.Harness, databaseB, databaseOn(true, "a"))
+	r.Act("create", "b", &databaseB)
+	r.Ready(clusterA).EndFaults().Settle()
+	r.Begin().Update(trace.Harness, clusterA, tt.Deleting(tt.CR("a", true))).Act("delete", "a", &clusterA)
+	deadline := r.Now + r.Spec.Stable/2
+	r.Add(tt.EndFaults(r.Step, deadline, false))
+	r.Now = deadline
+	r.Add(tt.Phase(r.Step, trace.TimedOut))
+	findings, _ := convergeOf(t, r)
+	requireFinding(t, findings, "Converge", 1, "did not settle (clause 2)", "kube/toy/clusters", "less than stable ago")
+}
+
 func TestHonestJudgesAnObjectWaitingInDeletionByItsVersionBefore(t *testing.T) {
 	for name, c := range map[string]struct{ block, wasReady, finding bool }{
 		"under block, once ready":   {true, true, false},

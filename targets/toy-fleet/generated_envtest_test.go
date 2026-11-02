@@ -15,9 +15,10 @@ import (
 )
 
 // TestGeneratedPlansWithFaultsPassB0 runs 20 plans with a fault from each
-// config it fuzzes. config.yaml's header says why config.yaml is not one. It
-// fails if fewer than 3 of a config's plans had a request or model fault that
-// picked a request or held an object, so it catches faults that stop firing.
+// config it fuzzes. It fuzzes no config with a block reference yet, so it
+// leaves out config.yaml and secret/. It fails if fewer than 3 of a config's
+// plans had a request or model fault that picked a request or held an
+// object, so it catches faults that stop firing.
 func TestGeneratedPlansWithFaultsPassB0(t *testing.T) {
 	for _, cfg := range []string{clusterConfig, databaseConfig, protectConfig, upgradeConfig} {
 		t.Run(cfg, func(t *testing.T) {

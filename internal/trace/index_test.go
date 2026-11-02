@@ -451,19 +451,19 @@ func TestLatestAt(t *testing.T) {
 	}
 }
 
-func TestVersionsAt(t *testing.T) {
+func TestVersions(t *testing.T) {
 	var b tt.Builder
 	b.At(1*s).Add(tt.Version(widgetA, "u", "1", nil)).
-		At(2*s).Add(tt.Version(widgetA, "u", "2", nil), tt.Version(widgetB, "w", "5", nil)).
+		At(2*s).Add(tt.Version(widgetA, "u", "2", nil), tt.Version(widgetB, "u", "5", nil)).
 		At(3 * s).Add(tt.Version(widgetA, "u2", "3", nil))
 	ix := b.Index()
-	for at, want := range map[time.Duration][]string{999 * time.Millisecond: nil, 1 * s: {"1"}, 2 * s: {"1", "2"}, 3 * s: {"1", "2", "3"}} {
+	for uid, want := range map[string][]string{"u": {"1", "2"}, "u2": {"3"}, "other": nil} {
 		var rvs []string
-		for _, e := range ix.VersionsAt(widgetA, at) {
+		for _, e := range ix.Versions(widgetA, uid) {
 			rvs = append(rvs, e.Version.RV)
 		}
 		if !slices.Equal(rvs, want) {
-			t.Errorf("VersionsAt(a, %v) = versions %q, want %q", at, rvs, want)
+			t.Errorf("Versions(a, %q) = versions %q, want %q", uid, rvs, want)
 		}
 	}
 }

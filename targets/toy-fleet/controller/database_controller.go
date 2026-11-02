@@ -89,10 +89,13 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 }
 
 // hosts says whether cluster hosts a Database in phase. A Cluster that waits
-// in deletion hosts only a Database that is already Ready.
+// in deletion hosts only a Database that is already Ready, and only if the
+// Cluster was Ready when its deletion started: deletion raised its generation
+// by one, and its controller then wrote only the phase and message.
 func hosts(cluster *fleetv1.Cluster, phase fleetv1.Phase) bool {
 	if !cluster.DeletionTimestamp.IsZero() {
-		return phase == fleetv1.Ready
+		was := cluster.Status
+		return phase == fleetv1.Ready && was.ObservedGeneration == cluster.Generation-1 && was.ReadyVolumes == cluster.Spec.Volumes
 	}
 	return cluster.Status.ReadyAt(cluster.Generation)
 }

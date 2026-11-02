@@ -421,12 +421,15 @@ func (ix *Index) LatestAt(ref Ref, t time.Duration) (Version, bool) {
 	return *versions[n-1].Version, true
 }
 
-// VersionsAt are the versions of ref that the observer recorded by t, in Seq
-// order, of each instance in turn.
-func (ix *Index) VersionsAt(ref Ref, t time.Duration) []Event {
-	versions := ix.versions[kindOf(ref)][ref]
-	n := after(versions, t)
-	return versions[:n:n]
+// Versions are the versions of ref's instance uid, in Seq order.
+func (ix *Index) Versions(ref Ref, uid string) []Event {
+	var versions []Event
+	for _, e := range ix.versions[kindOf(ref)][ref] {
+		if e.Version.UID == uid {
+			versions = append(versions, e)
+		}
+	}
+	return versions
 }
 
 // Previous is the version of ref, of the same instance, that the observer
