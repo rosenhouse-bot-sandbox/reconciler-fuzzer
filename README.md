@@ -116,7 +116,12 @@ timeouts: {settle: 30s, stable: 3s}
 - `ready` is CEL over the CR. It must be true only once the controller has acted on the
   current spec, so compare an `observedGeneration` with `metadata.generation`.
 - `stable` is how long the controller must stay quiet before a step counts as settled.
-- `launch.rbac` also tells generation which requests a fault can pick.
+- `launch.rbac` also tells generation which requests a fault can pick. A generated `damage` of
+  a kube object targets an unlisted kind that `launch.rbac` lets the controller create. Faults
+  favor the listed kinds. Faults and damage favor the kinds the CRs own: the kube kinds that
+  `owns` names and the `models:` kinds with a `dependency`. Without owned kinds, the core kinds
+  that the controller may create, such as Secrets, stand in for them. An owned kind ends that
+  stand-in, even for a core kind that the controller also writes.
 - `values` steers generated CRs: `overlay` narrows the CRD schema, `distinct` fields differ
   across a plan's CRs, `mutate` names the fields updates change, and `fixtures` names the
   fixture strings `changeFixture` sets.
@@ -146,16 +151,81 @@ values: {fixtures: {settings.yaml: [data.theme]}}   # with primaries, only fixtu
   CR's resources, and Restore treats a damage under the CR as a damage under its owner.
 - A plan creates only CRs of listed kinds, and `run` refuses any other create. A create
   without an object makes the first entry's sample.
-- Generated plans draw each create's kind from the list. They do not yet fill a field that
-  names another CR, such as a Database's `clusterRef`. So
-  [targets/toy-fleet](targets/toy-fleet)'s `database/config.yaml` lists only Database, and
-  makes the Cluster it names a fixture.
+- Generated plans draw each create's kind from the list. They fill a field that names another
+  object, such as a Database's `clusterRef`, only when a `references` entry declares it.
 - A fixture may not be a CR. An object whose ownerReferences lead to no CR, but reach a live
   object that the controller did not create, such as a fixture, belongs to that object. They may
   reach it through live objects that the controller made. `owner` and `owns` do not change this.
   Clean skips such an object while its owner lives.
 - A dependency belongs to the nearest CR that owns it, even one that the controller created.
   `dependency.required` binds only CRs of the first entry.
+
+### References
+
+A `references` entry declares a field by which a CR names an object that it does not own, such as
+the Cluster that a Database runs on or the Secret that holds its password:
+
+```yaml
+references:
+  - {from: example.com/v1/Database, to: example.com/v1/Cluster, name: spec.clusterRef}
+  - from: example.com/v1/Database
+    to: v1/Secret
+    name: spec.passwordSecretRef.name
+    ready: has(self.data) && has(self.data.password)   # CEL over the Secret
+    required: true                                    # the default
+    track: 1s
+```
+
+- `from` is a listed kind. `to` is a kube kind, or a fake's collection written as
+  `<system>:<collection>`. A kube kind needs its CRD in `crds`, unless Kubernetes serves it
+  without one, as it does `v1/Secret` and `apps/v1/Deployment`.
+- `ready` defaults to the `ready` of the `to` kind's entry, model or fake. A model's compares
+  `observedGeneration` with `metadata.generation`, as an entry's should. So Honest fails a CR that
+  the controller writes ready while the named object's status lags its spec. If the controller
+  checks only the named object's condition or phase, set `ready` to that check.
+- `name` and `namespace` are field paths in the CR, as in `values.mutate`, which the `from` CRD's
+  schema must describe as strings. `[*]` names a field of each list item, as in
+  `spec.keys[*].secretName`. Without `namespace`, a namespaced object is in the CR's namespace. An
+  empty or absent value names nothing. A `name` may not be the field that an `owns` entry of the
+  `from` entry reads for the same kind, since the CR owns that object.
+- The controller **looks** at an object when a response or watch event gives it the object, or
+  when a get, a list or the initial events of a watch show it missing. A reference **holds back**
+  a CR while the controller's last look at the named object showed it not ready, or missing and
+  `required`. Before any look, only a missing `required` object holds the CR back.
+- Honest fails a CR that the controller writes ready while a reference holds it back, or before
+  the controller looked at a live named object. It passes a write sent within 2×`stable` of a
+  look, after an earlier look that let the CR be ready, with no restart since, that the
+  controller retracts within `stable` of the write's response, by writing the CR not ready or
+  naming another object. A reconcile may read its cache before the look reaches the cache, and
+  the cache holds what an earlier look showed. The retraction window starts again at a start in it,
+  since a restart loses the reconcile. A write of the CR, the ready write itself or one in the
+  window, that failed or had an unknown outcome, such as a conflict, gives the controller the
+  time the faults of the step that answered it lasted, at most `timeouts.backoffCap`, and
+  `stable` from its response, since it retries after a backoff. A killed write gives none, since
+  the controller starts again. With `track: d`, Honest fails a CR that stays ready `d` after a
+  look that held it back. None of these windows counts time in which the controller **stalls**:
+  while a step's faults last, or between an exit and its next start. A step's faults stall it
+  only if a fault altered one of the controller's requests in them, so a model fault and a held
+  watch stall it not at all.
+- The settle condition does not wait for a CR that a reference holds back, if the object as it is
+  now would hold the CR back too. This starts once `stable`, and the time the step's faults
+  lasted, at most `timeouts.backoffCap`, have passed since the faults ended. So a controller in
+  retry backoff reacts first. If the controller does not watch the `to` kind, it misses the
+  object's return, and the step does not settle. While such a CR is not ready, Restore lets its
+  damaged resources stay gone.
+- A response that the harness cannot decode, such as a watch of Tables, may show the named object.
+  If one ends after the controller's last look, or is a watch still open since, the reference is
+  **unknown**. Honest then passes the CR's ready writes, and the settle condition treats the CR as
+  held back.
+- Generated plans write at each `name` the name of a slot's CR of the `to` kind, or of a fixture
+  of it, so a CR may name an object that does not exist yet. With `required: false`, 1 write in 4
+  names `missing`, which no object has. `changeFixture` may delete a kube fixture of a `to` kind,
+  and `createFixture` makes it again:
+  `{"do": "createFixture", "target": {"resource": "secrets", "name": "admin-password"}}`.
+- The step that deletes every CR deletes those of each `from` kind before those of its `to` kind.
+
+[targets/toy-fleet](targets/toy-fleet/config.yaml) declares that a Database names a Cluster and a
+Secret, and a User a Database.
 
 ### Other namespaces and cluster scope
 
@@ -205,10 +275,13 @@ models:
   ownerReference, `owns` or `owner`. Honest then fails a CR that reports ready before the controller saw its
   Gadget ready. `required` (the default)
   also fails one with no Gadget. `track: d` fails a CR that stays ready longer than `d` after
-  the controller saw its Gadget not ready.
-- Generated plans then draw two model faults. `stuck` keeps Gadgets not ready, and `slowDelete`
-  holds their deletion. Each ends with the fault period. A create that waits until a deleted CR
-  no longer exists ends them once `period` has passed. A plan step writes one as
+  the controller saw its Gadget not ready, not counting time in which the controller stalls, as
+  References defines.
+- Generated plans then draw two model faults. `stuck` keeps Gadgets not ready. `slowDelete`
+  holds their deletion with the finalizer `reconciler-fuzzer.dev/slow-delete`, which the model
+  keeps on each Gadget only while the fault lasts. Each ends with the fault period. A create
+  that waits until a deleted CR no longer exists ends them once `period` has passed. A plan step
+  writes one as
   `{"match": {"group": "example.com", "resource": "gadgets"}, "stuck": true}`.
 - `finalizer: {name: example.com/cleanup, after: 500ms}` plays a controller, such as a storage
   controller, that holds each Gadget's deletion with its own finalizer. The model adds the
@@ -267,7 +340,8 @@ collections:
   `{"system": "cloud", "match": {"verb": "create", "resource": "buckets"}, "nth": 1, "dropResponse": true}`,
   and `stuck` or `slowDelete`. `damage` takes `"target": {"system": "cloud"}`.
 - An entry's `halted` is CEL over its CR. It counts a CR as done after a request of unknown
-  outcome, for a controller that stops on purpose. [targets/toy-bucket/halted](targets/toy-bucket/halted/config.yaml)
+  outcome, for a controller that stops on purpose. While such a CR is not ready, Restore lets its
+  damaged resources stay gone. [targets/toy-bucket/halted](targets/toy-bucket/halted/config.yaml)
   uses it.
 - Any program can be a fake. The harness runs it in the config's directory and sets
   `RECONCILER_FUZZER_ADDR`, where it serves its API and the fake contract: `GET /_fake/resources`
@@ -326,7 +400,8 @@ properties:
 ```
 
 A kind the harness watches from the start maps to an empty list while no object of it exists.
-These include each installed CRD, each listed kind, and each kind that `models` or a fixture names.
+These include each installed CRD, each listed kind, each kind that a reference names as `to`, and
+each kind that `models` or a fixture names.
 They also include each kind that a `launch.rbac` rule names without `*`, except Events, Leases
 and the other kinds the checks ignore. The harness skips a kind that the server does not list
 and watch in the named group. The `run` event of `trace.jsonl` lists these kinds in `kinds`. A
@@ -355,11 +430,67 @@ cluster. The settle condition counts a held watch as looking only once the hold 
 The create waits until the deleted CR no longer exists. Once `period` has passed, the wait
 ends the hold, so that the controller can finish the delete.
 
-Generated plans draw it for kinds `launch.rbac` lets the controller watch, the listed and
-`owns` kinds most, in a step that deletes a CR and creates it again unchanged. About 1
+Generated plans draw it for kinds `launch.rbac` lets the controller watch, favoring the kinds
+other faults favor, in a step that deletes a CR and creates it again unchanged. About 1
 cert-manager seed in 11 holds Secrets this way, so a 20-seed `make hunt-cert-manager` usually,
 but not always, finds #63. A report notes a `holdWatch` while the controller had no watch of
 its kind, such as one with a misspelt resource.
+
+### Upgrading
+
+A `restart` stops the controller with SIGTERM and starts it again with its current binary, args
+and env. The harness installs `crds:` before step 0, and the CRDs stay fixed unless a
+restart installs new ones. A restart that names `binary`, `args` or `crds` tests an upgrade:
+
+```json
+{"actions": [{"do": "restart", "args": ["--version=2"], "crds": ["../v2/crds/"]}]}
+```
+
+- It installs `crds` first, while the old controller still runs.
+- `args` replace `launch.args`, and `[]` drops them. The `--launch-arg`s still come after the
+  new args, and `${systems.<name>.<key>}` expands as in `launch.args`.
+- Every later start keeps the new `binary` and `args`: restarts, crash restarts, the start after
+  a `kill`, and the appended restart. Env and RBAC do not change, so `launch.rbac` must grant
+  what both versions need.
+- Paths resolve against the plan's directory. Before it starts, `run` refuses a `binary` that
+  is not an executable file, a `crds` path that holds no CRD, and an unknown or unclosed
+  `${key}`. It checks `launch.upgrades` the same way.
+
+`launch.upgrades` lists later versions with the same keys:
+
+```yaml
+launch:
+  upgrades:
+    - {args: [--bug=0, --version=2], crds: [v2/crds/]}
+```
+
+Each generated plan then restarts into each version once, in order, at the end of a random step.
+That step may hold a fault or come before a delete. `shrink` and `hunt` drop upgrades from the
+last one back, so the versions stay in order.
+
+The checks judge an upgrade's step as they judge any restart's, except that Restore lets the new
+version change the old version's resources but not replace them. Restore judges a generated
+upgrade only when its step changes no CR or fixture. Only some seeds draw such a step.
+[targets/toy-fleet/upgrade](targets/toy-fleet/upgrade/config.yaml) upgrades toy-fleet to
+`--version=2`, which labels each Volume with its version. Its bugs B140 to B142 mishandle the
+Clusters that version 1 made.
+
+Upgrades have these limits:
+
+- No conversion webhook runs, and the two versions never run at once.
+- For about a second after an install, the harness's watches still decode objects with the old
+  schema. The trace keeps a version they record then until the object's next write.
+- The harness watches each kind at the API version it first used. A restart whose CRDs stop
+  serving that version ends the run with exit 2. The harness's patches and deletes use the
+  kind's preferred version, which new CRDs may change.
+- A property's `world` lacks a kind that only the new CRDs serve, unless an object of it exists
+  during the run. `world` then lists no objects of that kind before the install.
+- A default that the new CRDs add to a kind the controller makes shows as a Restore change if
+  the controller first writes such an object after the upgrade's step.
+- Restore reports `replaced resources` for a resource that a new version adds, deletes, renames
+  or gives another owner. Adding an ownerReference can change a child's owner.
+- Every plan.json that `run`, `hunt` or `shrink` writes holds absolute upgrade paths. Make them
+  relative before you commit the plan.
 
 ### Uninstalling
 
@@ -377,6 +508,23 @@ No controller is left to clean up after a CR that the plan deletes after the sto
 counts that CR as live. A CR that the stop did not wait for, such as that one, may keep its
 finalizers, and gets a note.
 
+An uninstall may delete a CRD before the stop. List that CRD under `fixtures:`, not `crds:`. Its
+kind must be one the config does not list. `changeFixture` without a `patch` deletes it:
+
+```json
+{"actions": [{"do": "changeFixture", "target": {"group": "apiextensions.k8s.io",
+  "resource": "customresourcedefinitions", "name": "databases.example.com"}}]}
+```
+
+- A CRD under both `crds:` and `fixtures:` fails the run with `already exists`.
+- A listed kind's CRD must stay in `crds:`. As a fixture alone, the run fails with `no matches for
+  kind`, and generation with `the CRDs describe no <kind>`.
+- No target matches a CRD that `crds:` or a restart installed. Such an action only gets the note
+  `no instance matches`.
+
+[targets/toy-fleet/uninstall](targets/toy-fleet/uninstall/config.yaml) makes the Database CRD a
+fixture this way.
+
 ### Examples
 
 Each example builds its controller from a pinned upstream tag. Its plans and seeds give no
@@ -386,7 +534,9 @@ findings, and a negative control, where one exists, must fail.
   `bugs/` plan holds the Secret watch across a recreate, and `fresh-key` finds
   [a real bug](docs/findings/cert-manager-secret-write-back.md): the new Certificate gets the
   deleted one's key. `make test-example-cert-manager` needs it in 1 of 3 runs, and
-  `make repro-cert-manager` prints its reproduction rate.
+  `make repro-cert-manager` prints its reproduction rate. A hunt can report a false Restore
+  finding on a CertificateRequest that a `damage` deleted after issuance, since cert-manager
+  rightly leaves it gone.
 - [examples/external-secrets](examples/external-secrets/config.yaml) runs external-secrets
   with its Vault provider against a Vault dev server. Its `bugs/` plan finds
   [a real bug](docs/findings/external-secrets-onchange-stale-failure.md): after a lost Secret

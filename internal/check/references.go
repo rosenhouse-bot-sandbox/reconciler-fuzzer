@@ -1,0 +1,173 @@
+package check
+
+import (
+	"cmp"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
+)
+
+// named is an object that a CR names by s.References[ref].
+type named struct {
+	ref    int
+	object trace.Ref
+}
+
+// names returns the objects that body, a version of the CR at cr, names. A
+// namespaced To takes the namespace value, or else cr's namespace, so a
+// cluster-scoped CR without a namespace value names no namespaced object.
+func (s Spec) names(cr trace.Ref, body map[string]any) []named {
+	var objects []named
+	for i, r := range s.References {
+		if !cr.OfKind(r.From) {
+			continue
+		}
+		for _, n := range config.ReferencedNames(r.Name, r.Namespace, body) {
+			object := r.To
+			object.Name = n.Name
+			if r.Namespaced {
+				if object.Namespace = cmp.Or(n.Namespace, cr.Namespace); object.Namespace == "" {
+					continue
+				}
+			}
+			objects = append(objects, named{i, object})
+		}
+	}
+	return objects
+}
+
+// state is what a look at a named object shows.
+type state struct{ missing, ready bool }
+
+// holds reports whether a look that shows st holds back a CR that names the
+// object: it shows the object missing, with required, or not ready.
+func (st state) holds(required bool) bool {
+	if st.missing {
+		return required
+	}
+	return !st.ready
+}
+
+func (st state) describe() string {
+	if st.missing {
+		return "seen missing"
+	}
+	return "seen not ready"
+}
+
+// sight is what the controller knows of a named object: the state its last
+// look, at at, showed, or, if it never looked, the object's state.
+type sight struct {
+	state
+	looked bool
+	at     time.Duration
+	// unknown says an opaque response may have shown the object since.
+	unknown bool
+}
+
+// holds reports whether the sight holds back a CR that names the object.
+// Without a look, only a missing required object does.
+func (g sight) holds(required bool) bool {
+	return g.state.holds(required) && (g.looked || g.missing)
+}
+
+// allowsReady reports whether a CR that names the object may report ready:
+// an opaque response may have shown the object, or the sight does not hold
+// the CR back and the controller looked at the object or it is missing.
+func (g sight) allowsReady(required bool) bool {
+	return g.unknown || (g.looked || g.missing) && !g.holds(required)
+}
+
+func (g sight) describe() string {
+	if !g.looked {
+		return "not seen"
+	}
+	return g.state.describe()
+}
+
+// sight is the controller's sight of n at t.
+func (s Spec) sight(ix *trace.Index, n named, t time.Duration) sight {
+	look, looked := lastSeen(ix.Looks(trace.Controller, n.object), t)
+	if !looked {
+		return sight{state: s.world(ix, n, t), unknown: ix.Opaque(trace.Controller, n.object, -1, t)}
+	}
+	return sight{state: s.shown(ix, n, look), looked: true, at: look.At, unknown: ix.Opaque(trace.Controller, n.object, look.At, t)}
+}
+
+// shown is what look, one of the controller's looks at n, showed. The
+// reference's ready judges a version the observer missed as an empty body.
+func (s Spec) shown(ix *trace.Index, n named, look trace.Event) state {
+	if look.Seen == nil || look.Seen.Deleted {
+		return state{missing: true}
+	}
+	v, _ := ix.VersionOf(look.Seen.Ref, look.Seen.RV)
+	return s.showing(n, decode(v.Body))
+}
+
+// world is what a look at n at t would show: the observer's latest version
+// of it by then.
+func (s Spec) world(ix *trace.Index, n named, t time.Duration) state {
+	v, found := ix.LatestAt(n.object, t)
+	if !found || v.Deleted {
+		return state{missing: true}
+	}
+	return s.showing(n, decode(v.Body))
+}
+
+// showing is what a look that shows body, a live version of n, sees: n
+// missing when its system's gone CEL accepts body.
+func (s Spec) showing(n named, body map[string]any) state {
+	if gone := s.Owners.Gone[n.object.System]; gone != nil && satisfies(gone, body) {
+		return state{missing: true}
+	}
+	return state{ready: satisfies(s.References[n.ref].Ready, body)}
+}
+
+// describeLooks says what the controller last saw by t of each object that
+// body, a version of the CR at cr, names.
+func (s Spec) describeLooks(ix *trace.Index, cr trace.Ref, body map[string]any, t time.Duration) string {
+	var seen strings.Builder
+	for _, n := range s.names(cr, body) {
+		g := s.sight(ix, n, t)
+		shown := "ready"
+		switch {
+		case !g.looked:
+			fmt.Fprintf(&seen, "; the controller never saw %s", describe(n.object))
+			continue
+		case g.missing:
+			shown = "missing"
+		case !g.ready:
+			shown = "not ready"
+		}
+		fmt.Fprintf(&seen, "; the controller last saw %s %s at %v", describe(n.object), shown, g.at)
+	}
+	return seen.String()
+}
+
+// heldBack reports whether a reference holds back the CR at cr, whose body
+// is body, at t, as the controller last saw and as a look at t would see,
+// or leaves it unknown. It excuses no CR before the latest step's
+// excuseStart.
+func (s Spec) heldBack(ix *trace.Index, cr trace.Ref, body map[string]any, t time.Duration) bool {
+	if step, _ := latestStep(ix, t); !step.Reached[trace.EndFaults] || t < s.excuseStart(step) {
+		return false
+	}
+	for _, n := range s.names(cr, body) {
+		required := s.References[n.ref].Required
+		if g := s.sight(ix, n, t); g.unknown || g.holds(required) && s.world(ix, n, t).holds(required) {
+			return true
+		}
+	}
+	return false
+}
+
+// excuseStart is when the settle condition starts to excuse a CR that a
+// reference holds back in step: once the step's backoff allowance and
+// stable have passed since its faults ended, so that clause 7 sees a
+// controller in backoff react to the step's create or update.
+func (s Spec) excuseStart(step trace.StepSpan) time.Duration {
+	return step.EndFaults + step.Backoff + s.Stable
+}

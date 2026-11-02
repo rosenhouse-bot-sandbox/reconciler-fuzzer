@@ -1,0 +1,15 @@
+# This config gives toy-widget three later versions. Nothing launches it.
+launch:
+  binary: none
+  args: [--bug=0]
+  rbac: [../../../../targets/toy-widget/rbac/role.yaml]
+  upgrades:
+    - {args: [--bug=0, --version=2], crds: [../../../../targets/toy-widget/crds/]}
+    - {binary: v3}
+    - {args: []}
+crds: [../../../../targets/toy-widget/crds/]
+primary:
+  kind: toy.reconciler-fuzzer/v1/Widget
+  sample: ../../../../targets/toy-widget/widget.yaml
+  ready: "true"
+timeouts: {settle: 5s, stable: 2s}
