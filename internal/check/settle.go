@@ -80,7 +80,7 @@ func runClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 		unmets = append(unmets, unmet{3, "", fmt.Sprintf("the controller has run for %v, less than stable %v", t-since, s.Stable)})
 	}
 	if !slices.ContainsFunc(ix.Calls(trace.Controller, since, t), func(e trace.Event) bool {
-		return judged(e) && succeeded(*e.Call) && !e.Call.Unknown() && e.At-e.Call.Latency >= since
+		return judged(e) && !unconfirmed(*e.Call) && e.At-e.Call.Latency >= since
 	}) {
 		unmets = append(unmets, unmet{4, "", fmt.Sprintf("the controller has made no successful request since it started at %v", since)})
 	}
@@ -88,11 +88,11 @@ func runClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 }
 
 // lookClauses holds the controller to looking at each object that the
-// damage and changeFixture actions of the latest step changed, until the
-// step's lapse time. It also holds the step for Stable after each change,
-// after a holdWatch released the watch that saw it, and, without a watch
-// across the change, after the first request that looked, so that clause 7
-// sees the controller's reaction. A held watch does not look.
+// latest step's damage, changeFixture and createFixture actions changed,
+// until the step's lapse time. It also holds the step for Stable after each
+// change, after a holdWatch released the watch that saw it, and, without a
+// watch across the change, after the first request that looked, so that
+// clause 7 sees the controller's reaction. A held watch does not look.
 func lookClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 	step, found := latestStep(ix, t)
 	if !found || step.Reached[trace.EndFaults] && t >= lapse(ix, step, s) {
@@ -146,12 +146,12 @@ func lapse(ix *trace.Index, step trace.StepSpan, s Spec) time.Duration {
 	return step.EndFaults + poll*3/2
 }
 
-// changes are the step's damage and changeFixture actions that changed an
-// object without error.
+// changes are the step's damage, changeFixture and createFixture actions
+// that changed an object without error.
 func changes(ix *trace.Index, step int) []trace.Event {
 	var changed []trace.Event
 	for _, e := range ix.Actions(step) {
-		if (e.Action.Do == "damage" || e.Action.Do == "changeFixture") && e.Action.Ref != nil && e.Action.Error == "" {
+		if slices.Contains([]string{"damage", "changeFixture", "createFixture"}, e.Action.Do) && e.Action.Ref != nil && e.Action.Error == "" {
 			changed = append(changed, e)
 		}
 	}
@@ -163,8 +163,8 @@ func looksAt(c trace.Call, ref trace.Ref) bool {
 	return (succeeded(c) || c.Status == 404) && !c.Unknown() && c.Ref.Covers(ref)
 }
 
-// crClauses says whether cr, a CR of p's kind, is done at t, ready or
-// halted, and not being deleted.
+// crClauses says whether cr, a CR of p's kind, is done at t, and not being
+// deleted: ready, halted, or held back by a reference.
 func crClauses(ix *trace.Index, p Primary, cr trace.Version, t time.Duration, s Spec) []unmet {
 	name, k := describe(cr.Ref), kind(cr.Ref)
 	var body map[string]any
@@ -176,8 +176,8 @@ func crClauses(ix *trace.Index, p Primary, cr trace.Version, t time.Duration, s 
 	}
 	if ready, err := p.Ready(body); err != nil {
 		return []unmet{{1, k, fmt.Sprintf("%s: ready: %v", name, err)}}
-	} else if !ready && !halted(ix, p, cr, body, t, s) {
-		return []unmet{{1, k, name + " is not ready"}}
+	} else if !ready && !halted(ix, p, cr, body, t, s) && !s.heldBack(ix, cr.Ref, body, t) {
+		return []unmet{{1, k, name + " is not ready" + s.describeLooks(ix, cr.Ref, body, t)}}
 	}
 	return nil
 }
@@ -222,11 +222,7 @@ func halted(ix *trace.Index, p Primary, cr trace.Version, body map[string]any, t
 func quietClauses(ix *trace.Index, t time.Duration, s Spec, crs int) []unmet {
 	var changed []trace.Event
 	reads, writes := map[string]int{}, map[string]int{}
-	window := s.Stable
-	for _, poll := range s.Polls {
-		window = max(window, poll)
-	}
-	for _, e := range ix.Calls(trace.Controller, t-window, math.MaxInt64) {
+	for _, e := range ix.Calls(trace.Controller, t-s.longestPoll(), math.MaxInt64) {
 		if !judged(e) {
 			continue
 		}
@@ -308,17 +304,24 @@ func describe(ref trace.Ref) string {
 }
 
 // FirstSettled is the earliest time in [from, to] at which Settled holds.
-// The condition changes only at an event, an event plus Stable, or a
-// clause 5 lapse, so those are the only candidate times.
+// The condition changes only at an event, an event plus Stable, a call plus
+// its system's poll, a clause 5 lapse or a step's excuseStart, so those are
+// the only candidate times.
 func FirstSettled(ix *trace.Index, from, to time.Duration, s Spec) (time.Duration, bool) {
 	candidates := []time.Duration{from}
 	for _, step := range ix.Steps() {
-		if t := lapse(ix, step, s); from <= t && t <= to {
-			candidates = append(candidates, t)
+		for _, t := range []time.Duration{lapse(ix, step, s), s.excuseStart(step)} {
+			if from <= t && t <= to {
+				candidates = append(candidates, t)
+			}
 		}
 	}
-	for _, e := range ix.EventsIn(from-s.Stable-1, to) {
-		for _, t := range []time.Duration{e.At, e.At + s.Stable} {
+	for _, e := range ix.EventsIn(from-s.longestPoll()-1, to) {
+		times := []time.Duration{e.At, e.At + s.Stable}
+		if e.Call != nil {
+			times = append(times, e.At+s.poll(e.Call.Ref.System))
+		}
+		for _, t := range times {
 			if from <= t && t <= to {
 				candidates = append(candidates, t)
 			}

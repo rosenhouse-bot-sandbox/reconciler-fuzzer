@@ -61,7 +61,7 @@ func TestCreatesDrawEachKindsOwnFieldsAndValues(t *testing.T) {
 	}
 	want := map[string][]string{
 		"Cluster":  {"volumeSize=large", "volumeSize=small", "volumes=1", "volumes=2", "volumes=3"},
-		"Database": {"clusterRef=cluster", "engine=mysql", "engine=postgres"},
+		"Database": {"clusterRef=cluster", "engine=mysql", "engine=postgres", "passwordSecretRef=map[name:admin-password]"},
 	}
 	for kind, values := range want {
 		if got := slices.Sorted(maps.Keys(drawn[kind])); !slices.Equal(got, values) {
@@ -124,7 +124,7 @@ func TestHoldsFavorTheKubeKindsEachEntryOwns(t *testing.T) {
 
 // fleetState holds a Cluster in slot a and a Database in slot b.
 func fleetState(g *Generator) state {
-	return state{"a": g.kinds[0].base("a").Object, "b": g.kinds[1].base("b").Object}
+	return holding(map[string]map[string]any{"a": g.kinds[0].base("a").Object, "b": g.kinds[1].base("b").Object})
 }
 
 // firstActions sum up the first action of 20 draws of traffic: the slot it
@@ -135,7 +135,7 @@ func firstActions(t *testing.T, at state, traffic func(*rapid.T, state) []plan.A
 	for seed := range 20 {
 		drawn := example(t, seed, func(rt *rapid.T) []plan.Action {
 			rapid.Bool().Draw(rt, "rapid needs a draw")
-			return traffic(rt, maps.Clone(at))
+			return traffic(rt, at.clone())
 		})
 		switch first := drawn[0]; first.Do {
 		case plan.Update, plan.Delete:
@@ -151,7 +151,7 @@ func firstActions(t *testing.T, at state, traffic func(*rapid.T, state) []plan.A
 
 func TestARequestFaultOnAListedKindComesWithAnUpdateOfThatKind(t *testing.T) {
 	g := newGenerator(t, loadConfig(t, fleetConfig))
-	onlyCluster := state{"a": g.kinds[0].base("a").Object}
+	onlyCluster := holding(map[string]map[string]any{"a": g.kinds[0].base("a").Object})
 	for _, c := range []struct {
 		resource string
 		at       state
@@ -164,7 +164,7 @@ func TestARequestFaultOnAListedKindComesWithAnUpdateOfThatKind(t *testing.T) {
 		f := plan.Fault{Match: plan.Match{Verb: "update", Group: "toy.reconciler-fuzzer", Resource: c.resource}, Drop: true}
 		got := firstActions(t, c.at, func(t *rapid.T, at state) []plan.Action { return []plan.Action{g.traffic(t, at, f)} })
 		if !slices.Equal(got, c.want) {
-			t.Errorf("A fault on %s with slots %v comes with %v, want %v.", c.resource, slices.Sorted(maps.Keys(c.at)), got, c.want)
+			t.Errorf("A fault on %s with slots %v comes with %v, want %v.", c.resource, slices.Sorted(maps.Keys(c.at.slots)), got, c.want)
 		}
 	}
 }
@@ -172,7 +172,7 @@ func TestARequestFaultOnAListedKindComesWithAnUpdateOfThatKind(t *testing.T) {
 func TestAHoldWatchOfAListedKindRecreatesOrCreatesACROfThatKind(t *testing.T) {
 	g := newGenerator(t, loadConfig(t, fleetConfig))
 	database := g.kinds[1].base("b").Object
-	databases := state{"a": g.kinds[1].base("a").Object, "b": database, "c": g.kinds[1].base("c").Object}
+	databases := holding(map[string]map[string]any{"a": g.kinds[1].base("a").Object, "b": database, "c": g.kinds[1].base("c").Object})
 	for _, c := range []struct {
 		group, resource string
 		at              state
@@ -180,17 +180,17 @@ func TestAHoldWatchOfAListedKindRecreatesOrCreatesACROfThatKind(t *testing.T) {
 	}{
 		{"toy.reconciler-fuzzer", "clusters", fleetState(g), []string{"a"}},
 		{"toy.reconciler-fuzzer", "databases", fleetState(g), []string{"b"}},
-		{"toy.reconciler-fuzzer", "clusters", state{"b": database}, []string{"create Cluster"}},
-		{"toy.reconciler-fuzzer", "databases", state{}, []string{"create Database"}},
+		{"toy.reconciler-fuzzer", "clusters", holding(map[string]map[string]any{"b": database}), []string{"create Cluster"}},
+		{"toy.reconciler-fuzzer", "databases", newState(), []string{"create Database"}},
 		{"toy.reconciler-fuzzer", "clusters", databases, []string{"a", "b", "c"}},
 		{"toy.reconciler-fuzzer", "users", fleetState(g), []string{"a", "b"}},
-		{"toy.reconciler-fuzzer", "users", state{}, []string{"create Cluster", "create Database"}},
+		{"toy.reconciler-fuzzer", "users", newState(), []string{"create Cluster", "create Database"}},
 		{"", "configmaps", fleetState(g), []string{"a", "b"}},
 	} {
 		f := plan.Fault{Match: plan.Match{Group: c.group, Resource: c.resource}, HoldWatch: true}
 		got := firstActions(t, c.at, func(t *rapid.T, at state) []plan.Action { return g.holdTraffic(t, at, f) })
 		if !slices.Equal(got, c.want) {
-			t.Errorf("A hold of %s with slots %v comes with %v, want %v.", c.resource, slices.Sorted(maps.Keys(c.at)), got, c.want)
+			t.Errorf("A hold of %s with slots %v comes with %v, want %v.", c.resource, slices.Sorted(maps.Keys(c.at.slots)), got, c.want)
 		}
 	}
 }

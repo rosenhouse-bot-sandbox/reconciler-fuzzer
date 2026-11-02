@@ -80,9 +80,9 @@ func TestRestoreIgnoresMetadataEveryWriteChanges(t *testing.T) {
 }
 
 func TestRestoreSkipsAStepThatChangesWhatItCompares(t *testing.T) {
-	for _, do := range []string{"create", "update", "delete", "changeFixture"} {
+	for _, do := range []string{"create", "update", "delete", "changeFixture", "createFixture"} {
 		r := twoCRs()
-		r.Begin().Restart().Act(do, "a", &widgetA)
+		r.Begin().Restart().Act(do, "a", &widgetA).Call(ctl, "get", widgetA, 200)
 		r.Update(ctl, childA, map[string]any{"data": "changed"})
 		r.EndFaults().Settle()
 		if findings := restore(t, r); len(findings) != 0 {

@@ -52,7 +52,7 @@ func TestAHoldWatchComesWithARecreateOfALiveCRAsItWas(t *testing.T) {
 	g := newGenerator(t, loadConfig(t, toyConfig))
 	cr := g.kinds[0].base("a").Object
 	actions := example(t, 0, func(rt *rapid.T) []plan.Action {
-		return g.holdTraffic(rt, state{"a": cr}, holdWidgets)
+		return g.holdTraffic(rt, holding(map[string]map[string]any{"a": cr}), holdWidgets)
 	})
 	if len(actions) != 2 || actions[0].Do != plan.Delete || actions[1].Do != plan.Create ||
 		actions[0].Slot != "a" || actions[1].Slot != "a" || !reflect.DeepEqual(decode(t, actions[1].Object), decode(t, marshal(cr))) {
@@ -66,7 +66,7 @@ func TestAHoldWatchComesWithARecreateOfALiveCRAsItWas(t *testing.T) {
 func TestAHoldWatchWithoutALiveCRComesWithACreate(t *testing.T) {
 	g := newGenerator(t, loadConfig(t, toyConfig))
 	actions := example(t, 0, func(rt *rapid.T) []plan.Action {
-		return g.holdTraffic(rt, state{}, holdWidgets)
+		return g.holdTraffic(rt, newState(), holdWidgets)
 	})
 	if len(actions) != 1 || actions[0].Do != plan.Create {
 		t.Errorf("A holdWatch with no live CR comes with %+v, want a create.", actions)
@@ -216,10 +216,10 @@ func TestAReadOnlyFakesFaultComesWithACreateOrAnUpdate(t *testing.T) {
 		}
 		action := example(t, 0, func(rt *rapid.T) plan.Action {
 			rapid.Bool().Draw(rt, "rapid needs a draw")
-			at := state{}
+			at := newState()
 			if c.live {
 				for _, slot := range slots {
-					at[slot] = g.kinds[0].base(slot).Object
+					at.slots[slot] = g.kinds[0].base(slot).Object
 				}
 			}
 			return g.traffic(rt, at, read)
