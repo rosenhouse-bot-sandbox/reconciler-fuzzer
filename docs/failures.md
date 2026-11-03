@@ -171,12 +171,12 @@ as required. If it saw the object missing or not ready, and the object is
 ready now, the controller missed the change, as when it does not watch the
 named kind. `never saw` means the controller never read the object.
 
-At a last step that deletes a `values.deletable` fixture, the line does not
-name that fixture. Run the plan a few times without that step's restarts and
-kills. If every run passes, a restart or kill caused the finding, and the
-controller has a bug. If a run fails, the delete alone left the CR not ready.
-Drop the file from `values.deletable` if the controller does that by design.
-Otherwise the controller has a bug.
+A finding at a last step that deletes a `values.deletable` fixture may come
+from that delete, which the line does not name. Run the plan a few times
+without that step's restarts and kills. If every run passes, a restart or
+kill caused the finding, and the controller has a bug. If a run fails, the
+delete alone left the CR not ready. Drop the file from `values.deletable` if
+the controller does that by design. Otherwise the controller has a bug.
 
 After a `stop`, only clauses 2, 6 and 7 apply, and clause 2 only in the
 stop's step. It names a CR that was still being deleted when the stop's wait

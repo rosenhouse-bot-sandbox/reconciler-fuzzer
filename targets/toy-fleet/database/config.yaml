@@ -1,7 +1,8 @@
 # Databases as the primary, on a fixture Cluster, with the fixture Secret
 # that each names. Generated plans may delete the Secret and create it again,
-# and may delete the Cluster in their last step. Paths resolve against this
-# file's directory.
+# and may delete the Cluster in their last step. No reference names the
+# Cluster, since plans would then create it again while its deletion waits
+# for its Databases (#189). Paths resolve against this file's directory.
 launch:
   binary: ../../../bin/toy-fleet
   args:
