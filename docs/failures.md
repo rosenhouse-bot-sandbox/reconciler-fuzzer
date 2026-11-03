@@ -93,7 +93,8 @@ CRDs says so.
 `kube: launch.rbac forbids the controller's watch on
 volumes.storage.thirdparty, 14 times` counts the API server's 403 answers to
 the controller's requests of one verb and kind. An injected `error(403)`
-does not count. Add the rule to `launch.rbac` if the controller needs it.
+does not count, nor does a create in a namespace being deleted. Add the
+rule to `launch.rbac` if the controller needs it.
 
 `primary.ready held for no CR version; the last of widgets.toy ns/a has
 status {...}` follows a clause 1 finding when no version of that kind's CRs
@@ -151,8 +152,8 @@ Look at the clause first:
 
 | Clause | Meaning | Look at |
 | --- | --- | --- |
-| 1 | A CR is not `ready`. | The CR's last status in `trace.jsonl`, and `ready` in the config. |
-| 2 | A CR is still being deleted. | Its finalizers, and why the controller did not remove them. |
+| 1 | A CR is not `ready`. | The status that the line quotes, and `ready` in the config. |
+| 2 | A CR is still being deleted. | The finalizers that the line names. The controller should remove its own once its cleanup is done. |
 | 3 | The controller is down, or restarted within `stable`. | `controller.log`, and any Crash finding. |
 | 4 | The controller made no successful request since it started. | Its startup in `controller.log`, and its RBAC. |
 | 5 | The controller did not look at an object a `damage`, `changeFixture` or `createFixture` changed. | Its watches and the kinds it reads. |
@@ -181,9 +182,10 @@ is now would hold the CR back too, or that a reference leaves unknown. It
 does so once `stable`, and the time the step's faults lasted, at most
 `timeouts.backoffCap`, have passed since the faults ended.
 
-Clause 1's line says what the controller last saw of each object that the
-CR names, such as `; the controller last saw secrets ns/admin-password
-ready at 7.24s`. If it saw the object ready, the reference's `ready`
+Clause 1's line quotes the CR's status as stored, such as `it has status
+{"ready":false}`, or says `it has no status`. It then says what the
+controller last saw of each object that the CR names, such as `; the
+controller last saw secrets ns/admin-password ready at 7.24s`. If it saw the object ready, the reference's `ready`
 accepts an object that the controller treats as not ready. If it saw the
 object missing under `required: false`, the controller treats the object
 as required. If it saw the object missing or not ready, and the object is
@@ -288,10 +290,16 @@ line names the CR, by its slot or else by its kind and name, and the
 dependency:
 
 - `reported ready before seeing its dependency ready`: `not seen` means
-  the controller never read the dependency after its last write to it;
-  `seen not ready` means its last read showed it not ready.
+  the controller never read the dependency; `not seen since the
+  controller's write at <t>` means it did not read the dependency after
+  that write; `seen not ready at <t>` means its last read, at t, showed
+  it not ready.
 - `reported ready with no dependency`: under `dependency.required`, the
-  CR owned none that counts.
+  CR owned none that counts. A line such as `slot a: gadgets.toy ns/a has
+  no ownerReference to it; declare primary.owns or a kube owner` names a
+  dependency that the controller made but that no rule of DESIGN.md §11
+  gives to one CR. Set an ownerReference to the CR, or tie the dependency
+  to it with the entry's `owns` or the system's `owner`.
 - `stayed ready after seeing its dependency not ready`: the CR stayed
   ready longer than `track`, not counting time in which the controller
   stalled (README.md, References).
@@ -301,11 +309,11 @@ the CR and the object that its field names. The finding takes the object's
 kind:
 
 - `reported ready with no dependency`: the object was missing and
-  `required`. `seen missing` means the controller's last look showed it
-  missing; `not seen` means the controller never looked.
-- `reported ready before seeing its dependency ready`: `seen not ready`
-  means the controller's last look showed the object not ready; `not seen`
-  means the controller never looked at the live object.
+  `required`. `seen missing at <t>` means the controller's last look, at
+  t, showed it missing; `not seen` means the controller never looked.
+- `reported ready before seeing its dependency ready`: `seen not ready at
+  <t>` means the controller's last look, at t, showed the object not
+  ready; `not seen` means the controller never looked at the live object.
 - `stayed ready after seeing its dependency not ready`: the CR stayed
   ready, naming the object, for `track` after the look at the time the
   line gives, not counting time in which the controller stalled, and each

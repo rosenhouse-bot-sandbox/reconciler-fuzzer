@@ -353,10 +353,10 @@ controller:
 | Finding | What the config got wrong | Fix |
 | --- | --- | --- |
 | Converge, with a line `whose status nothing models` | Another controller sets that kind's status. | Add the `models:` entry it suggests. |
-| Converge | `ready` reads a field the controller never writes. | Fix `ready`. |
+| Converge, clause 1, with a note that `ready` held for no CR version | `ready` may read a field or value that the controller never writes. | Compare the status that the note quotes with `ready`. Fix `ready` if it misreads the status. Otherwise report the bug (step 11). |
 | Converge, clause 7, on CR writes each refresh period | The controller refreshes on a timer. | Set the entry's `periodic`, and raise `budgets.reads` if each refresh reads more than twice. |
 | Converge | A drawn value is one a webhook would refuse. | Narrow `values.overlay`. |
-| Honest, `reported ready with no dependency` | The CR can be ready without that kind, or does not own it. | Set `required: false` in the first case. In the second, add `owns` or `owner`, or drop `dependency`. |
+| Honest, `reported ready with no dependency` | The CR can be ready without that kind, or does not own it. A line that says `has no ownerReference to it` names a dependency that the controller made but that no rule ties to one CR. | Set `required: false` in the first case. In the second, add `owns` or `owner`, or drop `dependency`. |
 | Honest, on an object that a `references` entry names | The CR may be ready while the object is missing or, by `ready`, not ready. | Set the entry's `required: false`, or fix its `ready`. |
 | Honest, `reported ready before seeing its dependency ready`, on a named object whose spec just changed | The default `ready` waits for the object's `observedGeneration`, but the controller checks only its condition or phase. | Set the entry's `ready` to the controller's check. |
 | Converge, clause 1, at a last step that deletes a `values.deletable` fixture, also in a run of the plan without that step's restarts and kills | If the controller marks CRs not ready by design while the fixture is being deleted or once it is gone, the file does not belong in `values.deletable`. | Ask the user whether CRs should stay ready while the fixture is being deleted and once it is gone. If they should not, drop the file from `values.deletable`. Otherwise, report the bug (step 11). |
@@ -369,7 +369,7 @@ controller:
 | Unique | The CR owns several resources of one kind and role by design, such as several with one `generateName`, or several in one collection of a fake. | Set the system's `role`. |
 | Restore, `did not restore damaged resources` | The controller recreates a damaged resource under a new name by design. | Set the system's `role` to CEL that gives both names one role. |
 | Converge or Restore, with a CR that halted after a create of unknown outcome | The controller stops on purpose and waits for a person. | Set the entry's `halted` to CEL over its halted condition. |
-| Converge after an upgrade, with `forbidden` errors in `controller.log` | `launch.rbac` lacks a rule the new version needs. | Add the rule to `launch.rbac`. |
+| Converge after an upgrade, with a note that `launch.rbac` forbids a request | `launch.rbac` lacks a rule the new version needs. | Add the rule to `launch.rbac`. |
 | Restore after an upgrade, on a resource the new version adds, deletes, renames or gives another owner, or on a field the new CRDs default | Nothing: `<module>/README.md` lists this limit under Upgrading. | Ask the user whether the change is intended. If so, report the finding as that limit, not as a bug. |
 
 Every other finding is a bug in the controller. Never hide one to make a check pass, and ask
@@ -379,6 +379,8 @@ A note `unmapped request` means the API map could not read a request to a fake, 
 judged it. Tell the user which paths the controller uses.
 A note that a `role` failed on every resource of a kind names the CEL's first error. Fix the
 `role`, or guard it by kind.
+A note `launch.rbac forbids the controller's <verb> on <kind>` counts the API server's 403
+answers to the controller. Add the rule to `launch.rbac` if the controller needs it.
 
 A note that the harness sent SIGKILL means the controller did not exit within
 `launch.gracePeriod` of SIGTERM. Set it above the controller's shutdown time, or tell the user

@@ -95,15 +95,29 @@ var gate = []gateRow{
 }
 
 // hasFinding says whether report holds a finding whose heading starts with
-// heading, at step, that says detail.
+// heading, at step, whose details say detail.
 func hasFinding(report, heading string, step int, detail string) bool {
 	for _, section := range strings.Split(report, "\n## ")[1:] {
 		title, body, _ := strings.Cut(section, "\n\n")
-		if strings.HasPrefix(title, heading) && strings.HasPrefix(body, fmt.Sprintf("Step %d,", step)) && strings.Contains(body, detail) {
+		header, details, _ := strings.Cut(body, "\n\n")
+		details, _, _ = strings.Cut(details, "\n# ")
+		if strings.HasPrefix(title, heading) && strings.HasPrefix(header, fmt.Sprintf("Step %d,", step)) && strings.Contains(details, detail) {
 			return true
 		}
 	}
 	return false
+}
+
+func TestHasFindingMatchesOnlyTheDetails(t *testing.T) {
+	const report = "# Findings\n\n## Restore: did not restore damaged resources\n\nStep 1, at 1s.\nActions: damage configmaps ns/widget-0.\n\n```\nconfigmaps ns/widget-1\n```\n\n# Next steps\n\nReplay widget-2.\n"
+	if !hasFinding(report, "Restore", 1, "widget-1") {
+		t.Error("missed the detail line")
+	}
+	for _, elsewhere := range []string{"widget-0", "widget-2"} {
+		if hasFinding(report, "Restore", 1, elsewhere) {
+			t.Errorf("matched %q outside the details", elsewhere)
+		}
+	}
 }
 
 func TestEveryPlanLoads(t *testing.T) {

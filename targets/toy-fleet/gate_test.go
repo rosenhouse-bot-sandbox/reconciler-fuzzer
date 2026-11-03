@@ -137,13 +137,15 @@ func plans(config string) ([]string, error) {
 }
 
 // hasFinding says whether report holds a finding whose heading starts with
-// heading, at step, that says detail. The delete-all step's body names it,
-// as in "Step 2 (delete all),".
+// heading, at step, whose details say detail. The delete-all step's header
+// names it, as in "Step 2 (delete all),".
 func hasFinding(report, heading string, step int, detail string) bool {
 	for _, section := range strings.Split(report, "\n## ")[1:] {
 		title, body, _ := strings.Cut(section, "\n\n")
+		header, details, _ := strings.Cut(body, "\n\n")
+		details, _, _ = strings.Cut(details, "\n# ")
 		at := fmt.Sprintf("Step %d", step)
-		if strings.HasPrefix(title, heading) && (strings.HasPrefix(body, at+",") || strings.HasPrefix(body, at+" (")) && strings.Contains(body, detail) {
+		if strings.HasPrefix(title, heading) && (strings.HasPrefix(header, at+",") || strings.HasPrefix(header, at+" (")) && strings.Contains(details, detail) {
 			return true
 		}
 	}
@@ -232,6 +234,18 @@ func TestHasFindingMatchesTheStep(t *testing.T) {
 	for _, step := range []int{1, 3, 12} {
 		if hasFinding(report, "Clean", step, "volumes v") {
 			t.Errorf("matched step %d", step)
+		}
+	}
+}
+
+func TestHasFindingMatchesOnlyTheDetails(t *testing.T) {
+	const report = "# Findings\n\n## Clean: left resources behind\n\nStep 1, at 1s.\nActions: damage volumes v-0.\n\n```\nvolumes v-1\n```\n\n# Next steps\n\nReplay volumes v-2.\n"
+	if !hasFinding(report, "Clean", 1, "volumes v-1") {
+		t.Error("missed the detail line")
+	}
+	for _, elsewhere := range []string{"volumes v-0", "volumes v-2"} {
+		if hasFinding(report, "Clean", 1, elsewhere) {
+			t.Errorf("matched %q outside the details", elsewhere)
 		}
 	}
 }
