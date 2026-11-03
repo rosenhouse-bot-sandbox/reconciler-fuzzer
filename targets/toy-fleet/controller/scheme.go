@@ -53,8 +53,8 @@ func NewScheme(bug Bug) (*runtime.Scheme, error) {
 }
 
 // Setup indexes the references and adds the three reconcilers of version to m,
-// and the SecretReconciler with protectSecrets. With storageClasses, each
-// Cluster gets a StorageClass.
+// and the SecretReconciler with protectSecrets. With storageClasses, the
+// ClusterReconciler creates a StorageClass for each Cluster.
 func Setup(m ctrl.Manager, bug Bug, version int, protectSecrets, storageClasses bool) error {
 	ctx := context.Background()
 	indexer := m.GetFieldIndexer()

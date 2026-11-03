@@ -311,6 +311,19 @@ func TestTeardownPassesADeleteOfAChildThatTheObserverRecordedLate(t *testing.T) 
 	requireNone(t, teardown(t, r))
 }
 
+// The observer may record a child before the answer to its create.
+func TestTeardownPassesADeleteSentBeforeTheChildsCreateAnswered(t *testing.T) {
+	r, uid := finalized(ruleTwo)
+	deleteA(r, uid, own)
+	sentAt := r.Now
+	r.Add(tt.Version(ruleTwo.ref, "c", "c1", ruleTwo.body))
+	r.Call(ctl, "delete", ruleTwo.ref, 200)
+	r.Add(sent(tt.Create(ctl, ruleTwo.ref, "c", "c1"), r.Now-sentAt))
+	releaseA(r, uid)
+	r.Add(tt.Deleted(ruleTwo.ref, "c", "c2", ruleTwo.body))
+	requireNone(t, teardown(t, r))
+}
+
 // Like Clean, Teardown judges only what the controller created.
 func TestTeardownPassesAChildThatTheHarnessCreated(t *testing.T) {
 	r, uid := finalized(ruleTwo)
@@ -691,6 +704,20 @@ func TestTeardownPassesASharedResourceThatAReleasedCRRetains(t *testing.T) {
 			for _, slot := range released {
 				releaseSlot(r, slot)
 			}
+			requireNone(t, teardown(t, r))
+		})
+	}
+}
+
+// So may the policy of a CR that left without a release.
+func TestTeardownPassesASharedResourceThatAGoneCRRetains(t *testing.T) {
+	for _, created := range creationOrders {
+		t.Run("created "+strings.Join(created, " then "), func(t *testing.T) {
+			r, uids := sharing(created...)
+			r.Spec.Primaries[0].Retain = `self.metadata.name == "a"`
+			r.Delete(trace.Harness, widget("a"))
+			deleteSlot(r, "b", uids["b"])
+			releaseSlot(r, "b")
 			requireNone(t, teardown(t, r))
 		})
 	}

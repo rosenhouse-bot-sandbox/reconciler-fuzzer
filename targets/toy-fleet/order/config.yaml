@@ -26,7 +26,7 @@ models:
 values:
   mutate: [spec.volumes, spec.volumeSize]
 properties:
-  - name: volumes-go-before-their-cluster
+  - name: volumes-deleted-before-their-cluster
     when: always
     expr: >-
       world.kube['volumes.storage.thirdparty'].all(v, !has(v.metadata.ownerReferences)

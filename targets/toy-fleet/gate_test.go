@@ -54,7 +54,7 @@ func (g gateRow) planPath() string { return planPath(g.configPath(), g.plan) }
 var gate = []gateRow{
 	// gc deletes B115's Volumes, which carry ownerReferences, so only the
 	// property judges their order.
-	{plan: "slow-delete", bug: 115, finding: "Property: property volumes-go-before-their-cluster does not hold", step: 1, detail: "is false", config: orderConfig},
+	{plan: "slow-delete", bug: 115, finding: "Property: property volumes-deleted-before-their-cluster does not hold", step: 1, detail: "is false", config: orderConfig},
 	{plan: "slow-delete", bug: 116, finding: "Finalizers: removed another caller's finalizer", step: 1, detail: "cluster-vol-0: reconciler-fuzzer.dev/slow-delete, added by model:volumes.storage.thirdparty, removed by update"},
 	{plan: "b0", bug: 116, finding: "Finalizers: removed another caller's finalizer", step: 2, detail: "cluster-vol-0: storage.thirdparty/protect, added by model:volumes.storage.thirdparty, removed by update", config: protectConfig},
 	{plan: "delete-cluster-first", bug: 120, finding: "Ordered: released an object that another names", step: 1, detail: "/cluster: slot b names it"},
@@ -95,7 +95,7 @@ var gate = []gateRow{
 	{plan: "restart-cluster-delete", bug: 150, finding: "Converge: did not settle (clause 1)", step: 1, detail: "db is not ready", config: databaseConfig},
 	// B150 strips the Cluster's finalizer at the restart, while slowDelete
 	// holds its Volumes.
-	{plan: "restart-slow-delete", bug: 150, finding: "Property: property volumes-go-before-their-cluster does not hold", step: 1, detail: "is false", config: orderConfig},
+	{plan: "restart-slow-delete", bug: 150, finding: "Property: property volumes-deleted-before-their-cluster does not hold", step: 1, detail: "is false", config: orderConfig},
 	// The kill comes after the update that releases the Cluster, so B151
 	// never strips its Volumes' finalizers.
 	{plan: "kill-recreate", bug: 151, finding: "Converge: did not settle (clause 1)", step: 1, detail: "cluster is not ready", config: uninstallConfig},

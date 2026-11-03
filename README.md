@@ -311,17 +311,18 @@ systems:
 
 Kubernetes' garbage collector deletes a child only through an ownerReference chain. It never
 follows a cluster-scoped child's ownerReference to a namespaced owner. So before a controller
-removes its finalizer from a CR, it must delete each child of the CR that the garbage collector
-does not delete. Teardown fails a controller write that removes the controller's last finalizer
-from a CR being deleted while such a child is not yet being deleted: `released a CR before deleting
-its resources`. It finds the CR's children through `owns`, `owner` and ownerReferences. A child
-with a `deletionTimestamp`, a child whose delete succeeded or found it gone, and a child in a
-namespace being deleted are being deleted. The controller need not wait until the child is gone.
-But a kube child's delete counts only if the trace shows the child deleting or gone at some time,
-so a dry run alone does not count. The garbage collector deletes no fake service's object. The CR's
-`retain` allows its children to stay. A child that the `owns` entries of several CRs name fails
-only at the release of the last of them, and only if none of them retains it. To judge the order
-of children that the garbage collector deletes, write a [property](#properties).
+removes its finalizer from a CR, it must delete each child that it created for the CR and that the
+garbage collector does not delete. Teardown fails a controller write that removes the controller's
+last finalizer from a CR being deleted while such a child is not yet being deleted: `released a CR
+before deleting its resources`. It finds the CR's children through `owns`, `owner` and
+ownerReferences. A child with a `deletionTimestamp`, a child whose delete succeeded or found it
+gone, and a child in a namespace being deleted are being deleted. The controller need not wait
+until the child is gone. But a kube child's delete counts only if the trace shows the child
+deleting or gone at some time, so a dry run alone does not count. The garbage collector deletes no
+fake service's object. The CR's `retain` allows its children to stay. Teardown judges a child that
+the `owns` entries of several CRs name only at the release of the last of them, and passes it if
+any of them retains it. To judge the order of children that the garbage collector deletes, write a
+[property](#properties).
 
 ### Roles
 
@@ -514,7 +515,7 @@ property can require that such children are deleted first, as
 
 ```yaml
 properties:
-  - name: volumes-go-before-their-cluster
+  - name: volumes-deleted-before-their-cluster
     when: always
     expr: >-
       world.kube['volumes.storage.thirdparty'].all(v, !has(v.metadata.ownerReferences)

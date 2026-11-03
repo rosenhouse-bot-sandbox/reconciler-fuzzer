@@ -19,24 +19,24 @@ const releasedFirst = "released a CR before deleting its resources"
 func Teardown(ix *trace.Index, s Spec) []Finding {
 	w := owner.New(ix, s.Owners)
 	steps, deletes := ix.Steps(), deleteCalls(ix)
-	// retained maps each CR that the controller released to whether its
+	// retained maps each object that the controller released to whether its
 	// deletion policy keeps its resources.
 	retained := map[string]bool{}
 	details, at := map[int]map[string][]string{}, map[int]time.Duration{}
 	for _, e := range ix.Calls(trace.Controller, -1, math.MaxInt64) {
-		cr, released := releasedBy(ix, e, s)
-		if !released {
+		released, ok := releasedBy(ix, e, s)
+		if !ok {
 			continue
 		}
-		if retained[cr.UID] = retains(s, cr.Ref, cr.Body); retained[cr.UID] {
+		if retained[released.UID] = retains(s, released.Ref, released.Body); retained[released.UID] {
 			continue
 		}
 		for _, i := range w.Instances(e.At) {
 			if !controllerResource(i) {
 				continue
 			}
-			o, owned := ownedBy(w, i, cr.UID, retained, e.At)
-			if !owned || w.Collected(i, cr.UID, e.At) || beingDeleted(ix, w, deletes, i, e.At) {
+			o, owned := ownedBy(w, s, i, released.UID, retained, e.At)
+			if !owned || w.Collected(i, released.UID, e.At) || beingDeleted(ix, w, deletes, i, e.At) {
 				continue
 			}
 			step := stepAt(steps, e.At-e.Call.Latency)
@@ -54,30 +54,31 @@ func Teardown(ix *trace.Index, s Spec) []Finding {
 	return findings
 }
 
-// ownedBy returns i's owner at t and whether rules 1 to 3 make it cr, the
-// CR that the controller released at t. Rule 3 may find several CRs that
-// name i. Then i is cr's once each of them that lives at t is released and
-// none of them retains i.
-func ownedBy(w *owner.World, i owner.Instance, cr string, retained map[string]bool, t time.Duration) (owner.Owner, bool) {
-	o := w.Owner(i, t)
-	if o.Rule != 3 {
-		uid, named := o.Named()
-		return o, named && uid == cr
+// ownedBy returns the owner that describes i, and whether rules 1 to 3 make
+// i a resource of the CR with uid, which the controller released at t. Rule
+// 3 may find several CRs that name i. Then i is that CR's once each of them
+// is released or gone, unless one of them retains i.
+func ownedBy(w *owner.World, s Spec, i owner.Instance, uid string, retained map[string]bool, t time.Duration) (owner.Owner, bool) {
+	if o := w.Owner(i, t); o.Rule != 3 {
+		cr, named := o.Named()
+		return o, named && cr == uid
 	}
 	naming := w.Naming(i, t)
-	o.CRs = []string{cr}
-	return o, slices.ContainsFunc(naming, func(c owner.Instance) bool { return c.UID == cr }) &&
-		!slices.ContainsFunc(naming, func(c owner.Instance) bool {
-			kept, released := retained[c.UID]
-			return kept || c.Live(t) && !released
+	return owner.Owner{Rule: 3, CRs: []string{uid}}, slices.ContainsFunc(naming, func(cr owner.Instance) bool { return cr.UID == uid }) &&
+		!slices.ContainsFunc(naming, func(cr owner.Instance) bool {
+			if kept, released := retained[cr.UID]; released {
+				return kept
+			}
+			return cr.Live(t) || retains(s, cr.Ref, w.Body(cr, t))
 		})
 }
 
-// releasedBy returns the version of the CR that e, a controller write,
-// released: the write left the CR, which was being deleted, none of the
-// finalizers that the controller may own.
+// releasedBy returns the version of the object that e, a controller write,
+// released: the write left the object, which was being deleted, none of the
+// finalizers that the controller may own. Only a CR owns resources, so
+// another object's release finds none.
 func releasedBy(ix *trace.Index, e trace.Event, s Spec) (trace.Version, bool) {
-	if !judgedWrite(*e.Call, s) || !s.listed(e.Call.Ref) {
+	if !judgedWrite(*e.Call, s) {
 		return trace.Version{}, false
 	}
 	base := replaced(ix, e)
