@@ -189,3 +189,11 @@ func TestFlattenNamesEachSystemsVars(t *testing.T) {
 		t.Errorf("flatten = %v", got)
 	}
 }
+
+func TestReplayCommand(t *testing.T) {
+	o := Options{ConfigPath: "toy/config.yaml", Out: "out dir/seed-3", LaunchArgs: []string{"--bug=3", "it's"}}
+	want := `reconciler-fuzzer run --config toy/config.yaml --plan 'out dir/seed-3/plan.json' --out 'out dir/seed-3/replay' --launch-arg --bug=3 --launch-arg 'it'\''s'`
+	if got := replayCommand(o); got != want {
+		t.Errorf("replayCommand = %s, want %s", got, want)
+	}
+}

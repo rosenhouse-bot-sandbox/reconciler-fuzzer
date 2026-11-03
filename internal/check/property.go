@@ -41,7 +41,11 @@ func Property(ix *trace.Index, s Spec) []Finding {
 				findings = append(findings, propertyFinding(property, at.step, at.t, "could not be evaluated", err.Error()))
 			case !holds:
 				f := propertyFinding(property, at.step, at.t, "does not hold", property.Expr+" is false")
-				f.Details = append(f.Details, p.origins...)
+				origins := p.origins
+				if turn, found := p.turned(eval, at.t); found {
+					f.Details = append(f.Details, turn)
+				}
+				f.Details = append(f.Details, origins...)
 				findings = append(findings, f)
 			default:
 				continue
@@ -50,6 +54,51 @@ func Property(ix *trace.Index, s Spec) []Finding {
 		}
 	}
 	return findings
+}
+
+// turned says when a property that eval judges false at t last turned
+// false, and which writes the trace recorded then. The world changes only at
+// version events, so it judges the world at each earlier one in turn.
+func (p *properties) turned(eval func([]any, map[string]map[string][]any) (bool, error), t time.Duration) (string, bool) {
+	defer func(t time.Duration, origins []string) { p.t, p.origins = t, origins }(p.t, p.origins)
+	var times []time.Duration
+	for _, e := range p.ix.EventsIn(-1, t) {
+		if e.Version != nil && (len(times) == 0 || times[len(times)-1] != e.At) {
+			times = append(times, e.At)
+		}
+	}
+	// times[turn] is the first of the false run that ends at t.
+	turn := len(times)
+	for ; turn > 0; turn-- {
+		p.t = times[turn-1]
+		if holds, err := eval(p.world(p.t)); err == nil && holds {
+			break
+		}
+	}
+	switch turn {
+	case len(times):
+		return "", false
+	case 0:
+		return "it was false at each version event", true
+	}
+	var writes []string
+	for _, e := range p.ix.EventsIn(times[turn]-1, times[turn]) {
+		if v := e.Version; v != nil {
+			writes = append(writes, fmt.Sprintf("%s %s %s", p.ix.Writer(*v), p.change(e), describe(v.Ref)))
+		}
+	}
+	return fmt.Sprintf("it turned false at %v: %s", times[turn], strings.Join(slices.Compact(writes), ", ")), true
+}
+
+// change says how version event e changed its instance.
+func (p *properties) change(e trace.Event) string {
+	switch i, _ := p.w.Instance(e.Version.UID); {
+	case e.Version.Deleted:
+		return "deleted"
+	case e.At == i.Created:
+		return "created"
+	}
+	return "updated"
 }
 
 func propertyFinding(p PropertySpec, step int, t time.Duration, summary, detail string) Finding {

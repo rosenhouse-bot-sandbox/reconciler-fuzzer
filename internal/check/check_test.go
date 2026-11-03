@@ -222,11 +222,21 @@ func TestRecordedB0RunHasNoFindings(t *testing.T) {
 	}
 }
 
+// Under B16, launch.rbac lacks widgets/status, so the widget never gets a
+// status.
 func TestRecordedB16RunDidNotSettle(t *testing.T) {
 	r := judgeRecorded(t, "testdata/b16.jsonl")
 	if f := only(t, r.Findings); f.Summary != "did not settle (clause 1)" || f.Step != 0 ||
-		!slices.ContainsFunc(f.Details, func(d string) bool { return strings.HasSuffix(d, "/widget is not ready") }) {
+		!slices.ContainsFunc(f.Details, func(d string) bool { return strings.HasSuffix(d, "/widget is not ready; it has no status") }) {
 		t.Fatalf("finding = %+v", f)
+	}
+	for _, want := range []string{
+		"primary.ready held for no CR version; the last of widgets.toy.reconciler-fuzzer rf-d1ebbd7f/widget has no status",
+		"kube: launch.rbac forbids the controller's update on the status subresource of widgets.toy.reconciler-fuzzer, 10 times",
+	} {
+		if !slices.Contains(r.Notes, want) {
+			t.Errorf("notes = %q, want %q", r.Notes, want)
+		}
 	}
 }
 
@@ -295,6 +305,83 @@ func TestJudgeNotesAFailedAction(t *testing.T) {
 	notes := check.Judge(b.Index(), spec).Notes
 	if len(notes) != 1 || notes[0] != "Step 1, action 2 (create) failed at 10s: the slot's name is still taken after the create waited 1s" {
 		t.Fatalf("notes = %q", notes)
+	}
+}
+
+// A ready that no CR ever meets more likely names the wrong field or value
+// than finds a bug, so the report says so.
+func TestJudgeNotesAReadyNoCRVersionMet(t *testing.T) {
+	var b tt.Builder
+	b.Add(tt.Run("toy", "widgets"), tt.Start(1)).
+		At(0).Add(tt.Phase(0, trace.FaultPeriod)).
+		At(100*ms).Add(tt.Call(trace.Harness, "create", widgetA, 201, "1"), tt.Version(widgetA, "ua", "1", ready(false))).
+		At(1*s).Add(tt.EndFaults(0, 10*s, false)).
+		At(1500*ms).Add(tt.Call(ctl, "update", widgetA, 200, "2"), tt.Version(widgetA, "ua", "2", ready("Ready"))).
+		At(10 * s).Add(tt.Phase(0, trace.TimedOut))
+	notes := check.Judge(b.Index(), spec).Notes
+	want := "primary.ready held for no CR version; the last of widgets.toy ns/a has status {\"ready\":\"Ready\"}"
+	if !slices.Contains(notes, want) {
+		t.Fatalf("notes = %q, want %q", notes, want)
+	}
+}
+
+// The note explains a CR that is not ready, so a run without such a CR gets
+// none, nor does one in which a CR was ready once.
+func TestJudgeNotesNoReadyThatHeldOrNoCRWaitedFor(t *testing.T) {
+	once := createStep()
+	once.At(3500*ms).Add(tt.Phase(0, trace.Settled)).
+		At(5500*ms).Add(tt.Phase(0, trace.Confirmed)).
+		At(5500*ms).Add(tt.Phase(1, trace.FaultPeriod)).
+		At(5600*ms).Add(tt.EndFaults(1, 20*s, false)).
+		At(6*s).Add(tt.Call(ctl, "update", widgetA, 200, "3"), tt.Version(widgetA, "ua", "3", ready(false))).
+		At(20 * s).Add(tt.Phase(1, trace.TimedOut))
+	var gone tt.Builder
+	gone.Add(tt.Run("toy", "widgets"), tt.Start(1)).
+		At(0).Add(tt.Phase(0, trace.FaultPeriod)).
+		At(100 * ms).Add(tt.Version(widgetA, "ua", "1", ready(false))).
+		At(200 * ms).Add(tt.Call(ctl, "get", widgetA, 200, "")).
+		At(500 * ms).Add(tt.Deleted(widgetA, "ua", "2", ready(false))).
+		At(1 * s).Add(tt.EndFaults(0, 10*s, false)).
+		At(3500 * ms).Add(tt.Phase(0, trace.Settled)).
+		At(5500 * ms).Add(tt.Phase(0, trace.Confirmed))
+	for name, b := range map[string]*tt.Builder{"ready once": once, "deleted unready": &gone} {
+		r := check.Judge(b.Index(), spec)
+		if name == "ready once" && !slices.ContainsFunc(r.Findings, func(f check.Finding) bool { return strings.HasSuffix(f.Summary, "(clause 1)") }) {
+			t.Errorf("%s: findings = %+v, want clause 1", name, r.Findings)
+		}
+		if slices.ContainsFunc(r.Notes, func(n string) bool { return strings.Contains(n, "held for no CR version") }) {
+			t.Errorf("%s: notes = %q", name, r.Notes)
+		}
+	}
+}
+
+func TestJudgeNotesARequestLaunchRBACForbids(t *testing.T) {
+	b := cleanRun()
+	gadgets := tt.Ref("toy/gadgets", "ns", "")
+	for _, at := range []time.Duration{2 * s, 4 * s} {
+		watch := tt.Call(ctl, "watch", gadgets, 403, "")
+		watch.Call.Watch = true
+		b.At(at).Add(watch)
+	}
+	notes := check.Judge(b.Index(), spec).Notes
+	want := "kube: launch.rbac forbids the controller's watch on gadgets.toy, 2 times"
+	if !slices.Contains(notes, want) {
+		t.Fatalf("notes = %q, want %q", notes, want)
+	}
+}
+
+// A 403 counts only when the API server gave it to the controller. A delay
+// fault passes the request on.
+func TestJudgeNotesOnlyTheControllersRealDenials(t *testing.T) {
+	b := cleanRun()
+	status := call("update", widgetA, 403, "delay(1s)")
+	status.Call.Subresource = "status"
+	harness := tt.Call(trace.Harness, "get", cm, 403, "")
+	bucket := tt.Call(ctl, "get", trace.Ref{System: "cloud", Resource: "buckets", Name: "b1"}, 403, "")
+	b.At(2*s).Add(call("get", widgetA, 403, "error(403)"), status, harness, bucket)
+	notes := slices.DeleteFunc(check.Judge(b.Index(), spec).Notes, func(n string) bool { return !strings.HasPrefix(n, "kube: launch.rbac") })
+	if want := []string{"kube: launch.rbac forbids the controller's update on the status subresource of widgets.toy, 1 time"}; !slices.Equal(notes, want) {
+		t.Fatalf("notes = %q, want %q", notes, want)
 	}
 }
 
@@ -447,27 +534,40 @@ func TestMarkdown(t *testing.T) {
 	var b tt.Builder
 	run := tt.Run("toy", "widgets")
 	run.Run.PlanSteps = 2
-	ix := b.Add(run).Index()
-	if got := check.Markdown(ix, check.Report{}); got != "No findings.\n" {
+	ix := b.Add(run).
+		At(1*s).Add(tt.SlotAction(1, "create", "a", widgetA), tt.Action(1, "damage", cm)).
+		At(2*s).Add(trace.Event{Action: &trace.Action{Step: 1, Index: 2, Do: "restart", Upgrade: true}}, trace.Event{Action: &trace.Action{Step: 1, Index: 3, Do: "kill"}}).
+		Index()
+	const replay = "reconciler-fuzzer run --config c.yaml --plan out/plan.json --out out/replay"
+	if got := check.Markdown(ix, check.Report{}, replay); got != "No findings.\n" {
 		t.Fatalf("Markdown of nothing = %q", got)
 	}
 	got := check.Markdown(ix, check.Report{
 		Findings: []check.Finding{
 			{Check: "Converge", Step: 1, At: 1500 * ms, Labels: []string{"backoff-bound"}, Summary: "did not settle", Details: []string{"ns/a is not ready"}},
-			{Check: "Converge", Step: 2, Summary: "did not settle"},
+			{Check: "Converge", Step: 2, At: 16907430335, Summary: "did not settle"},
 			{Check: "Crash", Step: 3, Summary: "the controller exited 1 time"},
 			{Check: "Crash", Step: -1, Summary: "the controller exited 2 times"},
 		},
 		Notes: []string{"Step 0 is not judged."},
-	})
-	for _, want := range []string{"# Findings", "## Converge: did not settle\n\nStep 1, at 1.5s.", "backoff-bound", "ns/a is not ready",
-		"Step 2 (delete all), at 0s.", "## Crash: the controller exited 1 time\n\nStep 3 (restart)",
+	}, replay)
+	for _, want := range []string{"# Findings",
+		"## Converge: did not settle\n\nStep 1, at 1.5s.\nActions: create slot a, damage configmaps ns/c, restart (upgrade), kill.\nLabels: backoff-bound.\n",
+		"ns/a is not ready", "Step 2 (delete all), at 16.907s.\n\n## Crash: the controller exited 1 time\n\nStep 3 (restart)",
 		"## Crash: the controller exited 2 times\n\nBefore step 0, at 0s.", "# Notes\n\n- Step 0 is not judged.\n"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Markdown lacks %q:\n%s", want, got)
 		}
 	}
-	if got := check.Markdown(ix, check.Report{Notes: []string{"n"}}); !strings.HasPrefix(got, "No findings.\n") {
+	const failures = "[docs/failures.md](https://github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/blob/main/docs/failures.md) says what each finding means.\n"
+	if want := "\n# Next steps\n\nReplay the plan:\n\n```\n" + replay + "\n```\n\n" + failures; !strings.HasSuffix(got, want) {
+		t.Errorf("Markdown does not end with %q:\n%s", want, got)
+	}
+	unreplayed := check.Markdown(ix, check.Report{Findings: []check.Finding{{Check: "Crash", Step: 3}}}, "")
+	if want := "\n# Next steps\n\n" + failures; !strings.HasSuffix(unreplayed, want) || strings.Contains(unreplayed, "Replay") {
+		t.Errorf("Markdown without a replay = %q, want it to end with %q", unreplayed, want)
+	}
+	if got := check.Markdown(ix, check.Report{Notes: []string{"n"}}, replay); got != "No findings.\n\n# Notes\n\n- n\n" {
 		t.Errorf("Markdown with only notes = %q", got)
 	}
 }

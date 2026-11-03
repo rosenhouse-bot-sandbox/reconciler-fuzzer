@@ -94,7 +94,7 @@ func TestJudgeRunsProperty(t *testing.T) {
 	}
 	report := check.Judge(ix, spec)
 	requireSummaries(t, report.Findings, "1 property fresh-key does not hold")
-	if md := check.Markdown(ix, report); !strings.Contains(md, "## Property: property fresh-key does not hold") {
+	if md := check.Markdown(ix, report, ""); !strings.Contains(md, "## Property: property fresh-key does not hold") {
 		t.Errorf("report.md lacks the finding:\n%s", md)
 	}
 }
@@ -282,11 +282,46 @@ func TestAPropertyFindingSaysWhereAFirstWrittenValueCameFrom(t *testing.T) {
 		"a re-point":   {rePoint(), ", in this instance, under CR"},
 	} {
 		findings := judgeWith(t, c.r, check.Property)
-		if len(findings) != 1 || len(findings[0].Details) != 2 || !strings.Contains(findings[0].Details[1], c.want) {
+		if len(findings) != 1 || len(findings[0].Details) != 3 || !strings.Contains(findings[0].Details[2], c.want) {
 			t.Errorf("%s: findings = %+v, want a detail containing %q", name, findings, c.want)
 		}
 	}
-	if f := judgeWith(t, secretWriteBack("K", false), check.Property); len(f) == 1 && !strings.Contains(f[0].Details[1], ", in instance ") {
-		t.Errorf("a write-back's detail %q names no earlier instance", f[0].Details[1])
+	if f := judgeWith(t, secretWriteBack("K", false), check.Property); len(f) == 1 && len(f[0].Details) == 3 && !strings.Contains(f[0].Details[2], ", in instance ") {
+		t.Errorf("a write-back's detail %q names no earlier instance", f[0].Details[2])
+	}
+}
+
+// A property finding says when the property last turned false and which
+// writes turned it, though later writes kept it false.
+func TestAPropertyFindingSaysWhatTurnedItFalse(t *testing.T) {
+	a0 := tt.Ref("configmaps", "ns", "a-0")
+	for name, c := range map[string]struct {
+		expr   string
+		turn   func(r *tt.Script)
+		writes string
+	}{
+		"a create": {"size(world.kube.configmaps) <= 1", func(r *tt.Script) {
+			r.Create(ctl, tt.Ref("configmaps", "ns", "a-extra"), tt.Object("a-extra"))
+		}, "controller created configmaps ns/a-extra"},
+		"an update": {"world.kube.configmaps.all(m, !has(m.data))", func(r *tt.Script) {
+			r.Update(ctl, a0, named("a-0", map[string]any{"data": map[string]any{"k": "v"}}))
+		}, "controller updated configmaps ns/a-0"},
+		"a delete": {"size(world.kube.configmaps) == 1", func(r *tt.Script) { r.Delete(trace.GC, a0) }, "gc deleted configmaps ns/a-0"},
+	} {
+		r := newRun(0)
+		r.Spec.Properties = []trace.Property{{Name: "p", Expr: c.expr, When: "step"}}
+		r.Begin()
+		withChild(r, "a", true)
+		turned := r.Now
+		c.turn(r)
+		r.Update(trace.Harness, widgetA, tt.CR("a", true))
+		f := only(t, judgeWith(t, r.EndFaults().Settle(), check.Property))
+		if want := fmt.Sprintf("it turned false at %v: %s", turned, c.writes); len(f.Details) != 2 || f.Details[1] != want {
+			t.Errorf("%s: details = %q, want %q", name, f.Details, want)
+		}
+	}
+	f := only(t, judgeWith(t, transient("always"), check.Property))
+	if want := fmt.Sprintf("it turned false at %v: controller created configmaps ns/a-extra", f.At); len(f.Details) != 2 || f.Details[1] != want {
+		t.Errorf("always: details = %q, want %q", f.Details, want)
 	}
 }

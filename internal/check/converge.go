@@ -13,6 +13,7 @@ import (
 // deadline, or no longer holds at the end of the confirm window. A step the
 // trace ends too early to decide gets a note instead.
 func Converge(ix *trace.Index, s Spec) (findings []Finding, notes []string) {
+	var found []unmet
 	steps := ix.Steps()
 	for i, step := range steps {
 		if !step.Reached[trace.EndFaults] {
@@ -35,7 +36,9 @@ func Converge(ix *trace.Index, s Spec) (findings []Finding, notes []string) {
 			continue
 		case !ok:
 			f.At = to
-			f.describe("did not settle", unmetClauses(ix, to, s))
+			unmets := unmetClauses(ix, to, s)
+			found = append(found, unmets...)
+			f.describe("did not settle", unmets)
 		case confirm > end:
 			notes = append(notes, fmt.Sprintf("%s is not judged: it settled at %v and had to stay settled until %v, but %s at %v.", stepName(ix, step.Step), settled, confirm, ends, end))
 			continue
@@ -45,12 +48,37 @@ func Converge(ix *trace.Index, s Spec) (findings []Finding, notes []string) {
 				continue
 			}
 			f.At = confirm
+			found = append(found, unmets...)
 			f.describe("did not stay settled", unmets)
 		}
 		f.Details = append(f.Details, unmodelledKinds(ix, f.At, s)...)
 		findings = append(findings, f)
 	}
-	return findings, append(notes, unwaitedDeletions(ix, s)...)
+	return findings, slices.Concat(notes, neverReady(ix, s, found), unwaitedDeletions(ix, s))
+}
+
+// neverReady notes each listed kind that an unmet clause 1 is about and whose
+// ready held for no version of its CRs. Either the ready or the controller
+// can be at fault, so the note gives only what the trace shows.
+func neverReady(ix *trace.Index, s Spec, unmets []unmet) []string {
+	var notes []string
+	for _, p := range s.Primaries {
+		k := kind(trace.Ref{System: "kube", Group: p.Kind.Group, Resource: p.Kind.Resource})
+		if !slices.ContainsFunc(unmets, func(u unmet) bool { return u.clause == 1 && u.kind == k }) {
+			continue
+		}
+		var last *trace.Version
+		ready := false
+		for _, e := range ix.Events() {
+			if v := e.Version; v != nil && v.Ref.OfKind(p.Kind) {
+				last, ready = v, ready || p.ready(decode(v.Body))
+			}
+		}
+		if last != nil && !ready {
+			notes = append(notes, fmt.Sprintf("%s.ready held for no CR version; the last of %s %s", s.entryKey(p.Kind), describe(last.Ref), quoteStatus(decode(last.Body))))
+		}
+	}
+	return notes
 }
 
 // unwaitedDeletions notes each CR still being deleted when the trace ends

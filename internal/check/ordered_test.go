@@ -85,6 +85,24 @@ func TestOrderedFailsAReleaseWhileASeenCRNamesIt(t *testing.T) {
 	}
 }
 
+// The detail says how the object was released, so that a finalizer that
+// was missing or removed shows.
+func TestOrderedDetailSaysHowTheObjectWasReleased(t *testing.T) {
+	r := secretRun(blockRef(), secret(true))
+	gone := seeBoth(r).Now
+	r.Delete(ctl, pw)
+	requireFinding(t, ordered(t, r), "Ordered", 0, released, "kube/secrets", fmt.Sprintf("secrets ns/pw: slot b names it; it was deleted at %v with no finalizers", gone))
+
+	r = secretRun(blockRef(), secret(true))
+	body := tt.Deleting(secret(true))
+	body["metadata"].(map[string]any)["finalizers"] = []any{"toy/in-use"}
+	start := seeBoth(r).Now
+	gone = r.Update(trace.Harness, pw, body).Now
+	r.Delete(ctl, pw)
+	requireFinding(t, ordered(t, r), "Ordered", 0, released, "kube/secrets",
+		fmt.Sprintf("secrets ns/pw: slot b names it; its deletion started at %v with finalizer toy/in-use, and it was gone at %v", start, gone))
+}
+
 // The controller can hold the object once it saw both the object and the CR
 // that names it.
 func TestOrderedFailsAReleaseStableAfterTheLaterSight(t *testing.T) {

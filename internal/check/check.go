@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -79,6 +80,14 @@ func (s Spec) primary(ref trace.Ref) (Primary, bool) {
 		return Primary{}, false
 	}
 	return s.Primaries[i], true
+}
+
+// entryKey names the config entry of kind k, as "primary" or "primaries[1]".
+func (s Spec) entryKey(k trace.Kind) string {
+	if len(s.Primaries) == 1 {
+		return "primary"
+	}
+	return fmt.Sprintf("primaries[%d]", slices.IndexFunc(s.Primaries, func(p Primary) bool { return p.Kind == k }))
 }
 
 // listed reports whether ref names a CR.
@@ -435,7 +444,7 @@ func Judge(ix *trace.Index, s Spec) Report {
 	findings = append(findings, Backoff(ix, s)...)
 	findings = append(findings, Finalizers(ix, s)...)
 	findings = append(findings, Property(ix, s)...)
-	notes = slices.Concat(actionErrors(ix), killedStops(ix), unpicked(ix, s), notes, unmapped(ix), failedRoles(ix, s))
+	notes = slices.Concat(actionErrors(ix), killedStops(ix), unpicked(ix, s), notes, unmapped(ix), forbidden(ix), failedRoles(ix, s))
 	return Report{Findings: findings, Notes: notes}
 }
 
@@ -482,6 +491,45 @@ func unmapped(ix *trace.Index) []string {
 		}
 	}
 	return notes
+}
+
+// forbidden notes how many times the API server answered the controller
+// with 403 for each verb and kind. An injected error does not count.
+func forbidden(ix *trace.Index) []string {
+	type request struct{ verb, on string }
+	var order []request
+	counts := map[request]int{}
+	for _, e := range ix.Calls(trace.Controller, -1, math.MaxInt64) {
+		c := e.Call
+		if c.Ref.System != "kube" || c.Status != http.StatusForbidden || strings.HasPrefix(c.Injected, "error") {
+			continue
+		}
+		on := c.Path
+		if c.Ref.Resource != "" {
+			on = schema.GroupResource{Group: c.Ref.Group, Resource: c.Ref.Resource}.String()
+		}
+		if c.Subresource != "" {
+			on = "the " + c.Subresource + " subresource of " + on
+		}
+		r := request{c.Verb, on}
+		if counts[r] == 0 {
+			order = append(order, r)
+		}
+		counts[r]++
+	}
+	notes := make([]string, len(order))
+	for i, r := range order {
+		notes[i] = fmt.Sprintf("kube: launch.rbac forbids the controller's %s on %s, %s", r.verb, r.on, times(counts[r]))
+	}
+	return notes
+}
+
+// times says n times, as "1 time" or "2 times".
+func times(n int) string {
+	if n == 1 {
+		return "1 time"
+	}
+	return fmt.Sprintf("%d times", n)
 }
 
 // unpicked notes each request fault that altered no controller request
@@ -630,8 +678,9 @@ func stepName(ix *trace.Index, step int) string {
 	return name
 }
 
-// Markdown renders a report as report.md.
-func Markdown(ix *trace.Index, r Report) string {
+// Markdown renders a report as report.md. replay is a command that runs
+// the plan again, or empty.
+func Markdown(ix *trace.Index, r Report, replay string) string {
 	var b strings.Builder
 	if len(r.Findings) == 0 {
 		b.WriteString("No findings.\n")
@@ -639,7 +688,10 @@ func Markdown(ix *trace.Index, r Report) string {
 		b.WriteString("# Findings\n")
 	}
 	for _, f := range r.Findings {
-		fmt.Fprintf(&b, "\n## %s: %s\n\n%s, at %v.\n", f.Check, f.Summary, stepName(ix, f.Step), f.At)
+		fmt.Fprintf(&b, "\n## %s: %s\n\n%s, at %v.\n", f.Check, f.Summary, stepName(ix, f.Step), f.At.Round(time.Millisecond))
+		if done := actions(ix, f.Step); len(done) > 0 {
+			fmt.Fprintf(&b, "Actions: %s.\n", strings.Join(done, ", "))
+		}
 		if len(f.Labels) > 0 {
 			fmt.Fprintf(&b, "Labels: %s.\n", strings.Join(f.Labels, ", "))
 		}
@@ -653,5 +705,33 @@ func Markdown(ix *trace.Index, r Report) string {
 			fmt.Fprintf(&b, "- %s\n", note)
 		}
 	}
+	if len(r.Findings) > 0 {
+		b.WriteString("\n# Next steps\n\n")
+		if replay != "" {
+			fmt.Fprintf(&b, "Replay the plan:\n\n```\n%s\n```\n\n", replay)
+		}
+		b.WriteString("[docs/failures.md](https://github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/blob/main/docs/failures.md) says what each finding means.\n")
+	}
 	return b.String()
+}
+
+// actions describes the harness's actions in step, such as "create slot a"
+// and "restart (upgrade)".
+func actions(ix *trace.Index, step int) []string {
+	var done []string
+	for _, e := range ix.Actions(step) {
+		a := e.Action
+		what := a.Do
+		switch {
+		case a.Slot != "":
+			what += " slot " + a.Slot
+		case a.Ref != nil:
+			what += " " + describe(*a.Ref)
+		}
+		if a.Upgrade {
+			what += " (upgrade)"
+		}
+		done = append(done, what)
+	}
+	return done
 }

@@ -103,9 +103,9 @@ func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, d
 		t0 := call.At - call.Call.Latency
 		due := sync.OnceValue(func() time.Duration { return h.correctionDue(call) })
 		for _, m := range deps {
-			owned := h.dependencies(uid, m, t0)
+			owned, unowned := h.dependencies(uid, m, t0)
 			if len(owned) == 0 && m.Dependency.Required && requires {
-				h.add(t0, noDependency, kind(v.Ref), crName(h.w, uid))
+				h.noDependency(t0, uid, p, kind(v.Ref), unowned)
 			}
 			for _, dep := range owned {
 				if why := h.unseen(dep, m, t0); why != "" {
@@ -124,6 +124,22 @@ func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, d
 			}
 			h.add(t0, summary, kind(n.object), fmt.Sprintf("%s: %s %s", crName(h.w, uid), describe(n.object), g.describe()))
 		}
+	}
+}
+
+// noDependency fails the CR with uid, of p's kind, for reporting ready at t0
+// with no dependency. It names each dependency the controller made that no
+// rule assigns to one CR, and how to assign it.
+func (h *honesty) noDependency(t0 time.Duration, uid string, p Primary, k string, unowned []owner.Instance) {
+	if len(unowned) == 0 {
+		h.add(t0, noDependency, k, crName(h.w, uid))
+	}
+	for _, i := range unowned {
+		lacks := "has no owner"
+		if i.Ref.System == "kube" {
+			lacks = "has no ownerReference to it"
+		}
+		h.add(t0, noDependency, k, fmt.Sprintf("%s: %s %s; declare %s.owns or a %s owner", crName(h.w, uid), describe(i.Ref), lacks, h.s.entryKey(p.Kind), i.Ref.System))
 	}
 }
 
@@ -314,9 +330,9 @@ const (
 // is uid. An instance counts from when it appeared until the controller
 // deletes it, and not while the controller last saw it deleted. A live one
 // counts unless it is being deleted, and a gone one only if the controller
-// last saw it live and nothing has replaced it.
-func (h *honesty) dependencies(uid string, m Model, t time.Duration) []owner.Instance {
-	var owned []owner.Instance
+// last saw it live and nothing has replaced it. Unowned are those of the
+// others that the controller created and whose rule 4 set holds uid.
+func (h *honesty) dependencies(uid string, m Model, t time.Duration) (owned, unowned []owner.Instance) {
 	for _, i := range h.w.All() {
 		if !m.covers(i.Ref) || appeared(h.ix, i) > t || h.controllerDeleted(i, t) {
 			continue
@@ -332,11 +348,14 @@ func (h *honesty) dependencies(uid string, m Model, t time.Duration) []owner.Ins
 		} else if deleting(h.w.Body(i, t)) {
 			continue
 		}
-		if cr, named := h.w.Owner(i, max(t, i.Created)).Named(); named && cr == uid {
+		o := h.w.Owner(i, max(t, i.Created))
+		if cr, named := o.Named(); named && cr == uid {
 			owned = append(owned, i)
+		} else if o.Rule == 4 && i.Creator == trace.Controller && slices.Contains(o.CRs, uid) {
+			unowned = append(unowned, i)
 		}
 	}
-	return owned
+	return owned, unowned
 }
 
 // appeared is when the trace first shows i: its first version, the answer
@@ -393,9 +412,9 @@ func (h *honesty) unseen(dep owner.Instance, m Model, t0 time.Duration) string {
 	case !found:
 		return "not seen"
 	case wrote && !h.seenSince(seen, write):
-		return "not seen since the controller's write"
+		return fmt.Sprintf("not seen since the controller's write at %v", write.At)
 	case !h.ready(seen, m):
-		return "seen not ready"
+		return fmt.Sprintf("seen not ready at %v", seen.At)
 	}
 	return ""
 }
