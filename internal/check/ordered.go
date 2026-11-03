@@ -60,9 +60,9 @@ func Ordered(ix *trace.Index, s Spec) []Finding {
 }
 
 // holdDue returns when a controller that saw an object, or a CR that names
-// it, at sight must hold the object: stable later, stalls aside, or once the
-// excuse of a step whose faults stalled it by then starts, since it may wait
-// in retry backoff until then.
+// it, at sight must hold the object: stable later, stalls aside, but not
+// before the excuse of a step whose faults stalled it by then starts, since
+// it may wait in retry backoff until then.
 func (s Spec) holdDue(ix *trace.Index) func(sight time.Duration) time.Duration {
 	steps, faulted := ix.Steps(), faultStalls(ix)
 	all := stalls(ix, faulted)

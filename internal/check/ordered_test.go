@@ -123,7 +123,8 @@ const secretsFail = "error(500) on resource=secrets"
 
 // A fault failed the controller's update of the Secret, so it retries after
 // a backoff that the step's allowance bounds. A sight once the faults ended,
-// or stable before they began, gives it only stable.
+// or stable before they began, gives it only stable. Time the controller is
+// down after the faults still does not count toward stable.
 func TestOrderedGivesAControllerInRetryBackoffTheStepsAllowance(t *testing.T) {
 	// faults runs the step's faults from now for 500ms, failing the
 	// controller's update of the Secret if fail is set, and returns when the
@@ -147,6 +148,10 @@ func TestOrderedGivesAControllerInRetryBackoffTheStepsAllowance(t *testing.T) {
 		"as the excuse starts": {func(r *tt.Script) time.Duration {
 			return faults(r.See(ctl, pw).See(ctl, databaseB), true)
 		}, true},
+		"after it was down from the faults until the excuse started": {func(r *tt.Script) time.Duration {
+			excuse := faults(r.See(ctl, pw).See(ctl, databaseB), true)
+			return r.Add(tt.Exit("exit status 2", false, "panic: nil map")).Tick(excuse - r.Now).Add(tt.Start(2)).Now
+		}, false},
 		"stable after a sight once the faults ended": {func(r *tt.Script) time.Duration {
 			faults(r.See(ctl, pw).See(ctl, databaseB), true)
 			return r.See(ctl, pw).See(ctl, databaseB).Now - tt.Tick + r.Spec.Stable
