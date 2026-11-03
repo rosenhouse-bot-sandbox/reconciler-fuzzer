@@ -263,10 +263,10 @@ references:
   or the object's last version before its deletion started, shows it ready, since the
   controller may still use the object.
 - Clause 2 judges only CRs of listed kinds, so no check fails an object of another kind, such as
-  a Secret, that stays in deletion after its last naming CR is gone ([#188](https://github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/issues/188)).
+  a Secret, that stays in deletion after its last naming CR is gone (#188).
 - Under `block`, a generated create or `createFixture` may need a name that waits in deletion
   while a CR names it. Its wait then gives up with a `still taken` note, and the plan's later
-  steps do not run. `hunt` drops the note, so the seed counts as clean ([#189](https://github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/issues/189), [#190](https://github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/issues/190)).
+  steps do not run. `hunt` drops the note, so the seed counts as clean (#189, #190).
 
 [targets/toy-fleet/secret](targets/toy-fleet/secret/config.yaml) runs toy-fleet with
 `--protect-secrets`, which holds each Secret while a Database names it, and blocks on the Secret
