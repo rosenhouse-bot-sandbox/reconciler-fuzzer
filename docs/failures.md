@@ -52,7 +52,8 @@ A `# Notes` section follows the findings. A note says what the checks
 could not judge, or names a config mistake: an action that failed, a fault
 that picked no request, a step the trace ended too early to judge, a CR
 still being deleted that a `stop` did not wait for, an unmapped request, or
-a `role` that failed on every resource of a kind. Notes do not fail a run.
+a `role` that failed on every resource of a kind. A note also names each
+time the controller outlived `launch.gracePeriod`. Notes do not fail a run.
 A fault that picked no request tested nothing, so a plan with such notes
 may need a different fault. A step without a `period` ends its faults by
 the time its last action returns. Such a fault's note says how long the
@@ -91,6 +92,13 @@ kind the controller created: evaluating "self.metadata.labels['x']": no such
 key: x` names the first error of the system's `role`. The checks then group
 those resources as if the system had no `role`. One note per kind catches a
 `role` that a kind guard applies to that kind alone. Fix the CEL.
+
+`Step 1, at 8.6s: the controller did not exit within launch.gracePeriod of
+SIGTERM, so the harness sent SIGKILL.` means that a stop of the controller
+for a `restart` or a `stop` waited `launch.gracePeriod` after SIGTERM and
+then killed it. Such a stop tested a crash, not a clean shutdown. A note
+that begins `After the last step` names the stop at the run's end. Raise
+`launch.gracePeriod` if the controller needs longer to shut down.
 
 Hunt and shrink match findings by check, summary and kind, so a replay
 need not fail at the same step or on the same names.

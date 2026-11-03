@@ -122,6 +122,9 @@ timeouts: {settle: 30s, stable: 3s}
   `owns` names and the `models:` kinds with a `dependency`. Without owned kinds, the core kinds
   that the controller may create, such as Secrets, stand in for them. An owned kind ends that
   stand-in, even for a core kind that the controller also writes.
+- `launch.gracePeriod`, 5s by default, is how long a stop of the controller waits after
+  SIGTERM before it sends SIGKILL. The report notes each time the controller outlived the
+  grace period. After an interrupt, such as Ctrl-C, a stop sends SIGKILL at once.
 - `values` steers generated CRs: `overlay` narrows the CRD schema, `distinct` fields differ
   across a plan's CRs, `mutate` names the fields updates change, and `fixtures` names the
   fixture strings `changeFixture` sets.
@@ -471,9 +474,10 @@ its kind, such as one with a misspelt resource.
 
 ### Upgrading
 
-A `restart` stops the controller with SIGTERM and starts it again with its current binary, args
-and env. The harness installs `crds:` before step 0, and the CRDs stay fixed unless a
-restart installs new ones. A restart that names `binary`, `args` or `crds` tests an upgrade:
+A `restart` stops the controller and starts it again with its current binary, args and env. The
+stop sends SIGTERM, and SIGKILL if the controller outlives `launch.gracePeriod`. The harness
+installs `crds:` before step 0, and the CRDs stay fixed unless a restart installs new ones. A
+restart that names `binary`, `args` or `crds` tests an upgrade:
 
 ```json
 {"actions": [{"do": "restart", "args": ["--version=2"], "crds": ["../v2/crds/"]}]}
@@ -483,8 +487,8 @@ restart installs new ones. A restart that names `binary`, `args` or `crds` tests
 - `args` replace `launch.args`, and `[]` drops them. The `--launch-arg`s still come after the
   new args, and `${systems.<name>.<key>}` expands as in `launch.args`.
 - Every later start keeps the new `binary` and `args`: restarts, crash restarts, the start after
-  a `kill`, and the appended restart. Env and RBAC do not change, so `launch.rbac` must grant
-  what both versions need.
+  a `kill`, and the appended restart. Env, RBAC and `launch.gracePeriod` do not change, so
+  `launch.rbac` must grant what both versions need.
 - Paths resolve against the plan's directory. Before it starts, `run` refuses a `binary` that
   is not an executable file, a `crds` path that holds no CRD, and an unknown or unclosed
   `${key}`. It checks `launch.upgrades` the same way.

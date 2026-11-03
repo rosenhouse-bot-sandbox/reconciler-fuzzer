@@ -229,7 +229,7 @@ until no object holds the name it needs. Once `period` has passed, the wait ends
 the step's faults and restarts a killed controller. It gives up `deadline -
 endFaults` after the later of the faults' end and the delete, and the plan ends
 after the step. A `stop` waits the same way until each CR that a `delete`
-removed is gone, then sends SIGTERM even if one stays. A model fault that
+removed is gone, then stops the controller even if one stays. A model fault that
 nothing `Takes` is a harness error, as is any other action error except an
 unmatched target or a `createFixture` whose `changeFixture` deleted nothing.
 
@@ -274,8 +274,8 @@ reviews, non-resource URLs and unmapped requests.
 
 ## 11. Instances, owning CRs and roles
 
-`owner.New(ix, rules)` indexes every instance the trace shows. `rules` come
-from the config, or else the run event.
+`owner.New(ix, rules)` indexes every instance the trace shows. `rules`, like
+the checks' `Spec`, come from the config, or else the run event.
 
 - An instance is a (ref, UID), from its first version until a deleted
   version, or one its system's `gone` CEL accepts.
@@ -303,12 +303,12 @@ from the config, or else the run event.
 
 Most checks are `func(*trace.Index, Spec) []Finding`. A finding's signature is
 its check, summary and `kind` (`system/group/resource`). `check.Judge` runs
-every check, and notes each action error, request fault that picked no request,
-`holdWatch` while the controller had no watch of its kind, stage-model fault
-that held no object, distinct unmapped (system, method, path), and kind whose
-`role` failed on every resource the controller created. `Spec` comes from the
-config, or else the run event. A step's **end** is its `confirmed` time. Clean,
-Restore and Unique judge only settled steps (§17, entry 15).
+every check, and notes each action error, stop whose controller outlived its
+grace period, request fault that picked no request, `holdWatch` while the
+controller had no watch of its kind, stage-model fault that held no object,
+distinct unmapped (system, method, path), and kind whose `role` failed on every
+resource the controller created. A step's **end** is its `confirmed` time.
+Clean, Restore and Unique judge only settled steps (§17, entry 15).
 
 **Converge.** The settle condition holds by the deadline, and still holds at
 `t* + stable`. The summary names the first unmet clause, such as `did not

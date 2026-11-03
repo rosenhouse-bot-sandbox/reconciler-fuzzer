@@ -369,7 +369,11 @@ judged it. Tell the user which paths the controller uses.
 A note that a `role` failed on every resource of a kind names the CEL's first error. Fix the
 `role`, or guard it by kind.
 
-**Exit 0**: no findings. Go on.
+A note that the harness sent SIGKILL means the controller did not exit within
+`launch.gracePeriod` of SIGTERM. Set it above the controller's shutdown time, or tell the user
+if the controller ignores SIGTERM.
+
+**Exit 0**: no findings. Act on any notes as above, then go on.
 
 If five runs in a row make no progress, stop and report what you tried.
 

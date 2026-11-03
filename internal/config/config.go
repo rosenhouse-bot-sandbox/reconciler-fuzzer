@@ -68,6 +68,9 @@ type Launch struct {
 	// RBAC holds Role and ClusterRole manifests that the controller's
 	// identity is bound to.
 	RBAC []string
+	// GracePeriod is how long a stop of the controller waits after SIGTERM
+	// before it sends SIGKILL. It defaults to 5s.
+	GracePeriod time.Duration
 	// Upgrades are the later versions that generated plans restart into, in
 	// order.
 	Upgrades []plan.Upgrade
@@ -264,14 +267,17 @@ var DefaultBudgets = Budgets{Reads: 2, Writes: 4}
 
 var defaultTimeouts = Timeouts{Settle: 30 * time.Second, Stable: 3 * time.Second, BackoffCap: 60 * time.Second}
 
+const defaultGracePeriod = 5 * time.Second
+
 // declaration mirrors the YAML file.
 type declaration struct {
 	Launch struct {
-		Binary   string            `json:"binary"`
-		Args     []string          `json:"args"`
-		Env      map[string]string `json:"env"`
-		RBAC     []string          `json:"rbac"`
-		Upgrades []plan.Upgrade    `json:"upgrades"`
+		Binary      string            `json:"binary"`
+		Args        []string          `json:"args"`
+		Env         map[string]string `json:"env"`
+		RBAC        []string          `json:"rbac"`
+		GracePeriod string            `json:"gracePeriod"`
+		Upgrades    []plan.Upgrade    `json:"upgrades"`
 	} `json:"launch"`
 	CRDs       []string            `json:"crds"`
 	Primary    *declaredPrimary    `json:"primary"`
@@ -403,7 +409,7 @@ func load(path string) (*Config, error) {
 	if env["KUBECONFIG"] == "" {
 		env["KUBECONFIG"] = "${systems.kube.kubeconfig}"
 	}
-	c := &Config{Launch: Launch{Args: d.Launch.Args, Env: env}}
+	c := &Config{Launch: Launch{Args: d.Launch.Args, Env: env, GracePeriod: defaultGracePeriod}}
 
 	if d.Launch.Binary == "" {
 		return nil, errors.New("launch.binary is required")
@@ -459,6 +465,7 @@ func load(path string) (*Config, error) {
 		{"timeouts.settle", d.Timeouts.Settle, &c.Timeouts.Settle},
 		{"timeouts.stable", d.Timeouts.Stable, &c.Timeouts.Stable},
 		{"timeouts.backoffCap", d.Timeouts.BackoffCap, &c.Timeouts.BackoffCap},
+		{"launch.gracePeriod", d.Launch.GracePeriod, &c.Launch.GracePeriod},
 	} {
 		if t.declared == "" {
 			continue

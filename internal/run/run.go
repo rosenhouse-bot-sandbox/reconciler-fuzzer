@@ -309,18 +309,15 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 	launchOptions.OnStart = func(pid int) {
 		rec.Record(trace.Event{Proc: &trace.Proc{Event: trace.Start, PID: pid}})
 	}
-	launchOptions.OnExit = func(e launch.Exit) {
-		rec.Record(trace.Event{Proc: &trace.Proc{Event: trace.Exit, PID: e.PID, Exit: e.Status, HarnessCaused: e.HarnessCaused, StderrTail: e.Tail}})
-	}
+	launchOptions.OnExit = func(e launch.Exit) { rec.Record(trace.Event{Proc: procExit(e)}) }
 	controller := launch.New(launchOptions)
 	listeners := map[string]FaultTarget{}
 	for name, l := range controllerListeners {
 		l.SetKill(controller.Kill)
 		listeners[name] = l
 	}
-	defer func() {
-		err = errors.Join(err, controller.Supervise(false), controller.Stop(context.WithoutCancel(ctx)))
-	}()
+	// The stop takes ctx, so an interrupt sends SIGKILL at once.
+	defer func() { err = errors.Join(err, controller.Supervise(false), controller.Stop(ctx)) }()
 	if err := controller.Supervise(true); err != nil {
 		return err
 	}
@@ -506,6 +503,10 @@ func primaryKinds(primaries []config.Primary) []schema.GroupVersionKind {
 	return kinds
 }
 
+func procExit(e launch.Exit) *trace.Proc {
+	return &trace.Proc{Event: trace.Exit, PID: e.PID, Exit: e.Status, HarnessCaused: e.HarnessCaused, GracePeriodPassed: e.GracePeriodPassed, StderrTail: e.Tail}
+}
+
 // expandLaunch expands ${systems.<name>.<key>} in the launch args, with
 // extra appended, and in the env.
 func expandLaunch(l config.Launch, extra []string, vars map[string]string) (launch.Options, error) {
@@ -513,7 +514,7 @@ func expandLaunch(l config.Launch, extra []string, vars map[string]string) (laun
 	if err != nil {
 		return launch.Options{}, fmt.Errorf("launch args: %w", err)
 	}
-	o := launch.Options{Path: l.Binary, Args: args, Env: map[string]string{}}
+	o := launch.Options{Path: l.Binary, Args: args, Env: map[string]string{}, GracePeriod: l.GracePeriod}
 	for name, value := range l.Env {
 		expanded, err := config.Expand(value, vars)
 		if err != nil {
