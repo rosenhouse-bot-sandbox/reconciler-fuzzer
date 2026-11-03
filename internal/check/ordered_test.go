@@ -123,14 +123,18 @@ const secretsFail = "error(500) on resource=secrets"
 
 // A fault failed the controller's update of the Secret, so it retries after
 // a backoff that the step's allowance bounds. A sight once the faults ended,
-// or stable before they began, gives it only stable. Time the controller is
-// down after the faults still does not count toward stable.
+// or stable before they began, gives it only stable. The allowance never
+// shortens stable. A next step's faults that begin in the allowance extend it.
 func TestOrderedGivesAControllerInRetryBackoffTheStepsAllowance(t *testing.T) {
 	// faults runs the step's faults from now for 500ms, failing the
 	// controller's update of the Secret if fail is set, and returns when the
-	// step's settle excuse starts.
-	faults := func(r *tt.Script, fail bool) time.Duration {
+	// step's settle excuse starts. Each of during runs in the faults, before
+	// the update.
+	faults := func(r *tt.Script, fail bool, during ...func(*tt.Script)) time.Duration {
 		r.Add(tt.Fault(r.Step, 0, false, secretsFail))
+		for _, f := range during {
+			f(r)
+		}
 		if fail {
 			r.Add(injected("update", pw, 500, "error(500)"))
 		}
@@ -148,9 +152,20 @@ func TestOrderedGivesAControllerInRetryBackoffTheStepsAllowance(t *testing.T) {
 		"as the excuse starts": {func(r *tt.Script) time.Duration {
 			return faults(r.See(ctl, pw).See(ctl, databaseB), true)
 		}, true},
-		"after it was down from the faults until the excuse started": {func(r *tt.Script) time.Duration {
-			excuse := faults(r.See(ctl, pw).See(ctl, databaseB), true)
-			return r.Add(tt.Exit("exit status 2", false, "panic: nil map")).Tick(excuse - r.Now).Add(tt.Start(2)).Now
+		"before the excuse starts, after a sight in the faults": {func(r *tt.Script) time.Duration {
+			return faults(r, true, func(r *tt.Script) { r.See(ctl, pw).See(ctl, databaseB) }) - tt.Tick
+		}, false},
+		"before the excuse of a next step whose faults began in the allowance": {func(r *tt.Script) time.Duration {
+			faults(r.See(ctl, pw).See(ctl, databaseB), true)
+			return faults(r.Settle().Begin(), true) - tt.Tick
+		}, false},
+		"stable after a sight, counting the faults but not the downtime after them": {func(r *tt.Script) time.Duration {
+			sight := r.See(ctl, pw).See(ctl, databaseB).Now - tt.Tick
+			faults(r, true)
+			exit := r.Now
+			start := r.Add(tt.Exit("exit status 2", false, "panic: nil map")).Tick(10 * s).Now
+			r.Add(tt.Start(2))
+			return sight + r.Spec.Stable + start - exit
 		}, false},
 		"stable after a sight once the faults ended": {func(r *tt.Script) time.Duration {
 			faults(r.See(ctl, pw).See(ctl, databaseB), true)
