@@ -49,6 +49,7 @@ adopted controllers, and `docs/` the bug matrix, failures and findings.
 | `launch` | The controller process. |
 | `config` | Strict YAML loader, CEL, `${...}` expansion. |
 | `plan` | Plan types and `plan.json` load, save and validation. |
+| `suggest` | The name a mistyped one most likely meant, and lists of names. |
 | `owner` | Instances, creators, owning CRs, roles and target selection. |
 | `run` | The step runner, the deadline, and `Run`, which wires one run. |
 | `check` | Settle condition, the checks, findings, `report.md`. |
@@ -178,8 +179,8 @@ harness errors, which each settle poll checks for (`fake.go`).
 
 The observer lists a fake every 20 ms, through `fake.ResourcesPath` or an
 emulator's `fake.Lister`, and hears `Shown`. It records versions, deletions and
-`work`. `Takes` accepts a model fault on a `crud` fake. `Patch` and `Delete`
-return after an observer pass that started after the answer.
+`work`. `Patch` and `Delete` return after an observer pass that started after
+the answer.
 
 ## 8. Plans
 
@@ -198,14 +199,14 @@ whose root (§11) holds the slot's newest live CR when a slot is set. A target
 that matches nothing records `no instance matches`, the target, and what the
 slot holds or up to five live instances of its kind that the creator made.
 
-Actions run in order, each at its optional `at` offset. A fault sets one
-effect: a request fault or `holdWatch` (§5), or a model fault (§7) with no
-verb, subresource or `nth`. A fault's `system` defaults to `kube`; the runner
-refuses an unknown one. On `kube`, a model fault and a target need a
-`resource`; on a fake, an empty one matches every collection, and a fault
-takes no `group`. `plan.Load` decodes strictly and validates the plan
-(`plan.go`). Two slots' CRs clash only with equal group, kind, namespace and
-name. `run.Run` refuses a create of an unlisted kind (`ValidateKinds`).
+Actions run in order, each at its optional `at` offset. A fault sets one effect:
+a request fault or `holdWatch` (§5), or a model fault (§7) with no verb,
+subresource or `nth`. On `kube`, a model fault and a target need a `resource`;
+on a fake, an empty one matches every collection, and a fault takes no `group`.
+`plan.Load` decodes strictly and validates the plan (`plan.go`). Two slots' CRs
+clash only with equal group, kind, namespace and name. Before envtest starts,
+`run.Run` refuses a create of an unlisted kind (`ValidateKinds`), a fault that
+nothing takes (`checkFaults`), and a missing `launch.binary`.
 
 **Upgrades.** A `restart` may take `binary`, `args` and `crds`, relative to the
 plan's directory. It installs the `crds` while the old controller runs; a failed
@@ -230,9 +231,9 @@ until no object holds the name it needs. Once `period` has passed, the wait ends
 the step's faults and restarts a killed controller. It gives up `deadline -
 endFaults` after the later of the faults' end and the delete, and the plan ends
 after the step. A `stop` waits the same way until each CR that a `delete`
-removed is gone, then stops the controller even if one stays. A model fault that
-nothing `Takes` is a harness error, as is any other action error except an
-unmatched target or a `createFixture` whose `changeFixture` deleted nothing.
+removed is gone, then stops the controller even if one stays. An action error is
+a harness error, except an unmatched target or a `createFixture` whose
+`changeFixture` deleted nothing.
 
 ## 10. Settle condition
 
@@ -272,9 +273,9 @@ to the CRs the stop waited for (§9).
    A fake's write without a resourceVersion is changed only if the
    observer records a new version within 200 ms (`Index.Changed`).
 
-`ready` and `halted` are CEL over `self`, the CR; an error fails clause 1. No
-check counts what `trace.Ignored` lists: Events, Leases, TokenReview, access
-reviews, non-resource URLs and unmapped requests.
+`ready` and `halted` are CEL over `self`, the CR, typed by its CRD's schema; an
+error, such as a missing field, fails clause 1. No check counts what
+`trace.Ignored` lists, such as Events and Leases.
 
 ## 11. Instances, owning CRs and roles
 
@@ -451,25 +452,25 @@ budgets: {reads: 2, writes: 4}                          # defaults
 timeouts: {settle: 30s, stable: 3s, backoffCap: 60s}    # defaults
 ```
 
-`primary` is shorthand for a one-entry `primaries`, whose `overlay`,
-`distinct` and `mutate` sit in the top-level `values`. An entry also takes
-`retain` and `halted`. No kind appears twice among `primaries` and `models`,
-and no kube fixture is a CR. A model's stage is `readyCondition`.
-`dependency.required` defaults to true, and `stuckStatus` to `status`. `vault`
-needs a `token`. `access: read` says the controller only reads the fake.
-`values.fixtures` may name a system's fixtures file, whose entries' body paths
-`changeFixture` sets. `config.go` holds the other rules.
+`primary` is shorthand for a one-entry `primaries`, whose `overlay`, `distinct`
+and `mutate` sit in the top-level `values`. An entry also takes `retain` and
+`halted`. A CRD under `crds` or Kubernetes must serve each kind. No kind appears
+twice among `primaries` and `models`, and no kube fixture is a CR. A model's
+stage is `readyCondition`. `dependency.required` defaults to true, and
+`stuckStatus` to `status`. `vault` needs a `token`. `access: read` says the
+controller only reads the fake. `values.fixtures` may name a system's fixtures
+file, whose entries' body paths `changeFixture` sets. `config.go` holds the
+other rules.
 
 A reference's `to` is a kube kind or `<system>:<collection>`, and its `ready`
 defaults to that of a listed kind, a model or a fake. `name` and `namespace` are
 field paths as in `values.mutate`; `[*]` names a field of each list item. An
-empty or absent value names nothing. `config.Load` reads each kind's scope from
-`crds` and a table of the kinds Kubernetes serves without a CRD. The `from`
-CRD's schema must describe each path as a string. A `name` that an `owns` entry
-of the `from` entry reads is refused, since the CR owns that object. Under
-`onDelete: block`, the `to` object's deletion waits for its `from` CRs, as
-`kubernetes.io/pvc-protection` does. `references.go` holds the other refusals.
-`targets/toy-fleet/config.yaml` lists three kinds and their references (§16).
+empty or absent value names nothing. The `from` CRD's schema must describe each
+path as a string. A `name` that an `owns` entry of the `from` entry reads is
+refused, since the CR owns that object. Under `onDelete: block`, the `to`
+object's deletion waits for its `from` CRs, as `kubernetes.io/pvc-protection`
+does. `references.go` holds the other refusals. `targets/toy-fleet/config.yaml`
+lists three kinds and their references (§16).
 
 ## 14. Generation, replay and shrinking
 

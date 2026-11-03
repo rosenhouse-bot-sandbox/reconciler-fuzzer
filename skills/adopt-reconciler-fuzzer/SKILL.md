@@ -147,7 +147,8 @@ Fill each key from the project:
   later version's `binary`, `args` or `crds`, and each generated plan restarts into it once.
 - `primary` describes one kind. For several, write `primaries`, a list of such entries, and
   move each kind's `overlay`, `distinct` and `mutate` into its entry's `values`.
-- An entry's `ready`: CEL over the CR, true only once the controller acted on the current spec.
+- An entry's `ready`: CEL over the CR, typed by its CRD's schema, true only once the controller
+  acted on the current spec.
   Compare an `observedGeneration` with `metadata.generation`. If the controller writes no
   status, use `"true"` and tell the user.
 - An entry's `retain`: CEL over a deleted CR that allows its resources to stay. Set it only where

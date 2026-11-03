@@ -128,7 +128,7 @@ func assetsHint(err error) string {
 	if !errors.As(err, &missing) || missing.Op != "fork/exec" {
 		return ""
 	}
-	return `; set KUBEBUILDER_ASSETS to the directory that "setup-envtest use 1.37.0 -p path" prints`
+	return "; set KUBEBUILDER_ASSETS to the path that setup-envtest prints, as the README's Install section shows"
 }
 
 func (k *Kube) start(ctx context.Context, env *system.Env) (system.Endpoints, error) {

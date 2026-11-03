@@ -351,12 +351,13 @@ names its cause. A run that started leaves its partial trace in `--out`. Common 
 
 | Error | Fix |
 | --- | --- |
-| `starting envtest: ... etcd: no such file or directory` | Set `KUBEBUILDER_ASSETS` to `$(make -s assets-path)`. |
-| `starting <binary>: ... no such file or directory` | Build the controller to `launch.binary`. |
+| `starting envtest: ... etcd: no such file or directory; set KUBEBUILDER_ASSETS ...` | Set `KUBEBUILDER_ASSETS` as the README's Install section shows, or to `$(make -s assets-path)` in a checkout. |
+| `launch.binary: ... no such file or directory` | Build the controller to `launch.binary`. |
 | `the controller never started: ...` | No request got a 2xx answer within `timeouts.settle`. Requests that no check judges, such as discovery, Leases and Events, do not count. Read the output tail and `controller.log`. Fix `launch.args`, `launch.env` or `launch.rbac`. Raise `timeouts.settle` for a controller that starts slowly. |
 | `creating fixture ...` | Fix the fixture, or install the CRD it needs under `crds`. |
 | `creating fixture CustomResourceDefinition ...: ... already exists` | List the CRD under `crds` or under `fixtures`, not both. |
-| `mapping <group>/<version>, Kind=<kind>: no matches for kind ...` | Install the listed kind's CRD under `crds`. |
+| `... <kind>: no CRD under crds and no built-in kind serves it; ...` | Fix the kind's group, version or name as the error suggests, or add its CRD under `crds`. |
+| `steps[i].faults[j]: unknown system ...` or `steps[i].faults[j]: no model takes ...` | Name `kube` or a fake under `systems`. A model fault on `kube` needs a `models` entry whose plural is its `resource`, and one on a fake needs a `crud` fake. |
 | `steps[i].actions[j]: ...` or `launch.upgrades[i]: ...` that names a `binary` or `crds` path | Point `binary` at an executable file and `crds` at valid CRD files. A plan file's paths resolve against its directory, and `launch.upgrades` paths against the config's. |
 | `installing CRDs: the <resource> CRD stops serving <version>, which the harness watches` | Keep that version served in the restart's `crds`. |
 | `installing CRDs: ...` | Fix the CRDs that a restart's `crds` names. |

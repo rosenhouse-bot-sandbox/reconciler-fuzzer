@@ -116,8 +116,9 @@ timeouts: {settle: 30s, stable: 3s}
   with an empty path.
 - `args` turns off the scaffold's fixed ports, so runs cannot clash on them. If it has
   webhooks, set `ENABLE_WEBHOOKS: "false"` in `env`.
-- `ready` is CEL over the CR. It must be true only once the controller has acted on the
-  current spec, so compare an `observedGeneration` with `metadata.generation`.
+- `ready` is CEL over the CR, typed by its CRD's schema. It must be true only once the
+  controller has acted on the current spec, so compare an `observedGeneration` with
+  `metadata.generation`.
 - `stable` is how long the controller must stay quiet before a step counts as settled.
 - `launch.rbac` also tells generation which requests a fault can pick. A generated `damage` of
   a kube object targets an unlisted kind that `launch.rbac` lets the controller create. Faults
