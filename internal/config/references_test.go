@@ -54,17 +54,26 @@ func writeReferences(t *testing.T, rest string) string {
 	return path
 }
 
-func crd(kind, scope string) string {
+func crd(kind, scope string) string { return crdOf("toy", kind, scope, "v1") }
+
+// crdOf is a CRD of kind in group that lists versions, each served unless
+// it ends in "!".
+func crdOf(group, kind, scope string, versions ...string) string {
+	var listed []string
+	for i, v := range versions {
+		name, unserved := strings.CutSuffix(v, "!")
+		listed = append(listed, fmt.Sprintf("{name: %s, served: %t, storage: %t}", name, !unserved, i == 0))
+	}
 	plural := strings.ToLower(kind) + "s"
 	return fmt.Sprintf(`apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
-metadata: {name: %s.toy}
+metadata: {name: %s.%s}
 spec:
-  group: toy
+  group: %s
   names: {kind: %s, plural: %s}
   scope: %s
-  versions: [{name: v1, served: true, storage: true}]
-`, plural, kind, plural, scope)
+  versions: [%s]
+`, plural, group, group, kind, plural, scope, strings.Join(listed, ", "))
 }
 
 func toyKind(group, kind string) schema.GroupVersionKind {

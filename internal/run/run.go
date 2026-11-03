@@ -235,6 +235,8 @@ func checkUpgrades(cfg *config.Config, p *plan.Plan) error {
 	return nil
 }
 
+func checkFaults(cfg *config.Config, p *plan.Plan) error { return nil }
+
 func checkPaths(u plan.Upgrade) error {
 	if u.Binary != "" {
 		if _, err := exec.LookPath(u.Binary); err != nil {

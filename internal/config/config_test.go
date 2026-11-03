@@ -259,11 +259,20 @@ func minimal(t *testing.T) string {
 	return string(data)
 }
 
-// writeConfig writes content next to copies of the testdata files.
+// testCRDs serve the CR kinds that the tests' configs name.
+var testCRDs = strings.Join([]string{
+	crdOf("toy", "Cluster", "Namespaced", "v1"), crdOf("toy", "Database", "Namespaced", "v1"),
+	crdOf("other", "Cluster", "Namespaced", "v1"), crdOf("model", "Cluster", "Namespaced", "v1"),
+	crdOf("example.com", "Gadget", "Namespaced", "v1"), crdOf("example.com", "Doohickey", "Namespaced", "v1"),
+	crdOf("example.com", "Gizmo", "Namespaced", "v1"), crdOf("x.io", "Thing", "Namespaced", "v1beta2"),
+}, "---\n")
+
+// writeConfig writes content beside a crd.yaml of testCRDs and empty
+// sample.yaml, role.yaml and fixture.yaml files.
 func writeConfig(t *testing.T, content string) string {
 	dir := t.TempDir()
-	for _, file := range []string{"crd.yaml", "sample.yaml", "role.yaml", "fixture.yaml"} {
-		if err := os.WriteFile(filepath.Join(dir, file), nil, 0o644); err != nil {
+	for file, data := range map[string]string{"crd.yaml": testCRDs, "sample.yaml": "", "role.yaml": "", "fixture.yaml": ""} {
+		if err := os.WriteFile(filepath.Join(dir, file), []byte(data), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}

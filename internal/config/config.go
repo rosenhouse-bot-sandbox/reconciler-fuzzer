@@ -218,8 +218,10 @@ const ReadyConditionCEL = `has(self.status) && has(self.status.conditions) && se
 
 // Model is one models entry: the harness plays the controller of Kind.
 type Model struct {
-	Kind  schema.GroupVersionKind
-	Stage string
+	Kind schema.GroupVersionKind
+	// Resource is the plural that serves Kind, such as gadgets.
+	Resource string
+	Stage    string
 	// Status holds literal fields the stage sets in each status write, and
 	// StuckStatus those it sets in their place while a stuck fault lasts.
 	// A nil StuckStatus means Status, and an empty one means no fields.
