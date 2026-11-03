@@ -28,15 +28,14 @@ func Ordered(ix *trace.Index, s Spec) []Finding {
 			claims[i.UID] = s.claims(w.Versions(i))
 		}
 	}
-	steps, faulted := ix.Steps(), faultStalls(ix)
-	all := stalls(ix, faulted)
+	steps, due := ix.Steps(), s.holdDue(ix)
 	details, at := map[int]map[string][]string{}, map[int]time.Duration{}
 	for _, object := range w.All() {
 		r, found := releaseOf(w, object)
 		if !found {
 			continue
 		}
-		inTime := func(e trace.Event) bool { return s.holdDue(e.At, steps, faulted, all) <= r.start }
+		inTime := func(e trace.Event) bool { return due(e.At) <= r.start }
 		if !slices.ContainsFunc(ix.Seen(trace.Controller, object.UID), inTime) {
 			continue
 		}
@@ -60,19 +59,22 @@ func Ordered(ix *trace.Index, s Spec) []Finding {
 	return findings
 }
 
-// holdDue is when a controller that saw an object, or a CR that names it,
-// at sight must hold the object: stable later, stalls aside, or once the
+// holdDue returns when a controller that saw an object, or a CR that names
+// it, at sight must hold the object: stable later, stalls aside, or once the
 // excuse of a step whose faults stalled it by then starts, since it may wait
-// in retry backoff until then. faulted holds the steps' stalls, and all
-// every stall.
-func (s Spec) holdDue(sight time.Duration, steps []trace.StepSpan, faulted map[int]stall, all []stall) time.Duration {
-	due := until(sight, s.Stable, all)
-	for _, step := range steps {
-		if f, found := faulted[step.Step]; found && f.end > sight && f.start <= due {
-			due = max(due, s.excuseStart(step))
+// in retry backoff until then.
+func (s Spec) holdDue(ix *trace.Index) func(sight time.Duration) time.Duration {
+	steps, faulted := ix.Steps(), faultStalls(ix)
+	all := stalls(ix, faulted)
+	return func(sight time.Duration) time.Duration {
+		due := until(sight, s.Stable, all)
+		for _, step := range steps {
+			if f, found := faulted[step.Step]; found && f.end > sight && f.start <= due {
+				due = max(due, s.excuseStart(step))
+			}
 		}
+		return due
 	}
-	return due
 }
 
 // A release is an instance's deleted version, at at with resourceVersion

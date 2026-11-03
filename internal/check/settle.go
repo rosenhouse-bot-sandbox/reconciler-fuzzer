@@ -84,7 +84,7 @@ func runClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 	if !MadeSuccessfulRequest(ix, since, t) {
 		unmets = append(unmets, unmet{4, "", fmt.Sprintf("the controller has made no successful request since it started at %v", since)})
 	}
-	return append(unmets, lookClauses(ix, t, s)...)
+	return slices.Concat(unmets, lookClauses(ix, t, s), releaseClauses(ix, t, s))
 }
 
 // MadeSuccessfulRequest says whether the controller sent a request that a
@@ -98,15 +98,15 @@ func MadeSuccessfulRequest(ix *trace.Index, since, t time.Duration) bool {
 // lookClauses holds the controller to looking at each object that the
 // latest step's damage, changeFixture and createFixture actions changed,
 // until the step's lapse time. It also holds the step for Stable after each
-// change, after each of the step's holdWatch faults ends, and, without a
-// watch across the change, after the first request that looked, so that
-// clause 7 sees the controller's reaction. A held watch does not look.
+// change and, without a watch across the change, after the first request
+// that looked, so that clause 7 sees the controller's reaction. A held watch
+// does not look.
 func lookClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 	step, found := latestStep(ix, t)
 	if !found || step.Reached[trace.EndFaults] && t >= lapse(ix, step, s) {
 		return nil
 	}
-	unmets := releaseClauses(ix, step.Step, t, s)
+	var unmets []unmet
 	for _, change := range changes(ix, step.Step) {
 		ref := *change.Action.Ref
 		watched := ix.Watching(trace.Controller, ref, change.At, t) && !ix.Holding(ref, t)
@@ -124,13 +124,13 @@ func lookClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 	return unmets
 }
 
-// releaseClauses holds step for Stable after each of its holdWatch faults
-// ends. The events that the hold delivers may show the controller work, such
-// as its own write that the hold kept from its cache.
-func releaseClauses(ix *trace.Index, step int, t time.Duration, s Spec) []unmet {
+// releaseClauses holds the controller for Stable after each holdWatch fault
+// ends, with no lapse. The events that the hold delivers may show the
+// controller work, such as its own write that the hold kept from its cache.
+func releaseClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 	var unmets []unmet
 	for _, h := range ix.Holds() {
-		if h.Step == step && h.End <= t && t < h.End+s.Stable {
+		if h.End <= t && t < h.End+s.Stable {
 			unmets = append(unmets, unmet{5, kind(h.Kind), fmt.Sprintf("a holdWatch released the controller's watch of %s at %v, less than stable ago", worldKey(h.Kind), h.End)})
 		}
 	}
@@ -211,7 +211,10 @@ func deletionClauses(ix *trace.Index, cr trace.Version, t time.Duration, s Spec,
 	}
 	start, _ := deletionStart(ix.Versions(cr.Ref, cr.UID))
 	step, _ := latestStep(ix, t)
-	if from := max(start+s.Stable, s.excuseStart(step)); t < from {
+	switch from := max(start+s.Stable, s.excuseStart(step)); {
+	case from == math.MaxInt64:
+		return []unmet{{2, k, name + " waits in deletion, which counts as settled only once the step's faults end"}}
+	case t < from:
 		return []unmet{{2, k, fmt.Sprintf("%s waits in deletion, which counts as settled only from %v", name, from)}}
 	}
 	return nil

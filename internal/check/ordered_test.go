@@ -178,6 +178,15 @@ func TestOrderedGivesAControllerInRetryBackoffTheStepsAllowance(t *testing.T) {
 	}
 }
 
+// A step whose faults never ended, as in an interrupted run's trace, bounds
+// no backoff that they caused.
+func TestOrderedPassesAReleaseInFaultsThatNeverEnded(t *testing.T) {
+	r := secretRun(blockRef(), secret(true))
+	r.See(ctl, pw).See(ctl, databaseB).Add(tt.Fault(r.Step, 0, false, secretsFail)).Add(injected("update", pw, 500, "error(500)")).
+		Tick(500 * ms).Add(tt.Fault(r.Step, 0, true, secretsFail))
+	requireNone(t, judgeWith(t, r.Tick(10*r.Spec.Stable).Delete(trace.Harness, pw), check.Ordered))
+}
+
 func TestOrderedJudgesOnlyBlockReferences(t *testing.T) {
 	r := secretRun(secretRef(), secret(true))
 	seeBoth(r).Delete(ctl, pw)
@@ -529,6 +538,23 @@ func TestACRWaitingInDeletionSettlesOnceTheStepsExcuseStarts(t *testing.T) {
 	}
 	if unmet := settledAt(t, r, excuse); len(unmet) != 0 {
 		t.Errorf("At the excuse: unmet = %q, want none.", unmet)
+	}
+}
+
+// While a step's faults go on, as at the end of an interrupted run's trace,
+// the controller may wait in retry backoff for as long as they last.
+func TestACRWaitingInDeletionDoesNotSettleBeforeTheStepsFaultsEnd(t *testing.T) {
+	r := fleetRun(1, clusters, databases)
+	r.Spec.References = []trace.Reference{clusterRef(r, true)}
+	r.Begin()
+	r.CreateCR("a", clusterA)
+	r.Ready(clusterA)
+	r.Create(trace.Harness, databaseB, databaseOn(true, "a"))
+	r.Act("create", "b", &databaseB)
+	r.Update(trace.Harness, clusterA, tt.Deleting(tt.CR("a", false))).Act("delete", "a", &clusterA)
+	want := []string{"clusters.toy ns/a waits in deletion, which counts as settled only once the step's faults end"}
+	if unmet := settledAt(t, r, r.Now+5*s); !slices.Equal(unmet, want) {
+		t.Errorf("unmet = %q, want %q.", unmet, want)
 	}
 }
 

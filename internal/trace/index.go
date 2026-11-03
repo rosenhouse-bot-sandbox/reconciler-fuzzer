@@ -31,7 +31,8 @@ type Index struct {
 	// byRV holds each object's Version event of each resourceVersion.
 	byRV map[objectRV]Event
 	// seen holds each caller's Seen events by UID, and opaque its opaque
-	// ones. gone holds the UIDs that each caller saw deleted.
+	// ones. gone holds the UIDs that each caller saw deleted on a watch
+	// that is not Partial.
 	seen   map[Caller]map[string][]Event
 	opaque map[Caller][]Event
 	gone   map[Caller]map[string]bool
@@ -135,21 +136,25 @@ func (ix *Index) Append(events ...Event) {
 	}
 }
 
-// addSeen indexes e, a Seen event that is not opaque, unless its caller saw
-// the object deleted before. The object is then gone, so e shows a stale
-// version, as the response to the write that removed its last finalizer
-// may. A Partial watch sends DELETED also when the object leaves its
-// selector, so its DELETED does not count.
+// addSeen indexes e, a Seen event that is not opaque, unless e is a response
+// that shows an object that its caller saw deleted before. The object is
+// then gone, so e shows a stale version, as the response to the write that
+// removed its last finalizer may. Another watch's event still counts, since
+// that watch's cache holds the object until its own DELETED. A Partial watch
+// sends DELETED also when the object leaves its selector, so its DELETED
+// does not count.
 func (ix *Index) addSeen(e Event) {
 	s := e.Seen
-	if ix.gone[s.Caller][s.UID] {
+	if s.Stream == 0 && ix.gone[s.Caller][s.UID] {
 		return
 	}
-	if watch, found := ix.watch(s.Caller, s.Ref.System, s.Stream); s.Deleted && (!found || !watch.Call.Partial) {
-		if ix.gone[s.Caller] == nil {
-			ix.gone[s.Caller] = map[string]bool{}
+	if s.Deleted {
+		if watch, found := ix.watch(s.Caller, s.Ref.System, s.Stream); !found || !watch.Call.Partial {
+			if ix.gone[s.Caller] == nil {
+				ix.gone[s.Caller] = map[string]bool{}
+			}
+			ix.gone[s.Caller][s.UID] = true
 		}
-		ix.gone[s.Caller][s.UID] = true
 	}
 	if ix.seen[s.Caller] == nil {
 		ix.seen[s.Caller] = map[string][]Event{}
@@ -477,8 +482,8 @@ func (ix *Index) Later(ref Ref, rv, base string) (later, found bool) {
 }
 
 // Seen returns the Seen events by caller of the object with uid, in Seq
-// order, up to the first that showed it deleted on a watch that is not
-// Partial.
+// order, without a response after a watch that is not Partial showed it
+// deleted.
 func (ix *Index) Seen(caller Caller, uid string) []Event { return ix.seen[caller][uid] }
 
 // Looks returns, in Seq order, the responses that showed caller ref: each

@@ -148,8 +148,9 @@ under `onDelete: block`, from `stable` after its deletion started. After
 faults, the skip also waits until `stable`, and the time the step's faults
 lasted, at most `timeouts.backoffCap`, have passed since they ended. Until
 then, clause 2's line says `waits in deletion, which counts as settled only
-from <t>`. If the controller holds a named CR's deletion by design, and
-clause 2 names that CR, set the reference's `onDelete: block`.
+from <t>`, or `only once the step's faults end` while they go on. If the
+controller holds a named CR's deletion by design, and clause 2 names that
+CR, set the reference's `onDelete: block`.
 
 CRs being deleted that name each other, directly or through other CRs
 being deleted, would wait for good, so those names do not count. A CR

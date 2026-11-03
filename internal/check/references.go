@@ -3,6 +3,7 @@ package check
 import (
 	"cmp"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -209,7 +210,7 @@ func (s Spec) describeLooks(ix *trace.Index, cr trace.Ref, body map[string]any, 
 // or leaves it unknown. It excuses no CR before the latest step's
 // excuseStart.
 func (s Spec) heldBack(ix *trace.Index, cr trace.Ref, body map[string]any, t time.Duration) bool {
-	if step, _ := latestStep(ix, t); !step.Reached[trace.EndFaults] || t < s.excuseStart(step) {
+	if step, _ := latestStep(ix, t); t < s.excuseStart(step) {
 		return false
 	}
 	for _, n := range s.names(cr, body) {
@@ -224,7 +225,11 @@ func (s Spec) heldBack(ix *trace.Index, cr trace.Ref, body map[string]any, t tim
 // excuseStart is when the settle condition starts to excuse a CR that a
 // reference holds back in step, or that waits in deletion: once the step's
 // backoff allowance and stable have passed since its faults ended, so that
-// clause 7 sees a controller in backoff react to the step's actions.
+// clause 7 sees a controller in backoff react to the step's actions. It is
+// never while the faults go on, since the backoff may last as long.
 func (s Spec) excuseStart(step trace.StepSpan) time.Duration {
+	if !step.Reached[trace.EndFaults] {
+		return math.MaxInt64
+	}
 	return step.EndFaults + step.Backoff + s.Stable
 }

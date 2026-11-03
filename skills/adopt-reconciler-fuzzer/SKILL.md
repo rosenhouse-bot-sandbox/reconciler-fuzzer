@@ -394,8 +394,9 @@ Treat each finding as in step 8.
 
 Under `onDelete: block`, a seed's plan may stop early: a create or `createFixture` into a name
 that waits in deletion gives up with a `still taken` note, and the later steps do not run.
-`summary.md` does not show this ([#190](https://github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/issues/190)). Run such a seed with `reconciler-fuzzer run --seed`
-to read its notes in `report.md`.
+`summary.md` does not show this
+([#190](https://github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/issues/190)). Run such a
+seed with `reconciler-fuzzer run --seed` to read its notes in `report.md`.
 
 ## 10. Commit plans and seeds
 
