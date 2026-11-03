@@ -49,20 +49,12 @@ type declaredReference struct {
 	OnDelete  string `json:"onDelete"`
 }
 
-// references loads the references entries. Only a config with entries
-// reads the CRDs.
-func (c *Config) references(declared []declaredReference) ([]Reference, error) {
-	if len(declared) == 0 {
-		return nil, nil
-	}
-	crds, err := readCRDs(c.CRDs)
-	if err != nil {
-		return nil, err
-	}
+// references loads the references entries.
+func (c *Config) references(declared []declaredReference, kinds servedKinds) ([]Reference, error) {
 	var references []Reference
 	for i, d := range declared {
 		key := fmt.Sprintf("references[%d]", i)
-		r, err := c.reference(key, d, crds)
+		r, err := c.reference(key, d, kinds)
 		if err != nil {
 			return nil, err
 		}
@@ -76,7 +68,7 @@ func (c *Config) references(declared []declaredReference) ([]Reference, error) {
 	return references, nil
 }
 
-func (c *Config) reference(key string, d declaredReference, crds map[schema.GroupKind]crd) (Reference, error) {
+func (c *Config) reference(key string, d declaredReference, kinds servedKinds) (Reference, error) {
 	r := Reference{Name: d.Name, Namespace: d.Namespace, Ready: d.Ready, Required: d.Required == nil || *d.Required}
 	if d.From == "" {
 		return Reference{}, fmt.Errorf("%s.from is required", key)
@@ -94,6 +86,7 @@ func (c *Config) reference(key string, d declaredReference, crds map[schema.Grou
 	}
 
 	var fake System
+	var to servedKind
 	switch {
 	case d.To == "":
 		return Reference{}, fmt.Errorf("%s.to is required", key)
@@ -109,10 +102,10 @@ func (c *Config) reference(key string, d declaredReference, crds map[schema.Grou
 		if err := c.atDeclaredVersion(r.To); err != nil {
 			return Reference{}, fmt.Errorf("%s.to %s: %w", key, d.To, err)
 		}
-		var known bool
-		if r.Namespaced, known = scopeOf(r.To.GroupKind(), crds); !known {
-			return Reference{}, fmt.Errorf("%s.to %s: %s", key, d.To, unknownKind(r.To, crds))
+		if to, err = kinds.serving(r.To); err != nil {
+			return Reference{}, fmt.Errorf("%s.to %s: %w", key, d.To, err)
 		}
+		r.Namespaced = to.namespaced
 	}
 
 	if r.Name == "" {
@@ -130,10 +123,10 @@ func (c *Config) reference(key string, d declaredReference, crds map[schema.Grou
 	if slices.Contains(c.Primaries[from].Values.Distinct, r.Name) {
 		return Reference{}, fmt.Errorf("%s.name %s: the from entry's values.distinct lists it", key, r.Name)
 	}
-	if err := stringField(crds[r.From.GroupKind()].schemas[r.From.Version], name); err != nil {
+	if err := stringField(kinds[r.From].schema, name); err != nil {
 		return Reference{}, fmt.Errorf("%s.name %s: %w", key, r.Name, err)
 	}
-	if err := checkNamespace(key+".namespace", r, name, crds); err != nil {
+	if err := checkNamespace(key+".namespace", r, name, kinds[r.From]); err != nil {
 		return Reference{}, err
 	}
 
@@ -141,7 +134,7 @@ func (c *Config) reference(key string, d declaredReference, crds map[schema.Grou
 		if r.Ready = c.defaultReady(r, fake); r.Ready == "" {
 			return Reference{}, fmt.Errorf("%s.ready is required: %s is no listed kind, model or fake with a ready", key, d.To)
 		}
-	} else if _, err := CompileReady(r.Ready); err != nil {
+	} else if _, err := compileOver(r.Ready, to.schema); err != nil {
 		return Reference{}, fmt.Errorf("%s.ready: %w", key, err)
 	}
 
@@ -167,10 +160,10 @@ func (c *Config) reference(key string, d declaredReference, crds map[schema.Grou
 // checkNamespace refuses a namespace path that is malformed, that reads
 // lists otherwise than name does, that the to kind has no use for, or that
 // the from kind's schema describes as no string. Without a namespace path,
-// it refuses a namespaced to of a from that the CRDs say is cluster-scoped.
-func checkNamespace(key string, r Reference, name []pathSegment, crds map[schema.GroupKind]crd) error {
+// it refuses a namespaced to of a cluster-scoped from.
+func checkNamespace(key string, r Reference, name []pathSegment, from servedKind) error {
 	if r.Namespace == "" {
-		if fromNamespaced, known := scopeOf(r.From.GroupKind(), crds); r.Namespaced && known && !fromNamespaced {
+		if r.Namespaced && !from.namespaced {
 			return fmt.Errorf("%s is required: the from kind is cluster-scoped and the to kind namespaced", key)
 		}
 		return nil
@@ -186,7 +179,7 @@ func checkNamespace(key string, r Reference, name []pathSegment, crds map[schema
 	case !r.Namespaced:
 		return fmt.Errorf("%s: the to kind is cluster-scoped", key)
 	}
-	if err := stringField(crds[r.From.GroupKind()].schemas[r.From.Version], namespace); err != nil {
+	if err := stringField(from.schema, namespace); err != nil {
 		return fmt.Errorf("%s %s: %w", key, r.Namespace, err)
 	}
 	return nil
@@ -294,128 +287,6 @@ func fakeKind(declared string, fakes []System) (System, string, error) {
 		return System{}, "", fmt.Errorf("systems declares no fake %s", system)
 	}
 	return fakes[i], collection, nil
-}
-
-// builtinKinds are the kinds that Kubernetes 1.37 serves without a CRD and
-// that a client can watch, by whether they are namespaced.
-var builtinKinds = map[bool][]string{
-	true: {
-		"v1/ConfigMap", "v1/Endpoints", "v1/Event", "v1/LimitRange", "v1/PersistentVolumeClaim", "v1/Pod", "v1/PodTemplate",
-		"v1/ReplicationController", "v1/ResourceQuota", "v1/Secret", "v1/Service", "v1/ServiceAccount",
-		"apps/v1/ControllerRevision", "apps/v1/DaemonSet", "apps/v1/Deployment", "apps/v1/ReplicaSet", "apps/v1/StatefulSet",
-		"autoscaling/v2/HorizontalPodAutoscaler", "batch/v1/CronJob", "batch/v1/Job",
-		"certificates.k8s.io/v1/PodCertificateRequest", "coordination.k8s.io/v1/Lease", "discovery.k8s.io/v1/EndpointSlice",
-		"events.k8s.io/v1/Event", "networking.k8s.io/v1/Ingress", "networking.k8s.io/v1/NetworkPolicy",
-		"policy/v1/PodDisruptionBudget", "rbac.authorization.k8s.io/v1/Role", "rbac.authorization.k8s.io/v1/RoleBinding",
-		"resource.k8s.io/v1/ResourceClaim", "resource.k8s.io/v1/ResourceClaimTemplate", "storage.k8s.io/v1/CSIStorageCapacity",
-	},
-	false: {
-		"v1/Namespace", "v1/Node", "v1/PersistentVolume",
-		"admissionregistration.k8s.io/v1/MutatingAdmissionPolicy", "admissionregistration.k8s.io/v1/MutatingAdmissionPolicyBinding",
-		"admissionregistration.k8s.io/v1/MutatingWebhookConfiguration", "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy",
-		"admissionregistration.k8s.io/v1/ValidatingAdmissionPolicyBinding", "admissionregistration.k8s.io/v1/ValidatingWebhookConfiguration",
-		"apiextensions.k8s.io/v1/CustomResourceDefinition", "apiregistration.k8s.io/v1/APIService",
-		"certificates.k8s.io/v1/CertificateSigningRequest", "certificates.k8s.io/v1/ClusterTrustBundle",
-		"flowcontrol.apiserver.k8s.io/v1/FlowSchema", "flowcontrol.apiserver.k8s.io/v1/PriorityLevelConfiguration",
-		"networking.k8s.io/v1/IngressClass", "networking.k8s.io/v1/IPAddress", "networking.k8s.io/v1/ServiceCIDR",
-		"node.k8s.io/v1/RuntimeClass", "rbac.authorization.k8s.io/v1/ClusterRole", "rbac.authorization.k8s.io/v1/ClusterRoleBinding",
-		"resource.k8s.io/v1/DeviceClass", "resource.k8s.io/v1/DeviceTaintRule", "resource.k8s.io/v1/ResourceSlice",
-		"scheduling.k8s.io/v1/PriorityClass", "storage.k8s.io/v1/CSIDriver", "storage.k8s.io/v1/CSINode", "storage.k8s.io/v1/StorageClass",
-		"storage.k8s.io/v1/VolumeAttachment", "storage.k8s.io/v1/VolumeAttributesClass", "storagemigration.k8s.io/v1/StorageVersionMigration",
-	},
-}
-
-// builtins holds each of builtinKinds by group and kind.
-var builtins = func() map[schema.GroupKind]builtin {
-	kinds := map[schema.GroupKind]builtin{}
-	for namespaced, spellings := range builtinKinds {
-		for _, spelling := range spellings {
-			kind, err := parseGVK(spelling)
-			if err != nil {
-				panic(err)
-			}
-			kinds[kind.GroupKind()] = builtin{spelling, namespaced}
-		}
-	}
-	return kinds
-}()
-
-type builtin struct {
-	spelling   string
-	namespaced bool
-}
-
-// scopeOf says whether kind is namespaced, by the CRDs or the built-in
-// kinds, and whether either knows it.
-func scopeOf(kind schema.GroupKind, crds map[schema.GroupKind]crd) (namespaced, known bool) {
-	if c, found := crds[kind]; found {
-		return c.namespaced, true
-	}
-	b, found := builtins[kind]
-	return b.namespaced, found
-}
-
-// unknownKind says that no CRD and no built-in kind is kind, and suggests
-// those whose kind differs from kind's only in case, a CRD at each version
-// it lists.
-func unknownKind(kind schema.GroupVersionKind, crds map[schema.GroupKind]crd) string {
-	var near []string
-	for known, b := range builtins {
-		if strings.EqualFold(known.Kind, kind.Kind) {
-			near = append(near, b.spelling)
-		}
-	}
-	for known, c := range crds {
-		if !strings.EqualFold(known.Kind, kind.Kind) {
-			continue
-		}
-		for version := range c.schemas {
-			near = append(near, known.WithVersion(version).GroupVersion().String()+"/"+known.Kind)
-		}
-	}
-	why := "no CRD in crds and no built-in kind has this group and kind"
-	if len(near) == 0 {
-		return why
-	}
-	slices.Sort(near)
-	return fmt.Sprintf("%s; did you mean %s?", why, strings.Join(near, " or "))
-}
-
-// crd is what references read of a CustomResourceDefinition.
-type crd struct {
-	namespaced bool
-	// schemas holds each version's openAPIV3Schema.
-	schemas map[string]map[string]any
-}
-
-// readCRDs reads each CustomResourceDefinition in paths, by the kind it
-// describes. A CRD without a scope is namespaced, as Kubernetes defaulted
-// it before apiextensions.k8s.io/v1.
-func readCRDs(paths []string) (map[schema.GroupKind]crd, error) {
-	documents, err := ReadManifests(paths)
-	if err != nil {
-		return nil, fmt.Errorf("crds: %w", err)
-	}
-	crds := map[schema.GroupKind]crd{}
-	for _, document := range documents {
-		if document["kind"] != "CustomResourceDefinition" {
-			continue
-		}
-		spec, _ := document["spec"].(map[string]any)
-		names, _ := spec["names"].(map[string]any)
-		group, _ := spec["group"].(string)
-		kind, _ := names["kind"].(string)
-		c := crd{namespaced: spec["scope"] != "Cluster", schemas: map[string]map[string]any{}}
-		versions, _ := spec["versions"].([]any)
-		for _, v := range versions {
-			version, _ := v.(map[string]any)
-			name, _ := version["name"].(string)
-			validation, _ := version["schema"].(map[string]any)
-			c.schemas[name], _ = validation["openAPIV3Schema"].(map[string]any)
-		}
-		crds[schema.GroupKind{Group: group, Kind: kind}] = c
-	}
-	return crds, nil
 }
 
 // pathSegment is one dotted part of a field path. each says that the field

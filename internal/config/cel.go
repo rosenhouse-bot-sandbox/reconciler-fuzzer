@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/ext"
+	apiservercel "k8s.io/apiserver/pkg/cel"
 )
 
 // ErrNotBool marks an expression whose result is not a bool. That is a
@@ -22,6 +23,15 @@ func compileTo(expr string, want *cel.Type) (cel.Program, error) {
 	if err != nil {
 		return nil, err
 	}
+	ast, err := checked(env, expr, want)
+	if err != nil {
+		return nil, err
+	}
+	return env.Program(ast)
+}
+
+// checked compiles expr in env and refuses it unless it yields want or dyn.
+func checked(env *cel.Env, expr string, want *cel.Type) (*cel.Ast, error) {
 	ast, issues := env.Compile(expr)
 	if issues != nil && issues.Err() != nil {
 		return nil, issues.Err()
@@ -29,7 +39,71 @@ func compileTo(expr string, want *cel.Type) (cel.Program, error) {
 	if out := ast.OutputType(); !out.IsExactType(want) && !out.IsExactType(cel.DynType) {
 		return nil, fmt.Errorf("expression yields %s, want %s", out, want)
 	}
-	return env.Program(ast)
+	return ast, nil
+}
+
+// typeCheck refuses expr unless it yields want with self typed by root, an
+// openAPIV3Schema, as the API server checks x-kubernetes-validations rules.
+// It types self as the harness decodes it from JSON, with any metadata and
+// a string in any format. A nil root types self as dyn.
+func typeCheck(expr string, root map[string]any, want *cel.Type) error {
+	self := declType(root, true).MaybeAssignTypeName("selfType")
+	provider := apiservercel.NewDeclTypeProvider(self)
+	base, err := cel.NewEnv(ext.Strings())
+	if err != nil {
+		return err
+	}
+	options, err := provider.EnvOptions(base.CELTypeProvider())
+	if err != nil {
+		return err
+	}
+	env, err := base.Extend(append(options, cel.Variable("self", self.CelType()))...)
+	if err != nil {
+		return err
+	}
+	_, err = checked(env, expr, want)
+	return err
+}
+
+// declType types a value that s, an OpenAPI v3 schema, describes. A
+// resource has apiVersion, kind and any metadata. Any value fits where s
+// keeps unknown fields, embeds a resource or names no type.
+func declType(s map[string]any, resource bool) *apiservercel.DeclType {
+	if s["x-kubernetes-preserve-unknown-fields"] == true || s["x-kubernetes-embedded-resource"] == true {
+		return apiservercel.DynType
+	}
+	switch s["type"] {
+	case "object":
+		if values, isSchema := s["additionalProperties"].(map[string]any); isSchema {
+			return apiservercel.NewMapType(apiservercel.StringType, declType(values, false), -1)
+		}
+		properties, _ := s["properties"].(map[string]any)
+		fields := map[string]*apiservercel.DeclField{}
+		for name, property := range properties {
+			property, _ := property.(map[string]any)
+			fields[name] = apiservercel.NewDeclField(name, declType(property, false), false, nil, nil)
+		}
+		if resource {
+			for name, t := range map[string]*apiservercel.DeclType{
+				"apiVersion": apiservercel.StringType, "kind": apiservercel.StringType, "metadata": apiservercel.DynType,
+			} {
+				fields[name] = apiservercel.NewDeclField(name, t, false, nil, nil)
+			}
+		}
+		return apiservercel.NewObjectType("object", fields)
+	case "array":
+		items, _ := s["items"].(map[string]any)
+		return apiservercel.NewListType(declType(items, false), -1)
+	case "string":
+		return apiservercel.StringType
+	case "integer":
+		return apiservercel.IntType
+	case "number":
+		return apiservercel.DoubleType
+	case "boolean":
+		return apiservercel.BoolType
+	}
+	return apiservercel.DynType
 }
 
 func evalBool(program cel.Program, self map[string]any, expr string) (bool, error) {
@@ -42,6 +116,15 @@ func evalBool(program cel.Program, self map[string]any, expr string) (bool, erro
 		return false, fmt.Errorf("evaluating %q: %w: it yielded %T", expr, ErrNotBool, out.Value())
 	}
 	return value, nil
+}
+
+// compileOver compiles a ready expression over an object that root, an
+// openAPIV3Schema, describes. It type-checks the expression against root.
+func compileOver(expr string, root map[string]any) (func(self map[string]any) (bool, error), error) {
+	if err := typeCheck(expr, root, cel.BoolType); err != nil {
+		return nil, err
+	}
+	return CompileReady(expr)
 }
 
 // CompileReady compiles a ready expression as Load compiles an entry's ready.
