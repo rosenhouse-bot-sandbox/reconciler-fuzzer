@@ -50,6 +50,7 @@ func TestTheGadgetConfigDependsOnAModelledGadget(t *testing.T) {
 	}
 	want := config.Model{
 		Kind:       schema.GroupVersionKind{Group: "toy.reconciler-fuzzer", Version: "v1", Kind: "Gadget"},
+		Resource:   "gadgets",
 		Stage:      config.ReadyCondition,
 		After:      200 * time.Millisecond,
 		Dependency: &config.Dependency{Required: true, Track: time.Second},
