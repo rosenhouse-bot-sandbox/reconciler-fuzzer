@@ -469,6 +469,7 @@ CRD's schema must describe each path as a string. A `name` that an `owns` entry
 of the `from` entry reads is refused, since the CR owns that object. Under
 `onDelete: block`, the `to` object's deletion waits for its `from` CRs, as
 `kubernetes.io/pvc-protection` does. `references.go` holds the other refusals.
+`targets/toy-fleet/config.yaml` lists three kinds and their references (§16).
 
 ## 14. Generation, replay and shrinking
 
