@@ -24,10 +24,10 @@ func TestExpandLaunch(t *testing.T) {
 		Env:         map[string]string{"KUBECONFIG": "${systems.kube.kubeconfig}", "CLOUD": "${systems.cloud.url}/v1"},
 		GracePeriod: 30 * time.Second,
 	}
-	vars := map[string]map[string]string{
+	vars := flatten(map[string]map[string]string{
 		"kube":  {"namespace": "rf-1", "kubeconfig": "/out/kubeconfig"},
 		"cloud": {"url": "http://127.0.0.1:1"},
-	}
+	})
 	o, err := expandLaunch(l, []string{"--bug=3"}, vars)
 	if err != nil {
 		t.Fatal(err)
@@ -163,7 +163,7 @@ func TestFakeOptionsCarryTheFixturesAndToken(t *testing.T) {
 		Name: "vault", API: "vault", Token: "root", Fixtures: []string{fixtures}, Dependency: &config.Dependency{},
 		Process: &config.Process{Command: []string{"/bin/vault", "server"}, Dir: "/cfg"},
 	}
-	o, err := fakeOptions(s)
+	o, err := fakeOptions(s, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,11 +173,11 @@ func TestFakeOptionsCarryTheFixturesAndToken(t *testing.T) {
 		t.Errorf("fakeOptions = %+v", o)
 	}
 	s.Token, s.Fixtures, s.Dependency = "", nil, nil
-	if o, err := fakeOptions(s); err != nil || o.Vars != nil || o.Fixtures != nil || o.SeenAll {
+	if o, err := fakeOptions(s, nil); err != nil || o.Vars != nil || o.Fixtures != nil || o.SeenAll {
 		t.Errorf("fakeOptions = %+v, %v, want no vars or fixtures", o, err)
 	}
 	s.Fixtures = []string{filepath.Join(t.TempDir(), "missing.yaml")}
-	if _, err := fakeOptions(s); err == nil {
+	if _, err := fakeOptions(s, nil); err == nil {
 		t.Error("fakeOptions read a missing fixtures file")
 	}
 }

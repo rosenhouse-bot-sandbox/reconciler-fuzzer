@@ -541,13 +541,22 @@ func TestSystems(t *testing.T) {
 	}
 }
 
+func TestKubeTakesARole(t *testing.T) {
+	const role = "self.metadata.labels['index']"
+	c, err := config.Load(writeConfig(t, minimal(t)+"systems: [{name: kube, role: \""+role+"\"}]\n"))
+	if err != nil || c.Systems[0].Role != role {
+		t.Errorf("systems = %+v, %v", c, err)
+	}
+}
+
 func TestSystemsRefuseMistakes(t *testing.T) {
 	for systems, want := range map[string]string{
 		"[{name: kube}, {name: kube}]":                             "systems[1].name kube",
 		"[{name: kube, owner: '1 + 2'}]":                           "systems[0].owner",
+		"[{name: kube, role: '1 + 2'}]":                            "systems[0].role",
 		"[{name: kube, ownr: self.x}]":                             "did you mean owner",
-		"[{name: kube, process: {command: [x]}}]":                  "systems[0]: kube takes only name and owner",
-		"[{name: kube, poll: 1s}]":                                 "systems[0]: kube takes only name and owner",
+		"[{name: kube, process: {command: [x]}}]":                  "systems[0]: kube takes only name, owner and role",
+		"[{name: kube, poll: 1s}]":                                 "systems[0]: kube takes only name, owner and role",
 		"[{name: s3}]":                                             "systems[0].process.command is required",
 		"[{name: s3, api: crud, process: {}}]":                     "systems[0].process.command is required",
 		"[{name: s3, api: crud, process: {command: ['']}}]":        "systems[0].process.command is required",
@@ -697,5 +706,12 @@ func TestLaunchVarsNameDeclaredSystems(t *testing.T) {
 		if _, err := config.Load(writeConfig(t, launch(value))); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: err = %v, want one containing %q", value, err, want)
 		}
+	}
+}
+
+func TestLaunchArgsNameDeclaredSystems(t *testing.T) {
+	_, err := config.Load(writeConfig(t, strings.Replace(minimal(t), "launch:\n", "launch:\n  args: [--a, '${systems.cloud.port}']\n", 1)+"systems: ["+fake+"]\n"))
+	if want := "launch args[1]: system cloud has no port"; err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("err = %v, want one containing %q", err, want)
 	}
 }

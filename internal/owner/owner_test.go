@@ -2,6 +2,7 @@ package owner_test
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -143,6 +144,29 @@ func TestRoleIsGenerateNameOrName(t *testing.T) {
 	}
 }
 
+// A kube role CEL gives the role where it yields one. Where it fails or
+// yields "", the role is the generateName or the name, as without one.
+// RoleError keeps the failure.
+func TestAKubeRoleFallsBackWhereItFailsOrIsEmpty(t *testing.T) {
+	labelled := func(body map[string]any, role string) map[string]any {
+		body["metadata"].(map[string]any)["labels"] = map[string]any{"role": role}
+		return body
+	}
+	tl := twoWidgets()
+	tl.At(3*s, tt.Version(cmA0, "c1", "3", tt.Object("a-0")), tt.Version(cmGen, "c2", "4", labelled(tt.Generated("a-", "a-x7k2"), "")),
+		tt.Version(tt.Ref("configmaps", "ns", "a-1"), "c3", "5", labelled(tt.Object("a-1"), "data")))
+	w := owner.New(tl.Index(), compileSystems(t, nil, nil, trace.System{Name: "kube", Role: "self.metadata.labels['role']"}))
+	for uid, want := range map[string]string{"c1": "a-0", "c2": "a-", "c3": "data"} {
+		i := instance(t, w, uid)
+		if i.Role != want {
+			t.Errorf("%s role = %q, want %q", uid, i.Role, want)
+		}
+		if err := w.RoleError(i); (err != nil) != (uid == "c1") {
+			t.Errorf("%s role error = %v", uid, err)
+		}
+	}
+}
+
 func ownerAt(t *testing.T, tl *tt.Timeline, uid string, at time.Duration) owner.Owner {
 	t.Helper()
 	w := owner.New(tl.Index(), owner.Rules{})
@@ -281,6 +305,69 @@ func TestSelectPicksTheNthMatchInCreationOrder(t *testing.T) {
 		ref, err := w.Select(c.creator, c.target, c.slot, 10*s)
 		if (err == nil) != (c.want != "") || ref.Name != c.want {
 			t.Errorf("Select(%s, %+v, %q) = %+v, %v; want %q", c.creator, c.target, c.slot, ref, err, c.want)
+		}
+	}
+}
+
+func TestSelectSaysWhyNoInstanceMatches(t *testing.T) {
+	w := owner.New(children().Index(), owner.Rules{})
+	for _, c := range []struct {
+		creator trace.Caller
+		target  plan.Target
+		slot    string
+		want    string
+	}{
+		{ctl, plan.Target{Resource: "configmaps", Nth: 4}, "", "resource=configmaps nth=4: the controller's live configmaps are ns/a-0, ns/a-1, ns/b-0"},
+		{ctl, plan.Target{Resource: "configmaps", Role: "x"}, "", "resource=configmaps role=x: the controller's live configmaps are ns/a-0, ns/a-1, ns/b-0"},
+		{ctl, plan.Target{Resource: "configmaps", Nth: 2}, "b", "resource=configmaps nth=2: the controller's live configmaps in slot b are ns/b-0"},
+		{ctl, plan.Target{Resource: "configmaps"}, "z", "resource=configmaps: slot z holds no live CR"},
+		{ctl, plan.Target{Resource: "secrets"}, "a", "resource=secrets: the controller has no live secrets in slot a"},
+		{ctl, plan.Target{Group: "apps", Resource: "configmaps"}, "", "group=apps resource=configmaps: the controller has no live configmaps.apps"},
+		{ctl, plan.Target{System: "vault", Resource: "configmaps"}, "", "system=vault resource=configmaps: the controller has no live vault configmaps"},
+		{trace.Harness, plan.Target{Resource: "configmaps", Namespace: "other"}, "", "resource=configmaps namespace=other: the harness's live configmaps are ns/fixture"},
+		{trace.Harness, plan.Target{Resource: "secrets"}, "", "resource=secrets: the harness has no live secrets"},
+	} {
+		_, err := w.Select(c.creator, c.target, c.slot, 10*s)
+		if want := "no instance matches " + c.want; !errors.Is(err, owner.ErrNoMatch) || err.Error() != want {
+			t.Errorf("Select(%s, %+v, %q) = %v, want %q", c.creator, c.target, c.slot, err, want)
+		}
+	}
+}
+
+func TestSelectSaysACRDFromCRDsIsNoFixture(t *testing.T) {
+	gadgets := tt.Ref("apiextensions.k8s.io/customresourcedefinitions", "", "gadgets.toy")
+	withGadgets := children()
+	withGadgets.At(500*time.Millisecond, tt.Create(trace.Harness, gadgets, "u-crd", "0"), tt.Version(gadgets, "u-crd", "0", tt.Object("gadgets.toy")))
+	target := plan.Target{Group: "apiextensions.k8s.io", Resource: "customresourcedefinitions", Name: "widgets.toy"}
+	const crds = "no instance matches group=apiextensions.k8s.io resource=customresourcedefinitions name=widgets.toy: the "
+	for _, c := range []struct {
+		tl      *tt.Timeline
+		creator trace.Caller
+		want    string
+	}{
+		{children(), trace.Harness, crds + "harness has no live customresourcedefinitions.apiextensions.k8s.io; a CRD that the config's crds or a restart installed is not a fixture"},
+		{withGadgets, trace.Harness, crds + "harness's live customresourcedefinitions.apiextensions.k8s.io are gadgets.toy; a CRD that the config's crds or a restart installed is not a fixture"},
+		{children(), ctl, crds + "controller has no live customresourcedefinitions.apiextensions.k8s.io"},
+	} {
+		if _, err := owner.New(c.tl.Index(), owner.Rules{}).Select(c.creator, target, "", 10*s); err == nil || err.Error() != c.want {
+			t.Errorf("Select(%s) = %v, want %q", c.creator, err, c.want)
+		}
+	}
+}
+
+func TestSelectNamesFiveLiveInstancesOfTheKind(t *testing.T) {
+	for live, named := range map[int]string{
+		5: "ns/c-0, ns/c-1, ns/c-2, ns/c-3, ns/c-4",
+		7: "ns/c-0, ns/c-1, ns/c-2, ns/c-3, ns/c-4 and 2 more",
+	} {
+		tl := twoWidgets()
+		for i := range live {
+			ref := tt.Ref("configmaps", "ns", fmt.Sprintf("c-%d", i))
+			tl.At(3*s, tt.Create(ctl, ref, ref.Name, "1"), tt.Version(ref, ref.Name, "1", tt.Object(ref.Name)))
+		}
+		_, err := owner.New(tl.Index(), owner.Rules{}).Select(ctl, plan.Target{Resource: "configmaps", Name: "x"}, "", 4*s)
+		if want := "no instance matches resource=configmaps name=x: the controller's live configmaps are " + named; err == nil || err.Error() != want {
+			t.Errorf("Select among %d = %v, want %q", live, err, want)
 		}
 	}
 }
