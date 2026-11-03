@@ -269,7 +269,7 @@ func (h *hunter) investigate(ctx context.Context, p *plan.Plan, dir, name string
 			f.Shrunk, f.ShrunkPath = shrunk, path
 		}
 		if err := errors.Join(shrinkErr, saveErr); err != nil {
-			h.logf("%s: shrink cut short", name)
+			h.logf("%s: shrink cut short, %v", name, err)
 			// This shrink and each one still to come are cut short.
 			for i := j; i < len(found); i++ {
 				found[i].CutShort = found[i].Reproduced > 0

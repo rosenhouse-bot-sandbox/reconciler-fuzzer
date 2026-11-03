@@ -22,10 +22,11 @@ holds a run's files,
 `replay-<i>` runs, the failing `shrink-<c>-<r>` candidates, and
 `shrunk.json`. `summary.md` has one row per distinct finding: seed, check,
 summary, replays that reproduced it, and the shrunk plan. It also lists
-seeds whose run failed. When an interrupt or a harness error cuts a
-finding's replays or shrink short, its row says `(cut short)`. The row names
-the smallest failing plan so far, if the hunt saved one. Run `shrink` on
-that plan, or on the seed's `plan.json`, to finish.
+seeds whose run failed. When an interrupt cuts a finding's replays or
+shrink short, or a harness error cuts its shrink short, its row says
+`(cut short)`. The row names the smallest failing plan so far, if the hunt
+saved one. Run `shrink` on that plan, or on the seed's `plan.json`, to
+finish.
 
 ## report.md
 

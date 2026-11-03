@@ -352,7 +352,7 @@ func TestHuntKeepsTheShrinkSoFarOnACancel(t *testing.T) {
 		!strings.Contains(string(summary), "over 1 seed") || !strings.Contains(string(summary), "| 5/5 | "+shrunk+" (cut short) |") {
 		t.Errorf("Hunt = %+v, %v, and wrote:\n%s", found, err, summary)
 	}
-	if !strings.Contains(log.String(), "seed 4: shrink cut short\n") {
+	if !strings.Contains(log.String(), "seed 4: shrink cut short, context canceled\n") {
 		t.Errorf("The log does not say the shrink was cut short:\n%s", log.String())
 	}
 	if saved, err := plan.Load(shrunk); err != nil || encoded(t, saved) != encoded(t, smallest) {
@@ -362,18 +362,23 @@ func TestHuntKeepsTheShrinkSoFarOnACancel(t *testing.T) {
 }
 
 // A shrunk plan that fails to save leaves its finding not shrunk and cut
-// short. The hunt keeps the finding and notes the error under the seed.
+// short. The hunt keeps the finding, logs the error and notes it under the
+// seed.
 func TestHuntKeepsAFindWhoseShrunkPlanFailedToSave(t *testing.T) {
 	fake := &fakeRun{out: t.TempDir(), finds: always(clean)}
 	blocked := filepath.Join(fake.out, "seed-1", "shrunk.json")
 	if err := os.MkdirAll(blocked, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	found, err := Hunt(context.Background(), Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1}), Out: fake.out, Run: fake.run})
+	var log strings.Builder
+	found, err := Hunt(context.Background(), Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1}), Out: fake.out, Log: &log, Run: fake.run})
 	summary, _ := os.ReadFile(filepath.Join(fake.out, "summary.md"))
 	if err == nil || len(found) != 1 || found[0].Shrunk != nil || found[0].ShrunkPath != "" || !found[0].CutShort || !strings.Contains(string(summary), "over 1 seed") ||
 		!strings.Contains(string(summary), "| 5/5 | not shrunk (cut short) |") || !strings.Contains(string(summary), "- seed 1: open "+blocked) {
 		t.Errorf("Hunt = %+v, %v, and wrote:\n%s", found, err, summary)
+	}
+	if !strings.Contains(log.String(), "seed 1: shrink cut short, open "+blocked+":") {
+		t.Errorf("The log does not name the save's error:\n%s", log.String())
 	}
 }
 
