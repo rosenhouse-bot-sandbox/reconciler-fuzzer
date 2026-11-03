@@ -15,15 +15,17 @@ import (
 const (
 	clusterConfig           = "cluster/config.yaml"
 	databaseConfig          = "database/config.yaml"
+	orderConfig             = "order/config.yaml"
 	protectConfig           = "protect/config.yaml"
 	secretConfig            = "secret/config.yaml"
+	storageClassConfig      = "storageclass/config.yaml"
 	uninstallConfig         = "uninstall/config.yaml"
 	upgradeConfig           = "upgrade/config.yaml"
 	upgradePropertiesConfig = "upgrade/properties/config.yaml"
 )
 
 // configs are the configs whose every plan B0 passes with no notes.
-var configs = []string{"config.yaml", databaseConfig, protectConfig, secretConfig, upgradeConfig}
+var configs = []string{"config.yaml", databaseConfig, orderConfig, protectConfig, secretConfig, storageClassConfig, upgradeConfig}
 
 type gateRow struct {
 	plan    string
@@ -50,6 +52,9 @@ func (g gateRow) planPath() string { return planPath(g.configPath(), g.plan) }
 // report.md must hold: its heading, its step and a detail line. An empty
 // finding means the bug must pass the plan.
 var gate = []gateRow{
+	// gc deletes B115's Volumes, which carry ownerReferences, so only the
+	// property judges their order.
+	{plan: "slow-delete", bug: 115, finding: "Property: property volumes-go-before-their-cluster does not hold", step: 1, detail: "is false", config: orderConfig},
 	{plan: "slow-delete", bug: 116, finding: "Finalizers: removed another caller's finalizer", step: 1, detail: "cluster-vol-0: reconciler-fuzzer.dev/slow-delete, added by model:volumes.storage.thirdparty, removed by update"},
 	{plan: "b0", bug: 116, finding: "Finalizers: removed another caller's finalizer", step: 2, detail: "cluster-vol-0: storage.thirdparty/protect, added by model:volumes.storage.thirdparty, removed by update", config: protectConfig},
 	{plan: "delete-cluster-first", bug: 120, finding: "Ordered: released an object that another names", step: 1, detail: "/cluster: slot b names it"},
@@ -64,6 +69,10 @@ var gate = []gateRow{
 	{plan: "secret-recreate", bug: 125, finding: "Honest: stayed ready after seeing its dependency not ready", step: 1, detail: "slot b: secrets "},
 	// The restarted controller's watch shows the Secret missing.
 	{plan: "secret-deleted-while-down", bug: 125, finding: "Honest: stayed ready after seeing its dependency not ready", step: 1, detail: "slot b: secrets "},
+	{plan: "stuck-delete", bug: 117, finding: "Converge: did not settle (clause 2)", step: 1, detail: "cluster is being deleted"},
+	// gc removes the orphan finalizer that B118's deletes add.
+	{plan: "slow-delete", bug: 118},
+	{plan: "slow-delete", bug: 119, finding: "Teardown: released a CR before deleting its resources", step: 1, detail: "-cluster (rule 3, slot a)", config: storageClassConfig},
 	{plan: "secret-first", bug: 126, finding: "Ordered: released an object that another names", step: 1, detail: "/admin-password: slot a names it", config: secretConfig},
 	// The restart comes 500 ms after the create, long after the first
 	// process makes its Volumes. The second makes its own, and the update
@@ -93,6 +102,7 @@ var gate = []gateRow{
 	// The kill follows B160's release of the Cluster and comes before its
 	// Volume deletes.
 	{plan: "kill-finalize", bug: 160, finding: "Clean: left resources behind", step: 1, detail: "/cluster-vol-0 (rule 2, slot a)"},
+	{plan: "kill-finalize", bug: 160, finding: "Teardown: released a CR before deleting its resources", step: 1, detail: "/cluster-vol-0 (rule 2, slot a)"},
 	// The restart or kill comes while slowDelete holds the Volumes.
 	{plan: "restart-deleting", bug: 161, finding: "Converge: did not settle (clause 2)", step: 1, detail: "cluster is being deleted"},
 	{plan: "foreground-kill", bug: 161, finding: "Converge: did not settle (clause 2)", step: 1, detail: "cluster is being deleted"},

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	k8sstoragev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -368,6 +369,135 @@ func TestB116StripsTheFinalizersOfVolumesOnlyWhileTheClusterIsDeleted(t *testing
 		if n := len(f.listVolumes()); (n == 0) != wantStripped {
 			t.Errorf("B%d: the deleted Cluster leaves %d held Volumes; want them gone %v.", bug, n, wantStripped)
 		}
+	}
+}
+
+func TestB115ReleasesTheClusterWhileItsVolumesAreHeld(t *testing.T) {
+	for bug, wantGone := range map[Bug]bool{0: false, B115: true} {
+		f := newBuggyFleet(t, bug, clusterObj())
+		f.settle(f.clusters, "cluster")
+		f.holdVolumes()
+		f.delete(f.cluster())
+		f.settle(f.clusters, "cluster")
+		if gone := apierrors.IsNotFound(f.get("cluster", &fleetv1.Cluster{})); gone != wantGone {
+			t.Errorf("B%d: with its Volumes held, the deleted Cluster is gone %v, want %v.", bug, gone, wantGone)
+		}
+		for _, v := range f.listVolumes() {
+			if v.DeletionTimestamp.IsZero() {
+				t.Errorf("B%d: Volume %s was not deleted.", bug, v.Name)
+			}
+		}
+	}
+}
+
+// failVolumes plays the third party: it marks every Volume not ready.
+func (f *fleet) failVolumes() {
+	f.t.Helper()
+	for _, v := range f.listVolumes() {
+		meta.SetStatusCondition(&v.Status.Conditions, metav1.Condition{Type: "Ready", Status: metav1.ConditionFalse, Reason: "Stuck", ObservedGeneration: v.Generation})
+		if err := f.c.Status().Update(f.t.Context(), &v); err != nil {
+			f.t.Fatal(err)
+		}
+	}
+}
+
+// B117 gives up for good: the Cluster stays after its Volumes recover.
+func TestB117StopsFinalizingAClusterWhoseVolumeFailed(t *testing.T) {
+	for bug, wantGone := range map[Bug]bool{0: true, B117: false} {
+		f := newBuggyFleet(t, bug, clusterObj())
+		f.settle(f.clusters, "cluster")
+		f.failVolumes()
+		f.delete(f.cluster())
+		f.reconcileOnce(f.clusters, "cluster")
+		f.readyVolumes()
+		f.settle(f.clusters, "cluster")
+		if gone := apierrors.IsNotFound(f.get("cluster", &fleetv1.Cluster{})); gone != wantGone {
+			t.Fatalf("B%d: once a Volume failed, the deleted Cluster is gone %v, want %v.", bug, gone, wantGone)
+		}
+		if bug == B117 {
+			if c := f.cluster(); c.Status.Phase != fleetv1.Deleting || c.Status.Message != "a Volume failed; clean up by hand" {
+				t.Errorf("B117: the abandoned Cluster's status is %+v.", c.Status)
+			}
+			if n := len(f.listVolumes()); n != 2 {
+				t.Errorf("B117 deleted %d of 2 Volumes, want none.", 2-n)
+			}
+		}
+	}
+}
+
+func TestB118DeletesVolumesWithOrphanPropagation(t *testing.T) {
+	for bug, want := range map[Bug]metav1.DeletionPropagation{0: "", B118: metav1.DeletePropagationOrphan} {
+		f := newBuggyFleet(t, bug, clusterObj())
+		policies := map[string]metav1.DeletionPropagation{}
+		f.clusters.Client = interceptor.NewClient(f.c, interceptor.Funcs{
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				o := &client.DeleteOptions{}
+				o.ApplyOptions(opts)
+				policies[obj.GetName()] = ptr.Deref(o.PropagationPolicy, "")
+				return c.Delete(ctx, obj, opts...)
+			},
+		})
+		f.settle(f.clusters, "cluster")
+		c := f.cluster()
+		c.Spec.Volumes = 1
+		if err := f.c.Update(t.Context(), c); err != nil {
+			t.Fatal(err)
+		}
+		f.settle(f.clusters, "cluster")
+		f.delete(f.cluster())
+		f.settle(f.clusters, "cluster")
+		if wantAll := map[string]metav1.DeletionPropagation{"cluster-vol-0": want, "cluster-vol-1": want}; !maps.Equal(policies, wantAll) {
+			t.Errorf("B%d: the Volume deletes have propagation %v, want %v.", bug, policies, wantAll)
+		}
+	}
+}
+
+// storageClass is the StorageClass of the Cluster named cluster in ns.
+const storageClass = "fleet-ns-cluster"
+
+func TestAClusterWithStorageClassesDeletesItsStorageClassBeforeItsRelease(t *testing.T) {
+	for _, row := range []struct {
+		bug  Bug
+		want []string
+	}{
+		{0, []string{"delete cluster-vol-0", "delete cluster-vol-1", "delete " + storageClass, "update cluster"}},
+		{B119, []string{"delete cluster-vol-0", "delete cluster-vol-1", "update cluster", "delete " + storageClass}},
+	} {
+		f := newBuggyFleet(t, row.bug, clusterObj())
+		f.clusters.storageClasses = true
+		f.settle(f.clusters, "cluster")
+		sc := &k8sstoragev1.StorageClass{}
+		if err := f.c.Get(t.Context(), types.NamespacedName{Name: storageClass}, sc); err != nil || sc.Provisioner != Provisioner {
+			t.Fatalf("B%d: the Cluster's StorageClass is %+v, %v.", row.bug, sc, err)
+		}
+		var writes []string
+		f.clusters.Client = interceptor.NewClient(f.c, interceptor.Funcs{
+			Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				writes = append(writes, "update "+obj.GetName())
+				return c.Update(ctx, obj, opts...)
+			},
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				writes = append(writes, "delete "+obj.GetName())
+				return c.Delete(ctx, obj, opts...)
+			},
+		})
+		f.delete(f.cluster())
+		f.settle(f.clusters, "cluster")
+		if !slices.Equal(writes, row.want) {
+			t.Errorf("B%d: the deleted Cluster's controller writes %q, want %q.", row.bug, writes, row.want)
+		}
+		if err := f.c.Get(t.Context(), types.NamespacedName{Name: storageClass}, sc); !apierrors.IsNotFound(err) {
+			t.Errorf("B%d: getting the deleted Cluster's StorageClass gives %v, want NotFound.", row.bug, err)
+		}
+	}
+}
+
+func TestAClusterWithoutStorageClassesHasNone(t *testing.T) {
+	f := newFleet(t, clusterObj())
+	f.settle(f.clusters, "cluster")
+	list := &k8sstoragev1.StorageClassList{}
+	if err := f.c.List(t.Context(), list); err != nil || len(list.Items) != 0 {
+		t.Errorf("Without storage classes, the StorageClasses are %+v, %v.", list.Items, err)
 	}
 }
 
@@ -940,7 +1070,7 @@ func TestReconcileOfAMissingCRSucceeds(t *testing.T) {
 }
 
 func TestParseBugAcceptsOnlyKnownBugs(t *testing.T) {
-	for _, id := range []int{0, 116, 120, 121, 122, 123, 124, 125, 126, 135, 140, 141, 142, 150, 151, 152, 160, 161, 162, 170, 171} {
+	for _, id := range []int{0, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 135, 140, 141, 142, 150, 151, 152, 160, 161, 162, 170, 171} {
 		if b, err := ParseBug(id); int(b) != id || err != nil {
 			t.Errorf("ParseBug(%d) = %v, %v", id, b, err)
 		}
