@@ -370,7 +370,11 @@ judged it. Tell the user which paths the controller uses.
 A note that a `role` failed on every resource of a kind names the CEL's first error. Fix the
 `role`, or guard it by kind.
 
-**Exit 0**: no findings. Go on.
+A note that the harness sent SIGKILL means the controller did not exit within
+`launch.gracePeriod` of SIGTERM. Set it above the controller's shutdown time, or tell the user
+if the controller ignores SIGTERM.
+
+**Exit 0**: no findings. Act on any notes as above, then go on.
 
 If five runs in a row make no progress, stop and report what you tried.
 
@@ -380,8 +384,13 @@ If five runs in a row make no progress, stop and report what you tried.
 KUBEBUILDER_ASSETS=<path> reconciler-fuzzer hunt --config config.yaml --seeds 20 --out reconciler-fuzzer-out/hunt
 ```
 
-It replays and shrinks each finding, which takes many minutes. Run it in the background.
-`summary.md` lists each finding with its seed and shrunk plan. Treat each as in step 8.
+It replays the plan of a seed with new findings 5 times. For each finding, it then tries up to
+16 smaller plans, called shrink candidates, and runs each at most 4 times. This takes many
+minutes, so run it in the background. Lower `--replays` and `--candidates` to finish sooner.
+`summary.md` lists each finding with its seed and shrunk plan. It says `pending` until the
+finding's replays or shrink end, and `(cut short)` if an interrupt or error ends them first.
+Treat each finding as in step 8.
+`reconciler-fuzzer plan --config config.yaml --seed <n>` prints seed n's plan without running it.
 
 Under `onDelete: block`, a seed's plan may stop early: a create or `createFixture` into a name
 that waits in deletion gives up with a `still taken` note, and the later steps do not run.

@@ -45,9 +45,10 @@ const (
 	Update Do = "update"
 	// Delete deletes the slot's CR.
 	Delete Do = "delete"
-	// Restart installs the Upgrade's CRDs, stops the controller with SIGTERM
-	// and starts it again. The binary and args the Upgrade sets replace the
-	// current ones for every later start.
+	// Restart installs the Upgrade's CRDs, stops the controller and starts
+	// it again. The stop sends SIGTERM, and SIGKILL if the controller
+	// outlives launch.gracePeriod. The binary and args the Upgrade sets
+	// replace the current ones for every later start.
 	Restart Do = "restart"
 	// Kill sends SIGKILL. The controller stays down until the fault period
 	// ends, or until a create's or a stop's wait for a deleted CR restarts
@@ -65,10 +66,10 @@ const (
 	// waits as a create of a slot does.
 	CreateFixture Do = "createFixture"
 	// Stop waits until the CRs that deletes removed are gone, as a create's
-	// wait for its slot does, and then stops the controller with SIGTERM for
-	// good. A CR is gone once its name is free or another CR holds it. After
-	// a stop, a plan's only actions are deletes and fixture changes, and the
-	// runner appends no steps.
+	// wait for its slot does, and then stops the controller for good. The
+	// stop works as Restart's does. A CR is gone once its name is free or
+	// another CR holds it. After a stop, a plan's only actions are deletes
+	// and fixture changes, and the runner appends no steps.
 	Stop Do = "stop"
 )
 
@@ -230,6 +231,15 @@ func Load(path string) (*Plan, error) {
 	return &p, nil
 }
 
+// Marshal returns p as indented JSON, as Save writes it.
+func Marshal(p *Plan) ([]byte, error) {
+	data, err := json.MarshalIndent(p, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
+}
+
 // resolve joins each relative binary and crds path to dir.
 func (p *Plan) resolve(dir string) {
 	join := func(path string) string {
@@ -253,11 +263,11 @@ func (p *Plan) resolve(dir string) {
 
 // Save writes p as indented JSON.
 func Save(path string, p *Plan) error {
-	data, err := json.MarshalIndent(p, "", "  ")
+	data, err := Marshal(p)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0o644)
+	return os.WriteFile(path, data, 0o644)
 }
 
 // Validate reports the first malformed step, action or fault, naming its

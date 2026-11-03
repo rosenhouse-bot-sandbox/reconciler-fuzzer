@@ -14,19 +14,23 @@ define the clauses and checks.
 | `trace.jsonl` | Every request, action, phase and controller start and exit (DESIGN.md §4). |
 | `report.md` | The findings and notes. |
 | `controller.log` | The controller's output. |
+| `harness.log` | client-go's errors from the harness's watches, such as a failed watch of a CRD the plan deleted. |
 | `kubeconfig` | The envtest API server's kubeconfig. The server is gone after the run. |
 
 `hunt --out <out>` writes one `seed-<n>` directory per seed that found
 something new or whose run failed, and `summary.md`. Each seed directory
-holds a run's files,
-`replay-<i>` runs, the failing `shrink-<c>-<r>` candidates, and
-`shrunk.json`. `summary.md` has one row per distinct finding: seed, check,
+holds a run's files, `replay-<i>` runs, and `shrunk.json`, or
+`shrunk-<f>.json` for finding f past the first. A shrink that keeps no
+candidate saves the plan unchanged. `shrink-<f>-<c>-<r>` is run r of
+candidate c in the shrink of finding f, and stays only when it gave the
+finding. `summary.md` has one row per distinct finding: seed, check,
 summary, replays that reproduced it, and the shrunk plan. It also lists
-seeds whose run failed. When an interrupt cuts a finding's replays or
-shrink short, or a harness error cuts its shrink short, its row says
-`(cut short)`. The row names the smallest failing plan so far, if the hunt
-saved one. Run `shrink` on that plan, or on the seed's `plan.json`, to
-finish.
+seeds whose run failed. `hunt` rewrites it while it runs, and a cell says
+`pending` until its replays or shrink end. When an interrupt cuts a
+finding's replays or shrink short, or a harness error cuts its shrink
+short, its row says `(cut short)`. The row names the smallest failing plan
+so far, if the hunt saved one. Run `shrink` on that plan, or on the seed's
+`plan.json`, to finish.
 
 ## report.md
 
@@ -52,7 +56,8 @@ A `# Notes` section follows the findings. A note says what the checks
 could not judge, or names a config mistake: an action that failed, a fault
 that picked no request, a step the trace ended too early to judge, a CR
 still being deleted that a `stop` did not wait for, an unmapped request, or
-a `role` that failed on every resource of a kind. Notes do not fail a run.
+a `role` that failed on every resource of a kind. A note also names each
+time the controller outlived `launch.gracePeriod`. Notes do not fail a run.
 A fault that picked no request tested nothing, so a plan with such notes
 may need a different fault. A step without a `period` ends its faults by
 the time its last action returns. Such a fault's note says how long the
@@ -91,6 +96,13 @@ kind the controller created: evaluating "self.metadata.labels['x']": no such
 key: x` names the first error of the system's `role`. The checks then group
 those resources as if the system had no `role`. One note per kind catches a
 `role` that a kind guard applies to that kind alone. Fix the CEL.
+
+`Step 1, at 8.6s: the controller did not exit within launch.gracePeriod of
+SIGTERM, so the harness sent SIGKILL.` means that a stop of the controller
+for a `restart` or a `stop` waited `launch.gracePeriod` after SIGTERM and
+then killed it. Such a stop tested a crash, not a clean shutdown. A note
+that begins `After the last step` names the stop at the run's end. Raise
+`launch.gracePeriod` if the controller needs longer to shut down.
 
 Hunt and shrink match findings by check, summary and kind, so a replay
 need not fail at the same step or on the same names.

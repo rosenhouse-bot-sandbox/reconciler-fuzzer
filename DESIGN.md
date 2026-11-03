@@ -230,7 +230,7 @@ until no object holds the name it needs. Once `period` has passed, the wait ends
 the step's faults and restarts a killed controller. It gives up `deadline -
 endFaults` after the later of the faults' end and the delete, and the plan ends
 after the step. A `stop` waits the same way until each CR that a `delete`
-removed is gone, then sends SIGTERM even if one stays. A model fault that
+removed is gone, then stops the controller even if one stays. A model fault that
 nothing `Takes` is a harness error, as is any other action error except an
 unmatched target or a `createFixture` whose `changeFixture` deleted nothing.
 
@@ -278,8 +278,8 @@ reviews, non-resource URLs and unmapped requests.
 
 ## 11. Instances, owning CRs and roles
 
-`owner.New(ix, rules)` indexes every instance the trace shows. `rules` come
-from the config, or else the run event.
+`owner.New(ix, rules)` indexes every instance the trace shows. `rules`, like
+the checks' `Spec`, come from the config, or else the run event.
 
 - An instance is a (ref, UID), from its first version until a deleted
   version, or one its system's `gone` CEL accepts.
@@ -307,12 +307,12 @@ from the config, or else the run event.
 
 Most checks are `func(*trace.Index, Spec) []Finding`. A finding's signature is
 its check, summary and `kind` (`system/group/resource`). `check.Judge` runs
-every check, and notes each action error, request fault that picked no request,
-`holdWatch` while the controller had no watch of its kind, stage-model fault
-that held no object, distinct unmapped (system, method, path), and kind whose
-`role` failed on every resource the controller created. `Spec` comes from the
-config, or else the run event. A step's **end** is its `confirmed` time. Clean,
-Restore and Unique judge only settled steps (§17, entry 15).
+every check, and notes each action error, stop whose controller outlived its
+grace period, request fault that picked no request, `holdWatch` while the
+controller had no watch of its kind, stage-model fault that held no object,
+distinct unmapped (system, method, path), and kind whose `role` failed on every
+resource the controller created. A step's **end** is its `confirmed` time.
+Clean, Restore and Unique judge only settled steps (§17, entry 15).
 
 **Converge.** The settle condition holds by the deadline, and still holds at
 `t* + stable`. The summary names the first unmet clause, such as `did not
@@ -499,8 +499,9 @@ kube fixture of a `to` kind other than a Namespace, and `createFixture` makes
 it again.
 
 **Hunt.** `hunt.Hunt` runs each seed, keeps runs with a new signature, replays
-each 5 times and shrinks it (`shrink.go`), trying at most 16 candidates.
-`summary.md` lists the findings with seed, reproduction rate and shrunk plan.
+each `--replays` times (5) and shrinks it (`shrink.go`), trying at most
+`--candidates` (16) smaller plans per finding. It rewrites `summary.md`, a
+table of the findings, as their replays and shrinks finish.
 
 **Upgrades.** Each `launch.upgrades` entry becomes a restart that ends a step drawn
 from the previous upgrade's step on, 0 to `stable` after its latest offset. Drawn
@@ -508,22 +509,17 @@ last, they only add restarts to a plan. Shrinking drops them from the last back.
 
 ## 15. Commands
 
-```
-reconciler-fuzzer run    --config c.yaml (--plan plan.json | --seed n) --out dir [--launch-arg a]...
-reconciler-fuzzer judge  --trace dir[/trace.jsonl] [--config c.yaml]
-reconciler-fuzzer hunt   --config c.yaml --seeds n [--from s] --out dir [--launch-arg a]...
-reconciler-fuzzer shrink --config c.yaml --plan plan.json --out dir [--launch-arg a]...
-crudfake --config cloud.yaml [--listen addr]
-```
-
+`reconciler-fuzzer help` lists the commands `run`, `plan`, `judge`, `hunt` and
+`shrink`, and `reconciler-fuzzer help <command>` describes a command's flags.
 They exit 0 with no findings, 1 with some, and 2 on a usage or harness error.
+`crudfake --config cloud.yaml [--listen addr]` serves a fake.
 
 ## 16. Gates, examples and testing
 
 **Make targets and toys.** `make help` lists the targets, which CI and the
 nightly call. A toy is a directory in `targets/` with a `main.go`. `build`,
 `generate`, `test-generated` and `bug-matrix` run every toy.
-`targets/toy-widget` holds the Widget configs: `gadget/` adds a modelled Gadget,
+In `targets/toy-widget`, `gadget/` models a Gadget, `lease/` elects a leader,
 and `tenant/` and `grant/` cross scopes. In `targets/toy-bucket`, each Bucket CR
 owns one bucket in the `crudfake` system `cloud`; its bugs start at B30, and
 `halted/` runs `--halt` under `primary.halted`. In `targets/toy-fleet`, a

@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -148,18 +150,36 @@ func TestWithoutGadgetTheWidgetHasNoGadget(t *testing.T) {
 	}
 }
 
-// heldGadget is a Gadget of widget that another finalizer holds, as a
-// slowDelete fault does.
-func heldGadget(t *testing.T, widget *toyv1.Widget) *toyv1.Gadget {
+// ownedGadget is the Gadget that widget controls.
+func ownedGadget(t *testing.T, widget *toyv1.Widget) *toyv1.Gadget {
 	t.Helper()
 	scheme, err := NewScheme()
 	if err != nil {
 		t.Fatal(err)
 	}
-	gadget := &toyv1.Gadget{ObjectMeta: metav1.ObjectMeta{Namespace: widget.Namespace, Name: widget.Name, Finalizers: []string{"test/hold"}}}
+	gadget := &toyv1.Gadget{ObjectMeta: metav1.ObjectMeta{Namespace: widget.Namespace, Name: widget.Name}}
 	if err := controllerutil.SetControllerReference(widget, gadget, scheme); err != nil {
 		t.Fatal(err)
 	}
+	return gadget
+}
+
+// heldGadget is widget's Gadget that another finalizer holds, as a
+// slowDelete fault does.
+func heldGadget(t *testing.T, widget *toyv1.Widget) *toyv1.Gadget {
+	t.Helper()
+	gadget := ownedGadget(t, widget)
+	gadget.Finalizers = []string{"test/hold"}
+	return gadget
+}
+
+// deletingGadget is a held Gadget that another client deleted, as the garbage
+// collector does in a Foreground deletion of its Widget.
+func deletingGadget(t *testing.T, widget *toyv1.Widget) *toyv1.Gadget {
+	t.Helper()
+	gadget := heldGadget(t, widget)
+	deletedAt := metav1.Now()
+	gadget.DeletionTimestamp = &deletedAt
 	return gadget
 }
 
@@ -179,6 +199,118 @@ func widgetGone(t *testing.T, reader client.Reader, widget *toyv1.Widget) bool {
 		t.Fatal(err)
 	}
 	return err != nil
+}
+
+func TestCleanUpReleasesTheWidgetOnceItsDeleteRemovesTheGadget(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		bug  Bug
+	}{
+		{"the correct controller", 0},
+		{"B23", B23},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			widget := deletingWidget(1)
+			// The child holds the release until the second reconcile, which
+			// skips the cleanup if B23 gave up on the Widget.
+			r := gadgetFixture(t, testCase.bug, interceptor.Funcs{}, widget, controlledChild(t, widget), ownedGadget(t, widget))
+
+			mustReconcile(t, r, widget)
+			mustReconcile(t, r, widget)
+			if !widgetGone(t, r, widget) {
+				t.Error("The cleanup kept the Widget after its deletes removed the child and the Gadget.")
+			}
+		})
+	}
+}
+
+func TestCleanUpFailsTheReconcileWhenAGadgetReadFails(t *testing.T) {
+	for _, testCase := range []struct {
+		name        string
+		afterDelete bool
+	}{
+		{"the read before the delete", false},
+		{"the read after the delete", true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			refused := errors.New("the API server refused the read")
+			deleted := false
+			widget := deletingWidget(0)
+			r := gadgetFixture(t, 0, interceptor.Funcs{
+				Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+					_, isGadget := obj.(*toyv1.Gadget)
+					deleted = deleted || isGadget
+					return c.Delete(ctx, obj, opts...)
+				},
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if _, isGadget := obj.(*toyv1.Gadget); isGadget && deleted == testCase.afterDelete {
+						return refused
+					}
+					return c.Get(ctx, key, obj, opts...)
+				},
+			}, widget, heldGadget(t, widget))
+
+			if err := reconcile(t, r, widget); !errors.Is(err, refused) {
+				t.Errorf("Reconcile returned %v, want the refused read.", err)
+			}
+		})
+	}
+}
+
+func TestCleanUpFailsTheReconcileWhenTheGadgetDeleteFails(t *testing.T) {
+	refused := errors.New("the API server refused the delete")
+	widget := deletingWidget(0)
+	r := gadgetFixture(t, 0, interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if _, isGadget := obj.(*toyv1.Gadget); isGadget {
+				return refused
+			}
+			return c.Delete(ctx, obj, opts...)
+		},
+	}, widget, ownedGadget(t, widget))
+
+	if err := reconcile(t, r, widget); !errors.Is(err, refused) {
+		t.Errorf("Reconcile returned %v, want the refused delete.", err)
+	}
+}
+
+// The cleanup's delete finds no Gadget when the garbage collector removed it
+// after the cleanup read it.
+func TestCleanUpReleasesTheWidgetWhenItsGadgetDeleteFindsNoGadget(t *testing.T) {
+	widget := deletingWidget(0)
+	r := gadgetFixture(t, 0, interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			err := c.Delete(ctx, obj, opts...)
+			if _, isGadget := obj.(*toyv1.Gadget); isGadget && err == nil {
+				return apierrors.NewNotFound(toyv1.GroupVersion.WithResource("gadgets").GroupResource(), obj.GetName())
+			}
+			return err
+		},
+	}, widget, ownedGadget(t, widget))
+
+	mustReconcile(t, r, widget)
+	if !widgetGone(t, r, widget) {
+		t.Error("The cleanup kept the Widget after its Gadget was gone.")
+	}
+}
+
+func TestCleanUpDeletesTheGadgetOnce(t *testing.T) {
+	widget := deletingWidget(0)
+	deletes := 0
+	r := gadgetFixture(t, 0, interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if _, isGadget := obj.(*toyv1.Gadget); isGadget {
+				deletes++
+			}
+			return c.Delete(ctx, obj, opts...)
+		},
+	}, widget, heldGadget(t, widget))
+
+	mustReconcile(t, r, widget)
+	mustReconcile(t, r, widget)
+	if deletes != 1 {
+		t.Errorf("The cleanup deleted the Gadget %d times, want 1.", deletes)
+	}
 }
 
 func TestCleanUpKeepsTheFinalizerUntilTheGadgetIsGone(t *testing.T) {
