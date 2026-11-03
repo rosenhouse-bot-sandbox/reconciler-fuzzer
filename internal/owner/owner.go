@@ -29,8 +29,10 @@ type Instance struct {
 	Created time.Duration
 	Gone    time.Duration
 	// Creator is the caller of the create, or the 201 apply, whose response
-	// carried UID, or trace.Cluster.
-	Creator trace.Caller
+	// carried UID, or trace.Cluster. Answered is when that response ended,
+	// or zero for trace.Cluster.
+	Creator  trace.Caller
+	Answered time.Duration
 	// Role is its system's role CEL over its first body. Without one, or
 	// where it fails or yields "", a kube instance's is its generateName
 	// prefix, or else its name.
@@ -281,7 +283,7 @@ func New(ix *trace.Index, rules Rules) *World {
 			w.listed = append(w.listed, p.Kind)
 		}
 	}
-	creates := map[string]trace.Call{}
+	creates := map[string]trace.Event{}
 	var actions []trace.Event
 	for _, e := range ix.Events() {
 		switch {
@@ -290,7 +292,7 @@ func New(ix *trace.Index, rules Rules) *World {
 		case e.Call != nil && e.Call.Subresource == "" && e.Call.ResultUID != "" &&
 			(e.Call.Verb == "create" && e.Call.Status >= 200 && e.Call.Status <= 299 || e.Call.Status == 201):
 			if _, seen := creates[e.Call.ResultUID]; !seen {
-				creates[e.Call.ResultUID] = *e.Call
+				creates[e.Call.ResultUID] = e
 			}
 		case e.Action != nil && e.Action.Do == string(plan.Create) && e.Action.Ref != nil && e.Action.Error == "":
 			actions = append(actions, e)
@@ -299,8 +301,8 @@ func New(ix *trace.Index, rules Rules) *World {
 	for n := range w.instances {
 		i := &w.instances[n]
 		i.Creator = trace.Cluster
-		if c, found := creates[i.UID]; found && names(c, i.Ref) {
-			i.Creator = c.Caller
+		if c, found := creates[i.UID]; found && names(*c.Call, i.Ref) {
+			i.Creator, i.Answered = c.Call.Caller, c.At
 		}
 		var err error
 		if i.Role, err = w.role(w.versions[i.UID][0].Version); err != nil {
@@ -570,29 +572,41 @@ func (w *World) namedOfKind(kind trace.Kind, i Instance, namespace, name string,
 	return best.UID, best.UID != "" && (bestHome || !ambiguous)
 }
 
-// naming applies rule 3: an owns entry over the body at t of a CR of its
-// entry's kind names i. A CR live at t wins, then the latest created.
+// naming applies rule 3. A CR live at t wins, then the latest created.
 func (w *World) naming(i Instance, t time.Duration) (string, bool) {
 	var best Instance
 	found := false
-	for _, rule := range w.rules.Owns {
-		if rule.System != i.Ref.System || rule.Group != i.Ref.Group || rule.Resource != i.Ref.Resource {
-			continue
-		}
-		kind := trace.Kind{Group: rule.CRGroup, Resource: rule.CRResource}
-		for _, cr := range w.instances {
-			if !cr.Ref.OfKind(kind) || !w.names(rule, cr, i, t) {
-				continue
-			}
-			if !found || cr.Live(t) || !best.Live(t) {
-				best, found = cr, true
-			}
+	for _, cr := range w.Naming(i, t) {
+		if !found || cr.Live(t) || !best.Live(t) {
+			best, found = cr, true
 		}
 	}
 	return best.UID, found
 }
 
+// Naming returns, in order of first version, the CRs whose owns entries
+// name i by their bodies at t.
+func (w *World) Naming(i Instance, t time.Duration) []Instance {
+	var rules []OwnsRule
+	for _, rule := range w.rules.Owns {
+		if rule.System == i.Ref.System && rule.Group == i.Ref.Group && rule.Resource == i.Ref.Resource {
+			rules = append(rules, rule)
+		}
+	}
+	var crs []Instance
+	for _, cr := range w.instances {
+		if slices.ContainsFunc(rules, func(rule OwnsRule) bool { return w.names(rule, cr, i, t) }) {
+			crs = append(crs, cr)
+		}
+	}
+	return crs
+}
+
+// names reports whether rule, over cr's body at t, names i.
 func (w *World) names(rule OwnsRule, cr, i Instance, t time.Duration) bool {
+	if !cr.Ref.OfKind(trace.Kind{Group: rule.CRGroup, Resource: rule.CRResource}) {
+		return false
+	}
 	self := w.object(cr, t)
 	if self == nil {
 		return false

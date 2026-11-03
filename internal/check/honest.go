@@ -339,13 +339,17 @@ func (h *honesty) dependencies(uid string, m Model, t time.Duration) []owner.Ins
 	return owned
 }
 
-// appeared is when the trace first shows i: its first version, or the
-// controller's first sight of it if that is earlier.
+// appeared is when the trace first shows i: its first version, the answer
+// to its create, or the controller's first sight of it, whichever is first.
 func appeared(ix *trace.Index, i owner.Instance) time.Duration {
-	if seens := ix.Seen(trace.Controller, i.UID); len(seens) > 0 {
-		return min(i.Created, seens[0].At)
+	first := i.Created
+	if i.Creator != trace.Cluster {
+		first = min(first, i.Answered)
 	}
-	return i.Created
+	if seens := ix.Seen(trace.Controller, i.UID); len(seens) > 0 {
+		first = min(first, seens[0].At)
+	}
+	return first
 }
 
 // controllerDeleted reports whether the controller sent a `delete` of i's

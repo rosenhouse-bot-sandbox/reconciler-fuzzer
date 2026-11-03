@@ -208,6 +208,20 @@ func TestRule3PrefersALiveCRThenTheLatest(t *testing.T) {
 	wantOwner(t, ownerBy(t, tl, rules, "c1", 6*s), 3, "uc")
 }
 
+func TestNamingListsEachCRThatNamesTheResourceOnceInCreationOrder(t *testing.T) {
+	tl := namingWidgets()
+	tl.At(3*s, tt.Version(tt.Ref("toy/widgets", "ns", "c"), "uc", "3", naming("c", "x")),
+		tt.Version(tt.Ref("configmaps", "ns", "x"), "c1", "3", tt.Object("x")))
+	w := owner.New(tl.Index(), compile(t, nil, trace.Owns{Kind: configMaps, Name: "self.spec.child"}, trace.Owns{Kind: configMaps, Name: "'x'"}))
+	var got []string
+	for _, cr := range w.Naming(instance(t, w, "c1"), 3*s) {
+		got = append(got, cr.UID)
+	}
+	if want := []string{"ua", "ub", "uc"}; !slices.Equal(got, want) {
+		t.Errorf("naming = %q, want %q", got, want)
+	}
+}
+
 func TestRule3SkipsACRWhoseCELFails(t *testing.T) {
 	tl := namingWidgets()
 	tl.At(3*s, tt.Version(widgetA, "ua", "3", tt.Object("a")), tt.Version(tt.Ref("configmaps", "ns", "x"), "c1", "3", tt.Object("x")))

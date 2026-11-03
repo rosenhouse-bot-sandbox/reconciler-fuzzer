@@ -3,6 +3,7 @@ package check_test
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/check"
@@ -297,11 +298,11 @@ func TestTeardownFailsAReleaseAfterOnlyADeleteSentBeforeTheChildAppeared(t *test
 	requireFinding(t, teardown(t, r), "Teardown", 1, releasedFirst, ruleTwo.kind, ruleTwo.detail)
 }
 
-// The controller may see a child, and delete it, before the observer
-// records it.
+// The controller may delete a child after its create answered and before
+// the observer records it.
 func TestTeardownPassesADeleteOfAChildThatTheObserverRecordedLate(t *testing.T) {
 	r, uid := finalized(ruleTwo)
-	r.Add(tt.Create(ctl, ruleTwo.ref, "c", "c1"), tt.Seen(ctl, ruleTwo.ref, "c", "c1"))
+	r.Add(tt.Create(ctl, ruleTwo.ref, "c", "c1"))
 	deleteA(r, uid, own)
 	r.Call(ctl, "delete", ruleTwo.ref, 200)
 	r.Add(tt.Version(ruleTwo.ref, "c", "c1", ruleTwo.body))
@@ -454,7 +455,6 @@ func TestTeardownReportsAStepsReleasesOfAKindInOneFinding(t *testing.T) {
 	ruleTwo.tie(r)
 	r.Begin()
 	slots, uids := []string{"a", "b"}, map[string]string{}
-	widget := func(slot string) trace.Ref { return tt.Ref("toy/widgets", "ns", slot) }
 	for _, slot := range slots {
 		uids[slot] = r.CreateCR(slot, widget(slot))
 		r.Add(write(ctl, "update", widget(slot), "f"+slot, own), tt.Version(widget(slot), uids[slot], "f"+slot, objectBody(slot, false, own)))
@@ -587,4 +587,111 @@ func TestTeardownJudgesAFakesResourceInANamespaceThatKubeDeletes(t *testing.T) {
 	releaseA(r, uid)
 	r.Add(tt.Version(namespace, r.UID(namespace), "n2", tt.Deleting(tt.Object("other"))))
 	requireFinding(t, teardown(t, r), "Teardown", 1, releasedFirst, "cloud/buckets", "cloud buckets b1 (rule 2, slot a)")
+}
+
+func widget(slot string) trace.Ref { return tt.Ref("toy/widgets", "ns", slot) }
+
+// sharedRole is the ClusterRole that each Widget's owns entry names.
+var sharedRole = tt.Ref("rbac.authorization.k8s.io/clusterroles", "", "shared-role")
+
+// sharing has the harness create a Widget in each slot, in order, and the
+// controller give each its finalizer and create sharedRole. Then step 1
+// begins. It returns the Widgets' uids by slot.
+func sharing(slots ...string) (*tt.Script, map[string]string) {
+	r := newRun(2)
+	r.Spec.Primaries[0].Owns = []trace.Owns{{Kind: clusterRoles, Name: "'" + sharedRole.Name + "'"}}
+	r.Begin()
+	uids := map[string]string{}
+	for _, slot := range slots {
+		uids[slot] = r.CreateCR(slot, widget(slot))
+		r.Add(write(ctl, "update", widget(slot), "f"+slot, own), tt.Version(widget(slot), uids[slot], "f"+slot, objectBody(slot, false, own)))
+	}
+	r.Create(ctl, sharedRole, tt.Object(sharedRole.Name))
+	r.EndFaults().Settle().Begin()
+	return r, uids
+}
+
+// deleteSlot has the harness delete the slot's Widget.
+func deleteSlot(r *tt.Script, slot, uid string) {
+	cr := widget(slot)
+	r.Add(write(trace.Harness, "delete", cr, "d"+slot, own), tt.Version(cr, uid, "d"+slot, objectBody(slot, true, own)))
+	r.Act("delete", slot, &cr)
+}
+
+// releaseSlot has the controller remove its finalizer from the slot's
+// deleting Widget. The observer has yet to record the delete.
+func releaseSlot(r *tt.Script, slot string) { r.Add(write(ctl, "update", widget(slot), "d"+slot)) }
+
+var creationOrders = [][]string{{"a", "b"}, {"b", "a"}}
+
+// Another CR whose owns entry names the resource may still need it.
+func TestTeardownPassesASharedResourceThatALiveCRStillNames(t *testing.T) {
+	for _, created := range creationOrders {
+		t.Run("created "+strings.Join(created, " then "), func(t *testing.T) {
+			r, uids := sharing(created...)
+			deleteSlot(r, "a", uids["a"])
+			releaseSlot(r, "a")
+			r.Add(tt.Deleted(widget("a"), uids["a"], "ra", objectBody("a", true, own)))
+			requireNone(t, teardown(t, r))
+		})
+	}
+}
+
+// A gone CR no longer needs the resource, nor does one that the controller
+// released, though the observer has yet to record its delete.
+func TestTeardownJudgesASharedResourceAtTheLastRelease(t *testing.T) {
+	for name, end := range map[string]func(r *tt.Script, uids map[string]string){
+		"a released while b is deleting": func(r *tt.Script, uids map[string]string) {
+			deleteSlot(r, "a", uids["a"])
+			deleteSlot(r, "b", uids["b"])
+			releaseSlot(r, "a")
+		},
+		"a gone unreleased": func(r *tt.Script, uids map[string]string) {
+			r.Delete(trace.Harness, widget("a"))
+			deleteSlot(r, "b", uids["b"])
+		},
+	} {
+		for _, created := range creationOrders {
+			t.Run(name+", created "+strings.Join(created, " then "), func(t *testing.T) {
+				r, uids := sharing(created...)
+				end(r, uids)
+				releaseSlot(r, "b")
+				findings := teardown(t, r)
+				requireFinding(t, findings, "Teardown", 1, releasedFirst, "kube/rbac.authorization.k8s.io/clusterroles", "shared-role (rule 3, slot b)")
+				if details := findings[0].Details; len(details) != 1 {
+					t.Errorf("details = %q, want only slot b's release", details)
+				}
+			})
+		}
+	}
+}
+
+// A gone CR's owns entry still names its resource.
+func TestTeardownPassesAResourceThatOnlyAGoneCRNames(t *testing.T) {
+	r, uid := finalized(child{tie: func(r *tt.Script) {
+		r.Spec.Primaries[0].Owns = []trace.Owns{{Kind: clusterRoles, Name: "self.metadata.name + '-role'"}}
+	}})
+	r.CreateCR("b", widgetB)
+	r.Create(ctl, tt.Ref("rbac.authorization.k8s.io/clusterroles", "", "b-role"), tt.Object("b-role"))
+	r.Delete(trace.Harness, widgetB)
+	deleteA(r, uid, own)
+	releaseA(r, uid)
+	requireNone(t, teardown(t, r))
+}
+
+// One CR's deletion policy may keep a resource that it shares.
+func TestTeardownPassesASharedResourceThatAReleasedCRRetains(t *testing.T) {
+	for _, released := range creationOrders {
+		t.Run("released "+strings.Join(released, " then "), func(t *testing.T) {
+			r, uids := sharing("a", "b")
+			r.Spec.Primaries[0].Retain = `self.metadata.name == "a"`
+			for _, slot := range released {
+				deleteSlot(r, slot, uids[slot])
+			}
+			for _, slot := range released {
+				releaseSlot(r, slot)
+			}
+			requireNone(t, teardown(t, r))
+		})
+	}
 }

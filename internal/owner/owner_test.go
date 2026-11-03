@@ -107,6 +107,16 @@ func TestCreatorIsTheCallerWhoseCreateCarriedTheUID(t *testing.T) {
 	}
 }
 
+func TestAnsweredIsWhenTheResponseThatCarriedTheUIDEnded(t *testing.T) {
+	create := tt.Create(ctl, cmA0, "c1", "3")
+	create.Call.Latency = 2 * s
+	tl := twoWidgets()
+	tl.At(4*s, create).At(5*s, tt.Version(cmA0, "c1", "3", tt.Object("a-0")))
+	if got := instance(t, owner.New(tl.Index(), owner.Rules{}), "c1").Answered; got != 4*s {
+		t.Errorf("answered = %v, want 4s", got)
+	}
+}
+
 func TestCreatorOfAnApplyIsItsCaller(t *testing.T) {
 	apply := tt.Create(ctl, cmA0, "c1", "3")
 	apply.Call.Verb = "patch"
