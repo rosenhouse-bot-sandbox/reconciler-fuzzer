@@ -1175,6 +1175,22 @@ func TestClause1SaysWhatTheControllerLastSawOfWhatTheCRNames(t *testing.T) {
 	}
 }
 
+// The response to the write that removed the Secret's last finalizer can
+// come after the watch event of its deletion, and show it as it was.
+func TestClause1IgnoresAResponseAfterTheSightOfADeletion(t *testing.T) {
+	optional := secretRef()
+	optional.Required = false
+	r := secretRun(optional, secret(true))
+	live, _ := r.See(ctl, pw).Index().Latest(pw)
+	r.Delete(trace.Harness, pw)
+	gone := r.Now
+	r.SeeDeleted(ctl, pw).Add(tt.Seen(ctl, pw, live.UID, live.RV)).EndFaults()
+	want := fmt.Sprintf("databases.toy ns/b is not ready; the controller last saw secrets ns/pw missing at %v", gone)
+	if unmet := settledAt(t, r, r.Now+5*s); !slices.Contains(unmet, want) {
+		t.Errorf("unmet = %q, want %q.", unmet, want)
+	}
+}
+
 func TestSettleStillWaitsForACRNoReferenceHoldsBack(t *testing.T) {
 	r := secretRun(secretRef(), nil)
 	namesNothing := database(false, "")

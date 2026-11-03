@@ -383,6 +383,11 @@ KUBEBUILDER_ASSETS=<path> reconciler-fuzzer hunt --config config.yaml --seeds 20
 It replays and shrinks each finding, which takes many minutes. Run it in the background.
 `summary.md` lists each finding with its seed and shrunk plan. Treat each as in step 8.
 
+Under `onDelete: block`, a seed's plan may stop early: a create or `createFixture` into a name
+that waits in deletion gives up with a `still taken` note, and the later steps do not run.
+`summary.md` does not show this ([#190](https://github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/issues/190)). Run such a seed with `reconciler-fuzzer run --seed`
+to read its notes in `report.md`.
+
 ## 10. Commit plans and seeds
 
 Commit `config.yaml`, the sample, fixtures, `plans/`, and a `seeds` file of the seeds that ran

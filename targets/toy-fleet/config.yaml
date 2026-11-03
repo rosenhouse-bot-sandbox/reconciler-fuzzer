@@ -1,7 +1,9 @@
 # This config lists Clusters, Databases and Users. Its references say that a
 # Database names a Cluster and the fixture Secret, and a User a Database. A
 # Cluster's deletion waits for the Databases that name it, and a Database's
-# for its Users. Paths resolve against this file's directory.
+# for its Users. Some generated plans stop early, at a create into a name
+# that waits in deletion (#189). Fuzz cluster/ or database/ for whole
+# plans. Paths resolve against this file's directory.
 launch:
   binary: ../../bin/toy-fleet
   args:

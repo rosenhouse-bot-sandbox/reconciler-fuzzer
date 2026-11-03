@@ -246,8 +246,9 @@ to the CRs the stop waited for (§9).
    from `backoff + stable` after `endFaults`, a reference holds it back, as a
    look at `t` would too, or leaves it unknown (§12), and
 2. carries no `deletionTimestamp`. A CR being deleted that a live CR names
-   under `block` meets clauses 1 and 2 `stable` after its deletion started,
-   unless that CR waits for it in turn through CRs being deleted.
+   under `block` meets clauses 1 and 2 from `stable` after its deletion started
+   and `backoff + stable` after `endFaults`, unless that CR waits for it in
+   turn through CRs being deleted.
 3. The controller is up at `t` and has been up for at least `stable`.
 4. The controller made a 2xx request, not ignored and not of unknown
    outcome, that it sent since its last start.
@@ -255,10 +256,10 @@ to the CRs the stop waited for (§9).
    actions changed, the controller looked at it after the change: a 2xx or
    404 request, not of unknown outcome, that covers it (`Ref.Covers`), or a
    watch that covers it, opened before the change and open at `t`. The clause
-   also needs `stable` since each change, and lapses at `endFaults + 1.5 ×` the
-   longest poll of the changed objects' systems. Without a watch across
-   the change, it needs `stable` since the first request that looked; a
-   held watch, `stable` since its `holdWatch` ended.
+   also needs `stable` since each change and since each of the step's
+   `holdWatch` faults ended, and lapses at `endFaults + 1.5 ×` the longest poll
+   of the changed objects' systems. Without a watch across the change, it
+   needs `stable` since the first request that looked.
 6. No model or fake has work pending at `t` (`Index.Pending`).
 7. No changed write, not ignored, ended in `(t - stable, t]` or was in
    flight at `t`. Over each system's poll interval up to `t`, the
@@ -370,17 +371,16 @@ with no dependency` if missing, else `reported ready before seeing its
 dependency ready`. With `track: d`, a CR fails that stays `ready`, naming the
 object, `d`, stalls aside, after a look that held it back: `stayed ready after
 seeing its dependency not ready`. Each finding takes the `to` kind. Under
-`onDelete: block`, Honest, unlike Converge and Restore, judges a look that shows
-the object being deleted by its last version before the deletion started.
+`onDelete: block`, Honest, unlike Converge and Restore, also counts a look at
+the object being deleted `ready` if its last version before the deletion was.
 
 **Ordered.** Under `onDelete: block`, a `to` instance's **release** is its
 deleted version, and its deletion starts at its first `deletionTimestamp`, or
-else at the release. Ordered fails a release if, `stable` or more before the
-deletion started, the controller saw the instance and a version of a `from` CR
-that names it, and the CR stays live and names the instance in each later
-version up to the release: `released an object that another names` (entry 89).
-A CR that waits for the instance in turn, through CRs being deleted, does not
-count, since clause 2 needs such a cycle broken.
+else at the release. Ordered fails a release if the controller saw the instance
+and a version of a `from` CR that names it in time to hold it, and the CR stays
+live and names the instance in each later version up to the release: `released
+an object that another names`. Entry 89 says when a sight is in time, and which
+CRs on a cycle do not count.
 
 **Backoff.** A controller call is **futile** if it fails, or writes and changes
 nothing (entry 88). Futile calls with one system, verb, object, subresource and
@@ -580,7 +580,7 @@ Each entry changes a check, exception, `System` interface or ignore list.
 69. Properties judge settled step ends; `firstWrittenUnder` follows a value across instances, for #63.
 70. `primary.periodic` lets a timer's CR writes pass clause 7, for an external-secrets rotation.
 72. Clause 5 holds `stable` after a polling controller's look, for ACK's repair.
-73. A held watch looks only `stable` after its hold. Backoff allows 409s on a held kind during the hold, as #114 defines, and until `stable / 4` after. It allows no-op writes there too, since a stale cache repeats writes that the server holds (#139).
+73. A held watch looks only `stable` after its hold, and a step settles only `stable` after each of its holds ends, since the events that a hold delivers may show the controller its own write, such as a finalizer that it removed. Backoff allows 409s on a held kind during the hold, as #114 defines, and until `stable / 4` after. It allows no-op writes there too, since a stale cache repeats writes that the server holds (#139).
 74. A fake's write without a resourceVersion is a change only if the observer saw one, for ACK.
 75. Restore ignores Vault's `current_version` and `versions`, and S3's `versionId`.
 76. `primary.periodic` paths name list items with `[*]`, so ACK exempts only condition stamps.
@@ -591,9 +591,9 @@ Each entry changes a check, exception, `System` interface or ignore list.
 81. `required` binds only the first entry's CRs, so the kinds that own no dependency pass.
 82. A `damage` touches each group under its root. An undamaged touched group may empty while its kind lives under that root, and a damaged one whose owner is gone while a CR made in the step owns its kind and role there. So a damage under a CR that the controller made touches that CR's owner, and the controller may remake that CR.
 83. Converge accepts a CR that is not ready while a reference holds it back, where a `ready` write would fail Honest (#126). A look then must hold it back too, so a controller that misses the object's return does not settle. A look need not follow the controller's own write of the object, since a controller writes the status of the kinds it serves. The excuse waits `backoff + stable` after `endFaults`, so a step does not settle before a controller in retry backoff reacts to a held-back CR that it creates or updates. Restore lets a group empty while its CRs are all not ready but halted or held back, since their controller stops on purpose.
-84. A 2xx kube list that is not `Partial` and lacks an object shows it missing, as does the `k8s.io/initial-events-end` bookmark of such a watch, since client-go's informers open a watch with `sendInitialEvents` instead of a list. So a restart or a dropped watch counts. Kube listeners ask for JSON of Seen kinds, so built-in kinds' lists and watches decode.
+84. A 2xx kube list that is not `Partial` and lacks an object shows it missing, as does the `k8s.io/initial-events-end` bookmark of such a watch, since client-go's informers open a watch with `sendInitialEvents` instead of a list. So a restart or a dropped watch counts. Kube listeners ask for JSON of Seen kinds, so built-in kinds' lists and watches decode. A seen that follows its object's DELETED on a watch that is not `Partial` does not count, since it shows a version from before the deletion, as the response to the write that removed the last finalizer may.
 85. A kube write's call records its answer's finalizers, for Finalizers (#133), since an update that empties a deleting object's finalizers deletes it and answers with the old version. The gc owns `foregroundDeletion` and `orphan`, which the API server adds for whoever deletes. A finalizer the harness wrote, from a sample, a fixture or a plan, may be the controller's own. Listeners record answers in no fixed order, so a version that overlapping writes of two callers carry may be either's. After an answer names a version the observer missed, the trace may lack a change, so the object's later writes pass. A CRD's status write keeps its metadata.
 86. Honest excuses a `ready` write that the controller sends within 2×`stable` of a look, after an earlier look that let the CR be `ready`, with no `start` since, and retracts within `stable` of the write's response, by writing the CR not `ready` or naming another object. A reconcile may read its cache before the look reaches the cache, the cache holds what an earlier look showed, and the CR's next reconcile starts only once the write returns. Neither window, nor a `track`, counts time in which a step's faults stall the controller, or between an exit and its next start, since a reconcile that a fault holds keeps the CRs queued behind it waiting. A step's faults stall it only if a fault altered one of the controller's requests in them, so a model fault, such as `stuck`, and a held watch stall it not at all. The retraction window starts again at a `start`, since a restart loses the reconcile, and a write of the CR that failed or had an unknown outcome, the `ready` write itself or one in the window, such as a conflict from a cache that lacks the `ready` write, gives the controller the `backoff` of the step that answered it and `stable` from its response. A killed write gives none, since the controller starts again with an empty backoff.
 87. At a step whose restart upgrades the controller, Restore allows changed resources but not replaced ones, since a release often rewrites its children's labels or templates (#137).
 88. Backoff counts a no-op write, such as a delete of an object already being deleted, as futile (#139). A no-op success ends a run of failing calls, since its reconcile may have reset the rate limiter. A run of no-op writes allows twice the calls, since a reconcile may repeat a write, as a deferred status update after an explicit one does. An update that empties a deleting object's finalizers is not futile, since it deletes the object (entry 85). A kube `deletecollection` answers with the resourceVersion of its list. By default that is the latest, which repeats only while nothing in the cluster changes. So a repeat counts as a no-op. The rule assumes that the repeat has the earlier call's selector and options.
-89. Under `onDelete: block` (#126, #127), a `to` CR that waits in deletion while a live `from` CR names it meets clauses 1 and 2 from `stable` after its deletion started, since its controller may write it as it starts to wait, and may report it not `ready` while it waits. Ordered needs the `from` CR to name the instance in each version up to the release, so a moved reference releases the old object, and a CR being deleted still names it. It skips a CR that waits for the instance in turn, through CRs being deleted, since such a cycle waits for good unless the controller breaks it, as Kubernetes' garbage collector breaks a cycle of foreground deletions. Clause 2 holds the cycle's CRs to it. Ordered also skips what the trace cannot order: a delete that the observer recorded from a relist, which carries the resourceVersion of the version before it, and a CR with a version that the controller saw and the observer missed. It needs the controller's seens of the instance and the CR `stable` before the deletion started, since a controller that adds its finalizer in a reconcile cannot hold an object deleted first; only admission control closes that race. It compares resourceVersions as integers, as etcd assigns them, since the observer's watches order no events across kinds. Honest judges an object that waits in deletion by its last version before the deletion, which a controller may still use, so a CR may become `ready` on it only if it was `ready`. Converge and Restore still excuse a CR that is not `ready`.
+89. Under `onDelete: block` (#126, #127), a `to` CR that waits in deletion while a live `from` CR names it meets clauses 1 and 2 from `stable` after its deletion started, and not before the step's `backoff + stable` after `endFaults`, since its controller may write it as it starts to wait, from retry backoff if a fault failed that write, and may report it not `ready` while it waits. Ordered needs the `from` CR to name the instance in each version up to the release, so a moved reference releases the old object, and a CR being deleted still names it. It skips a CR that waits for the instance in turn, through CRs being deleted, since such a cycle waits for good unless the controller breaks it, as Kubernetes' garbage collector breaks a cycle of foreground deletions. Clause 2 holds the cycle's CRs to it. Ordered also skips what the trace cannot order: a delete that the observer recorded from a relist, which carries the resourceVersion of the version before it, and a CR with a version that the controller saw and the observer missed. It counts a seen of the instance or the CR only if it came in time for the deletion's start: `stable` before it, stalls aside (entry 86), or, if a step's faults that began by then stalled the controller after the seen, by the step's `backoff + stable` after `endFaults`. A controller that adds its finalizer in a reconcile cannot hold an object deleted first, and one in retry backoff reconciles only after the backoff. Only admission control closes the first race. It compares resourceVersions as integers, as etcd assigns them, since the observer's watches order no events across kinds. Honest counts an object that waits in deletion `ready` if it is, or if its last version before the deletion was, since a controller may still use that version. Converge and Restore judge the object as it is, so they still excuse a CR that is not `ready` on it.

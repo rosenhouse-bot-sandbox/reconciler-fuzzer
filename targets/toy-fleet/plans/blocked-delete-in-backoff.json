@@ -1,0 +1,60 @@
+{
+  "steps": [
+    {
+      "actions": [
+        {
+          "do": "create",
+          "slot": "a",
+          "object": {
+            "apiVersion": "toy.reconciler-fuzzer/v1",
+            "kind": "Cluster",
+            "metadata": {
+              "name": "cluster"
+            },
+            "spec": {
+              "volumes": 1,
+              "volumeSize": "small"
+            }
+          }
+        },
+        {
+          "do": "create",
+          "slot": "b",
+          "object": {
+            "apiVersion": "toy.reconciler-fuzzer/v1",
+            "kind": "Database",
+            "metadata": {
+              "name": "db"
+            },
+            "spec": {
+              "clusterRef": "cluster",
+              "engine": "postgres"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "period": "4s",
+      "faults": [
+        {
+          "match": {
+            "verb": "update",
+            "group": "toy.reconciler-fuzzer",
+            "resource": "clusters",
+            "subresource": "status"
+          },
+          "error": {
+            "code": 500
+          }
+        }
+      ],
+      "actions": [
+        {
+          "do": "delete",
+          "slot": "a"
+        }
+      ]
+    }
+  ]
+}

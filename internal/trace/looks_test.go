@@ -145,3 +145,48 @@ func TestLooksCountTheEndOfAWatchsInitialEvents(t *testing.T) {
 		}
 	}
 }
+
+// The response to the write that removed an object's last finalizer can come
+// after the watch event of its deletion, and show the object as it was. A
+// Partial watch sends DELETED also when the object leaves its selector.
+func TestLooksEndAtTheSightOfADeletion(t *testing.T) {
+	const s = time.Second
+	ctl, secrets := trace.Controller, tt.Ref("secrets", "ns", "")
+	pw, labeled := tt.Ref("secrets", "ns", "pw"), tt.Ref("secrets", "ns", "labeled")
+	watch := func(stream uint64, partial bool) trace.Event {
+		e := tt.Call(ctl, "watch", secrets, 200, "")
+		e.Call.Watch, e.Call.Stream, e.Call.Partial = true, stream, partial
+		return e
+	}
+	deleted := func(ref trace.Ref, uid string, stream uint64) trace.Event {
+		e := tt.Seen(ctl, ref, uid, "2")
+		e.Seen.Deleted, e.Seen.Stream = true, stream
+		return e
+	}
+	var b tt.Builder
+	b.At(1*s).Add(watch(1, false), watch(2, true), tt.Seen(ctl, pw, "u1", "1"), tt.Seen(ctl, labeled, "u3", "1")).
+		At(2*s).Add(deleted(pw, "u1", 1), tt.Seen(ctl, pw, "u1", "1"), tt.Seen(trace.Harness, pw, "u1", "1"),
+		deleted(labeled, "u3", 2), tt.Seen(ctl, labeled, "u3", "1")).
+		At(3 * s).Add(tt.Seen(ctl, pw, "u2", "3"))
+	ix := b.Index()
+	describe := func(events []trace.Event) []string {
+		var described []string
+		for _, e := range events {
+			described = append(described, fmt.Sprintf("%v %s %v", e.At, e.Seen.UID, e.Seen.Deleted))
+		}
+		return described
+	}
+	for _, c := range []struct {
+		what      string
+		got, want []string
+	}{
+		{"Looks(controller, pw)", describe(ix.Looks(ctl, pw)), []string{"1s u1 false", "2s u1 true", "3s u2 false"}},
+		{"Seen(controller, u1)", describe(ix.Seen(ctl, "u1")), []string{"1s u1 false", "2s u1 true"}},
+		{"Looks(harness, pw)", describe(ix.Looks(trace.Harness, pw)), []string{"2s u1 false"}},
+		{"Looks(controller, labeled)", describe(ix.Looks(ctl, labeled)), []string{"1s u3 false", "2s u3 true", "2s u3 false"}},
+	} {
+		if !slices.Equal(c.got, c.want) {
+			t.Errorf("%s = %q, want %q.", c.what, c.got, c.want)
+		}
+	}
+}
