@@ -417,9 +417,51 @@ func TestClause5HoldsStableAfterAHoldWatchReleasesTheWatch(t *testing.T) {
 		At(1200*ms).Add(tt.Action(0, "damage", cm)).
 		At(3500*ms).Add(tt.HoldFault(0, 0, true, hold), tt.EndFaults(0, 10*s, false))
 	requireUnmet(t, b, 3400*ms, "has not looked at configmaps ns/c")
-	requireUnmet(t, b, 5499*ms, "a holdWatch released the controller's watch of configmaps ns/c at 3.5s, less than stable ago")
+	requireUnmet(t, b, 5499*ms, "a holdWatch released the controller's watch of configmaps at 3.5s, less than stable ago")
 	if got, ok := check.FirstSettled(b.Index(), 3500*ms, 10*s, spec); !ok || got != 5500*ms {
 		t.Errorf("FirstSettled = %v, %v; want stable after the release", got, ok)
+	}
+}
+
+// The events a hold delivers at its end may show the controller its own
+// writes, such as a finalizer it removed, that it reacts to.
+func TestClause5HoldsStableAfterAHoldWatchOfAnUnchangedKindEnds(t *testing.T) {
+	hold := trace.Ref{System: "kube", Resource: "secrets"}
+	b := settledAt3s()
+	b.At(1*s).Add(tt.Phase(0, trace.FaultPeriod), tt.HoldFault(0, 0, false, hold)).
+		At(3500*ms).Add(tt.HoldFault(0, 0, true, hold), tt.EndFaults(0, 10*s, false))
+	requireUnmet(t, b, 5499*ms, "a holdWatch released the controller's watch of secrets at 3.5s, less than stable ago")
+	if got, ok := check.FirstSettled(b.Index(), 3500*ms, 10*s, spec); !ok || got != 5500*ms {
+		t.Errorf("FirstSettled = %v, %v; want stable after the release", got, ok)
+	}
+}
+
+// A hold delivers its events whatever the changed systems poll, so the wait
+// after it outlasts clause 5's lapse.
+func TestClause5HoldsStableAfterAHoldWatchEndsPastTheLapse(t *testing.T) {
+	sp := spec
+	sp.Polls = map[string]time.Duration{"fast": s}
+	hold := trace.Ref{System: "kube", Resource: "secrets"}
+	b := settledAt3s()
+	b.At(1*s).Add(tt.Phase(0, trace.FaultPeriod), tt.HoldFault(0, 0, false, hold)).
+		At(1200*ms).Add(tt.Action(0, "damage", trace.Ref{System: "fast", Resource: "buckets", Name: "b1"})).
+		At(3500*ms).Add(tt.HoldFault(0, 0, true, hold), tt.EndFaults(0, 10*s, false))
+	if got, ok := check.FirstSettled(b.Index(), 3500*ms, 10*s, sp); !ok || got != 5500*ms {
+		t.Errorf("FirstSettled = %v, %v; want stable after the release, past the lapse at 5s", got, ok)
+	}
+}
+
+// Converge judges each step on the whole run's index, which holds the holds
+// of later steps.
+func TestClause5IgnoresAHoldWatchThatEndsLater(t *testing.T) {
+	hold := trace.Ref{System: "kube", Resource: "secrets"}
+	b := settledAt3s()
+	b.At(1*s).Add(tt.Phase(0, trace.FaultPeriod)).
+		At(1300*ms).Add(tt.EndFaults(0, 10*s, false)).
+		At(6*s).Add(tt.Phase(1, trace.FaultPeriod), tt.HoldFault(1, 0, false, hold)).
+		At(7*s).Add(tt.HoldFault(1, 0, true, hold), tt.EndFaults(1, 20*s, false))
+	if got, ok := check.FirstSettled(b.Index(), 1300*ms, 5*s, spec); !ok || got != 2*s {
+		t.Errorf("FirstSettled = %v, %v; want 2s, as without step 1's hold", got, ok)
 	}
 }
 

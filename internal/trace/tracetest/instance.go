@@ -20,14 +20,27 @@ func Generated(prefix, name string) map[string]any {
 
 // OwnedBy adds an ownerReference to the owner with uid, and returns body.
 func OwnedBy(body map[string]any, uid string, controller bool) map[string]any {
+	metadata := metadataOf(body)
+	refs, _ := metadata["ownerReferences"].([]any)
+	metadata["ownerReferences"] = append(refs, map[string]any{"uid": uid, "controller": controller})
+	return body
+}
+
+// Deleting adds the deletionTimestamp that a delete of an object with
+// finalizers sets, and returns body.
+func Deleting(body map[string]any) map[string]any {
+	metadataOf(body)["deletionTimestamp"] = "2026-01-01T00:00:00Z"
+	return body
+}
+
+// metadataOf is body's metadata, which it adds if body has none.
+func metadataOf(body map[string]any) map[string]any {
 	metadata, _ := body["metadata"].(map[string]any)
 	if metadata == nil {
 		metadata = map[string]any{}
 		body["metadata"] = metadata
 	}
-	refs, _ := metadata["ownerReferences"].([]any)
-	metadata["ownerReferences"] = append(refs, map[string]any{"uid": uid, "controller": controller})
-	return body
+	return metadata
 }
 
 // Create is a successful create by caller of ref, to which the server gave

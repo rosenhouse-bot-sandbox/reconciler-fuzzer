@@ -10,9 +10,9 @@ import (
 	"testing"
 )
 
-func TestDesignStaysUnder585Lines(t *testing.T) {
-	if lines := bytes.Count(design(t), []byte("\n")); lines >= 585 {
-		t.Errorf("DESIGN.md has %d lines, want under 585.", lines)
+func TestDesignStaysUnder600Lines(t *testing.T) {
+	if lines := bytes.Count(design(t), []byte("\n")); lines >= 600 {
+		t.Errorf("DESIGN.md has %d lines, want under 600.", lines)
 	}
 }
 

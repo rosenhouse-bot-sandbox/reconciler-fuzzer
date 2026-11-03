@@ -8,6 +8,10 @@ import (
 // DatabaseFinalizer holds a Database until its Users are gone.
 const DatabaseFinalizer = "fleet.toy/db"
 
+// SecretInUseFinalizer holds a Secret's deletion while a Database names it,
+// under --protect-secrets.
+const SecretInUseFinalizer = "fleet.toy/secret-in-use"
+
 type DatabaseSpec struct {
 	// ClusterRef names the Cluster, in the Database's namespace, that hosts it.
 	// +kubebuilder:validation:MinLength=1

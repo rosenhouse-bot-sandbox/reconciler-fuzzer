@@ -3,8 +3,8 @@
 reconciler-fuzzer finds bugs in Kubernetes controllers. It runs your controller on your machine
 against envtest's kube-apiserver and etcd. It follows a plan of steps: CR changes, faults on the
 controller's API requests, restarts, and damage to objects the controller created. It records
-every request and object version in a trace, including requests to fake HTTP services. Then it judges the trace with eight checks: Converge,
-Crash, Clean, Restore, Unique, Honest, Backoff and Finalizers ([DESIGN.md §12](DESIGN.md#12-checks)).
+every request and object version in a trace, including requests to fake HTTP services. Then it judges the trace with nine checks: Converge,
+Crash, Clean, Restore, Unique, Honest, Ordered, Backoff and Finalizers ([DESIGN.md §12](DESIGN.md#12-checks)).
 
 You write no test code. One YAML config describes your controller.
 
@@ -136,19 +136,21 @@ timeouts: {settle: 30s, stable: 3s}
 
 A controller that serves several CRD kinds lists each under `primaries`. `primary` is shorthand
 for a list of one. An entry takes `primary`'s keys, and its own `overlay`, `distinct` and
-`mutate` under `values`:
+`mutate` under `values`. The top-level `values` then takes only `fixtures`. The toy controller
+in [targets/toy-fleet](targets/toy-fleet/config.yaml) serves Clusters, Databases and Users:
 
 ```yaml
 primaries:
-  - kind: example.com/v1/Cluster
+  - kind: toy.reconciler-fuzzer/v1/Cluster
     sample: cluster.yaml
     ready: &ready >-
       has(self.status) && has(self.status.observedGeneration)
       && self.status.observedGeneration == self.metadata.generation
-    values: {mutate: [spec.size]}
-  - {kind: example.com/v1/Database, sample: database.yaml, ready: *ready}
-fixtures: [settings.yaml]
-values: {fixtures: {settings.yaml: [data.theme]}}   # with primaries, only fixtures
+      && has(self.status.phase) && self.status.phase == 'Ready'
+    values: {mutate: [spec.volumes, spec.volumeSize]}
+  - {kind: toy.reconciler-fuzzer/v1/Database, sample: database/database.yaml, ready: *ready}
+  - {kind: toy.reconciler-fuzzer/v1/User, sample: user.yaml, ready: *ready}
+fixtures: [admin-password.yaml]                     # a Secret that a Database names
 ```
 
 - Every check judges the CRs of each listed kind by their own entry, and the settle condition
@@ -168,18 +170,23 @@ values: {fixtures: {settings.yaml: [data.theme]}}   # with primaries, only fixtu
 
 ### References
 
-A `references` entry declares a field by which a CR names an object that it does not own, such as
-the Cluster that a Database runs on or the Secret that holds its password:
+A `references` entry declares a field by which a CR names an object that it does not own. In
+toy-fleet, a Database names the Cluster that it runs on and the Secret that holds its password,
+and a User names a Database:
 
 ```yaml
 references:
-  - {from: example.com/v1/Database, to: example.com/v1/Cluster, name: spec.clusterRef}
-  - from: example.com/v1/Database
+  - from: toy.reconciler-fuzzer/v1/Database
+    to: toy.reconciler-fuzzer/v1/Cluster
+    name: spec.clusterRef
+    onDelete: block                                   # the Cluster's deletion waits for its Databases
+  - from: toy.reconciler-fuzzer/v1/Database
     to: v1/Secret
     name: spec.passwordSecretRef.name
     ready: has(self.data) && has(self.data.password)   # CEL over the Secret
     required: true                                    # the default
     track: 1s
+  - {from: toy.reconciler-fuzzer/v1/User, to: toy.reconciler-fuzzer/v1/Database, name: spec.databaseRef, onDelete: block}
 ```
 
 - `from` is a listed kind. `to` is a kube kind, or a fake's collection written as
@@ -195,9 +202,11 @@ references:
   empty or absent value names nothing. A `name` may not be the field that an `owns` entry of the
   `from` entry reads for the same kind, since the CR owns that object.
 - The controller **looks** at an object when a response or watch event gives it the object, or
-  when a get, a list or the initial events of a watch show it missing. A reference **holds back**
-  a CR while the controller's last look at the named object showed it not ready, or missing and
-  `required`. Before any look, only a missing `required` object holds the CR back.
+  when a get, a list or the initial events of a watch show it missing. A response that gives it
+  the object after a watch without a selector showed the object deleted does not count, since it
+  shows a version from before the deletion. A reference **holds back** a CR while the
+  controller's last look at the named object showed it not ready, or missing and `required`.
+  Before any look, only a missing `required` object holds the CR back.
 - Honest fails a CR that the controller writes ready while a reference holds it back, or before
   the controller looked at a live named object. It passes a write sent within 2×`stable` of a
   look, after an earlier look that let the CR be ready, with no restart since, that the
@@ -229,9 +238,39 @@ references:
   and `createFixture` makes it again:
   `{"do": "createFixture", "target": {"resource": "secrets", "name": "admin-password"}}`.
 - The step that deletes every CR deletes those of each `from` kind before those of its `to` kind.
+- `onDelete: block` says that the object's deletion waits for the CRs that name it, as
+  `kubernetes.io/pvc-protection` holds a claim that a Pod uses. The controller holds the
+  object, usually with a finalizer that it removes once no CR names the object. A fake's
+  collection cannot take it. Without `onDelete`, the deletion need not wait for those CRs.
+- Under `block`, Ordered fails an object that is released, that is gone, while a CR names it:
+  `released an object that another names`. A CR names the object until the CR is gone, even
+  while the CR is being deleted. A CR that moves its reference releases the old object. Ordered
+  counts only a CR that the controller saw naming the object, and an object that it saw, in time
+  to hold the object: `stable` before the object's deletion started, not counting stalls. If a
+  step's faults stalled the controller in that time, the deletion must also start once `stable`,
+  and the time those faults lasted, at most `timeouts.backoffCap`, have passed since they ended,
+  since the controller may wait in retry backoff until then. A controller cannot hold an object
+  whose deletion starts before it reacts, and only admission control can refuse a CR that names
+  the object later.
+- Under `block`, the settle condition counts a CR that waits in deletion while a live CR names it
+  as settled. This starts `stable` after its deletion started, and not before `stable` and the
+  time the step's faults lasted, at most `timeouts.backoffCap`, have passed since the faults
+  ended. One that stays after its last naming CR is gone still fails clause 2. CRs being deleted
+  that name each other, directly or through other CRs being deleted, would wait for good, so
+  those names do not count. A CR that names itself is such a cycle. Ordered passes the release
+  that breaks one.
+- Under `block`, Honest counts a look at an object that waits in deletion as ready if the look,
+  or the object's last version before its deletion started, shows it ready, since the
+  controller may still use the object.
+- Clause 2 judges only CRs of listed kinds, so no check fails an object of another kind, such as
+  a Secret, that stays in deletion after its last naming CR is gone (#188).
+- Under `block`, a generated create or `createFixture` may need a name that waits in deletion
+  while a CR names it. Its wait then gives up with a `still taken` note, and the plan's later
+  steps do not run. `hunt` drops the note, so the seed counts as clean (#189, #190).
 
-[targets/toy-fleet](targets/toy-fleet/config.yaml) declares that a Database names a Cluster and a
-Secret, and a User a Database.
+[targets/toy-fleet/secret](targets/toy-fleet/secret/config.yaml) runs toy-fleet with
+`--protect-secrets`, which holds each Secret while a Database names it, and blocks on the Secret
+reference.
 
 ### Other namespaces and cluster scope
 
@@ -459,7 +498,9 @@ condition. `[*]` names a field of every list item, as in `status.conditions[*].l
 
 A `holdWatch` fault pauses the controller's watch events of one kind for the fault period, and
 delivers them in order when it ends. The controller then acts on a stale cache, as on a busy
-cluster. The settle condition counts a held watch as looking only once the hold ends:
+cluster. The settle condition counts a held watch as looking only once the hold ends, and it
+holds the step for `stable` after the hold ends, since the events it delivers may show the
+controller work, such as its own write:
 
 ```json
 {"actions": [{"do": "delete", "slot": "a"}, {"do": "create", "slot": "a", "object": {}}],

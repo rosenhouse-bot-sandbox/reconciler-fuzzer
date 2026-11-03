@@ -16,13 +16,14 @@ const (
 	clusterConfig           = "cluster/config.yaml"
 	databaseConfig          = "database/config.yaml"
 	protectConfig           = "protect/config.yaml"
+	secretConfig            = "secret/config.yaml"
 	uninstallConfig         = "uninstall/config.yaml"
 	upgradeConfig           = "upgrade/config.yaml"
 	upgradePropertiesConfig = "upgrade/properties/config.yaml"
 )
 
 // configs are the configs whose every plan B0 passes with no notes.
-var configs = []string{"config.yaml", databaseConfig, protectConfig, upgradeConfig}
+var configs = []string{"config.yaml", databaseConfig, protectConfig, secretConfig, upgradeConfig}
 
 type gateRow struct {
 	plan    string
@@ -51,11 +52,19 @@ func (g gateRow) planPath() string { return planPath(g.configPath(), g.plan) }
 var gate = []gateRow{
 	{plan: "slow-delete", bug: 116, finding: "Finalizers: removed another caller's finalizer", step: 1, detail: "cluster-vol-0: reconciler-fuzzer.dev/slow-delete, added by model:volumes.storage.thirdparty, removed by update"},
 	{plan: "b0", bug: 116, finding: "Finalizers: removed another caller's finalizer", step: 2, detail: "cluster-vol-0: storage.thirdparty/protect, added by model:volumes.storage.thirdparty, removed by update", config: protectConfig},
+	{plan: "delete-cluster-first", bug: 120, finding: "Ordered: released an object that another names", step: 1, detail: "/cluster: slot b names it"},
+	{plan: "blocked-delete", bug: 120, finding: "Ordered: released an object that another names", step: 1, detail: "/cluster: slot b names it"},
+	// database/config.yaml has no reference to the Cluster, so Converge
+	// catches B120 there.
+	{plan: "cluster-delete", bug: 120, finding: "Converge: did not settle (clause 1)", step: 1, detail: "/db is not ready", config: databaseConfig},
+	{plan: "delete-database-first", bug: 121, finding: "Ordered: released an object that another names", step: 1, detail: "/db: slot c names it"},
+	{plan: "user-first", bug: 122, finding: "Converge: did not settle (clause 1)", step: 0, detail: "/alice is not ready"},
 	{plan: "create-together", bug: 123, finding: "Honest: reported ready before seeing its dependency ready", step: 0, detail: "slot b: clusters.toy.reconciler-fuzzer "},
 	{plan: "secret-late", bug: 124, finding: "Honest: reported ready with no dependency", step: 0, detail: "slot b: secrets "},
 	{plan: "secret-recreate", bug: 125, finding: "Honest: stayed ready after seeing its dependency not ready", step: 1, detail: "slot b: secrets "},
 	// The restarted controller's watch shows the Secret missing.
 	{plan: "secret-deleted-while-down", bug: 125, finding: "Honest: stayed ready after seeing its dependency not ready", step: 1, detail: "slot b: secrets "},
+	{plan: "secret-first", bug: 126, finding: "Ordered: released an object that another names", step: 1, detail: "/admin-password: slot a names it", config: secretConfig},
 	// The restart comes 500 ms after the create, long after the first
 	// process makes its Volumes. The second makes its own, and the update
 	// deletes only one of them.

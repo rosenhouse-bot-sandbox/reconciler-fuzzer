@@ -53,6 +53,9 @@ type Reference struct {
 	Ready           func(obj map[string]any) (bool, error)
 	Required        bool
 	Track           time.Duration
+	// Block says the To object's deletion waits for the From CRs that name
+	// it (onDelete: block).
+	Block bool
 }
 
 // Primary is one listed kind as the checks judge its CRs.
@@ -149,8 +152,9 @@ type Model struct {
 
 // SpecFor builds a Spec from c, or from the trace's Run event when c is nil.
 // The status kinds always come from the Run event, and c must list the Run
-// event's kinds. Each To kind of c's references must be one the Run event's
-// references name, since the listeners record seens of no other kind.
+// event's kinds. The Run event's references must name each To kind of c's
+// references, and name each From kind of c's block references or have one
+// from it with onDelete: block, so that the trace holds seens of them.
 func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 	run, ok := ix.Run()
 	if !ok {
@@ -221,8 +225,9 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 }
 
 // configReferences compiles c's references. The run event's references must
-// name each kube To kind and each fake To system, since the listeners
-// recorded seens of no other.
+// name each kube To kind and each fake To system, and name each From kind of
+// a block reference or have one from it with onDelete: block, so that the
+// trace holds seens of them.
 func configReferences(c *config.Config, run trace.Run) ([]Reference, error) {
 	for i, r := range c.References {
 		if !slices.ContainsFunc(run.References, func(recorded trace.Reference) bool {
@@ -233,6 +238,13 @@ func configReferences(c *config.Config, run trace.Run) ([]Reference, error) {
 				to = kindName(trace.Kind{Group: r.To.Group, Version: r.To.Version, Kind: r.To.Kind})
 			}
 			return nil, fmt.Errorf("the config's references[%d] names %s, but no reference of the trace's run event does, so the trace holds no seens of it", i, to)
+		}
+		if r.Block && !slices.ContainsFunc(run.References, func(recorded trace.Reference) bool {
+			return recorded.To.Group == r.From.Group && recorded.To.Kind == r.From.Kind ||
+				recorded.Block && recorded.From.Group == r.From.Group && recorded.From.Kind == r.From.Kind
+		}) {
+			from := kindName(trace.Kind{Group: r.From.Group, Version: r.From.Version, Kind: r.From.Kind})
+			return nil, fmt.Errorf("the config's references[%d] from %s has onDelete: block, but no reference of the trace's run event names that kind, and none from it has onDelete: block, so the trace holds no seens of it", i, from)
 		}
 	}
 	references, err := owner.References(c, recordedResource(run))
@@ -255,7 +267,7 @@ func compileReferences(references []trace.Reference) ([]Reference, error) {
 			return nil, fmt.Errorf("ready of references[%d]: %w", i, err)
 		}
 		compiled = append(compiled, Reference{From: r.From, To: r.ToRef(), Namespaced: r.Namespaced, Name: r.Name, Namespace: r.Namespace,
-			Ready: ready, Required: r.Required, Track: r.Track})
+			Ready: ready, Required: r.Required, Track: r.Track, Block: r.Block})
 	}
 	return compiled, nil
 }
@@ -417,6 +429,7 @@ func Judge(ix *trace.Index, s Spec) Report {
 	findings = append(findings, Restore(ix, s)...)
 	findings = append(findings, Unique(ix, s)...)
 	findings = append(findings, Honest(ix, s)...)
+	findings = append(findings, Ordered(ix, s)...)
 	findings = append(findings, Backoff(ix, s)...)
 	findings = append(findings, Finalizers(ix, s)...)
 	findings = append(findings, Property(ix, s)...)

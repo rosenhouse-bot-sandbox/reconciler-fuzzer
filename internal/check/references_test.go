@@ -1175,6 +1175,22 @@ func TestClause1SaysWhatTheControllerLastSawOfWhatTheCRNames(t *testing.T) {
 	}
 }
 
+// The response to the write that removed the Secret's last finalizer can
+// come after the watch event of its deletion, and show it as it was.
+func TestClause1IgnoresAResponseAfterTheSightOfADeletion(t *testing.T) {
+	optional := secretRef()
+	optional.Required = false
+	r := secretRun(optional, secret(true))
+	live, _ := r.See(ctl, pw).Index().Latest(pw)
+	r.Delete(trace.Harness, pw)
+	gone := r.Now
+	r.SeeDeleted(ctl, pw).Add(tt.Seen(ctl, pw, live.UID, live.RV)).EndFaults()
+	want := fmt.Sprintf("databases.toy ns/b is not ready; the controller last saw secrets ns/pw missing at %v", gone)
+	if unmet := settledAt(t, r, r.Now+5*s); !slices.Contains(unmet, want) {
+		t.Errorf("unmet = %q, want %q.", unmet, want)
+	}
+}
+
 func TestSettleStillWaitsForACRNoReferenceHoldsBack(t *testing.T) {
 	r := secretRun(secretRef(), nil)
 	namesNothing := database(false, "")
@@ -1363,6 +1379,50 @@ func TestSpecForRefusesAConfigReferenceToAKindTheTraceDidNotSee(t *testing.T) {
 	c.References[0] = config.Reference{From: c.Primaries[0].Kind, To: schema.GroupVersionKind{Version: "v1", Kind: "Secret"}, Name: "spec.name", Ready: "self.("}
 	if _, err := check.SpecFor(c, ix); err == nil {
 		t.Error("SpecFor accepts a config reference whose ready does not compile.")
+	}
+}
+
+// The listener records seens of a block reference's from kind only where a
+// reference of the run names it, or one from it has onDelete: block.
+func TestSpecForRefusesAConfigBlockReferenceFromAKindTheTraceDidNotSee(t *testing.T) {
+	cfg, err := config.Load("../../targets/toy-widget/config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.References = []config.Reference{{From: cfg.Primaries[0].Kind, To: schema.GroupVersionKind{Version: "v1", Kind: "Secret"}, Namespaced: true,
+		Name: "spec.secretName", Ready: "true", Block: true}}
+	widget := trace.Kind{Group: "toy.reconciler-fuzzer", Version: "v1", Kind: "Widget", Resource: "widgets"}
+	gadget := trace.Kind{Group: "toy.reconciler-fuzzer", Version: "v1", Kind: "Gadget", Resource: "gadgets"}
+	otherWidget := trace.Kind{Group: "other.io", Version: "v1", Kind: "Widget", Resource: "widgets"}
+	toSecret := func(from trace.Kind, block bool) trace.Reference {
+		return trace.Reference{From: from, To: secrets, Namespaced: true, Name: "spec.secretName", Ready: "true", Block: block}
+	}
+	to := func(kind trace.Kind) trace.Reference {
+		return trace.Reference{From: gadget, To: kind, Namespaced: true, Name: "spec.widget", Ready: "true"}
+	}
+	for name, c := range map[string]struct {
+		recorded []trace.Reference
+		refused  bool
+	}{
+		"a block reference from the kind":                  {[]trace.Reference{toSecret(widget, true)}, false},
+		"a reference to the kind":                          {[]trace.Reference{toSecret(gadget, false), to(widget)}, false},
+		"a reference from the kind without block":          {[]trace.Reference{toSecret(widget, false)}, true},
+		"a block reference from another kind of its group": {[]trace.Reference{toSecret(gadget, true)}, true},
+		"a block reference from its kind in another group": {[]trace.Reference{toSecret(otherWidget, true)}, true},
+		"a reference to another kind of its group":         {[]trace.Reference{toSecret(gadget, false), to(gadget)}, true},
+		"a reference to its kind in another group":         {[]trace.Reference{toSecret(gadget, false), to(otherWidget)}, true},
+	} {
+		run := tt.Run("toy.reconciler-fuzzer", "widgets")
+		run.Run.References = c.recorded
+		var b tt.Builder
+		_, err := check.SpecFor(cfg, b.Add(run).Index())
+		const want = "references[0] from toy.reconciler-fuzzer/v1/Widget has onDelete: block, but no reference of the trace's run event names that kind"
+		switch {
+		case !c.refused && err != nil:
+			t.Errorf("%s: SpecFor = %v, want no error.", name, err)
+		case c.refused && (err == nil || !strings.Contains(err.Error(), want)):
+			t.Errorf("%s: SpecFor = %v, want an error that says %s.", name, err, want)
+		}
 	}
 }
 

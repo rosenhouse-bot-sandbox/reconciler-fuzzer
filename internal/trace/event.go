@@ -95,7 +95,8 @@ type Run struct {
 	// Properties are the config's properties.
 	Properties []Property `json:"properties,omitempty"`
 	// References are the config's references. The controller's listeners
-	// record Seen events of each To kind.
+	// record Seen events of each To kind, and of each From kind of a block
+	// reference.
 	References []Reference `json:"references,omitempty"`
 }
 
@@ -113,6 +114,7 @@ type Reference struct {
 	Ready      string        `json:"ready"`
 	Required   bool          `json:"required,omitempty"`
 	Track      time.Duration `json:"track,omitempty"`
+	Block      bool          `json:"block,omitempty"`
 }
 
 // ToRef names r's To kind by a ref with no namespace or name.

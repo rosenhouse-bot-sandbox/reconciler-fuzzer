@@ -143,6 +143,20 @@ Look at the clause first:
 `did not stay settled (clause k)` means the condition held once, then
 failed again within `stable`.
 
+Clauses 1 and 2 skip a CR that waits in deletion while a live CR names it
+under `onDelete: block`, from `stable` after its deletion started. After
+faults, the skip also waits until `stable`, and the time the step's faults
+lasted, at most `timeouts.backoffCap`, have passed since they ended. Until
+then, clause 2's line says `waits in deletion, which counts as settled only
+from <t>`, or `only once the step's faults end` while they go on. If the
+controller holds a named CR's deletion by design, and clause 2 names that
+CR, set the reference's `onDelete: block`.
+
+CRs being deleted that name each other, directly or through other CRs
+being deleted, would wait for good, so those names do not count. A CR
+that names itself is such a cycle. If clause 2 names CRs on a cycle, the
+controller should release one of them. Ordered passes that release.
+
 Clause 1 skips a CR that a reference holds back, if the named object as it
 is now would hold the CR back too, or that a reference leaves unknown. It
 does so once `stable`, and the time the step's faults lasted, at most
@@ -269,6 +283,29 @@ kind:
   ready, naming the object, for `track` after the look at the time the
   line gives, not counting time in which the controller stalled, and each
   later look by then held it back.
+
+Under `onDelete: block`, Honest counts a look at an object that waits in
+deletion as ready if the look, or the object's last version before its
+deletion started, shows it ready.
+
+### Ordered: released an object that another names
+
+An object that a `references` entry with `onDelete: block` names was
+released, that is gone, while a CR named it. Each line names the object and
+the CR, by its slot or else by its kind and name:
+
+```
+secrets rf-1b0b8a35/admin-password: slot a names it
+```
+
+The controller saw both in time to hold the object: `stable` before the
+object's deletion started, not counting time in which it stalled. If a
+step's faults stalled it in that time, the deletion also started once
+`stable`, and the time those faults lasted, at most `timeouts.backoffCap`,
+had passed since they ended. Check that it adds its finalizer to each
+object that a CR names. Before it removes the finalizer, it should list the
+CRs live, since its cache can miss a new one. If the controller does not
+hold such objects by design, drop the entry's `onDelete`.
 
 ### Backoff: retried a failing request in a tight loop
 

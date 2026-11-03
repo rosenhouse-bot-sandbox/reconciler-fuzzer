@@ -31,12 +31,14 @@ type Index struct {
 	// byRV holds each object's Version event of each resourceVersion.
 	byRV map[objectRV]Event
 	// seen holds each caller's Seen events by UID, and opaque its opaque
-	// ones.
+	// ones. gone holds the UIDs that each caller saw deleted on a watch
+	// that is not Partial.
 	seen   map[Caller]map[string][]Event
 	opaque map[Caller][]Event
-	// looks holds by ref each caller's Seen events that are not opaque and
-	// its gets that answered 404. lists holds by kind its 2xx kube lists that
-	// are not Partial. Neither holds a call of unknown outcome.
+	gone   map[Caller]map[string]bool
+	// looks holds by ref each caller's Seen events that seen holds and its
+	// gets that answered 404. lists holds by kind its 2xx kube lists that are
+	// not Partial. Neither holds a call of unknown outcome.
 	looks map[Caller]map[Ref][]Event
 	lists map[Caller]map[Ref][]Event
 	// syncs holds by kind each caller's kube watches that are not Partial
@@ -84,6 +86,7 @@ func NewIndex(events []Event) *Index {
 		byRV:     map[objectRV]Event{},
 		seen:     map[Caller]map[string][]Event{},
 		opaque:   map[Caller][]Event{},
+		gone:     map[Caller]map[string]bool{},
 		looks:    map[Caller]map[Ref][]Event{},
 		lists:    map[Caller]map[Ref][]Event{},
 		syncs:    map[Caller]map[Ref][]syncedWatch{},
@@ -128,13 +131,36 @@ func (ix *Index) Append(events ...Event) {
 		case e.Seen != nil && e.Seen.Opaque:
 			ix.opaque[e.Seen.Caller] = append(ix.opaque[e.Seen.Caller], e)
 		case e.Seen != nil:
-			if ix.seen[e.Seen.Caller] == nil {
-				ix.seen[e.Seen.Caller] = map[string][]Event{}
-			}
-			ix.seen[e.Seen.Caller][e.Seen.UID] = append(ix.seen[e.Seen.Caller][e.Seen.UID], e)
-			addBy(ix.looks, e.Seen.Caller, e.Seen.Ref, e)
+			ix.addSeen(e)
 		}
 	}
+}
+
+// addSeen indexes e, a Seen event that is not opaque, unless e is a response
+// that shows an object that its caller saw deleted before. The object is
+// then gone, so e shows a stale version, as the response to the write that
+// removed its last finalizer may. Another watch's event still counts, since
+// that watch's cache holds the object until its own DELETED. A Partial watch
+// sends DELETED also when the object leaves its selector, so its DELETED
+// does not count.
+func (ix *Index) addSeen(e Event) {
+	s := e.Seen
+	if s.Stream == 0 && ix.gone[s.Caller][s.UID] {
+		return
+	}
+	if s.Deleted {
+		if watch, found := ix.watch(s.Caller, s.Ref.System, s.Stream); !found || !watch.Call.Partial {
+			if ix.gone[s.Caller] == nil {
+				ix.gone[s.Caller] = map[string]bool{}
+			}
+			ix.gone[s.Caller][s.UID] = true
+		}
+	}
+	if ix.seen[s.Caller] == nil {
+		ix.seen[s.Caller] = map[string][]Event{}
+	}
+	ix.seen[s.Caller][s.UID] = append(ix.seen[s.Caller][s.UID], e)
+	addBy(ix.looks, s.Caller, s.Ref, e)
 }
 
 // addBy appends e to what m holds for caller and key.
@@ -145,14 +171,22 @@ func addBy(m map[Caller]map[Ref][]Event, caller Caller, key Ref, e Event) {
 	m[caller][key] = append(m[caller][key], e)
 }
 
+// watch returns caller's watch call with stream on system.
+func (ix *Index) watch(caller Caller, system string, stream uint64) (Event, bool) {
+	n := slices.IndexFunc(ix.watches[caller], func(w Event) bool { return w.Call.Ref.System == system && w.Call.Stream == stream })
+	if n < 0 {
+		return Event{}, false
+	}
+	return ix.watches[caller][n], true
+}
+
 // addSynced indexes e, a Synced event, unless its watch is Partial.
 func (ix *Index) addSynced(e Event) {
 	s := e.Synced
-	n := slices.IndexFunc(ix.watches[s.Caller], func(w Event) bool { return w.Call.Ref.System == s.System && w.Call.Stream == s.Stream })
-	if n < 0 || ix.watches[s.Caller][n].Call.Partial {
+	watch, found := ix.watch(s.Caller, s.System, s.Stream)
+	if !found || watch.Call.Partial {
 		return
 	}
-	watch := ix.watches[s.Caller][n]
 	if ix.syncs[s.Caller] == nil {
 		ix.syncs[s.Caller] = map[Ref][]syncedWatch{}
 	}
@@ -174,20 +208,11 @@ func (ix *Index) addHold(e Event) {
 // Holds returns every holdWatch span, by start.
 func (ix *Index) Holds() []Hold { return ix.holds }
 
-// Released is the end of the latest holdWatch on ref's kind that overlaps
-// [from, t], when its held watch events reach the controller. holding says
-// a hold is still on at t.
-func (ix *Index) Released(ref Ref, from, t time.Duration) (end time.Duration, holding, found bool) {
-	for _, h := range ix.holds {
-		if h.Kind.Group != ref.Group || h.Kind.Resource != ref.Resource || h.Kind.System != ref.System || h.Start > t || h.End < from {
-			continue
-		}
-		if h.End > t {
-			return h.End, true, true
-		}
-		end, found = max(end, h.End), true
-	}
-	return end, false, found
+// Holding reports whether a holdWatch on ref's kind is on at t.
+func (ix *Index) Holding(ref Ref, t time.Duration) bool {
+	return slices.ContainsFunc(ix.holds, func(h Hold) bool {
+		return h.Kind.Group == ref.Group && h.Kind.Resource == ref.Resource && h.Kind.System == ref.System && h.Start <= t && t < h.End
+	})
 }
 
 // WatchedKind reports whether caller had a successful watch of kind's group
@@ -423,6 +448,17 @@ func (ix *Index) LatestAt(ref Ref, t time.Duration) (Version, bool) {
 	return *versions[n-1].Version, true
 }
 
+// Versions are the versions of ref's instance uid, in Seq order.
+func (ix *Index) Versions(ref Ref, uid string) []Event {
+	var versions []Event
+	for _, e := range ix.versions[kindOf(ref)][ref] {
+		if e.Version.UID == uid {
+			versions = append(versions, e)
+		}
+	}
+	return versions
+}
+
 // Previous is the version of ref, of the same instance, that the observer
 // recorded just before ref's version rv.
 func (ix *Index) Previous(ref Ref, rv string) (Version, bool) {
@@ -446,11 +482,12 @@ func (ix *Index) Later(ref Ref, rv, base string) (later, found bool) {
 }
 
 // Seen returns the Seen events by caller of the object with uid, in Seq
-// order.
+// order, without a response after a watch that is not Partial showed it
+// deleted.
 func (ix *Index) Seen(caller Caller, uid string) []Event { return ix.seen[caller][uid] }
 
 // Looks returns, in Seq order, the responses that showed caller ref: each
-// of its Seen events of ref that is not opaque, a deleted one showing ref
+// of its Seen events of ref that Seen returns, a deleted one showing ref
 // missing, and each of its events that showed ref missing. Such an event is
 // the Call of a get of ref without a subresource that answered 404, or, for
 // a kind that a run event reference names as To, one of these:
