@@ -142,6 +142,62 @@ properties:
 	}
 }
 
+// TestClientGoLogsToHarnessLog deletes the grants CRD, a fixture, at step 1.
+// The harness watches grants after a request for them that comes once
+// discovery serves them, so the controller requests grants each second.
+// client-go writes its failed watch of grants to harness.log, not to stderr.
+func TestClientGoLogsToHarnessLog(t *testing.T) {
+	toyDir, err := filepath.Abs(toy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	config := fmt.Sprintf(`launch:
+  binary: /bin/sh
+  args: [-c, 'while true; do curl -s ${systems.kube.url}/apis/toy.reconciler-fuzzer/v1/grants >/dev/null; curl -sf ${systems.kube.url}/apis/toy.reconciler-fuzzer/v1/widgets >/dev/null; sleep 1; done']
+  rbac: [%[1]s/rbac/role.yaml]
+crds: [%[1]s/crds/toy.reconciler-fuzzer_widgets.yaml]
+fixtures: [%[1]s/crds/toy.reconciler-fuzzer_grants.yaml]
+primary:
+  kind: toy.reconciler-fuzzer/v1/Widget
+  sample: %[1]s/widget.yaml
+  ready: "true"
+timeouts: {settle: 10s, stable: 1s}
+`, toyDir)
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	grantsCRD := &plan.Target{Group: "apiextensions.k8s.io", Resource: "customresourcedefinitions", Name: "grants.toy.reconciler-fuzzer"}
+	p := &plan.Plan{Steps: []plan.Step{
+		{Actions: []plan.Action{{Do: plan.Create, Slot: "a"}}},
+		{Actions: []plan.Action{{Do: plan.ChangeFixture, Target: grantsCRD}}},
+		{Period: plan.Duration(2 * time.Second)},
+	}}
+	stderr, err := os.Create(filepath.Join(dir, "stderr"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stderr.Close()
+	saved := os.Stderr
+	os.Stderr = stderr
+	out := filepath.Join(dir, "out")
+	_, err = Run(context.Background(), Options{ConfigPath: filepath.Join(dir, "config.yaml"), Plan: p, Out: out})
+	os.Stderr = saved
+	if err != nil {
+		t.Fatal(err)
+	}
+	if printed, _ := os.ReadFile(stderr.Name()); strings.Contains(string(printed), "Failed to watch") {
+		t.Errorf("stderr holds client-go's log:\n%s", printed)
+	}
+	harnessLog, err := os.ReadFile(filepath.Join(out, "harness.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(harnessLog), "Failed to watch") || !strings.Contains(string(harnessLog), "grants") {
+		t.Errorf("harness.log lacks the failed watch of grants:\n%s", harnessLog)
+	}
+}
+
 // reader is a controller that reads the Vault secret a fixture names.
 const reader = `while true; do curl -sf -H "X-Vault-Token: $VAULT_TOKEN" "$VAULT_URL/v1/secret/data/app/db" >/dev/null; sleep 1; done`
 
