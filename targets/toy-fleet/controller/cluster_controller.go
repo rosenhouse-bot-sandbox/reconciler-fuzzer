@@ -31,6 +31,8 @@ const (
 // ClusterReconciler moves a Cluster through its phases and keeps its Volumes.
 type ClusterReconciler struct {
 	reconciler
+	// suffix ends the name of each Volume this process makes under B135.
+	suffix string
 	// finalizing holds, under B161, the Clusters this process began to finalize.
 	finalizing map[types.NamespacedName]bool
 }
@@ -148,7 +150,7 @@ func (r *ClusterReconciler) syncVolumes(ctx context.Context, cluster *fleetv1.Cl
 	want := map[string]bool{}
 	var ready int32
 	for i := range cluster.Spec.Volumes {
-		name := fmt.Sprintf("%s%d", r.volumePrefix(cluster), i)
+		name := r.volumeName(cluster, i)
 		want[name] = true
 		volume := &storagev1.Volume{ObjectMeta: metav1.ObjectMeta{Namespace: cluster.Namespace, Name: name}}
 		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, volume, func() error {
@@ -175,13 +177,28 @@ func (r *ClusterReconciler) syncVolumes(ctx context.Context, cluster *fleetv1.Cl
 		}
 	}
 	for i := range volumes {
-		if v := &volumes[i]; !want[v.Name] && v.DeletionTimestamp.IsZero() {
+		if v := &volumes[i]; !want[v.Name] && r.mine(v) && v.DeletionTimestamp.IsZero() {
 			if err := r.Delete(ctx, v); client.IgnoreNotFound(err) != nil {
 				return 0, fmt.Errorf("deleting Volume %s: %w", v.Name, err)
 			}
 		}
 	}
 	return ready, nil
+}
+
+// volumeName names the Cluster's ith Volume.
+func (r *ClusterReconciler) volumeName(cluster *fleetv1.Cluster, i int32) string {
+	name := fmt.Sprintf("%s%d", r.volumePrefix(cluster), i)
+	if r.Bug == B135 {
+		return name + "-" + r.suffix
+	}
+	return name
+}
+
+// mine says whether this process counts the Volume as its own. B135 counts
+// only the Volumes with its suffix.
+func (r *ClusterReconciler) mine(v *storagev1.Volume) bool {
+	return r.Bug != B135 || strings.HasSuffix(v.Name, "-"+r.suffix)
 }
 
 // finalize waits until no Database names the Cluster, deletes its Volumes,

@@ -520,13 +520,22 @@ func TestSystems(t *testing.T) {
 	}
 }
 
+func TestKubeTakesARole(t *testing.T) {
+	const role = "self.metadata.labels['index']"
+	c, err := config.Load(writeConfig(t, minimal(t)+"systems: [{name: kube, role: \""+role+"\"}]\n"))
+	if err != nil || c.Systems[0].Role != role {
+		t.Errorf("systems = %+v, %v", c, err)
+	}
+}
+
 func TestSystemsRefuseMistakes(t *testing.T) {
 	for systems, want := range map[string]string{
 		"[{name: kube}, {name: kube}]":                             "systems[1].name kube",
 		"[{name: kube, owner: '1 + 2'}]":                           "systems[0].owner",
+		"[{name: kube, role: '1 + 2'}]":                            "systems[0].role",
 		"[{name: kube, ownr: self.x}]":                             "did you mean owner",
-		"[{name: kube, process: {command: [x]}}]":                  "systems[0]: kube takes only name and owner",
-		"[{name: kube, poll: 1s}]":                                 "systems[0]: kube takes only name and owner",
+		"[{name: kube, process: {command: [x]}}]":                  "systems[0]: kube takes only name, owner and role",
+		"[{name: kube, poll: 1s}]":                                 "systems[0]: kube takes only name, owner and role",
 		"[{name: s3}]":                                             "systems[0].process.command is required",
 		"[{name: s3, api: crud, process: {}}]":                     "systems[0].process.command is required",
 		"[{name: s3, api: crud, process: {command: ['']}}]":        "systems[0].process.command is required",

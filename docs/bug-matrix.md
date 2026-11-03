@@ -65,7 +65,7 @@ Each Cluster owns Volumes of a third party's kind, which a model sets ready. A D
 
 | Bug | Description | Plan | Check | Step |
 |---|---|---|---|---|
-| B0 | The correct controller. | all 39 plans of config.yaml, database/config.yaml, protect/config.yaml, secret/config.yaml, upgrade/config.yaml | none | |
+| B0 | The correct controller. | all 41 plans of config.yaml, database/config.yaml, protect/config.yaml, secret/config.yaml, upgrade/config.yaml | none | |
 | B0 | The correct controller. | uninstall/crd-first-stop | none | |
 | B0 | The correct controller. | uninstall/kill-recreate | none | |
 | B0 | The correct controller. | uninstall/recreate | none | |
@@ -84,6 +84,10 @@ Each Cluster owns Volumes of a third party's kind, which a model sets ready. A D
 | B125 | Keeps a Ready Database ready after its Secret is deleted. | secret-deleted-while-down | Honest | 1 |
 | B125 | Keeps a Ready Database ready after its Secret is deleted. | secret-recreate | Honest | 1 |
 | B126 | Under --protect-secrets, never puts the in-use finalizer on the Secret a Database names. | secret/secret-first | Ordered | 1 |
+| B135 | Ends each Volume's name with a suffix that each process picks, and deletes only Volumes with its own suffix, so a restart makes a second set. | b135 | Unique | 0 |
+| B135 | Ends each Volume's name with a suffix that each process picks, and deletes only Volumes with its own suffix, so a restart makes a second set. | b135 | Unique | 1 |
+| B135 | Ends each Volume's name with a suffix that each process picks, and deletes only Volumes with its own suffix, so a restart makes a second set. | b135-restart | Restore | 1 |
+| B135 | Ends each Volume's name with a suffix that each process picks, and deletes only Volumes with its own suffix, so a restart makes a second set. | b135-restart | Unique | 1 |
 | B140 | Under version 2, keeps the version 1 finalizer, so a deleted Cluster is never removed. | upgrade/delete | Converge | 2 |
 | B141 | Under version 2, names its Volumes `<cluster>-data-<i>` and sees only those, so it makes new ones and leaves version 1's. | upgrade/properties/upgrade-and-update | Property | 2 |
 | B141 | Under version 2, names its Volumes `<cluster>-data-<i>` and sees only those, so it makes new ones and leaves version 1's. | upgrade/update | Restore | 1 |

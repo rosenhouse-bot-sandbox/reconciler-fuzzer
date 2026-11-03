@@ -3,7 +3,9 @@ package controller
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -62,7 +64,7 @@ func Setup(m ctrl.Manager, bug Bug, version int, protectSecrets bool) error {
 	}
 	base := reconciler{Client: m.GetClient(), APIReader: m.GetAPIReader(), Scheme: m.GetScheme(), Bug: bug, Version: version}
 	reconcilers := []interface{ SetupWithManager(ctrl.Manager) error }{
-		&ClusterReconciler{reconciler: base}, &DatabaseReconciler{base}, &UserReconciler{base},
+		&ClusterReconciler{reconciler: base, suffix: strings.ToLower(rand.Text()[:5])}, &DatabaseReconciler{base}, &UserReconciler{base},
 	}
 	if protectSecrets {
 		reconcilers = append(reconcilers, &SecretReconciler{base})

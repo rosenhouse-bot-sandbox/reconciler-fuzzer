@@ -181,6 +181,10 @@ Fill each key from the project:
   `systems: [{name: kube, owner}]` holds CEL over a child that yields its CR's UID,
   `namespace/name` or name, such as an owner label. Prefer the UID: a bare name that
   matches CRs in two other namespaces, or CRs of two kinds, names none.
+  The kube entry's `role` is CEL over a child that yields its role, or `''` to keep its
+  `generateName` or name. Set it when names do not show roles, such as names with a random
+  suffix. It runs over every kube object, so guard it by kind. Clean, Restore and Unique
+  group children by role.
 - `models`: one entry for every kind whose status another controller sets and the controller
   reads. Add `dependency` when a CR's readiness waits on it and the CR owns it: through
   ownerReferences, directly or through owned objects, or by `owns` or `owner`. Honest judges only such
@@ -350,7 +354,8 @@ controller:
 | Converge, clause 1, `the controller last saw … ready` | The entry's `ready` accepts an object that the controller treats as not ready. | Fix the entry's `ready`. |
 | Converge, clause 1, `the controller last saw … missing` or `not ready`, on an object that is ready now | Nothing, if the controller does not watch the named kind: it missed the change. | Report the bug (step 11). The controller should watch that kind and requeue the CRs that name the object. |
 | Clean | The controller keeps resources by design. | Set the entry's `retain`. |
-| Unique, on a fake | The CR owns several resources in one collection by design. | Set the system's `role`. |
+| Unique | The CR owns several resources of one kind and role by design, such as several with one `generateName`, or several in one collection of a fake. | Set the system's `role`. |
+| Restore, `did not restore damaged resources` | The controller recreates a damaged resource under a new name by design. | Set the system's `role` to CEL that gives both names one role. |
 | Converge or Restore, with a CR that halted after a create of unknown outcome | The controller stops on purpose and waits for a person. | Set the entry's `halted` to CEL over its halted condition. |
 | Converge after an upgrade, with `forbidden` errors in `controller.log` | `launch.rbac` lacks a rule the new version needs. | Add the rule to `launch.rbac`. |
 | Restore after an upgrade, on a resource the new version adds, deletes, renames or gives another owner, or on a field the new CRDs default | Nothing: `<module>/README.md` lists this limit under Upgrading. | Ask the user whether the change is intended. If so, report the finding as that limit, not as a bug. |
@@ -360,6 +365,8 @@ the user when in doubt. On a finding, stop and report it (step 11).
 
 A note `unmapped request` means the API map could not read a request to a fake, so no check
 judged it. Tell the user which paths the controller uses.
+A note that a `role` failed on every resource of a kind names the CEL's first error. Fix the
+`role`, or guard it by kind.
 
 **Exit 0**: no findings. Go on.
 

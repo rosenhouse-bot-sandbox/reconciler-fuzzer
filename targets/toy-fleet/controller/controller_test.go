@@ -371,6 +371,30 @@ func TestB116StripsTheFinalizersOfVolumesOnlyWhileTheClusterIsDeleted(t *testing
 	}
 }
 
+// A restarted B135 makes a second set of Volumes and deletes only its own
+// surplus ones. A restarted B0 keeps the first set.
+func TestB135MakesASecondSetOfVolumesAfterARestart(t *testing.T) {
+	for bug, want := range map[Bug][]string{
+		0:    {"cluster-vol-0 small"},
+		B135: {"cluster-vol-0-one small", "cluster-vol-0-two small", "cluster-vol-1-one small"},
+	} {
+		f := newBuggyFleet(t, bug, clusterObj())
+		f.clusters.suffix = "one"
+		f.settle(f.clusters, "cluster")
+		restarted := &ClusterReconciler{reconciler: f.clusters.reconciler, suffix: "two"}
+		f.settle(restarted, "cluster")
+		c := f.cluster()
+		c.Spec.Volumes = 1
+		if err := f.c.Update(t.Context(), c); err != nil {
+			t.Fatal(err)
+		}
+		f.settle(restarted, "cluster")
+		if got := f.volumes(); !slices.Equal(got, want) {
+			t.Errorf("B%d: after a restart and a change to 1 Volume, the Volumes are %q, want %q.", bug, got, want)
+		}
+	}
+}
+
 // A kill between B160's release of the Cluster and its Volume deletes leaks
 // the Volumes, since no ownerReference lets gc collect them.
 func TestB160ReleasesTheClusterBeforeDeletingItsUnownedVolumes(t *testing.T) {
@@ -909,7 +933,7 @@ func TestReconcileOfAMissingCRSucceeds(t *testing.T) {
 }
 
 func TestParseBugAcceptsOnlyKnownBugs(t *testing.T) {
-	for _, id := range []int{0, 116, 120, 121, 122, 123, 124, 125, 126, 140, 141, 142, 150, 151, 152, 160, 161, 162} {
+	for _, id := range []int{0, 116, 120, 121, 122, 123, 124, 125, 126, 135, 140, 141, 142, 150, 151, 152, 160, 161, 162} {
 		if b, err := ParseBug(id); int(b) != id || err != nil {
 			t.Errorf("ParseBug(%d) = %v, %v", id, b, err)
 		}
