@@ -161,8 +161,8 @@ func TestSelectNamesTheKindOfASlotThatHoldsNoCR(t *testing.T) {
 	tl.At(3*s, tt.Create(ctl, cmA0, "c1", "3"), tt.Version(cmA0, "c1", "3", tt.OwnedBy(tt.Object("a-0"), "ub", true)))
 	w := owner.New(tl.Index(), owner.Rules{})
 	_, err := w.Select(ctl, plan.Target{Resource: "configmaps"}, "b", 4*s)
-	if !errors.Is(err, owner.ErrNoMatch) || !strings.Contains(err.Error(), "databases.toy") {
-		t.Errorf("Select in slot b = %v, want no match that names databases.toy.", err)
+	if !errors.Is(err, owner.ErrNoMatch) || !strings.HasPrefix(err.Error(), "no instance matches resource=configmaps: slot b holds databases.toy ") {
+		t.Errorf("Select in slot b = %v, want no match that names the target and databases.toy.", err)
 	}
 }
 
