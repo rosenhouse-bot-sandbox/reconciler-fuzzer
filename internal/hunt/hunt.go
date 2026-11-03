@@ -80,12 +80,11 @@ type Found struct {
 // Hunt runs each seed's plan into <Out>/seed-<n>. For each finding whose
 // signature no earlier seed found, it replays the plan Replays times and
 // shrinks it. It removes the run of a seed that found nothing new. A seed
-// whose run fails is noted, and the hunt continues. A run that cannot start
-// a program, such as launch.binary or envtest's etcd, ends the hunt, since
-// the setup is at fault, not the seed. It writes summary.md under Out after
-// each seed, and as the replays and shrinks of a seed's findings finish. It
-// returns the distinct findings, and an error when a seed failed or the
-// context ended.
+// whose run fails is noted, and the hunt continues. A run that finds a
+// program missing ends the hunt, since the setup is at fault, not the seed.
+// It writes summary.md under Out after each seed, and as the replays and
+// shrinks of a seed's findings finish. It returns the distinct findings, and
+// an error when a seed failed or the context ended.
 func Hunt(ctx context.Context, o Options) ([]Found, error) {
 	cfg, err := config.Load(o.ConfigPath)
 	if err != nil {
@@ -131,18 +130,18 @@ func Hunt(ctx context.Context, o Options) ([]Found, error) {
 			return found, errors.Join(err, writeSummary(o.Out, fmt.Sprintf("%d seeds", seeds), found, failed))
 		}
 		seeds++
-		stop := cannotStart(err)
+		missing := missingProgram(err)
 		if err != nil {
 			err = fmt.Errorf("seed %d: %w", seed, err)
 			failed = append(failed, err.Error())
-			if !stop {
+			if !missing {
 				h.logf("%v", err)
 			}
 		}
 		if err := writeSummary(o.Out, fmt.Sprintf("%d seeds", seeds), found, failed); err != nil {
 			return found, err
 		}
-		if stop {
+		if missing {
 			return found, err
 		}
 	}
@@ -153,13 +152,15 @@ func Hunt(ctx context.Context, o Options) ([]Found, error) {
 	return found, err
 }
 
-// cannotStart reports whether err says that a program could not start.
-// exec.LookPath returns an *exec.Error. os.StartProcess returns an
-// *fs.PathError with Op "fork/exec", as for envtest's etcd without
-// KUBEBUILDER_ASSETS.
-func cannotStart(err error) bool {
+// missingProgram reports whether err says that a program is missing.
+// exec.LookPath returns an *exec.Error when it finds no executable file.
+// os.StartProcess returns an *fs.PathError with Op "fork/exec" and ENOENT
+// when the file is missing, as when envtest finds no etcd. Other fork/exec
+// errors, such as EAGAIN, can be transient.
+func missingProgram(err error) bool {
 	var start *fs.PathError
-	return errors.As(err, new(*exec.Error)) || errors.As(err, &start) && start.Op == "fork/exec"
+	return errors.As(err, new(*exec.Error)) ||
+		errors.As(err, &start) && start.Op == "fork/exec" && errors.Is(start.Err, fs.ErrNotExist)
 }
 
 // ShrinkOptions configure the shrink of one plan file, as Options do a

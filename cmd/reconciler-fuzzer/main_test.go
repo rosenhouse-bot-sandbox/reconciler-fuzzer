@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -317,8 +318,12 @@ func TestHuntWithoutTheControlPlaneStopsAfterItsFirstSeed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	binary, err := exec.LookPath("true")
+	if err != nil {
+		t.Fatal(err)
+	}
 	config := filepath.Join(t.TempDir(), "config.yaml")
-	body := fmt.Sprintf("launch: {binary: /bin/true}\ncrds: [%s/crds/]\nprimary: {kind: toy.reconciler-fuzzer/v1/Widget, sample: %s/widget.yaml, ready: \"true\"}\n", toy, toy)
+	body := fmt.Sprintf("launch: {binary: %s}\ncrds: [%s/crds/]\nprimary: {kind: toy.reconciler-fuzzer/v1/Widget, sample: %s/widget.yaml, ready: \"true\"}\n", binary, toy, toy)
 	if err := os.WriteFile(config, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
