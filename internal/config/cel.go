@@ -124,61 +124,58 @@ func selectable(name string) bool {
 	return identifier.MatchString(name) && !slices.Contains([]string{"true", "false", "null", "in"}, name)
 }
 
-// typed converts v, decoded by encoding/json, to the CEL types t declares,
-// as the API server converts a CR: a whole number is an int unless t types
-// it double.
-func typed(v any, t *apiservercel.DeclType) any {
+// typed converts v, decoded by encoding/json, to the types that s, an
+// OpenAPI v3 schema, gives it, as the API server converts a CR: a whole
+// number is an int unless s types it number. It follows s's properties
+// wherever they are, even where declType gives dyn.
+func typed(v any, s map[string]any) any {
 	switch v := v.(type) {
 	case map[string]any:
+		properties, _ := s["properties"].(map[string]any)
+		values, _ := s["additionalProperties"].(map[string]any)
 		out := make(map[string]any, len(v))
 		for name, value := range v {
-			field := apiservercel.DynType
-			if f, found := t.FindField(name); found {
-				field = f.Type
-			} else if t.IsMap() {
-				field = t.ElemType
+			field, found := properties[name].(map[string]any)
+			if !found {
+				field = values
 			}
 			out[name] = typed(value, field)
 		}
 		return out
 	case []any:
-		item := apiservercel.DynType
-		if t.IsList() {
-			item = t.ElemType
-		}
+		items, _ := s["items"].(map[string]any)
 		out := make([]any, len(v))
 		for i, value := range v {
-			out[i] = typed(value, item)
+			out[i] = typed(value, items)
 		}
 		return out
 	case float64:
-		if t != apiservercel.DoubleType && v == math.Trunc(v) && v >= math.MinInt64 && v < math.MaxInt64 {
+		if s["type"] != "number" && v == math.Trunc(v) && v >= math.MinInt64 && v < math.MaxInt64 {
 			return int64(v)
 		}
 	}
 	return v
 }
 
-// compileOver compiles expr, CEL over self that yields want, with self
-// typed by root as typeCheck types it. It returns that type.
-func compileOver(expr string, root map[string]any, want *cel.Type) (cel.Program, *apiservercel.DeclType, error) {
+// compileOver compiles expr, CEL over self that yields want, if typeCheck
+// accepts it with self typed by root.
+func compileOver(expr string, root map[string]any, want *cel.Type) (cel.Program, error) {
 	if err := typeCheck(expr, root, want); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	program, err := compileTo(expr, want)
-	return program, declType(root, true), err
+	return compileTo(expr, want)
 }
 
 // CompileReady compiles expr, CEL over self that yields a bool. It refuses
 // expr unless typeCheck accepts it. The result converts self's numbers to
 // the types root gives them before it evaluates expr.
 func CompileReady(expr string, root map[string]any) (func(self map[string]any) (bool, error), error) {
-	program, self, err := compileOver(expr, root, cel.BoolType)
+	program, err := compileOver(expr, root, cel.BoolType)
 	if err != nil {
 		return nil, err
 	}
 	return func(obj map[string]any) (bool, error) {
-		out, _, err := program.Eval(map[string]any{"self": typed(obj, self)})
+		out, _, err := program.Eval(map[string]any{"self": typed(obj, root)})
 		if err != nil {
 			return false, fmt.Errorf("evaluating %q: %w", expr, err)
 		}
@@ -193,12 +190,12 @@ func CompileReady(expr string, root map[string]any) (func(self map[string]any) (
 // CompileString compiles expr, CEL over self that yields a string, such as
 // an owns name or a systems owner, as CompileReady compiles a bool.
 func CompileString(expr string, root map[string]any) (func(self map[string]any) (string, error), error) {
-	program, self, err := compileOver(expr, root, cel.StringType)
+	program, err := compileOver(expr, root, cel.StringType)
 	if err != nil {
 		return nil, err
 	}
 	return func(obj map[string]any) (string, error) {
-		out, _, err := program.Eval(map[string]any{"self": typed(obj, self)})
+		out, _, err := program.Eval(map[string]any{"self": typed(obj, root)})
 		if err != nil {
 			return "", fmt.Errorf("evaluating %q: %w", expr, err)
 		}

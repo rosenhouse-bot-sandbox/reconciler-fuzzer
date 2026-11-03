@@ -107,10 +107,11 @@ spec:
                 namespace: {type: string}
                 port: {x-kubernetes-int-or-string: true, anyOf: [{type: integer}, {type: string}]}
                 extra: {type: object, x-kubernetes-preserve-unknown-fields: true}
-                template: {type: object, x-kubernetes-embedded-resource: true, properties: {spec: {type: object}}}
+                loose: {type: object, x-kubernetes-preserve-unknown-fields: true, properties: {ratio: {type: number}}}
+                template: {type: object, x-kubernetes-embedded-resource: true, properties: {spec: {type: object, properties: {ratio: {type: number}}}}}
                 labels: {type: object, additionalProperties: {type: string}}
                 items: {type: array, items: {type: object, properties: {name: {type: string}}}}
-                selector: {type: object, properties: {app.kubernetes.io/name: {type: string}}}
+                selector: {type: object, properties: {app.kubernetes.io/name: {type: string}, ratio: {type: number}}}
                 range: {type: object, properties: {"in": {type: integer}}}
                 ratios: {type: array, items: {type: number}}
                 weights: {type: object, additionalProperties: {type: number}}
@@ -171,7 +172,9 @@ func TestAReferenceReadyTypesTheToKind(t *testing.T) {
 // A JSON number decodes to a float64. Ready reads it as the API server
 // reads a CR: an int, unless the schema types it number.
 func TestAReadyComputesWithTheTypesTheSchemaGives(t *testing.T) {
-	cr := `{"spec": {"size": 2, "ratio": 1, "name": "abc", "ratios": [1], "weights": {"a": 1}, "extra": {"count": 2, "half": 0.5, "big": 1e19}, "port": 80}}`
+	cr := `{"spec": {"size": 2, "ratio": 1, "name": "abc", "ratios": [1], "weights": {"a": 1},
+		"extra": {"count": 2, "half": 0.5, "big": 1e19, "small": -1e19}, "port": 80,
+		"loose": {"ratio": 1, "count": 2}, "template": {"spec": {"ratio": 1}}, "selector": {"ratio": 1}}}`
 	for _, ready := range []string{
 		"self.spec.size + 1 == 3",
 		"self.spec.size % 2 == 0",
@@ -182,7 +185,12 @@ func TestAReadyComputesWithTheTypesTheSchemaGives(t *testing.T) {
 		"self.spec.extra.count + 1 == 3",
 		"self.spec.extra.half + 0.5 == 1.0",
 		"self.spec.extra.big > 1e18",
+		"self.spec.extra.small == -1e19",
 		"self.spec.port + 1 == 81",
+		"self.spec.loose.ratio + 0.5 == 1.5",
+		"self.spec.loose.count + 1 == 3",
+		"self.spec.template.spec.ratio + 0.5 == 1.5",
+		"self.spec.selector.ratio + 0.5 == 1.5",
 	} {
 		c, err := config.Load(thingConfig(t, `ready: "`+ready+`"`, ""))
 		if err != nil {
