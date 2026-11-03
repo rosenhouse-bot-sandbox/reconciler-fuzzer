@@ -607,8 +607,8 @@ kind must be one the config does not list. `changeFixture` without a `patch` del
 ```
 
 - A CRD under both `crds:` and `fixtures:` fails the run with `already exists`.
-- A listed kind's CRD must stay in `crds:`. As a fixture alone, the run fails with `no matches for
-  kind`, and generation with `the CRDs describe no <kind>`.
+- A listed kind's CRD must stay in `crds:`. As a fixture alone, the config fails to load with
+  `no CRD under crds and no built-in kind serves it`.
 - No target matches a CRD that `crds:` or a restart installed. A `changeFixture` of one only gets
   a `no instance matches` note that says so.
 
@@ -649,6 +649,9 @@ reconciler-fuzzer judge --trace reconciler-fuzzer-out/b3
 reconciler-fuzzer shrink --config targets/toy-widget/config.yaml \
   --plan reconciler-fuzzer-out/b3/plan.json --launch-arg --bug=3 --out reconciler-fuzzer-out/b3-shrunk
 ```
+
+Without `--config`, `judge` reads each whole number in a CR as an int, even under `type: number`,
+since a trace holds no schema.
 
 ## CI
 

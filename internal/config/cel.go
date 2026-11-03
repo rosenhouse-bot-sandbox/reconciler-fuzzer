@@ -49,8 +49,8 @@ func checked(env *cel.Env, expr string, want *cel.Type) (*cel.Ast, error) {
 
 // typeCheck refuses expr unless it yields want with self typed by root, an
 // openAPIV3Schema, as the API server checks x-kubernetes-validations rules.
-// It types self as the harness decodes it from JSON, with any metadata and
-// a string in any format. A nil root types self as dyn.
+// Unlike the API server, it allows any metadata field and types a string
+// in any format as a string. A nil root types self as dyn.
 func typeCheck(expr string, root map[string]any, want *cel.Type) error {
 	self := declType(root, true).MaybeAssignTypeName("selfType")
 	provider := apiservercel.NewDeclTypeProvider(self)
@@ -169,8 +169,9 @@ func compileOver(expr string, root map[string]any, want *cel.Type) (cel.Program,
 	return program, declType(root, true), err
 }
 
-// CompileReady compiles expr, CEL over self that yields a bool, with self
-// typed by root, as typeCheck types it. The result reads self through typed.
+// CompileReady compiles expr, CEL over self that yields a bool. It refuses
+// expr unless typeCheck accepts it. The result converts self's numbers to
+// the types root gives them before it evaluates expr.
 func CompileReady(expr string, root map[string]any) (func(self map[string]any) (bool, error), error) {
 	program, self, err := compileOver(expr, root, cel.BoolType)
 	if err != nil {

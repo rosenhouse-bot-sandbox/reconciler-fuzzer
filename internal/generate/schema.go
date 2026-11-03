@@ -225,7 +225,7 @@ func mutableField(s *schema, dotted string) (field, error) {
 	return field{path: path, dotted: dotted, values: values, optional: optional}, nil
 }
 
-// nearestPath is the path that s describes nearest path, segment by
+// nearestPath is the path that s describes nearest to path, segment by
 // segment. It is empty when no property is near a segment.
 func nearestPath(s *schema, path []string) string {
 	var near []string
