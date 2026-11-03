@@ -3,6 +3,7 @@ package generate
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
@@ -15,70 +16,48 @@ func deleting(cfg *config.Config) *config.Config {
 }
 
 // The fixture delete is drawn after the rest of the plan, so a seed's plan
-// only gains a last step. The step deletes the fixture, then restarts,
-// kills or does neither.
-func TestValuesDeletableOnlyAddsALastStepThatDeletesAFixture(t *testing.T) {
+// only gains a last step.
+func TestValuesDeletableOnlyAddsALastStep(t *testing.T) {
 	plain := plans(t, noFixtureValues, 100)
-	fixture := plan.Target{Resource: "configmaps", Name: "widget-config"}
-	then := map[plan.Do]int{}
+	gained := 0
 	for i, p := range drawPlans(t, newGenerator(t, deleting(loadConfig(t, noFixtureValues))), 100) {
-		if len(p.Steps) > len(plain[i].Steps) {
-			last := p.Steps[len(p.Steps)-1]
+		if len(p.Steps) == len(plain[i].Steps)+1 {
+			gained++
 			p.Steps = p.Steps[:len(p.Steps)-1]
-			if a := last.Actions[0]; a.Do != plan.ChangeFixture || *a.Target != fixture || a.Patch != nil || len(last.Faults) > 0 {
-				t.Errorf("Seed %d's last step is %+v, want one that deletes %+v first.", p.Seed, last, fixture)
-			}
-			var do plan.Do
-			if len(last.Actions) > 1 {
-				do = last.Actions[1].Do
-			}
-			if len(last.Actions) > 2 || do != "" && do != plan.Restart && do != plan.Kill || (do == plan.Kill) != (last.Period > 0) {
-				t.Errorf("Seed %d's last step is %+v, want a delete then a restart, a kill with a period, or neither.", p.Seed, last)
-			}
-			then[do]++
 		}
 		if !reflect.DeepEqual(p, plain[i]) {
 			t.Errorf("Seed %d's plan differs from the plan without values.deletable by more than a last step.", p.Seed)
 		}
 	}
-	if n := then[""] + then[plan.Restart] + then[plan.Kill]; n < 30 || n > 70 || then[""] == 0 || then[plan.Restart] == 0 || then[plan.Kill] == 0 {
-		t.Errorf("%d of 100 plans end with a fixture delete, then %v; want about half, then each of nothing, a restart and a kill.", n, then)
+	if gained < 30 || gained > 70 {
+		t.Errorf("%d of 100 plans gain a last step, want about half.", gained)
 	}
 }
 
-// A plan may end with a referenced fixture deleted already. Its last step
-// then deletes no fixture again.
-func TestTheLastStepDeletesOnlyALiveFixture(t *testing.T) {
-	ended := 0
-	for _, p := range plans(t, referencesConfig, 200) {
-		if endsDeleted(t, p) {
-			ended++
+// The last step deletes the fixture. Half the time, a restart or kill
+// follows 300 ms or more later, within the step's fault period.
+func TestTheLastStepDeletesTheFixtureThenMayRestartOrKill(t *testing.T) {
+	plain := plans(t, noFixtureValues, 200)
+	fixture := plan.Target{Resource: "configmaps", Name: "widget-config"}
+	then := map[plan.Do]int{}
+	for i, p := range drawPlans(t, newGenerator(t, deleting(loadConfig(t, noFixtureValues))), 200) {
+		if len(p.Steps) == len(plain[i].Steps) {
+			continue
+		}
+		last := p.Steps[len(p.Steps)-1]
+		if del := (plan.Action{Do: plan.ChangeFixture, Target: &fixture}); !reflect.DeepEqual(last.Actions[0], del) || len(last.Faults) > 0 {
+			t.Errorf("Seed %d's last step is %+v, want one without faults that deletes %+v first.", p.Seed, last, fixture)
+		}
+		switch late := last.Actions[1:]; {
+		case len(late) == 0 && last.Period == 0:
+			then[""]++
+		case len(late) == 1 && (late[0].Do == plan.Restart || late[0].Do == plan.Kill) && late[0].At >= plan.Duration(300*time.Millisecond) && late[0].At < last.Period:
+			then[late[0].Do]++
+		default:
+			t.Errorf("Seed %d's last step is %+v, want the delete alone, or then a restart or kill 300 ms or more later and before Period ends.", p.Seed, last)
 		}
 	}
-	for _, p := range drawPlans(t, newGenerator(t, deleting(loadConfig(t, referencesConfig))), 200) {
-		endsDeleted(t, p)
+	if then[""] == 0 || then[plan.Restart] == 0 || then[plan.Kill] == 0 {
+		t.Errorf("The last steps then do %v, want each of nothing, a restart and a kill.", then)
 	}
-	if ended < 10 {
-		t.Errorf("%d of 200 plans end with the Secret deleted, want 10 or more.", ended)
-	}
-}
-
-// endsDeleted says whether p ends with its one fixture deleted. A delete of
-// the deleted fixture fails the test.
-func endsDeleted(t *testing.T, p *plan.Plan) bool {
-	t.Helper()
-	deleted := false
-	for n, step := range p.Steps {
-		for _, a := range step.Actions {
-			switch {
-			case a.Do == plan.ChangeFixture && deleted:
-				t.Errorf("Seed %d's step %d deletes the fixture it already deleted.", p.Seed, n)
-			case a.Do == plan.ChangeFixture:
-				deleted = true
-			case a.Do == plan.CreateFixture:
-				deleted = false
-			}
-		}
-	}
-	return deleted
 }

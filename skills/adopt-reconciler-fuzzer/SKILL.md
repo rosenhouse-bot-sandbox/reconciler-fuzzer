@@ -158,7 +158,8 @@ Fill each key from the project:
   `distinct` names fields that must differ between CRs, such as a Secret's name. `mutate`
   names the fields updates change. `values.fixtures` names fixture strings to change.
   `values.deletable` lists `fixtures` files whose objects a plan's last step may delete. List a
-  file only if the controller holds its objects' deletion until no CR needs them.
+  file only if the controller holds the deletion of its objects until no CR needs them. The
+  files may hold no Namespace and no object of a `to` kind.
 - `fixtures`: objects the controller reads and does not create, of kinds the config does not
   list. Drop `metadata.namespace` unless the controller reads the object in another namespace;
   the harness creates that namespace.
@@ -356,6 +357,7 @@ controller:
 | Honest, `reported ready before seeing its dependency ready`, on a named object whose spec just changed | The default `ready` waits for the object's `observedGeneration`, but the controller checks only its condition or phase. | Set the entry's `ready` to the controller's check. |
 | Converge, clause 1, `the controller last saw … ready` | The entry's `ready` accepts an object that the controller treats as not ready. | Fix the entry's `ready`. |
 | Converge, clause 1, `the controller last saw … missing` or `not ready`, on an object that is ready now | Nothing, if the controller does not watch the named kind: it missed the change. | Report the bug (step 11). The controller should watch that kind and requeue the CRs that name the object. |
+| Converge, clause 1, at a last step that deletes a `values.deletable` fixture | By design, the controller does not hold the fixture's deletion while a CR needs it. | Drop the file from `values.deletable`. |
 | Clean | The controller keeps resources by design. | Set the entry's `retain`. |
 | Unique | The CR owns several resources of one kind and role by design, such as several with one `generateName`, or several in one collection of a fake. | Set the system's `role`. |
 | Restore, `did not restore damaged resources` | The controller recreates a damaged resource under a new name by design. | Set the system's `role` to CEL that gives both names one role. |

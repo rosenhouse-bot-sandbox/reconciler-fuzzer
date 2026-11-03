@@ -484,9 +484,10 @@ writes `missing`, a name no object has. `namespace` values stay as drawn.
 `changeFixture` draws kube and system fixtures alike. It also deletes a live
 kube fixture of a `to` kind other than a Namespace, and `createFixture` makes
 it again. Plans of a config without references are as before.
-`values.deletable` gives half the plans a last step that deletes a live fixture
-it lists, then restarts, kills or does neither. The step comes last, since a CR
-created or updated after it may rightly never be ready.
+With `values.deletable`, half the plans end with one more step, which deletes
+a fixture the key lists. The key refuses Namespaces and objects of `to` kinds.
+Half of these steps restart or kill 300 ms or more later, before Period ends.
+The step comes last: a CR created or updated after it may rightly never be ready.
 
 **Hunt.** `hunt.Hunt` runs each seed, keeps runs with a new signature, replays
 each `--replays` times (5) and shrinks it (`shrink.go`), trying at most

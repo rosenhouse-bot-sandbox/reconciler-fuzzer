@@ -131,10 +131,11 @@ timeouts: {settle: 30s, stable: 3s}
 - `values` steers generated CRs: `overlay` narrows the CRD schema, `distinct` fields differ
   across a plan's CRs, `mutate` names the fields updates change, and `fixtures` names the
   fixture strings `changeFixture` sets.
-- `values.deletable` lists `fixtures` files. Half the generated plans then end with a step that
-  deletes one of their objects, and maybe restarts or kills the controller. A CR may rightly stay
-  not ready without the object, so list a file only if the controller holds its objects'
-  deletion until no CR needs them.
+- `values.deletable` lists `fixtures` files whose objects plans may delete. Half the generated
+  plans then end with a step that deletes one such object, and maybe restarts or kills the
+  controller. A CR may rightly stay not ready without the object, so list a file only if the
+  controller holds the deletion of such an object until no CR needs it. The files may hold no
+  Namespace and no object of a `to` kind, which plans delete already.
 
 ### Several kinds
 
