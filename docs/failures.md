@@ -129,6 +129,11 @@ then, clause 2's line says `got its deletionTimestamp at <t>, less than
 stable ago`. If the controller holds a named CR's deletion by design, and
 clause 2 names that CR, set the reference's `onDelete: block`.
 
+CRs being deleted that name each other, directly or through other CRs
+being deleted, would wait for good, so those names do not count. A CR
+that names itself is such a cycle. If clause 2 names CRs on a cycle, the
+controller should release one of them. Ordered passes that release.
+
 Clause 1 skips a CR that a reference holds back, if the named object as it
 is now would hold the CR back too, or that a reference leaves unknown. It
 does so once `stable`, and the time the step's faults lasted, at most

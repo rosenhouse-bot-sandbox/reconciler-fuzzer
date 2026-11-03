@@ -162,12 +162,12 @@ func (h *honesty) shown(n named, look trace.Event) state {
 // beforeDeletion is v, or, while v waits in deletion, the last version of its
 // instance before the deletion started, if the trace holds one.
 func beforeDeletion(ix *trace.Index, v trace.Version) trace.Version {
-	for deleting(v.Body) {
-		previous, found := ix.Previous(v.Ref, v.RV)
-		if !found {
-			break
-		}
-		v = previous
+	if !deleting(v.Body) {
+		return v
+	}
+	versions := ix.Versions(v.Ref, v.UID)
+	if n := firstDeleting(versions); n > 0 {
+		return *versions[n-1].Version
 	}
 	return v
 }

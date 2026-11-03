@@ -35,6 +35,7 @@ type unmet struct {
 func unmetClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 	stop, stopped := ix.Stop(t)
 	step, _ := latestStep(ix, t)
+	inUse := s.inUse(ix, t)
 	var unmets []unmet
 	crs := 0
 	for _, p := range s.Primaries {
@@ -42,10 +43,10 @@ func unmetClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 		switch {
 		case !stopped:
 			for _, cr := range live {
-				unmets = append(unmets, crClauses(ix, p, cr, t, s)...)
+				unmets = append(unmets, crClauses(ix, p, cr, t, s, inUse)...)
 			}
 		case step.Step == stop.Action.Step:
-			unmets = append(unmets, unfinalized(ix, live, t, s)...)
+			unmets = append(unmets, unfinalized(ix, live, t, s, inUse)...)
 		}
 		crs += len(live)
 	}
@@ -58,13 +59,13 @@ func unmetClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 	return append(unmets, quietClauses(ix, t, s, max(1, crs))...)
 }
 
-// unfinalized are the CRs of live being deleted at t that the stop waited
-// for, unless one is in use.
-func unfinalized(ix *trace.Index, live []trace.Version, t time.Duration, s Spec) []unmet {
+// unfinalized holds the CRs of live being deleted at t that the stop waited
+// for to clause 2.
+func unfinalized(ix *trace.Index, live []trace.Version, t time.Duration, s Spec, inUse func(trace.Ref) bool) []unmet {
 	var unmets []unmet
 	for _, cr := range live {
-		if deleting(cr.Body) && ix.StopWaitedFor(cr.UID) && !s.inUse(ix, cr.Ref, t) {
-			unmets = append(unmets, unmet{2, kind(cr.Ref), describe(cr.Ref) + " is being deleted"})
+		if deleting(cr.Body) && ix.StopWaitedFor(cr.UID) {
+			unmets = append(unmets, deletionClauses(ix, cr, t, s, inUse)...)
 		}
 	}
 	return unmets
@@ -174,20 +175,14 @@ func looksAt(c trace.Call, ref trace.Ref) bool {
 // deleted: ready, halted, or held back by a reference. A CR in use waits in
 // deletion, and is done from stable after the deletion started, so that
 // clause 7 sees the controller's reaction.
-func crClauses(ix *trace.Index, p Primary, cr trace.Version, t time.Duration, s Spec) []unmet {
+func crClauses(ix *trace.Index, p Primary, cr trace.Version, t time.Duration, s Spec, inUse func(trace.Ref) bool) []unmet {
 	name, k := describe(cr.Ref), kind(cr.Ref)
 	var body map[string]any
 	if err := json.Unmarshal(cr.Body, &body); err != nil {
 		return []unmet{{1, k, fmt.Sprintf("%s has a body that is not a JSON object: %v", name, err)}}
 	}
 	if metadata, _ := body["metadata"].(map[string]any); metadata["deletionTimestamp"] != nil {
-		if !s.inUse(ix, cr.Ref, t) {
-			return []unmet{{2, k, name + " is being deleted"}}
-		}
-		if start, _ := deletionStart(ix.Versions(cr.Ref, cr.UID)); t < start+s.Stable {
-			return []unmet{{2, k, fmt.Sprintf("%s got its deletionTimestamp at %v, less than stable ago", name, start)}}
-		}
-		return nil
+		return deletionClauses(ix, cr, t, s, inUse)
 	}
 	if ready, err := p.Ready(body); err != nil {
 		return []unmet{{1, k, fmt.Sprintf("%s: ready: %v", name, err)}}
@@ -197,14 +192,33 @@ func crClauses(ix *trace.Index, p Primary, cr trace.Version, t time.Duration, s 
 	return nil
 }
 
+// deletionClauses holds cr, being deleted at t, to clause 2, unless a CR
+// that names it has held its deletion for stable since the deletion started.
+func deletionClauses(ix *trace.Index, cr trace.Version, t time.Duration, s Spec, inUse func(trace.Ref) bool) []unmet {
+	name, k := describe(cr.Ref), kind(cr.Ref)
+	if !inUse(cr.Ref) {
+		return []unmet{{2, k, name + " is being deleted"}}
+	}
+	if start, _ := deletionStart(ix.Versions(cr.Ref, cr.UID)); t < start+s.Stable {
+		return []unmet{{2, k, fmt.Sprintf("%s got its deletionTimestamp at %v, less than stable ago", name, start)}}
+	}
+	return nil
+}
+
 // deletionStart is when an instance got its deletionTimestamp: the time of
 // the first of its versions that has one.
 func deletionStart(versions []trace.Event) (time.Duration, bool) {
-	n := slices.IndexFunc(versions, func(e trace.Event) bool { return deleting(e.Version.Body) })
+	n := firstDeleting(versions)
 	if n < 0 {
 		return 0, false
 	}
 	return versions[n].At, true
+}
+
+// firstDeleting is the index of the first of versions with a
+// deletionTimestamp, or -1.
+func firstDeleting(versions []trace.Event) int {
+	return slices.IndexFunc(versions, func(e trace.Event) bool { return deleting(e.Version.Body) })
 }
 
 // halted reports whether p.Halted accepts cr's body and the controller

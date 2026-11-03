@@ -52,14 +52,48 @@ func (s Spec) blocked(cr trace.Ref, body map[string]any) []trace.Ref {
 	return objects
 }
 
-// inUse reports whether a live CR names the object at ref by a block
-// reference at t, so that the object's deletion waits for it.
-func (s Spec) inUse(ix *trace.Index, ref trace.Ref, t time.Duration) bool {
-	return slices.ContainsFunc(s.Primaries, func(p Primary) bool {
-		return slices.ContainsFunc(ix.Live(p.Kind.Group, p.Kind.Resource, t), func(cr trace.Version) bool {
-			return slices.Contains(s.blocked(cr.Ref, decode(cr.Body)), ref)
-		})
-	})
+// inUse returns a func that reports whether the deletion of a CR, being
+// deleted at t, waits for a live CR that names it by a block reference. A
+// namer that waits for the CR in turn, through CRs being deleted, does not
+// count, since the two would wait for good. A CR that names itself is such a
+// namer.
+func (s Spec) inUse(ix *trace.Index, t time.Duration) func(trace.Ref) bool {
+	var blocked map[trace.Ref][]trace.Ref
+	deletingCR := map[trace.Ref]bool{}
+	return func(cr trace.Ref) bool {
+		if blocked == nil {
+			blocked = map[trace.Ref][]trace.Ref{}
+			for _, p := range s.Primaries {
+				for _, v := range ix.Live(p.Kind.Group, p.Kind.Resource, t) {
+					blocked[v.Ref], deletingCR[v.Ref] = s.blocked(v.Ref, decode(v.Body)), deleting(v.Body)
+				}
+			}
+		}
+		for namer, objects := range blocked {
+			if slices.Contains(objects, cr) && !reaches(blocked, deletingCR, cr, namer) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// reaches reports whether the CR from is the CR to, or names it through a
+// chain of block references among CRs being deleted.
+func reaches(blocked map[trace.Ref][]trace.Ref, deleting map[trace.Ref]bool, from, to trace.Ref) bool {
+	seen := map[trace.Ref]bool{}
+	var visit func(trace.Ref) bool
+	visit = func(cr trace.Ref) bool {
+		if cr == to {
+			return true
+		}
+		if seen[cr] {
+			return false
+		}
+		seen[cr] = true
+		return slices.ContainsFunc(blocked[cr], func(n trace.Ref) bool { return deleting[n] && visit(n) })
+	}
+	return visit(from)
 }
 
 // state is what a look at a named object shows.

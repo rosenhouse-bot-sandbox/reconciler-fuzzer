@@ -2,6 +2,7 @@ package check_test
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"testing"
 	"time"
@@ -26,10 +27,23 @@ func clusterRef(r *tt.Script, block bool) trace.Reference {
 	return trace.Reference{From: databases, To: clusters, Namespaced: true, Name: "spec.clusterRef", Ready: r.Spec.Primaries[0].Ready, Required: true, Block: block}
 }
 
+// databaseRef is a Database's block reference to the Database that its
+// spec.clusterRef names.
+func databaseRef(r *tt.Script) trace.Reference {
+	ref := clusterRef(r, true)
+	ref.To = databases
+	return ref
+}
+
 // databaseOn is slot b's Database, naming the Cluster cluster.
 func databaseOn(ready bool, cluster string) map[string]any {
-	body := tt.CR("b", ready)
-	body["spec"] = map[string]any{"clusterRef": cluster}
+	return databaseNaming("b", ready, cluster)
+}
+
+// databaseNaming is the Database name, whose spec.clusterRef names other.
+func databaseNaming(name string, ready bool, other string) map[string]any {
+	body := tt.CR(name, ready)
+	body["spec"] = map[string]any{"clusterRef": other}
 	return body
 }
 
@@ -183,6 +197,91 @@ func TestOrderedOrdersVersionsOfTwoKindsByResourceVersion(t *testing.T) {
 	})
 }
 
+func TestOrderedPassesACRThatNamesItself(t *testing.T) {
+	r := fleetRun(1, databases)
+	r.Spec.References = []trace.Reference{databaseRef(r)}
+	r.Begin()
+	r.Create(trace.Harness, databaseB, databaseOn(true, "b"))
+	r.Act("create", "b", &databaseB).See(ctl, databaseB).Tick(r.Spec.Stable)
+	r.Delete(ctl, databaseB)
+	requireNone(t, ordered(t, r))
+}
+
+// Clause 2 needs a cycle of block names among CRs being deleted broken, so
+// Ordered passes the release that breaks it. A CR off the cycle still holds
+// the object.
+func TestOrderedPassesAReleaseThatBreaksACycle(t *testing.T) {
+	for name, c := range map[string]struct {
+		names    map[string]string
+		deleting []string
+		holder   string
+	}{
+		"of CRs being deleted":        {map[string]string{"b": "c", "c": "b"}, []string{"b", "c"}, ""},
+		"through a live CR":           {map[string]string{"b": "c", "c": "b"}, []string{"b"}, "slot c"},
+		"that a live CR off it names": {map[string]string{"b": "c", "c": "b", "d": "b"}, []string{"b", "c"}, "slot d"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := fleetRun(1, databases)
+			r.Spec.References = []trace.Reference{databaseRef(r)}
+			r.Begin()
+			for _, slot := range slices.Sorted(maps.Keys(c.names)) {
+				ref := tt.Ref("toy/databases", "ns", slot)
+				r.Create(trace.Harness, ref, databaseNaming(slot, true, c.names[slot]))
+				r.Act("create", slot, &ref).See(ctl, ref)
+			}
+			r.Tick(r.Spec.Stable)
+			for _, slot := range c.deleting {
+				r.Update(trace.Harness, tt.Ref("toy/databases", "ns", slot), tt.Deleting(databaseNaming(slot, true, c.names[slot])))
+			}
+			findings := ordered(t, r.Delete(ctl, databaseB))
+			if c.holder == "" {
+				requireNone(t, findings)
+				return
+			}
+			requireFinding(t, findings, "Ordered", 0, released, "kube/toy/databases", "databases.toy ns/b: "+c.holder+" names it")
+			if len(findings[0].Details) != 1 {
+				t.Errorf("details = %q, want only %s's.", findings[0].Details, c.holder)
+			}
+		})
+	}
+}
+
+// After a relist, the observer records a delete with the resourceVersion of
+// the version before it, so the trace does not say when the release came.
+func TestOrderedPassesAReleaseRecordedFromARelist(t *testing.T) {
+	r := secretRun(blockRef(), secret(true))
+	seeBoth(r).Add(tt.Version(pw, r.UID(pw), "100", tt.Deleting(secret(true))))
+	r.Add(tt.Version(databaseB, r.UID(databaseB), "105", database(false, "other")))
+	r.Add(tt.Deleted(pw, r.UID(pw), "100", tt.Deleting(secret(true))))
+	requireNone(t, ordered(t, r))
+}
+
+// The controller saw a version of the CR that the observer missed, so the
+// trace may lack the move off the object. A version after the release does
+// not matter.
+func TestOrderedPassesAReleaseAfterACRVersionTheObserverMissed(t *testing.T) {
+	for name, c := range map[string]struct {
+		missed  string
+		finding bool
+	}{
+		"before the release": {"105", false},
+		"after the release":  {"115", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := secretRun(blockRef(), secret(true))
+			seeBoth(r).Add(tt.Deleted(pw, r.UID(pw), "110", secret(true)))
+			r.Add(tt.Seen(ctl, databaseB, r.UID(databaseB), c.missed))
+			r.Add(tt.Version(databaseB, r.UID(databaseB), "120", database(false, "other")))
+			findings := ordered(t, r)
+			if !c.finding {
+				requireNone(t, findings)
+				return
+			}
+			requireFinding(t, findings, "Ordered", 0, released, "kube/secrets", "secrets ns/pw: slot b names it")
+		})
+	}
+}
+
 func TestOrderedReportsAReleaseInItsStepWithEachCRThatNamesIt(t *testing.T) {
 	r := secretRun(blockRef(), secret(true))
 	body := database(false, "pw")
@@ -280,20 +379,64 @@ func TestACRWaitingInDeletionSettlesStableAfterItsDeletionStarted(t *testing.T) 
 			return start
 		},
 	} {
+		for _, stop := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s, stopped %t", name, stop), func(t *testing.T) {
+				r := fleetRun(1, clusters, databases)
+				r.Spec.References = []trace.Reference{clusterRef(r, true)}
+				r.Begin()
+				r.Create(trace.Harness, databaseB, databaseOn(true, "a"))
+				r.Act("create", "b", &databaseB).EndFaults()
+				start := deleteA(r)
+				r.Update(trace.Harness, clusterA, tt.Deleting(tt.CR("a", false)))
+				if stop {
+					r.Stop(r.UID(clusterA))
+				}
+				want := []string{fmt.Sprintf("clusters.toy ns/a got its deletionTimestamp at %v, less than stable ago", start)}
+				if unmet := settledAt(t, r, start+r.Spec.Stable-tt.Tick); !slices.Equal(unmet, want) {
+					t.Errorf("Just before stable: unmet = %q, want %q.", unmet, want)
+				}
+				if unmet := settledAt(t, r, start+r.Spec.Stable); len(unmet) != 0 {
+					t.Errorf("At stable: unmet = %q, want none.", unmet)
+				}
+			})
+		}
+	}
+}
+
+// CRs being deleted that name each other wait for each other for good. A CR
+// on such a cycle still waits for a CR off it that names it.
+func TestACRWaitingInDeletionOnACycleDoesNotSettle(t *testing.T) {
+	for name, c := range map[string]struct {
+		names    map[string]string
+		deleting []string
+		unmet    []string
+	}{
+		"a CR that names itself": {map[string]string{"b": "b"}, []string{"b"}, []string{"databases.toy ns/b is being deleted"}},
+		"two CRs being deleted that name each other": {map[string]string{"b": "c", "c": "b"}, []string{"b", "c"},
+			[]string{"databases.toy ns/b is being deleted", "databases.toy ns/c is being deleted"}},
+		"a CR being deleted that names a live CR that names it": {map[string]string{"b": "c", "c": "b"}, []string{"b"}, nil},
+		"a cycle through a live CR":                             {map[string]string{"b": "c", "c": "d", "d": "b"}, []string{"b", "d"}, nil},
+		"a cycle that a live CR names":                          {map[string]string{"b": "c", "c": "d", "d": "c"}, []string{"c", "d"}, []string{"databases.toy ns/d is being deleted"}},
+		"a cycle that a CR being deleted names": {map[string]string{"b": "c", "c": "d", "d": "c"}, []string{"b", "c", "d"},
+			[]string{"databases.toy ns/b is being deleted", "databases.toy ns/d is being deleted"}},
+	} {
 		t.Run(name, func(t *testing.T) {
-			r := fleetRun(1, clusters, databases)
-			r.Spec.References = []trace.Reference{clusterRef(r, true)}
+			r := fleetRun(1, databases)
+			r.Spec.References = []trace.Reference{databaseRef(r)}
 			r.Begin()
-			r.Create(trace.Harness, databaseB, databaseOn(true, "a"))
-			r.Act("create", "b", &databaseB).EndFaults()
-			start := deleteA(r)
-			r.Update(trace.Harness, clusterA, tt.Deleting(tt.CR("a", false)))
-			want := []string{fmt.Sprintf("clusters.toy ns/a got its deletionTimestamp at %v, less than stable ago", start)}
-			if unmet := settledAt(t, r, start+r.Spec.Stable-tt.Tick); !slices.Equal(unmet, want) {
-				t.Errorf("Just before stable: unmet = %q, want %q.", unmet, want)
+			for _, slot := range slices.Sorted(maps.Keys(c.names)) {
+				ref := tt.Ref("toy/databases", "ns", slot)
+				r.Create(trace.Harness, ref, databaseNaming(slot, false, c.names[slot]))
+				r.Act("create", slot, &ref).Update(ctl, ref, databaseNaming(slot, true, c.names[slot]))
 			}
-			if unmet := settledAt(t, r, start+r.Spec.Stable); len(unmet) != 0 {
-				t.Errorf("At stable: unmet = %q, want none.", unmet)
+			for _, slot := range c.deleting {
+				r.Update(trace.Harness, tt.Ref("toy/databases", "ns", slot), tt.Deleting(databaseNaming(slot, true, c.names[slot])))
+			}
+			r.EndFaults()
+			unmet := settledAt(t, r, r.Now+5*s)
+			slices.Sort(unmet)
+			if !slices.Equal(unmet, c.unmet) {
+				t.Errorf("unmet = %q, want %q.", unmet, c.unmet)
 			}
 		})
 	}
@@ -337,6 +480,41 @@ func TestHonestJudgesAnObjectWaitingInDeletionByItsVersionBefore(t *testing.T) {
 			r.Update(ctl, databaseB, databaseOn(true, "a"))
 			findings := honest(t, r)
 			if !c.finding {
+				requireNone(t, findings)
+				return
+			}
+			requireFinding(t, findings, "Honest", 0, beforeSeeing, "kube/toy/clusters", "slot b: clusters.toy ns/a seen not ready")
+		})
+	}
+}
+
+func TestHonestJudgesALookBeforeTheDeletionAsItIs(t *testing.T) {
+	r := fleetRun(1, clusters, databases)
+	r.Spec.References = []trace.Reference{clusterRef(r, true)}
+	r.Begin()
+	r.CreateCR("a", clusterA)
+	r.Create(trace.Harness, databaseB, databaseOn(false, "a"))
+	r.Act("create", "b", &databaseB).See(ctl, clusterA)
+	r.Update(ctl, databaseB, databaseOn(true, "a"))
+	r.Ready(clusterA).Update(ctl, clusterA, tt.Deleting(tt.CR("a", false)))
+	requireFinding(t, honest(t, r), "Honest", 0, beforeSeeing, "kube/toy/clusters", "slot b: clusters.toy ns/a seen not ready")
+}
+
+// An object first recorded waiting in deletion has no version before its
+// deletion, so Honest judges the look as it is.
+func TestHonestJudgesAnObjectFirstRecordedInDeletionAsItIs(t *testing.T) {
+	for name, ready := range map[string]bool{"ready": true, "not ready": false} {
+		t.Run(name, func(t *testing.T) {
+			r := fleetRun(1, clusters, databases)
+			r.Spec.References = []trace.Reference{clusterRef(r, true)}
+			r.Begin()
+			r.Create(trace.Harness, clusterA, tt.Deleting(tt.CR("a", ready)))
+			r.Act("create", "a", &clusterA)
+			r.Create(trace.Harness, databaseB, databaseOn(false, "a"))
+			r.Act("create", "b", &databaseB).See(ctl, clusterA)
+			r.Update(ctl, databaseB, databaseOn(true, "a"))
+			findings := honest(t, r)
+			if ready {
 				requireNone(t, findings)
 				return
 			}

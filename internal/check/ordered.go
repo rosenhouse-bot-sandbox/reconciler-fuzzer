@@ -36,7 +36,7 @@ func Ordered(ix *trace.Index, s Spec) []Finding {
 			continue
 		}
 		for _, cr := range crs {
-			if !kept(ix.Seen(trace.Controller, cr.UID), claims[cr.UID], object.Ref, r, r.start-s.Stable) {
+			if !kept(ix.Seen(trace.Controller, cr.UID), claims[cr.UID], object.Ref, r, r.start-s.Stable) || breaksCycle(crs, claims, r.rv, object.Ref, cr.Ref) {
 				continue
 			}
 			step := stepAt(steps, r.at)
@@ -63,7 +63,9 @@ type release struct {
 	rv        uint64
 }
 
-// releaseOf is i's release, if it has one.
+// releaseOf is i's release, if it has one. A delete that the observer
+// recorded from a relist carries the resourceVersion of the version before
+// it, so the trace does not order it, and releaseOf reports none.
 func releaseOf(w *owner.World, i owner.Instance) (release, bool) {
 	versions := w.Versions(i)
 	last := versions[len(versions)-1]
@@ -71,17 +73,22 @@ func releaseOf(w *owner.World, i owner.Instance) (release, bool) {
 		return release{}, false
 	}
 	r := release{at: last.At, start: last.At, rv: revision(last.Version.RV)}
+	if len(versions) > 1 && r.rv <= revision(versions[len(versions)-2].Version.RV) {
+		return release{}, false
+	}
 	if start, found := deletionStart(versions); found {
 		r.start = start
 	}
 	return r, true
 }
 
-// A claim is a version of a CR, by resourceVersion, and the objects it names
-// by block references. A deleted version names none.
+// A claim is a version of a CR, by resourceVersion, the objects it names by
+// block references, and whether the CR is being deleted. A deleted version
+// names none.
 type claim struct {
-	rv      uint64
-	objects []trace.Ref
+	rv       uint64
+	objects  []trace.Ref
+	deleting bool
 }
 
 // claims are the claims of versions, a CR instance's versions.
@@ -91,6 +98,7 @@ func (s Spec) claims(versions []trace.Event) []claim {
 		claims[n].rv = revision(e.Version.RV)
 		if !e.Version.Deleted {
 			claims[n].objects = s.blocked(e.Version.Ref, decode(e.Version.Body))
+			claims[n].deleting = deleting(e.Version.Body)
 		}
 	}
 	return claims
@@ -99,8 +107,15 @@ func (s Spec) claims(versions []trace.Event) []claim {
 // kept reports whether a CR, whose versions make claims in order, kept
 // object until r: by bound, one of seens, the controller's seens of the CR,
 // showed a version that names object, and each later version before r names
-// it too.
+// it too. If the controller saw a version before r that the observer missed,
+// the trace may lack a move off object, and kept reports false.
 func kept(seens []trace.Event, claims []claim, object trace.Ref, r release, bound time.Duration) bool {
+	if slices.ContainsFunc(seens, func(e trace.Event) bool {
+		rv := revision(e.Seen.RV)
+		return rv < r.rv && !slices.ContainsFunc(claims, func(c claim) bool { return c.rv == rv })
+	}) {
+		return false
+	}
 	held := false
 	for _, c := range claims {
 		if c.rv >= r.rv {
@@ -111,6 +126,22 @@ func kept(seens []trace.Event, claims []claim, object trace.Ref, r release, boun
 		}))
 	}
 	return held
+}
+
+// breaksCycle reports whether, by the claims of crs before rv, releasing
+// object breaks a cycle of block names among CRs being deleted that cr is on.
+// Clause 2 needs such a cycle broken.
+func breaksCycle(crs []owner.Instance, claims map[string][]claim, rv uint64, object, cr trace.Ref) bool {
+	blocked, deletingCR := map[trace.Ref][]trace.Ref{}, map[trace.Ref]bool{}
+	for _, i := range crs {
+		for _, c := range claims[i.UID] {
+			if c.rv >= rv {
+				break
+			}
+			blocked[i.Ref], deletingCR[i.Ref] = c.objects, c.deleting
+		}
+	}
+	return reaches(blocked, deletingCR, object, cr)
 }
 
 // revision is a resourceVersion as the integer etcd assigns, which orders

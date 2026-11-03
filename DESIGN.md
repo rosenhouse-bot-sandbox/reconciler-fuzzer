@@ -246,7 +246,8 @@ to the CRs the stop waited for (§9).
    from `backoff + stable` after `endFaults`, a reference holds it back, as a
    look at `t` would too, or leaves it unknown (§12), and
 2. carries no `deletionTimestamp`. A CR being deleted that a live CR names
-   under `block` meets clauses 1 and 2 `stable` after its deletion started.
+   under `block` meets clauses 1 and 2 `stable` after its deletion started,
+   unless that CR waits for it in turn through CRs being deleted.
 3. The controller is up at `t` and has been up for at least `stable`.
 4. The controller made a 2xx request, not ignored and not of unknown
    outcome, that it sent since its last start.
@@ -378,6 +379,8 @@ else at the release. Ordered fails a release if, `stable` or more before the
 deletion started, the controller saw the instance and a version of a `from` CR
 that names it, and the CR stays live and names the instance in each later
 version up to the release: `released an object that another names` (entry 89).
+A CR that waits for the instance in turn, through CRs being deleted, does not
+count, since clause 2 needs such a cycle broken.
 
 **Backoff.** A controller call is **futile** if it fails, or writes and changes
 nothing (entry 88). Futile calls with one system, verb, object, subresource and
@@ -455,7 +458,7 @@ and no kube fixture is a CR. A model's stage is `readyCondition`.
 `dependency.required` defaults to true, and `stuckStatus` to `status`. `vault`
 needs a `token`. `access: read` says the controller only reads the fake.
 `values.fixtures` may name a system's fixtures file, whose entries' body paths
-`changeFixture` sets.
+`changeFixture` sets. `config.go` holds the other rules.
 
 A reference's `to` is a kube kind or `<system>:<collection>`, and its `ready`
 defaults to that of a listed kind, a model or a fake. `name` and `namespace` are
@@ -466,9 +469,6 @@ CRD's schema must describe each path as a string. A `name` that an `owns` entry
 of the `from` entry reads is refused, since the CR owns that object. Under
 `onDelete: block`, the `to` object's deletion waits for its `from` CRs, as
 `kubernetes.io/pvc-protection` does. `references.go` holds the other refusals.
-In toy-fleet's `config.yaml`, a Database names a Cluster (`spec.clusterRef`,
-`onDelete: block`) and a Secret (`spec.passwordSecretRef.name`), and a User a
-Database (`spec.databaseRef`, `onDelete: block`).
 
 ## 14. Generation, replay and shrinking
 
@@ -529,13 +529,13 @@ owns one bucket in the `crudfake` system `cloud`; its bugs start at B30, and
 `halted/` runs `--halt` under `primary.halted`. In `targets/toy-fleet`, a
 Cluster owns modelled third-party Volumes, a Database names a Cluster and maybe
 a Secret, and a User a Database. Its bugs start at B100. `config.yaml` lists all
-three kinds and their references (§13). The generated test fuzzes `cluster/`,
-which lists Clusters alone, `database/`, which lists Databases on a fixture
-Cluster, `protect/`, whose Volume model holds each Volume's deletion with its
-finalizer, and `upgrade/`, `cluster/` with an upgrade to `--version=2`. Only
-gate rows run `config.yaml`, `secret/`, which runs `--protect-secrets` to hold
-the fixture Secret while a Database names it, `upgrade/properties/`, which adds
-a property, and `uninstall/`, whose Database CRD a plan may delete.
+three kinds, and blocks on the references to Clusters and Databases. The
+generated test fuzzes `cluster/`, which lists Clusters alone, `database/`, which
+lists Databases on a fixture Cluster, `protect/`, whose Volume model holds each
+Volume's deletion with its finalizer, and `upgrade/`, `cluster/` with an upgrade
+to `--version=2`. Only gate rows run `config.yaml`, `secret/`, which runs
+`--protect-secrets` and blocks on the Secret reference, `upgrade/properties/`,
+which adds a property, and `uninstall/`, whose Database CRD a plan may delete.
 
 Each config's `plans/` holds its gated bugs' and B0's plans. A toy's
 `gate_envtest_test.go` runs `gate_test.go`'s rows, and its `bugmatrix_test.go`
@@ -596,4 +596,4 @@ Each entry changes a check, exception, `System` interface or ignore list.
 86. Honest excuses a `ready` write that the controller sends within 2×`stable` of a look, after an earlier look that let the CR be `ready`, with no `start` since, and retracts within `stable` of the write's response, by writing the CR not `ready` or naming another object. A reconcile may read its cache before the look reaches the cache, the cache holds what an earlier look showed, and the CR's next reconcile starts only once the write returns. Neither window, nor a `track`, counts time in which a step's faults stall the controller, or between an exit and its next start, since a reconcile that a fault holds keeps the CRs queued behind it waiting. A step's faults stall it only if a fault altered one of the controller's requests in them, so a model fault, such as `stuck`, and a held watch stall it not at all. The retraction window starts again at a `start`, since a restart loses the reconcile, and a write of the CR that failed or had an unknown outcome, the `ready` write itself or one in the window, such as a conflict from a cache that lacks the `ready` write, gives the controller the `backoff` of the step that answered it and `stable` from its response. A killed write gives none, since the controller starts again with an empty backoff.
 87. At a step whose restart upgrades the controller, Restore allows changed resources but not replaced ones, since a release often rewrites its children's labels or templates (#137).
 88. Backoff counts a no-op write, such as a delete of an object already being deleted, as futile (#139). A no-op success ends a run of failing calls, since its reconcile may have reset the rate limiter. A run of no-op writes allows twice the calls, since a reconcile may repeat a write, as a deferred status update after an explicit one does. An update that empties a deleting object's finalizers is not futile, since it deletes the object (entry 85). A kube `deletecollection` answers with the resourceVersion of its list. By default that is the latest, which repeats only while nothing in the cluster changes. So a repeat counts as a no-op. The rule assumes that the repeat has the earlier call's selector and options.
-89. Under `onDelete: block` (#126, #127), a `to` CR that waits in deletion while a live `from` CR names it meets clauses 1 and 2 from `stable` after its deletion started, since its controller may write it as it starts to wait, and may report it not `ready` while it waits. Ordered needs the `from` CR to name the instance in each version up to the release, so a moved reference releases the old object, and a CR being deleted still names it. It needs the controller's seens of the instance and the CR `stable` before the deletion started, since a controller that adds its finalizer in a reconcile cannot hold an object deleted first; only admission control closes that race. It compares resourceVersions as integers, as etcd assigns them, since the observer's watches order no events across kinds. Honest judges an object that waits in deletion by its last version before the deletion, which a controller may still use, so a CR may become `ready` on it only if it was `ready`. Converge and Restore still excuse a CR that is not `ready`.
+89. Under `onDelete: block` (#126, #127), a `to` CR that waits in deletion while a live `from` CR names it meets clauses 1 and 2 from `stable` after its deletion started, since its controller may write it as it starts to wait, and may report it not `ready` while it waits. Ordered needs the `from` CR to name the instance in each version up to the release, so a moved reference releases the old object, and a CR being deleted still names it. It skips a CR that waits for the instance in turn, through CRs being deleted, since such a cycle waits for good unless the controller breaks it, as Kubernetes' garbage collector breaks a cycle of foreground deletions. Clause 2 holds the cycle's CRs to it. Ordered also skips what the trace cannot order: a delete that the observer recorded from a relist, which carries the resourceVersion of the version before it, and a CR with a version that the controller saw and the observer missed. It needs the controller's seens of the instance and the CR `stable` before the deletion started, since a controller that adds its finalizer in a reconcile cannot hold an object deleted first; only admission control closes that race. It compares resourceVersions as integers, as etcd assigns them, since the observer's watches order no events across kinds. Honest judges an object that waits in deletion by its last version before the deletion, which a controller may still use, so a CR may become `ready` on it only if it was `ready`. Converge and Restore still excuse a CR that is not `ready`.

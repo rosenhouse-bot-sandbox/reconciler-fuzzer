@@ -242,8 +242,10 @@ references:
   reacts, and only admission control can refuse a CR that names the object later.
 - Under `block`, the settle condition counts a CR that waits in deletion while a live CR names it
   as settled, from `stable` after its deletion started. One that stays after its last naming CR
-  is gone still fails clause 2. Honest judges a look at an object that waits in deletion by the
-  object's last version before its deletion started.
+  is gone still fails clause 2. CRs being deleted that name each other, directly or through
+  other CRs being deleted, would wait for good, so those names do not count. A CR that names
+  itself is such a cycle. Ordered passes the release that breaks one. Honest judges a look at an
+  object that waits in deletion by the object's last version before its deletion started.
 
 [targets/toy-fleet/secret](targets/toy-fleet/secret/config.yaml) runs toy-fleet with
 `--protect-secrets`, which holds each Secret while a Database names it, and blocks on the Secret
