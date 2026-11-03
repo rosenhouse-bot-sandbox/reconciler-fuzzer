@@ -645,6 +645,19 @@ func TestHonestJudgesAnObjectWaitingInDeletionByItsLookOrItsVersionBefore(t *tes
 	}
 }
 
+func TestHonestJudgesAnObjectCreatedReadyByItsFirstVersion(t *testing.T) {
+	r := fleetRun(1, clusters, databases)
+	r.Spec.References = []trace.Reference{clusterRef(r, true)}
+	r.Begin()
+	r.Create(trace.Harness, clusterA, tt.CR("a", true))
+	r.Act("create", "a", &clusterA)
+	r.Create(trace.Harness, databaseB, databaseOn(false, "a"))
+	r.Act("create", "b", &databaseB)
+	r.Update(ctl, clusterA, tt.Deleting(tt.CR("a", false))).See(ctl, clusterA)
+	r.Update(ctl, databaseB, databaseOn(true, "a"))
+	requireNone(t, honest(t, r))
+}
+
 // Converge counts the same look ready, so it waits for the CR that names
 // the object.
 func TestSettleWaitsForACRWhileWhatItNamesWaitsInDeletionReady(t *testing.T) {
