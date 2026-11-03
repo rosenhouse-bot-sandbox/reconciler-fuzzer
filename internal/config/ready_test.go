@@ -45,7 +45,7 @@ func TestEachExpressionOverTheCRTypesAgainstTheCRDSchema(t *testing.T) {
 
 // The harness reads a CR as JSON, so metadata takes any field and a
 // date-time is a string.
-func TestAReadyTypesTheCRAsTheHarnessReadsIt(t *testing.T) {
+func TestAReadyTakesAnyMetadataFieldAndAFormattedStringAsAString(t *testing.T) {
 	for _, ready := range []string{
 		`self.metadata.generation == self.status.observedGeneration && self.metadata.labels['a'] == 'b'`,
 		`self.status.lastSyncTime != '' && self.status.gadgetReady && self.spec.count > 1`,

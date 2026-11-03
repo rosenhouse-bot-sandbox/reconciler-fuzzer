@@ -368,8 +368,9 @@ names its cause. A run that started leaves its partial trace in `--out`. Common 
 | `... holds a <kind>, not a <kind>` | Point the entry's `sample` at an object of its `kind`. |
 
 `hunt` lists each seed whose run failed in `summary.md`, by the first line
-of its error, and goes on. It prints the whole error to stderr. It
-exits 2 when a seed failed and nothing was found, and 1 on any find.
+of its error. It runs the next seed, unless the run found a program such as
+`launch.binary` missing. It prints the whole error to stderr. It exits 2
+when a seed failed and nothing was found, and 1 on any find.
 
 ## Next steps
 
