@@ -49,6 +49,8 @@ type Config struct {
 	Timeouts   Timeouts
 	Properties []Property
 	References []Reference
+
+	kinds servedKinds
 }
 
 // Values say how the generator draws CRs of one kind. Paths are dotted,
@@ -443,8 +445,7 @@ func load(path string) (*Config, error) {
 	if c.CRDs, err = existing(dir, "crds", d.CRDs); err != nil {
 		return nil, err
 	}
-	kinds, err := readKinds(c.CRDs)
-	if err != nil {
+	if c.kinds, err = readKinds(c.CRDs); err != nil {
 		return nil, err
 	}
 	if c.Fixtures, err = existing(dir, "fixtures", d.Fixtures); err != nil {
@@ -496,16 +497,16 @@ func load(path string) (*Config, error) {
 	if c.Systems, err = systems(d, dir, c.Timeouts.Stable); err != nil {
 		return nil, err
 	}
-	if c.Primaries, err = primaries(d, dir, c.Fakes(), kinds); err != nil {
+	if c.Primaries, err = primaries(d, dir, c.Fakes(), c.kinds); err != nil {
 		return nil, err
 	}
-	if c.Models, err = models(d, c.ListedKinds(), kinds); err != nil {
+	if c.Models, err = models(d, c.ListedKinds(), c.kinds); err != nil {
 		return nil, err
 	}
 	if err := refuseListedFixtures(d.Fixtures, c.Fixtures, c.ListedKinds()); err != nil {
 		return nil, err
 	}
-	if c.References, err = c.references(d.References, kinds); err != nil {
+	if c.References, err = c.references(d.References, c.kinds); err != nil {
 		return nil, err
 	}
 	fixtures := slices.Clone(c.Fixtures)
@@ -602,16 +603,16 @@ func primary(key string, declared declaredEntry, dir string, fakes []System, kin
 	if p.Ready == "" {
 		return Primary{}, fmt.Errorf("%s.ready is required", key)
 	}
-	if p.ready, err = compileOver(p.Ready, served.schema); err != nil {
+	if p.ready, err = CompileReady(p.Ready, served.schema); err != nil {
 		return Primary{}, fmt.Errorf("%s.ready: %w", key, err)
 	}
 	if p.Retain != "" {
-		if p.retain, err = compileOver(p.Retain, served.schema); err != nil {
+		if p.retain, err = CompileReady(p.Retain, served.schema); err != nil {
 			return Primary{}, fmt.Errorf("%s.retain: %w", key, err)
 		}
 	}
 	if p.Halted != "" {
-		if p.halted, err = compileOver(p.Halted, served.schema); err != nil {
+		if p.halted, err = CompileReady(p.Halted, served.schema); err != nil {
 			return Primary{}, fmt.Errorf("%s.halted: %w", key, err)
 		}
 	}
@@ -1016,12 +1017,12 @@ func systems(d declaration, dir string, stable time.Duration) ([]System, error) 
 }
 
 func compileString(expr string) error {
-	_, err := CompileString(expr)
+	_, err := CompileString(expr, nil)
 	return err
 }
 
 func compileBool(expr string) error {
-	_, err := CompileReady(expr)
+	_, err := CompileReady(expr, nil)
 	return err
 }
 
@@ -1069,6 +1070,10 @@ func parseGVK(declared string) (schema.GroupVersionKind, error) {
 	}
 	return gvk, nil
 }
+
+// Schema is the openAPIV3Schema of the CRD under crds that serves kind, or
+// nil.
+func (c *Config) Schema(kind schema.GroupVersionKind) map[string]any { return c.kinds[kind].schema }
 
 // Ready evaluates the Ready of cr's entry over cr, a CR's body. Ready,
 // Retain and Halted take the entry of cr's group and kind. With one entry,

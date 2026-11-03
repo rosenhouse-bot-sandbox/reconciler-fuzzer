@@ -93,16 +93,16 @@ func compilePrimaries(entries []trace.Primary) ([]Primary, error) {
 		p := Primary{Kind: e.Kind, Periodic: e.Periodic}
 		name := groupResource(e.Kind)
 		var err error
-		if p.Ready, err = config.CompileReady(e.Ready); err != nil {
+		if p.Ready, err = config.CompileReady(e.Ready, e.Schema); err != nil {
 			return nil, fmt.Errorf("ready of %s: %w", name, err)
 		}
 		if e.Retain != "" {
-			if p.Retain, err = config.CompileReady(e.Retain); err != nil {
+			if p.Retain, err = config.CompileReady(e.Retain, e.Schema); err != nil {
 				return nil, fmt.Errorf("retain of %s: %w", name, err)
 			}
 		}
 		if e.Halted != "" {
-			if p.Halted, err = config.CompileReady(e.Halted); err != nil {
+			if p.Halted, err = config.CompileReady(e.Halted, e.Schema); err != nil {
 				return nil, fmt.Errorf("halted of %s: %w", name, err)
 			}
 		}
@@ -203,7 +203,7 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 	}
 	s.Stable, s.Budgets = run.Stable, config.Budgets{Reads: run.Reads, Writes: run.Writes}
 	for _, m := range run.Models {
-		ready, err := config.CompileReady(m.Ready)
+		ready, err := config.CompileReady(m.Ready, nil)
 		if err != nil {
 			return Spec{}, fmt.Errorf("the trace's ready of model %s: %w", m.Kind.Kind, err)
 		}
@@ -262,7 +262,7 @@ func configReferences(c *config.Config, run trace.Run) ([]Reference, error) {
 func compileReferences(references []trace.Reference) ([]Reference, error) {
 	var compiled []Reference
 	for i, r := range references {
-		ready, err := config.CompileReady(r.Ready)
+		ready, err := config.CompileReady(r.Ready, r.Schema)
 		if err != nil {
 			return nil, fmt.Errorf("ready of references[%d]: %w", i, err)
 		}
@@ -299,7 +299,7 @@ func (s *Spec) addSystems(systems []trace.System) error {
 		if system.Dependency == nil {
 			continue
 		}
-		ready, err := config.CompileReady(system.Ready)
+		ready, err := config.CompileReady(system.Ready, nil)
 		if err != nil {
 			return fmt.Errorf("ready of %s: %w", system.Name, err)
 		}
@@ -372,7 +372,7 @@ func recordedResource(run trace.Run) func(schema.GroupVersionKind) (string, bool
 // configModels takes each model's ready and dependency from the config, and
 // its resource from the run event's model of the same kind, or else a guess.
 func configModels(models []config.Model, recorded []trace.Model) ([]Model, error) {
-	ready, err := config.CompileReady(config.ReadyConditionCEL)
+	ready, err := config.CompileReady(config.ReadyConditionCEL, nil)
 	if err != nil {
 		return nil, err
 	}

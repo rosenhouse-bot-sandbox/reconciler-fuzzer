@@ -88,7 +88,7 @@ func Compile(owners map[string]string, primaries []trace.Primary, systems []trac
 		Gone:   map[string]func(map[string]any) (bool, error){},
 	}
 	for system, expr := range owners {
-		eval, err := config.CompileString(expr)
+		eval, err := config.CompileString(expr, nil)
 		if err != nil {
 			return Rules{}, fmt.Errorf("owner of system %s: %w", system, err)
 		}
@@ -97,12 +97,12 @@ func Compile(owners map[string]string, primaries []trace.Primary, systems []trac
 	for _, s := range systems {
 		var err error
 		if s.Role != "" {
-			if rules.Roles[s.Name], err = config.CompileString(s.Role); err != nil {
+			if rules.Roles[s.Name], err = config.CompileString(s.Role, nil); err != nil {
 				return Rules{}, fmt.Errorf("role of system %s: %w", s.Name, err)
 			}
 		}
 		if s.Gone != "" {
-			if rules.Gone[s.Name], err = config.CompileReady(s.Gone); err != nil {
+			if rules.Gone[s.Name], err = config.CompileReady(s.Gone, nil); err != nil {
 				return Rules{}, fmt.Errorf("gone of system %s: %w", s.Name, err)
 			}
 		}
@@ -111,11 +111,11 @@ func Compile(owners map[string]string, primaries []trace.Primary, systems []trac
 		for _, o := range p.Owns {
 			rule := OwnsRule{System: cmp.Or(o.System, "kube"), Group: o.Kind.Group, Resource: o.Kind.Resource, CRGroup: p.Kind.Group, CRResource: p.Kind.Resource}
 			var err error
-			if rule.Name, err = config.CompileString(o.Name); err != nil {
+			if rule.Name, err = config.CompileString(o.Name, p.Schema); err != nil {
 				return Rules{}, fmt.Errorf("owns %s name: %w", o.Kind.Kind, err)
 			}
 			if o.Namespace != "" {
-				if rule.Namespace, err = config.CompileString(o.Namespace); err != nil {
+				if rule.Namespace, err = config.CompileString(o.Namespace, p.Schema); err != nil {
 					return Rules{}, fmt.Errorf("owns %s namespace: %w", o.Kind.Kind, err)
 				}
 			}
@@ -144,6 +144,7 @@ func Sources(c *config.Config, resource func(schema.GroupVersionKind) (string, b
 		if err != nil {
 			return nil, nil, fmt.Errorf("primaries kind %s: %w", p.Kind.Kind, err)
 		}
+		entry.Schema = c.Schema(p.Kind)
 		primaries = append(primaries, entry)
 	}
 	return owners, primaries, nil
@@ -209,7 +210,7 @@ func References(c *config.Config, resource func(schema.GroupVersionKind) (string
 	var references []trace.Reference
 	for i, r := range c.References {
 		entry := trace.Reference{System: r.System, Namespaced: r.Namespaced, Name: r.Name, Namespace: r.Namespace,
-			Ready: r.Ready, Required: r.Required, Track: r.Track, Block: r.Block}
+			Ready: r.Ready, Required: r.Required, Track: r.Track, Block: r.Block, Schema: c.Schema(r.To)}
 		var err error
 		if entry.From, err = kind(r.From); err != nil {
 			return nil, fmt.Errorf("references[%d] from kind %s: %w", i, r.From.Kind, err)

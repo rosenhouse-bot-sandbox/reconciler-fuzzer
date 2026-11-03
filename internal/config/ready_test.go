@@ -57,19 +57,26 @@ func TestAReadyTypesTheCRAsTheHarnessReadsIt(t *testing.T) {
 	}
 }
 
-func TestAFieldTheCRLacksLeavesItNotReady(t *testing.T) {
+// decode reads a CR as the harness reads one from a trace.
+func decode(t *testing.T, cr string) map[string]any {
+	t.Helper()
+	var self map[string]any
+	if err := json.Unmarshal([]byte(cr), &self); err != nil {
+		t.Fatal(err)
+	}
+	return self
+}
+
+func TestAReadyOverAFieldTheCRLacksErrs(t *testing.T) {
 	c, err := config.Load(widgetConfig(t, `ready: "self.status.ready == self.spec.count"`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for cr, want := range map[string]bool{`{"spec": {"count": 2}}`: false, `{"spec": {"count": 2}, "status": {"ready": 2}}`: true} {
-		var self map[string]any
-		if err := json.Unmarshal([]byte(cr), &self); err != nil {
-			t.Fatal(err)
-		}
-		if ready, _ := c.Ready(self); ready != want {
-			t.Errorf("Ready(%s) = %v, want %v", cr, ready, want)
-		}
+	if ready, err := c.Ready(decode(t, `{"spec": {"count": 2}}`)); ready || err == nil || !strings.Contains(err.Error(), "no such key: status") {
+		t.Errorf("Ready of a CR without status = %v, %v; want an error that names status", ready, err)
+	}
+	if ready, err := c.Ready(decode(t, `{"spec": {"count": 2}, "status": {"ready": 2}}`)); !ready || err != nil {
+		t.Errorf("Ready of a ready CR = %v, %v; want true", ready, err)
 	}
 }
 
@@ -105,6 +112,8 @@ spec:
                 items: {type: array, items: {type: object, properties: {name: {type: string}}}}
                 selector: {type: object, properties: {app.kubernetes.io/name: {type: string}}}
                 range: {type: object, properties: {"in": {type: integer}}}
+                sizes: {type: array, items: {type: integer}}
+                weights: {type: object, additionalProperties: {type: number}}
 `
 
 // thingConfig writes a config whose primary is a Thing, with the entry's
@@ -129,6 +138,11 @@ func TestAReadyTypesEachSchemaType(t *testing.T) {
 		"self.spec.namespace == 'a' && self.kind == 'Thing' && self.apiVersion == 'toy/v1'":    true,
 		"self.spec.selector['app.kubernetes.io/name'] == 'web' && self.spec.range['in'] > 1":   true,
 		"self.spec.ratio > 1 && self.spec.size < 2.5":                                          true,
+		"self.spec.size + 1 > 2":                                                               true,
+		"self.spec.ratio + 0.5 > 1.0":                                                          true,
+		"self.spec.ratio == 0.5":                                                               true,
+		"self.spec.size == 2.5":                                                                false,
+		"self.spec.ratio == 1":                                                                 false,
 		"self.spec.size == 'a'":                                                                false,
 		"self.spec.ratio == 'a'":                                                               false,
 		"self.spec.on == 1":                                                                    false,
@@ -150,6 +164,30 @@ func TestAReferenceReadyTypesTheToKind(t *testing.T) {
 		_, err := config.Load(thingConfig(t, `ready: "true"`, reference))
 		if (err == nil) != loads || err != nil && !strings.Contains(err.Error(), "references[0].ready: ") {
 			t.Errorf("ready %s: Load = %v, want it to load: %t", ready, err, loads)
+		}
+	}
+}
+
+// A JSON number decodes to a float64. Ready reads it as the API server
+// reads a CR: an int, unless the schema types it number.
+func TestAReadyComputesWithTheTypesTheSchemaGives(t *testing.T) {
+	cr := `{"spec": {"size": 2, "ratio": 1, "name": "abc", "sizes": [1], "weights": {"a": 1}, "extra": {"count": 2}, "port": 80}}`
+	for _, ready := range []string{
+		"self.spec.size + 1 == 3",
+		"self.spec.size % 2 == 0",
+		"self.spec.name.substring(0, self.spec.size) == 'ab'",
+		"self.spec.ratio + 0.5 == 1.5",
+		"self.spec.sizes[0] + 1 == 2",
+		"self.spec.weights['a'] + 0.5 == 1.5",
+		"self.spec.extra.count + 1 == 3",
+		"self.spec.port + 1 == 81",
+	} {
+		c, err := config.Load(thingConfig(t, `ready: "`+ready+`"`, ""))
+		if err != nil {
+			t.Fatalf("ready %s: %v", ready, err)
+		}
+		if ok, err := c.Ready(decode(t, cr)); !ok || err != nil {
+			t.Errorf("ready %s: Ready = %v, %v; want true", ready, ok, err)
 		}
 	}
 }

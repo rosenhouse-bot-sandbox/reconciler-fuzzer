@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"slices"
 
@@ -21,8 +22,6 @@ var ErrNotString = errors.New("the expression did not yield a string")
 // library is what each expression may use beyond self. As in the API
 // server, numbers of different types compare.
 var library = []cel.EnvOption{ext.Strings(), cel.CrossTypeNumericComparisons(true)}
-
-func compile(expr string) (cel.Program, error) { return compileTo(expr, cel.BoolType) }
 
 func compileTo(expr string, want *cel.Type) (cel.Program, error) {
 	env, err := cel.NewEnv(append([]cel.EnvOption{cel.Variable("self", cel.DynType)}, library...)...)
@@ -125,45 +124,88 @@ func selectable(name string) bool {
 	return identifier.MatchString(name) && !slices.Contains([]string{"true", "false", "null", "in"}, name)
 }
 
-func evalBool(program cel.Program, self map[string]any, expr string) (bool, error) {
-	out, _, err := program.Eval(map[string]any{"self": self})
-	if err != nil {
-		return false, fmt.Errorf("evaluating %q: %w", expr, err)
+// typed converts v, decoded from JSON, to the CEL types t declares, as the
+// API server converts a CR: a whole number is an int unless t types it
+// double.
+func typed(v any, t *apiservercel.DeclType) any {
+	switch v := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for name, value := range v {
+			field := apiservercel.DynType
+			if f, found := t.FindField(name); found {
+				field = f.Type
+			} else if t.IsMap() {
+				field = t.ElemType
+			}
+			out[name] = typed(value, field)
+		}
+		return out
+	case []any:
+		item := apiservercel.DynType
+		if t.IsList() {
+			item = t.ElemType
+		}
+		out := make([]any, len(v))
+		for i, value := range v {
+			out[i] = typed(value, item)
+		}
+		return out
+	case float64:
+		if t != apiservercel.DoubleType && v == math.Trunc(v) && v >= math.MinInt64 && v < math.MaxInt64 {
+			return int64(v)
+		}
+	case int64:
+		if t == apiservercel.DoubleType {
+			return float64(v)
+		}
+	case int:
+		if t == apiservercel.DoubleType {
+			return float64(v)
+		}
 	}
-	value, isBool := out.Value().(bool)
-	if !isBool {
-		return false, fmt.Errorf("evaluating %q: %w: it yielded %T", expr, ErrNotBool, out.Value())
-	}
-	return value, nil
+	return v
 }
 
-// compileOver compiles a ready expression over an object that root, an
-// openAPIV3Schema, describes. It type-checks the expression against root.
-func compileOver(expr string, root map[string]any) (func(self map[string]any) (bool, error), error) {
-	if err := typeCheck(expr, root, cel.BoolType); err != nil {
-		return nil, err
+// compileOver compiles expr, CEL over self that yields want, with self
+// typed by root as typeCheck types it. It returns that type.
+func compileOver(expr string, root map[string]any, want *cel.Type) (cel.Program, *apiservercel.DeclType, error) {
+	if err := typeCheck(expr, root, want); err != nil {
+		return nil, nil, err
 	}
-	return CompileReady(expr)
+	program, err := compileTo(expr, want)
+	return program, declType(root, true), err
 }
 
-// CompileReady compiles a ready expression as Load compiles an entry's ready.
-func CompileReady(expr string) (func(self map[string]any) (bool, error), error) {
-	program, err := compile(expr)
+// CompileReady compiles expr, CEL over self that yields a bool, with self
+// typed by root, as typeCheck types it. The result reads self through typed.
+func CompileReady(expr string, root map[string]any) (func(self map[string]any) (bool, error), error) {
+	program, self, err := compileOver(expr, root, cel.BoolType)
 	if err != nil {
 		return nil, err
 	}
-	return func(self map[string]any) (bool, error) { return evalBool(program, self, expr) }, nil
+	return func(obj map[string]any) (bool, error) {
+		out, _, err := program.Eval(map[string]any{"self": typed(obj, self)})
+		if err != nil {
+			return false, fmt.Errorf("evaluating %q: %w", expr, err)
+		}
+		value, isBool := out.Value().(bool)
+		if !isBool {
+			return false, fmt.Errorf("evaluating %q: %w: it yielded %T", expr, ErrNotBool, out.Value())
+		}
+		return value, nil
+	}, nil
 }
 
-// CompileString compiles an expression that yields a string, such as an
-// owns name or a systems owner.
-func CompileString(expr string) (func(self map[string]any) (string, error), error) {
-	program, err := compileTo(expr, cel.StringType)
+// CompileString compiles expr, CEL over self that yields a string, such as
+// an owns name or a systems owner, as CompileReady compiles a bool.
+func CompileString(expr string, root map[string]any) (func(self map[string]any) (string, error), error) {
+	program, self, err := compileOver(expr, root, cel.StringType)
 	if err != nil {
 		return nil, err
 	}
-	return func(self map[string]any) (string, error) {
-		out, _, err := program.Eval(map[string]any{"self": self})
+	return func(obj map[string]any) (string, error) {
+		out, _, err := program.Eval(map[string]any{"self": typed(obj, self)})
 		if err != nil {
 			return "", fmt.Errorf("evaluating %q: %w", expr, err)
 		}

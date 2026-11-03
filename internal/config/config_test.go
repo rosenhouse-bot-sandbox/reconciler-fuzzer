@@ -471,7 +471,7 @@ func TestModelsRefuseMistakes(t *testing.T) {
 }
 
 func TestModelReady(t *testing.T) {
-	ready, err := config.CompileReady(config.ReadyConditionCEL)
+	ready, err := config.CompileReady(config.ReadyConditionCEL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -498,19 +498,19 @@ func TestModelReady(t *testing.T) {
 }
 
 func TestCompileString(t *testing.T) {
-	name, err := config.CompileString("self.metadata.name + '-0'")
+	name, err := config.CompileString("self.metadata.name + '-0'", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got, err := name(map[string]any{"metadata": map[string]any{"name": "a"}}); got != "a-0" || err != nil {
 		t.Errorf("name = %q, %v", got, err)
 	}
-	if got, err := config.CompileString("self.x.lowerAscii()"); err != nil {
+	if got, err := config.CompileString("self.x.lowerAscii()", nil); err != nil {
 		t.Errorf("string extensions: %v", err)
 	} else if s, _ := got(map[string]any{"x": "AB"}); s != "ab" {
 		t.Errorf("lowerAscii = %q", s)
 	}
-	dyn, err := config.CompileString("self.x")
+	dyn, err := config.CompileString("self.x", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -521,7 +521,7 @@ func TestCompileString(t *testing.T) {
 		t.Error("a missing field is no error")
 	}
 	for _, expr := range []string{"1 + 2", "true", "self.(", "other"} {
-		if _, err := config.CompileString(expr); err == nil {
+		if _, err := config.CompileString(expr, nil); err == nil {
 			t.Errorf("%s compiles", expr)
 		}
 	}

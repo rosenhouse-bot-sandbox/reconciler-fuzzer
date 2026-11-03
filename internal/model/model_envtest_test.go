@@ -213,7 +213,7 @@ func lastVersion(recorded *events, ref trace.Ref) trace.Version {
 func TestAStageMakesAGadgetReadyThenStuckThenRecovered(t *testing.T) {
 	_, s, recorded, ref := startStage(t, config.Model{Kind: gadgetKind, Stage: config.ReadyCondition, After: 100 * time.Millisecond,
 		Status: map[string]any{"phase": "Running"}, StuckStatus: map[string]any{"phase": "Pending"}})
-	ready, err := config.CompileReady(config.ReadyConditionCEL)
+	ready, err := config.CompileReady(config.ReadyConditionCEL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
