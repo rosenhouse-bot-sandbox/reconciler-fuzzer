@@ -160,9 +160,9 @@ Fill each key from the project:
   `distinct` names fields that must differ between CRs, such as a Secret's name. `mutate`
   names the fields updates change. `values.fixtures` names fixture strings to change.
   `values.deletable` lists `fixtures` files whose objects a plan's last step may delete. List a
-  file only if the controller holds the deletion of its objects until no CR needs them, and
-  keeps those CRs ready meanwhile. The files may hold no Namespace and no object of a kind that
-  a `references` entry names as `to`.
+  file only if the controller keeps every CR ready while such an object is being deleted and
+  once it is gone. The files may hold no Namespace and no object of a kind that a `references`
+  entry names as `to`.
 - `fixtures`: objects the controller reads and does not create, of kinds the config does not
   list. Drop `metadata.namespace` unless the controller reads the object in another namespace;
   the harness creates that namespace.
@@ -358,8 +358,8 @@ controller:
 | Honest, `reported ready with no dependency` | The CR can be ready without that kind, or does not own it. | Set `required: false` in the first case. In the second, add `owns` or `owner`, or drop `dependency`. |
 | Honest, on an object that a `references` entry names | The CR may be ready while the object is missing or, by `ready`, not ready. | Set the entry's `required: false`, or fix its `ready`. |
 | Honest, `reported ready before seeing its dependency ready`, on a named object whose spec just changed | The default `ready` waits for the object's `observedGeneration`, but the controller checks only its condition or phase. | Set the entry's `ready` to the controller's check. |
-| Converge, clause 1, at a last step that deletes a `values.deletable` fixture, also in a run of the plan without that step's restart or kill | By design, the controller marks a CR not ready while the fixture is being deleted or once it is gone. | Drop the file from `values.deletable`. |
-| Converge, clause 1, at a last step that deletes a `values.deletable` fixture, but not in a run of the plan without that step's restart or kill | Nothing: the controller may drop its hold on the fixture when it stops. A restart or kill must not change the outcome. | Report the bug (step 11). |
+| Converge, clause 1, at a last step that deletes a `values.deletable` fixture, also in a run of the plan without that step's restarts and kills | By design, the controller marks a CR not ready while the fixture is being deleted or once it is gone. | Drop the file from `values.deletable`. |
+| Converge, clause 1, at a last step that deletes a `values.deletable` fixture, while a few runs of the plan without that step's restarts and kills pass | Nothing: a restart or kill must not change the outcome. | Report the bug (step 11). |
 | Converge, clause 1, `the controller last saw … ready` | The entry's `ready` accepts an object that the controller treats as not ready. | Fix the entry's `ready`. |
 | Converge, clause 1, `the controller last saw … missing` or `not ready`, on an object that is ready now | Nothing, if the controller does not watch the named kind: it missed the change. | Report the bug (step 11). The controller should watch that kind and requeue the CRs that name the object. |
 | Clean | The controller keeps resources by design. | Set the entry's `retain`. |

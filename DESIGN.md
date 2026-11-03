@@ -485,8 +485,8 @@ writes `missing`, a name no object has. `namespace` values stay as drawn.
 kube fixture of a `to` kind other than a Namespace, and `createFixture` makes
 it again. Plans of a config without references are as before.
 With `values.deletable`, half the plans end with a step that deletes an object
-of a file the key lists. Half of these steps restart or kill late in their fault
-period. A CR created or updated after the delete may rightly never be ready.
+of a file the key lists, since a CR created or updated later may rightly never
+be ready. Half of these steps restart or kill late in their fault period.
 
 **Hunt.** `hunt.Hunt` runs each seed, keeps runs with a new signature, replays
 each `--replays` times (5) and shrinks it (`shrink.go`), trying at most

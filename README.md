@@ -134,10 +134,9 @@ timeouts: {settle: 30s, stable: 3s}
 - `values.deletable` lists `fixtures` files whose objects plans may delete. Half the generated
   plans then end with a step that deletes one such object, and maybe restarts or kills the
   controller. Converge fails a CR that is not ready after that step. So list a file only if the
-  controller holds the deletion of such an object until no CR needs it, and keeps those CRs
-  ready meanwhile. The files may hold no Namespace. They may hold no object of a kind that a
-  `references` entry names in `to` ([References](#references)), since plans already delete
-  such objects.
+  controller keeps every CR ready while such an object is being deleted and once it is gone.
+  The files may hold no Namespace. They may hold no object of a kind that a `references` entry
+  names in `to` ([References](#references)), since plans already delete such objects.
 
 ### Several kinds
 

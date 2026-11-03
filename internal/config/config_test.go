@@ -322,7 +322,7 @@ func TestValues(t *testing.T) {
 	if _, err := config.Load(writeConfig(t, minimal(t)+"values: {fixtures: {other.yaml: [data.x]}}\n")); err == nil || !strings.Contains(err.Error(), "other.yaml") {
 		t.Errorf("a fixture the config does not list: err = %v", err)
 	}
-	if _, err := config.Load(writeConfig(t, minimal(t)+"values: {deletable: [other.yaml]}\n")); err == nil || !strings.Contains(err.Error(), "values.deletable other.yaml") {
+	if _, err := config.Load(writeConfig(t, minimal(t)+"values: {deletable: [other.yaml]}\n")); err == nil || !strings.Contains(err.Error(), "values.deletable other.yaml: the top-level fixtures key does not list this file") {
 		t.Errorf("a deletable file the config does not list: err = %v", err)
 	}
 }
