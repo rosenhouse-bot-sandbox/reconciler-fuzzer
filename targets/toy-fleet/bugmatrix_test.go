@@ -25,6 +25,7 @@ var bugs = map[int]string{
 	123: "Readies a Database on a Cluster that is not Ready.",
 	124: "Readies a Database without checking its Secret.",
 	125: "Keeps a Ready Database ready after its Secret is deleted.",
+	135: "Ends each Volume's name with a suffix that each process picks, and deletes only Volumes with its own suffix, so a restart makes a second set.",
 	140: "Under version 2, keeps the version 1 finalizer, so a deleted Cluster is never removed.",
 	141: "Under version 2, names its Volumes `<cluster>-data-<i>` and sees only those, so it makes new ones and leaves version 1's.",
 	142: "Under version 2, leaves a Cluster in the version 1 phase Provisioning.",

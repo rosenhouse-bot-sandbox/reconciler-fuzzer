@@ -56,6 +56,16 @@ var gate = []gateRow{
 	{plan: "secret-recreate", bug: 125, finding: "Honest: stayed ready after seeing its dependency not ready", step: 1, detail: "slot b: secrets "},
 	// The restarted controller's watch shows the Secret missing.
 	{plan: "secret-deleted-while-down", bug: 125, finding: "Honest: stayed ready after seeing its dependency not ready", step: 1, detail: "slot b: secrets "},
+	// The restart comes 500 ms after the create, long after the first
+	// process makes its Volumes. The second makes its own, and the update
+	// deletes only one of them.
+	{plan: "b135", bug: 135, finding: "Unique: duplicate resources", step: 0, detail: `role "cluster-vol-1": `},
+	{plan: "b135", bug: 135, finding: "Unique: duplicate resources", step: 1, detail: `role "cluster-vol-0": `},
+	// The restart has a step of its own, which changes no CR. Restore flags
+	// the second process's Volumes whatever their role, so only the Unique
+	// row below needs the config's role.
+	{plan: "b135-restart", bug: 135, finding: "Restore: replaced resources", step: 1, detail: "cluster-vol-0-"},
+	{plan: "b135-restart", bug: 135, finding: "Unique: duplicate resources", step: 1, detail: `role "cluster-vol-0": `},
 	// Each plan under upgrade/ restarts the controller as version 2.
 	{plan: "delete", bug: 140, finding: "Converge: did not settle (clause 2)", step: 2, detail: "cluster is being deleted", config: upgradeConfig},
 	{plan: "update", bug: 141, finding: "Restore: replaced resources", step: 1, detail: "/cluster-data-0 (rule 1, slot a)", config: upgradeConfig},
