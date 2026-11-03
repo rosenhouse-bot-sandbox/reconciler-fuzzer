@@ -715,21 +715,25 @@ func Markdown(ix *trace.Index, r Report, replay string) string {
 	return b.String()
 }
 
-// actions describes the harness's actions in step, such as "create slot a"
-// and "restart (upgrade)".
+// actions describes the harness's actions in step, such as "create slot a",
+// "damage configmaps ns/widget-0" and "restart (upgrade)". An object action
+// names its object, and any other action its slot.
 func actions(ix *trace.Index, step int) []string {
 	var done []string
 	for _, e := range ix.Actions(step) {
 		a := e.Action
 		what := a.Do
 		switch {
+		case slices.Contains(objectActions, a.Do) && a.Ref != nil:
+			what += " " + describe(*a.Ref)
 		case a.Slot != "":
 			what += " slot " + a.Slot
-		case a.Ref != nil:
-			what += " " + describe(*a.Ref)
 		}
 		if a.Upgrade {
 			what += " (upgrade)"
+		}
+		if a.Error != "" {
+			what += " (failed)"
 		}
 		done = append(done, what)
 	}

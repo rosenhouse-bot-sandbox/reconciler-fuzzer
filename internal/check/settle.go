@@ -164,12 +164,15 @@ func lapse(ix *trace.Index, step trace.StepSpan, s Spec) time.Duration {
 	return step.EndFaults + poll*3/2
 }
 
-// changes are the step's damage, changeFixture and createFixture actions
-// that changed an object without error.
+// objectActions are the actions that change an object other than a slot's CR.
+var objectActions = []string{"damage", "changeFixture", "createFixture"}
+
+// changes are the step's object actions that changed an object without
+// error.
 func changes(ix *trace.Index, step int) []trace.Event {
 	var changed []trace.Event
 	for _, e := range ix.Actions(step) {
-		if slices.Contains([]string{"damage", "changeFixture", "createFixture"}, e.Action.Do) && e.Action.Ref != nil && e.Action.Error == "" {
+		if slices.Contains(objectActions, e.Action.Do) && e.Action.Ref != nil && e.Action.Error == "" {
 			changed = append(changed, e)
 		}
 	}

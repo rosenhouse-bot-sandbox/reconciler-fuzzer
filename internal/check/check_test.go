@@ -535,8 +535,9 @@ func TestMarkdown(t *testing.T) {
 	run := tt.Run("toy", "widgets")
 	run.Run.PlanSteps = 2
 	ix := b.Add(run).
-		At(1*s).Add(tt.SlotAction(1, "create", "a", widgetA), tt.Action(1, "damage", cm)).
-		At(2*s).Add(trace.Event{Action: &trace.Action{Step: 1, Index: 2, Do: "restart", Upgrade: true}}, trace.Event{Action: &trace.Action{Step: 1, Index: 3, Do: "kill"}}).
+		At(1*s).Add(tt.SlotAction(1, "create", "a", widgetA), tt.SlotAction(1, "damage", "a", cm)).
+		At(2*s).Add(trace.Event{Action: &trace.Action{Step: 1, Index: 2, Do: "restart", Upgrade: true}}, trace.Event{Action: &trace.Action{Step: 1, Index: 3, Do: "kill"}},
+			trace.Event{Action: &trace.Action{Step: 1, Index: 4, Do: "changeFixture", Error: "no instance matches"}}).
 		Index()
 	const replay = "reconciler-fuzzer run --config c.yaml --plan out/plan.json --out out/replay"
 	if got := check.Markdown(ix, check.Report{}, replay); got != "No findings.\n" {
@@ -552,7 +553,7 @@ func TestMarkdown(t *testing.T) {
 		Notes: []string{"Step 0 is not judged."},
 	}, replay)
 	for _, want := range []string{"# Findings",
-		"## Converge: did not settle\n\nStep 1, at 1.5s.\nActions: create slot a, damage configmaps ns/c, restart (upgrade), kill.\nLabels: backoff-bound.\n",
+		"## Converge: did not settle\n\nStep 1, at 1.5s.\nActions: create slot a, damage configmaps ns/c, restart (upgrade), kill, changeFixture (failed).\nLabels: backoff-bound.\n",
 		"ns/a is not ready", "Step 2 (delete all), at 16.907s.\n\n## Crash: the controller exited 1 time\n\nStep 3 (restart)",
 		"## Crash: the controller exited 2 times\n\nBefore step 0, at 0s.", "# Notes\n\n- Step 0 is not judged.\n"} {
 		if !strings.Contains(got, want) {
