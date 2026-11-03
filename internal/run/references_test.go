@@ -98,8 +98,9 @@ func TestExecuteNotesACreateFixtureWhoseChangeFixtureDeletedNothing(t *testing.T
 		if got := f.cluster.all(); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: cluster calls = %q, want %q", name, got, c.want)
 		}
-		if a, _ := findAction(f.rec.Events(), 1, 0); a.Action == nil || a.Action.Error == "" || a.Action.Ref != nil {
-			t.Errorf("%s: createFixture action = %+v, want an error and no ref", name, a.Action)
+		const want = "no instance matches system=kube resource=secrets name=pw: no changeFixture deleted it"
+		if a, _ := findAction(f.rec.Events(), 1, 0); a.Action == nil || a.Action.Error != want || a.Action.Ref != nil {
+			t.Errorf("%s: createFixture action = %+v, want the error %q and no ref", name, a.Action, want)
 		}
 	}
 }

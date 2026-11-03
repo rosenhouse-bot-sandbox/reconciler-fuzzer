@@ -307,11 +307,12 @@ models:
   keeps on each Gadget only while the fault lasts. Each ends with the fault period. A create
   that waits until a deleted CR no longer exists ends them once `period` has passed. A plan step
   writes one as
-  `{"match": {"group": "example.com", "resource": "gadgets"}, "stuck": true}`. A generated
-  model-fault step that deletes a CR also restarts or kills the controller, unless the step
-  already holds 4 actions. The plan schedules the restart or kill 300 ms or more after the
-  delete, within the period. `slowDelete` may then still hold the deletion, and a new process
-  may have to finish it.
+  `{"match": {"group": "example.com", "resource": "gadgets"}, "stuck": true}`, and needs a
+  `period` to keep it on after the step's last action returns. A generated model-fault step
+  that deletes a CR also restarts or kills the controller, unless the step already holds 4
+  actions. The plan schedules the restart or kill 300 ms or more after the delete, within the
+  period. `slowDelete` may then still hold the deletion, and a new process may have to finish
+  it.
 - `finalizer: {name: example.com/cleanup, after: 500ms}` plays a controller, such as a storage
   controller, that holds each Gadget's deletion with its own finalizer. The model adds the
   finalizer to each live Gadget it hears, and removes it 500 ms after it hears the deletion.
@@ -365,9 +366,12 @@ collections:
   `DELETE /<c>/<id>`. A new resource is `pending` for `createDelay`, then `ready`. `DELETE` sets
   `deleting`, and the resource leaves after `deleteDelay`. A repeated `unique` field answers 409,
   and an unknown id 404.
-- A plan faults the fake with `"system": "cloud"`: any request fault, such as
-  `{"system": "cloud", "match": {"verb": "create", "resource": "buckets"}, "nth": 1, "dropResponse": true}`,
-  and `stuck` or `slowDelete`. `damage` takes `"target": {"system": "cloud"}`.
+- A plan faults the fake with `"system": "cloud"`: any request fault, and `stuck` or
+  `slowDelete`. The step
+  `{"period": "2s", "faults": [{"system": "cloud", "match": {"verb": "create", "resource": "buckets"}, "nth": 1, "dropResponse": true}], "actions": [{"do": "create", "slot": "a"}]}`
+  drops the response to the first bucket create. Without its `period`, the fault would end as
+  the CR's create returns, usually before the controller creates the bucket. `damage` takes
+  `"target": {"system": "cloud"}`.
 - An entry's `halted` is CEL over its CR. It counts a CR as done after a request of unknown
   outcome, for a controller that stops on purpose. While such a CR is not ready, Restore lets its
   damaged resources stay gone. [targets/toy-bucket/halted](targets/toy-bucket/halted/config.yaml)
@@ -548,8 +552,8 @@ kind must be one the config does not list. `changeFixture` without a `patch` del
 - A CRD under both `crds:` and `fixtures:` fails the run with `already exists`.
 - A listed kind's CRD must stay in `crds:`. As a fixture alone, the run fails with `no matches for
   kind`, and generation with `the CRDs describe no <kind>`.
-- No target matches a CRD that `crds:` or a restart installed. Such an action only gets the note
-  `no instance matches`.
+- No target matches a CRD that `crds:` or a restart installed. A `changeFixture` of one only gets
+  a `no instance matches` note that says so.
 
 [targets/toy-fleet/uninstall](targets/toy-fleet/uninstall/config.yaml) makes the Database CRD a
 fixture this way.

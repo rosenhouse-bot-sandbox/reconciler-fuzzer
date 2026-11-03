@@ -54,7 +54,11 @@ that picked no request, a step the trace ended too early to judge, a CR
 still being deleted that a `stop` did not wait for, an unmapped request, or
 a `role` that failed on every resource of a kind. Notes do not fail a run.
 A fault that picked no request tested nothing, so a plan with such notes
-may need a different fault.
+may need a different fault. A step without a `period` ends its faults by
+the time its last action returns. Such a fault's note says how long the
+fault lasted, unless the fault ended while the controller was down, or it
+is a `holdWatch` of a kind that the controller does not watch later in
+that step.
 
 `the slot's name is still taken after the create waited 37s` means that
 a create gave up waiting until its slot's previous CR no longer existed.
@@ -66,11 +70,15 @@ recorded a live object with that name, the rest of the note names its
 The run then skips to the `delete all` and `restart` steps that the runner
 appends.
 
-`Step 1, action 0 (changeFixture) failed ...: no instance matches` means
-the action's target matched no live object. A `damage` matches only
-objects the controller created, and a `changeFixture` only objects the
-harness created, such as fixtures. Neither matches a CRD that `crds:` or a
-restart installed.
+`Step 1, action 0 (changeFixture) failed ...: no instance matches
+resource=secrets name=token: the harness's live secrets are rf-da5dd4dd/pw`
+means that the action's target matched no live object. The note names the
+target. It then says what the action's slot holds, or names up to five
+live objects of the target's kind, in the slot if one is set. A `damage`
+matches only objects the controller created, and a `changeFixture` only
+objects the harness created, such as fixtures. Neither matches a CRD that
+`crds:` or a restart installed. The note of a `changeFixture` that targets
+CRDs says so.
 
 `cloud: unmapped request POST /v2/buckets/b-1/acl` means the system's API
 map could not place a controller request on a resource. No check judges

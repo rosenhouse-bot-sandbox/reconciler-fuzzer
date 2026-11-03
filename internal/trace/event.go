@@ -208,12 +208,14 @@ const (
 	Confirmed   PhaseName = "confirmed"
 )
 
-// Phase records that step Step entered phase Name. An EndFaults phase
+// Phase records that step Step entered phase Name. A FaultPeriod phase
+// carries the step's period, which an older trace lacks. An EndFaults phase
 // carries the settle deadline, as time since the run started.
 type Phase struct {
-	Step     int           `json:"step"`
-	Name     PhaseName     `json:"name"`
-	Deadline time.Duration `json:"deadline,omitempty"`
+	Step     int            `json:"step"`
+	Name     PhaseName      `json:"name"`
+	Period   *time.Duration `json:"period,omitempty"`
+	Deadline time.Duration  `json:"deadline,omitempty"`
 	// Backoff is the part of Deadline that allows for the controller's
 	// backoff: the time from the step's start until its faults ended, at
 	// most backoffCap. BackoffBound says that backoffCap was the smaller.
