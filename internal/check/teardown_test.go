@@ -135,7 +135,7 @@ func TestJudgeRunsTeardown(t *testing.T) {
 }
 
 // A fake's gone CEL may never accept what its delete left.
-func TestTeardownPassesADeleteAnsweredBeforeTheRelease(t *testing.T) {
+func TestTeardownPassesAFakesDeleteAnsweredBeforeTheRelease(t *testing.T) {
 	for name, status := range map[string]int{"accepted": 200, "of a child already gone": 404} {
 		t.Run(name, func(t *testing.T) {
 			r, uid := deletingA(ruleThree)
@@ -418,14 +418,14 @@ func TestTeardownFailsAReleaseOfAFinalizerThatTheSampleCarried(t *testing.T) {
 	requireFinding(t, teardown(t, r), "Teardown", 1, releasedFirst, ruleTwo.kind, ruleTwo.detail)
 }
 
-// Once the controller adds a finalizer, one that the harness added is not
-// its own.
-func TestTeardownFailsAReleaseThatLeavesTheSamplesFinalizer(t *testing.T) {
+// A finalizer that the harness added may be the controller's own, so a
+// write that keeps one releases nothing.
+func TestTeardownPassesAWriteThatKeepsTheSamplesFinalizer(t *testing.T) {
 	r, uid := sampled(protect)
 	r.Add(write(ctl, "update", widgetA, "f1", protect, own), tt.Version(widgetA, uid, "f1", objectBody("a", false, protect, own)))
 	deleteA(r, uid, protect, own)
 	r.Add(write(ctl, "update", widgetA, "d2", protect), tt.Version(widgetA, uid, "d2", objectBody("a", true, protect)))
-	requireFinding(t, teardown(t, r), "Teardown", 1, releasedFirst, ruleTwo.kind, ruleTwo.detail)
+	requireNone(t, teardown(t, r))
 }
 
 // A write that removes the controller's finalizer from a live CR does not

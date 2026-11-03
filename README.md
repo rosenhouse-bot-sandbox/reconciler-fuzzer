@@ -316,9 +316,10 @@ write that removes the controller's last finalizer from a CR being deleted while
 not yet being deleted: `released a CR before deleting its resources`. It finds the CR's children
 through `owns`, `owner` and ownerReferences. A child with a `deletionTimestamp`, a child whose
 delete has answered, and a child in a namespace being deleted are being deleted. The controller
-need not wait until the child is gone. The garbage collector deletes no fake service's object.
-The CR's `retain` allows its children to stay. To judge the order of children that the garbage
-collector deletes, write a [property](#properties).
+need not wait until the child is gone. But a kube child's delete counts only if the trace shows the
+child deleting or gone at some time, so a dry run does not count. The garbage collector deletes no
+fake service's object. The CR's `retain` allows its children to stay. To judge the order of children
+that the garbage collector deletes, write a [property](#properties).
 
 ### Roles
 

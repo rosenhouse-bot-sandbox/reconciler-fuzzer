@@ -56,29 +56,12 @@ func releasedBy(ix *trace.Index, e trace.Event, s Spec) (trace.Version, bool) {
 		return trace.Version{}, false
 	}
 	base := replaced(ix, e)
-	own := ownFinalizers(ix, base)
+	own := slices.DeleteFunc(finalizers(base), func(f string) bool {
+		_, foreign := adder(ix, base, f)
+		return foreign
+	})
 	kept := slices.ContainsFunc(own, func(f string) bool { return slices.Contains(*e.Call.ResultFinalizers, f) })
 	return base, deleting(base.Body) && len(own) > 0 && !kept
-}
-
-// ownFinalizers are the finalizers of v that the controller may own. Those
-// that the harness added count only if the controller added none, as when a
-// sample carries the controller's own.
-func ownFinalizers(ix *trace.Index, v trace.Version) []string {
-	var own, harness []string
-	for _, f := range finalizers(v) {
-		switch by, foreign := adder(ix, v, f); {
-		case foreign:
-		case by == trace.Harness:
-			harness = append(harness, f)
-		default:
-			own = append(own, f)
-		}
-	}
-	if len(own) == 0 {
-		return harness
-	}
-	return own
 }
 
 // beingDeleted reports whether, by t, i or the kube namespace that holds it
