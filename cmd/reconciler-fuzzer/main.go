@@ -6,8 +6,8 @@
 // given.
 //
 // Each command exits 1 with findings and 2 on a usage or harness error. A
-// hunt with findings exits 1 even when a seed failed or an interrupt cut it
-// short.
+// hunt or shrink with findings exits 1 even when a seed failed or an
+// interrupt cut it short.
 package main
 
 import (
@@ -197,10 +197,15 @@ func cli(args []string, stdout, stderr io.Writer) int {
 			}
 			found, err := hunt.ShrinkPlan(ctx, hunt.ShrinkOptions{ConfigPath: *configPath, PlanPath: *planPath, Out: *out,
 				Replays: int(replays), Candidates: int(candidates), Run: runInto, Log: stderr})
-			if err != nil {
+			if err != nil && len(found) == 0 {
+				// ShrinkPlan wrote no summary.md, and --out may hold a stale one.
 				return 0, harnessError{err}
 			}
 			printSummary(stdout, *out)
+			// A find outranks a cut-short shrink.
+			if err != nil {
+				fmt.Fprintln(stderr, err)
+			}
 			return len(found), nil
 		}
 	case "judge":

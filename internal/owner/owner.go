@@ -31,8 +31,9 @@ type Instance struct {
 	// Creator is the caller of the create, or the 201 apply, whose response
 	// carried UID, or trace.Cluster.
 	Creator trace.Caller
-	// Role is its system's role CEL over its first body. Without one, a
-	// kube instance's is its generateName prefix, or else its name.
+	// Role is its system's role CEL over its first body. Without one, or
+	// where it fails or yields "", a kube instance's is its generateName
+	// prefix, or else its name.
 	Role string
 }
 
@@ -63,7 +64,8 @@ type Rules struct {
 	Owners map[string]func(self map[string]any) (string, error)
 	// Owns are rule 3.
 	Owns []OwnsRule
-	// Roles and Gone map a fake's name to its role and gone CEL.
+	// Roles maps a system's name to its role CEL, and Gone a fake's name
+	// to its gone CEL.
 	Roles map[string]func(self map[string]any) (string, error)
 	Gone  map[string]func(self map[string]any) (bool, error)
 }
@@ -178,9 +180,15 @@ func source(p config.Primary, resource func(schema.GroupVersionKind) (string, bo
 	return entry, nil
 }
 
-// Systems returns c's fakes for the run event, with their API map's Ignore.
+// Systems returns c's systems for the run event: kube when it has a role,
+// and each fake with its API map's Ignore.
 func Systems(c *config.Config) []trace.System {
 	var systems []trace.System
+	for _, k := range c.Systems {
+		if k.Name == "kube" && k.Role != "" {
+			systems = append(systems, trace.System{Name: k.Name, Role: k.Role})
+		}
+	}
 	for _, f := range c.Fakes() {
 		s := trace.System{Name: f.Name, API: f.API, Role: f.Role, Ready: f.Ready, Gone: f.Gone, Poll: f.Poll, Ignore: f.Map().Ignore}
 		if f.Dependency != nil {
@@ -189,6 +197,31 @@ func Systems(c *config.Config) []trace.System {
 		systems = append(systems, s)
 	}
 	return systems
+}
+
+// References returns c's references for the run event. resource maps a
+// kube kind to its resource.
+func References(c *config.Config, resource func(schema.GroupVersionKind) (string, bool, error)) ([]trace.Reference, error) {
+	kind := func(gvk schema.GroupVersionKind) (trace.Kind, error) {
+		r, _, err := resource(gvk)
+		return trace.Kind{Group: gvk.Group, Version: gvk.Version, Kind: gvk.Kind, Resource: r}, err
+	}
+	var references []trace.Reference
+	for i, r := range c.References {
+		entry := trace.Reference{System: r.System, Namespaced: r.Namespaced, Name: r.Name, Namespace: r.Namespace,
+			Ready: r.Ready, Required: r.Required, Track: r.Track}
+		var err error
+		if entry.From, err = kind(r.From); err != nil {
+			return nil, fmt.Errorf("references[%d] from kind %s: %w", i, r.From.Kind, err)
+		}
+		if r.System != "" {
+			entry.To = trace.Kind{Resource: r.Collection}
+		} else if entry.To, err = kind(r.To); err != nil {
+			return nil, fmt.Errorf("references[%d] to kind %s: %w", i, r.To.Kind, err)
+		}
+		references = append(references, entry)
+	}
+	return references, nil
 }
 
 // Properties returns c's properties for the run event.
@@ -230,6 +263,8 @@ type World struct {
 	versions  map[string][]trace.Event
 	slots     map[string]string
 	decoded   map[decodedKey]map[string]any
+	// roleErrors maps an instance's UID to its role CEL's error.
+	roleErrors map[string]error
 }
 
 type decodedKey struct {
@@ -239,7 +274,8 @@ type decodedKey struct {
 
 // New indexes every instance in ix.
 func New(ix *trace.Index, rules Rules) *World {
-	w := &World{rules: rules, byUID: map[string]int{}, versions: map[string][]trace.Event{}, slots: map[string]string{}, decoded: map[decodedKey]map[string]any{}}
+	w := &World{rules: rules, byUID: map[string]int{}, versions: map[string][]trace.Event{}, slots: map[string]string{}, decoded: map[decodedKey]map[string]any{},
+		roleErrors: map[string]error{}}
 	if run, ok := ix.Run(); ok {
 		for _, p := range run.Primaries {
 			w.listed = append(w.listed, p.Kind)
@@ -266,7 +302,10 @@ func New(ix *trace.Index, rules Rules) *World {
 		if c, found := creates[i.UID]; found && names(c, i.Ref) {
 			i.Creator = c.Caller
 		}
-		i.Role = w.role(w.versions[i.UID][0].Version)
+		var err error
+		if i.Role, err = w.role(w.versions[i.UID][0].Version); err != nil {
+			w.roleErrors[i.UID] = err
+		}
 	}
 	for _, e := range actions {
 		if i, found := w.Latest(*e.Action.Ref, e.At); found {
@@ -315,17 +354,21 @@ func names(c trace.Call, ref trace.Ref) bool {
 	return c.Ref == ref && c.ResultName == ref.Name
 }
 
-// role is the system's role CEL over v, or else, on kube, its generateName
-// or name.
-func (w *World) role(v *trace.Version) string {
+// role is the system's role CEL over v, and the CEL's error. Without one, or
+// where it fails or yields "", a kube object's role is its generateName or
+// name, and a fake's is empty.
+func (w *World) role(v *trace.Version) (string, error) {
+	var err error
 	if eval := w.rules.Roles[v.Ref.System]; eval != nil {
 		var self map[string]any
 		_ = json.Unmarshal(v.Body, &self)
-		role, _ := eval(self) // A role that fails to evaluate is empty.
-		return role
+		var role string
+		if role, err = eval(self); err == nil && role != "" {
+			return role, nil
+		}
 	}
 	if v.Ref.System != "kube" {
-		return ""
+		return "", err
 	}
 	var body struct {
 		Metadata struct {
@@ -333,10 +376,13 @@ func (w *World) role(v *trace.Version) string {
 		} `json:"metadata"`
 	}
 	if json.Unmarshal(v.Body, &body) == nil && body.Metadata.GenerateName != "" {
-		return body.Metadata.GenerateName
+		return body.Metadata.GenerateName, err
 	}
-	return v.Ref.Name
+	return v.Ref.Name, err
 }
+
+// RoleError is the error of the instance's role CEL, or nil.
+func (w *World) RoleError(i Instance) error { return w.roleErrors[i.UID] }
 
 // Latest is the last instance of ref created at or before t, gone or not.
 func (w *World) Latest(ref trace.Ref, t time.Duration) (Instance, bool) {
@@ -641,8 +687,9 @@ var ErrNoMatch = errors.New("no instance matches")
 
 // Select resolves target at t among the live instances that creator made.
 // A slot narrows the match to instances whose root holds that slot's live
-// CR; an empty slot matches any owner. An error wraps ErrNoMatch, and names
-// the object a slot holds that is not a CR.
+// CR; an empty slot matches any owner. An error wraps ErrNoMatch and names
+// the target. It then says what the slot holds, or names up to five live
+// instances of the target's kind that creator made, in the slot if set.
 func (w *World) Select(creator trace.Caller, target plan.Target, slot string, t time.Duration) (trace.Ref, error) {
 	system := cmp.Or(target.System, "kube")
 	cr := ""
@@ -655,27 +702,70 @@ func (w *World) Select(creator trace.Caller, target plan.Target, slot string, t 
 		}
 		switch {
 		case held.UID == "":
-			return trace.Ref{}, ErrNoMatch
+			return trace.Ref{}, fmt.Errorf("%w %s: slot %s holds no live CR", ErrNoMatch, target, slot)
 		case !w.Primary(held):
 			kind := schema.GroupResource{Group: held.Ref.Group, Resource: held.Ref.Resource}
-			return trace.Ref{}, fmt.Errorf("%w: slot %s holds %s %s, which primaries does not list", ErrNoMatch, slot, kind, held.Ref.Name)
+			return trace.Ref{}, fmt.Errorf("%w %s: slot %s holds %s %s, which primaries does not list", ErrNoMatch, target, slot, kind, held.Ref.Name)
 		}
 		cr = held.UID
 	}
+	var live []Instance
 	nth := max(target.Nth, 1)
 	for _, i := range w.instances {
-		if !i.Live(t) || i.Creator != creator || i.Ref.System != system || !matches(target.Resource, i.Ref.Resource) ||
-			!matches(target.Group, i.Ref.Group) || !matches(target.Namespace, i.Ref.Namespace) || !matches(target.Name, i.Ref.Name) || !matches(target.Role, i.Role) {
+		if !i.Live(t) || i.Creator != creator || i.Ref.System != system || !matches(target.Resource, i.Ref.Resource) || !matches(target.Group, i.Ref.Group) {
 			continue
 		}
 		if cr != "" && !slices.Contains(w.Root(w.Owner(i, t), t).CRs, cr) {
+			continue
+		}
+		live = append(live, i)
+		if !matches(target.Namespace, i.Ref.Namespace) || !matches(target.Name, i.Ref.Name) || !matches(target.Role, i.Role) {
 			continue
 		}
 		if nth--; nth == 0 {
 			return i.Ref, nil
 		}
 	}
-	return trace.Ref{}, ErrNoMatch
+	return trace.Ref{}, fmt.Errorf("%w %s: %s", ErrNoMatch, target, candidates(creator, target, system, slot, live))
+}
+
+// candidates names up to five of live, the instances of target's kind that
+// creator made, in slot if set.
+func candidates(creator trace.Caller, target plan.Target, system, slot string, live []Instance) string {
+	kind := "objects"
+	if target.Resource != "" {
+		kind = schema.GroupResource{Group: target.Group, Resource: target.Resource}.String()
+	}
+	if system != "kube" {
+		kind = system + " " + kind
+	}
+	where := ""
+	if slot != "" {
+		where = " in slot " + slot
+	}
+	said := fmt.Sprintf("the %s has no live %s%s", creator, kind, where)
+	if len(live) > 0 {
+		const shown = 5
+		var names []string
+		for _, i := range live[:min(len(live), shown)] {
+			name := i.Ref.Name
+			if i.Ref.Namespace != "" {
+				name = i.Ref.Namespace + "/" + name
+			}
+			if target.Resource == "" {
+				name = i.Ref.Resource + "/" + name
+			}
+			names = append(names, name)
+		}
+		said = fmt.Sprintf("the %s's live %s%s are %s", creator, kind, where, strings.Join(names, ", "))
+		if len(live) > shown {
+			said += fmt.Sprintf(" and %d more", len(live)-shown)
+		}
+	}
+	if creator == trace.Harness && target.Resource == "customresourcedefinitions" {
+		said += "; a CRD that the config's crds or a restart installed is not a fixture"
+	}
+	return said
 }
 
 func matches(want, got string) bool { return want == "" || want == got }

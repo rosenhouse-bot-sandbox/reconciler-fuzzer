@@ -19,6 +19,7 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/system"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace/tracetest"
 )
 
 var timeouts = config.Timeouts{Settle: 300 * time.Millisecond, Stable: 50 * time.Millisecond, BackoffCap: time.Second}
@@ -70,6 +71,12 @@ func (p fakeProcess) Start(context.Context) error { p.add("start"); return nil }
 func (p fakeProcess) Stop(context.Context) error  { p.add("stop"); return nil }
 func (p fakeProcess) Kill(context.Context) error  { p.add("kill"); return nil }
 func (p fakeProcess) Supervise(on bool) error     { p.add("supervise(%v)", on); return nil }
+func (p fakeProcess) Tail() string                { return "toy: waiting\n" }
+
+// SetCommand logs args with %#v, which tells nil from empty.
+func (p fakeProcess) SetCommand(path string, args []string) {
+	p.add("setCommand %q %#v", path, args)
+}
 
 type fakeCluster struct {
 	*calls
@@ -85,7 +92,8 @@ type fakeCluster struct {
 	deleteErr error
 	// replaced makes Delete find that another CR, which it records, took
 	// the name, and so remove nothing.
-	replaced bool
+	replaced   bool
+	installErr error
 }
 
 func (c *fakeCluster) Create(_ context.Context, obj map[string]any) (trace.Ref, error) {
@@ -125,12 +133,22 @@ func (c *fakeCluster) Gone(_ context.Context, ref trace.Ref, uid string) (bool, 
 	return c.waitGone == nil && c.goneErr == nil, c.goneErr
 }
 
+func (c *fakeCluster) InstallCRDs(_ context.Context, paths []string) error {
+	c.add("install %q", paths)
+	return c.installErr
+}
+
 func (c *fakeCluster) WaitGone(ctx context.Context, ref trace.Ref, uid string) error {
 	c.add("%s", strings.TrimSpace("waitGone "+ref.Name+" "+uid))
 	if c.waitGone != nil {
 		return c.waitGone(ctx)
 	}
 	return nil
+}
+
+func (c *fakeCluster) CreateFixture(_ context.Context, ref trace.Ref) (trace.Ref, error) {
+	c.add("createFixture %s", ref.Name)
+	return ref, c.createErr
 }
 
 type fakeTarget struct {
@@ -588,23 +606,30 @@ func TestExecuteRestartsAKilledControllerWhileACreateWaits(t *testing.T) {
 }
 
 func TestExecuteBoundsTheBackoffByHowLongTheFaultsLasted(t *testing.T) {
-	f := newFixture(t, nil)
-	f.runner.Config.Timeouts.BackoffCap = 350 * time.Millisecond
-	faultHoldsDeletedCRs(f, 200*time.Millisecond)
-	p := recreateUnder(50*time.Millisecond, holdWidgets)
-	p.Steps[1].Actions[1].At = plan.Duration(250 * time.Millisecond)
-	if err := f.runner.Execute(context.Background(), p); err != nil {
-		t.Fatal(err)
-	}
-	events := f.rec.Events()
-	lasted := faultLasted(t, events)
-	if lasted < 245*time.Millisecond {
-		t.Fatalf("the fault lasted %v, want it to outlast the period until the create", lasted)
-	}
-	endFaults, _ := find(events, 1, trace.EndFaults)
-	want, wantBound := Deadline(endFaults.At, lasted, f.runner.Config.Poll("kube"), f.runner.Config.Timeouts)
-	if got := endFaults.Phase; (got.Deadline-want).Abs() > 20*time.Millisecond || got.BackoffBound != wantBound {
-		t.Errorf("deadline = %v, backoff-bound %v, want about %v, %v", got.Deadline, got.BackoffBound, want, wantBound)
+	for _, backoffCap := range []time.Duration{350 * time.Millisecond, 100 * time.Millisecond} {
+		t.Run(fmt.Sprint("backoffCap ", backoffCap), func(t *testing.T) {
+			f := newFixture(t, nil)
+			f.runner.Config.Timeouts.BackoffCap = backoffCap
+			faultHoldsDeletedCRs(f, 200*time.Millisecond)
+			p := recreateUnder(50*time.Millisecond, holdWidgets)
+			p.Steps[1].Actions[1].At = plan.Duration(250 * time.Millisecond)
+			if err := f.runner.Execute(context.Background(), p); err != nil {
+				t.Fatal(err)
+			}
+			events := f.rec.Events()
+			lasted := faultLasted(t, events)
+			if lasted < 245*time.Millisecond {
+				t.Fatalf("the fault lasted %v, want it to outlast the period until the create", lasted)
+			}
+			endFaults, _ := find(events, 1, trace.EndFaults)
+			want, wantBound := Deadline(endFaults.At, lasted, f.runner.Config.Poll("kube"), f.runner.Config.Timeouts)
+			if got := endFaults.Phase; (got.Deadline-want).Abs() > 20*time.Millisecond || got.BackoffBound != wantBound {
+				t.Errorf("deadline = %v, backoff-bound %v, want about %v, %v", got.Deadline, got.BackoffBound, want, wantBound)
+			}
+			if got, want := endFaults.Phase.Backoff, min(lasted, backoffCap); (got - want).Abs() > 20*time.Millisecond {
+				t.Errorf("backoff = %v, want about %v", got, want)
+			}
+		})
 	}
 }
 
@@ -702,7 +727,7 @@ func TestExecuteWaitsForEveryRecreatedSlotInAStepWithoutFaults(t *testing.T) {
 	}
 }
 
-func TestSlotTakenNamesWhatTheObserverLastSawHoldTheCR(t *testing.T) {
+func TestStillTakenNamesWhatTheObserverLastSawHoldTheName(t *testing.T) {
 	ref := trace.Ref{System: "kube", Resource: "widgets", Namespace: "ns", Name: "first"}
 	held := trace.Event{Version: &trace.Version{Ref: ref, UID: "u1", RV: "2",
 		Body: json.RawMessage(`{"metadata":{"deletionTimestamp":"2026-10-24T09:06:40Z","finalizers":["toy/cleanup"]}}`)}}
@@ -712,16 +737,21 @@ func TestSlotTakenNamesWhatTheObserverLastSawHoldTheCR(t *testing.T) {
 		Body: json.RawMessage(`{"metadata":{"finalizers":["toy/cleanup"]}}`)}}
 	undecodable := trace.Event{Version: &trace.Version{Ref: ref, UID: "u1", RV: "2", Body: json.RawMessage(`[]`)}}
 	const taken = "the slot's name is still taken after the create waited 1.5s"
+	const fixtureTaken = "the name of widgets ns/first is still taken after the createFixture waited 1.5s"
 	for _, c := range []struct {
 		name   string
+		do     plan.Do
 		events []trace.Event
 		want   string
 	}{
-		{"held", []trace.Event{held}, taken + ": the CR with that name has deletionTimestamp 2026-10-24T09:06:40Z and finalizers [toy/cleanup]"},
-		{"replaced", []trace.Event{held, gone, replaced}, taken + ": the CR with that name is not being deleted"},
-		{"gone since", []trace.Event{held, gone}, taken},
-		{"unrecorded", nil, taken},
-		{"undecodable", []trace.Event{undecodable}, taken},
+		{"held", plan.Create, []trace.Event{held}, taken + ": the CR with that name has deletionTimestamp 2026-10-24T09:06:40Z and finalizers [toy/cleanup]"},
+		{"replaced", plan.Create, []trace.Event{held, gone, replaced}, taken + ": the CR with that name is not being deleted"},
+		{"gone since", plan.Create, []trace.Event{held, gone}, taken},
+		{"unrecorded", plan.Create, nil, taken},
+		{"undecodable", plan.Create, []trace.Event{undecodable}, taken},
+		{"fixture held", plan.CreateFixture, []trace.Event{held}, fixtureTaken + ": the object with that name has deletionTimestamp 2026-10-24T09:06:40Z and finalizers [toy/cleanup]"},
+		{"fixture replaced", plan.CreateFixture, []trace.Event{held, gone, replaced}, fixtureTaken + ": the object with that name is not being deleted"},
+		{"fixture unrecorded", plan.CreateFixture, nil, fixtureTaken},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newFixture(t, nil)
@@ -729,10 +759,16 @@ func TestSlotTakenNamesWhatTheObserverLastSawHoldTheCR(t *testing.T) {
 				f.rec.Record(e)
 			}
 			e := &execution{Runner: f.runner, ix: trace.NewIndex(nil)}
-			if got := e.slotTaken(ref, 1500*time.Millisecond+400*time.Microsecond).Error(); got != c.want {
-				t.Errorf("slotTaken = %q, want %q", got, c.want)
+			if got := e.stillTaken(plan.Action{Do: c.do}, ref, 1500*time.Millisecond+400*time.Microsecond).Error(); got != c.want {
+				t.Errorf("stillTaken = %q, want %q", got, c.want)
 			}
 		})
+	}
+	clusterRole := trace.Ref{System: "kube", Group: "rbac.authorization.k8s.io", Resource: "clusterroles", Name: "reader"}
+	e := &execution{Runner: newFixture(t, nil).runner, ix: trace.NewIndex(nil)}
+	const want = "the name of clusterroles.rbac.authorization.k8s.io reader is still taken after the createFixture waited 2s"
+	if got := e.stillTaken(plan.Action{Do: plan.CreateFixture}, clusterRole, 2*time.Second).Error(); got != want {
+		t.Errorf("stillTaken = %q, want %q", got, want)
 	}
 }
 
@@ -1154,6 +1190,23 @@ func TestExecuteHonoursOffsetsAndPeriod(t *testing.T) {
 	}
 }
 
+func TestExecuteRecordsEachStepsPeriod(t *testing.T) {
+	f := newFixture(t, nil)
+	p := &plan.Plan{Steps: []plan.Step{
+		{Period: plan.Duration(300 * time.Millisecond), Actions: []plan.Action{{Do: plan.Create, Slot: "a", Object: widget("w")}}},
+		{Actions: []plan.Action{{Do: plan.Delete, Slot: "a"}}},
+	}}
+	if err := f.runner.Execute(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	for step, want := range []time.Duration{300 * time.Millisecond, 0} {
+		start, found := find(f.rec.Events(), step, trace.FaultPeriod)
+		if !found || start.Phase.Period == nil || *start.Phase.Period != want {
+			t.Errorf("step %d's fault period phase = %+v, want period %v", step, start.Phase, want)
+		}
+	}
+}
+
 func TestExecuteEndsFaultsBeforeEndFaults(t *testing.T) {
 	f := newFixture(t, nil)
 	var recordedEndFaults []bool
@@ -1432,10 +1485,11 @@ func TestExecuteRecordsADamageOfAGoneObjectAsUnmatched(t *testing.T) {
 	var got []string
 	for _, e := range f.rec.Events() {
 		if a := e.Action; a != nil && a.Do != "restart" {
-			got = append(got, fmt.Sprintf("%s ref=%v errored=%v", a.Do, a.Ref != nil, a.Error != ""))
+			got = append(got, fmt.Sprintf("%s ref=%v error=%q", a.Do, a.Ref != nil, a.Error))
 		}
 	}
-	want := []string{"create ref=true errored=false", "delete ref=true errored=false", "damage ref=false errored=true"}
+	want := []string{`create ref=true error=""`, `delete ref=true error=""`,
+		`damage ref=false error="no instance matches resource=configmaps: the object was gone or replaced before the action"`}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("actions = %q, want %q", got, want)
 	}
@@ -1459,14 +1513,120 @@ func TestQuietWaitsUntilTheControllerSettles(t *testing.T) {
 	}
 }
 
+// A controller that made a successful request passes the wait, even if it
+// has crashed or restarted since.
 func TestQuietGivesUpAfterTheSettleTimeout(t *testing.T) {
-	f := newFixture(t, func(*trace.Index, time.Duration, time.Duration) (time.Duration, bool) { return 0, false })
-	start := time.Now()
-	if err := f.runner.Quiet(context.Background()); err != nil {
-		t.Fatal(err)
+	worked := []trace.Event{tracetest.Start(1), tracetest.Call(trace.Controller, "list", tracetest.Ref("widgets", "ns", ""), 200, "1")}
+	crashed := slices.Concat(worked, []trace.Event{tracetest.Exit("exit status 2", false, "panic: boom\n")})
+	for name, events := range map[string][]trace.Event{
+		"running":   worked,
+		"crashed":   crashed,
+		"restarted": slices.Concat(crashed, []trace.Event{tracetest.Start(2)}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, func(*trace.Index, time.Duration, time.Duration) (time.Duration, bool) { return 0, false })
+			for _, e := range events {
+				f.rec.Record(e)
+			}
+			start := time.Now()
+			if err := f.runner.Quiet(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if waited := time.Since(start); waited < timeouts.Settle || waited > timeouts.Settle+3*PollInterval {
+				t.Errorf("Quiet waited %v, want the settle timeout %v", waited, timeouts.Settle)
+			}
+		})
 	}
-	if waited := time.Since(start); waited < timeouts.Settle || waited > timeouts.Settle+3*PollInterval {
-		t.Errorf("Quiet waited %v, want the settle timeout %v", waited, timeouts.Settle)
+}
+
+func TestQuietStopsWhenASystemFails(t *testing.T) {
+	for name, c := range map[string]struct {
+		settled   bool
+		failAfter time.Duration
+	}{
+		"mid-wait":                  {false, 100 * time.Millisecond},
+		"as the controller settles": {true, 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, func(_ *trace.Index, from, _ time.Duration) (time.Duration, bool) { return from, c.settled })
+			f.runner.Config.Timeouts.Settle = 5 * time.Second
+			failAt := time.Now().Add(c.failAfter)
+			f.runner.Failed = func() error {
+				if time.Now().After(failAt) {
+					return errors.New("fake cloud exited")
+				}
+				return nil
+			}
+			start := time.Now()
+			if err := f.runner.Quiet(context.Background()); err == nil || err.Error() != "fake cloud exited" {
+				t.Errorf("Quiet = %v, want the system's error", err)
+			}
+			if waited := time.Since(start); waited >= f.runner.Config.Timeouts.Settle {
+				t.Errorf("Quiet waited %v, the whole settle timeout", waited)
+			}
+		})
+	}
+}
+
+// exitOnTail is a controller that exits after Quiet's last poll, as Quiet
+// reads its tail.
+type exitOnTail struct {
+	fakeProcess
+	rec *trace.Recorder
+}
+
+func (p exitOnTail) Tail() string {
+	p.rec.Record(tracetest.Exit("exit status 1", false, "toy: forbidden\n"))
+	return ""
+}
+
+func TestQuietQuotesAnExitAfterTheLastPoll(t *testing.T) {
+	f := newFixture(t, func(*trace.Index, time.Duration, time.Duration) (time.Duration, bool) { return 0, false })
+	f.runner.Process = exitOnTail{fakeProcess{f.process}, f.rec}
+	f.rec.Record(tracetest.Start(1))
+	err := f.runner.Quiet(context.Background())
+	if want := "\nfirst exit: exit status 1\noutput tail:\ntoy: forbidden\n"; err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("Quiet = %v, want it to quote %q", err, want)
+	}
+}
+
+func TestQuietFailsAControllerThatNeverStarted(t *testing.T) {
+	lease := trace.Ref{System: "kube", Group: "coordination.k8s.io", Resource: "leases", Namespace: "ns", Name: "toy"}
+	tried := []trace.Event{
+		tracetest.Start(1),
+		tracetest.Call(trace.Controller, "get", trace.Ref{System: "kube"}, 200, ""),
+		tracetest.Call(trace.Controller, "get", lease, 200, "1"),
+		tracetest.Call(trace.Controller, "list", tracetest.Ref("widgets", "ns", ""), 403, ""),
+	}
+	never := "the controller never started: in the 300ms before step 0 (timeouts.settle), it made no successful request apart from ones that no check judges, such as discovery, Leases and Events"
+	for name, c := range map[string]struct {
+		events []trace.Event
+		want   string
+	}{
+		"exited": {
+			slices.Concat(tried, []trace.Event{tracetest.Exit("exit status 1", false, "toy: forbidden\n"), tracetest.Start(2), tracetest.Exit("exit status 2", false, "toy: again\n")}),
+			never + "\nfirst exit: exit status 1\noutput tail:\ntoy: forbidden\nsee controller.log",
+		},
+		"exited silently": {
+			slices.Concat(tried, []trace.Event{tracetest.Exit("exit status 1", false, "")}),
+			never + "\nfirst exit: exit status 1\nsee controller.log",
+		},
+		"still running": {tried, never + "\nit did not exit\noutput tail:\ntoy: waiting\nsee controller.log"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, func(*trace.Index, time.Duration, time.Duration) (time.Duration, bool) { return 0, false })
+			for _, e := range c.events {
+				f.rec.Record(e)
+			}
+			start := time.Now()
+			err := f.runner.Quiet(context.Background())
+			if err == nil || err.Error() != c.want {
+				t.Errorf("Quiet = %v, want %q", err, c.want)
+			}
+			if waited := time.Since(start); waited < timeouts.Settle {
+				t.Errorf("Quiet gave up after %v, want the settle timeout %v", waited, timeouts.Settle)
+			}
+		})
 	}
 }
 

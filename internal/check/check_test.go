@@ -2,6 +2,7 @@ package check_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -166,12 +167,15 @@ func TestConvergeNotesATraceThatEndsBeforeTheDeadline(t *testing.T) {
 }
 
 // cleanRun settles and confirms a create step, then a restart step.
-func cleanRun() *tt.Builder {
+func cleanRun() *tt.Builder { return restartRun(tt.Exit("signal: terminated", true, "bye")) }
+
+// restartRun is cleanRun with exit as the end of the restart's stop.
+func restartRun(exit trace.Event) *tt.Builder {
 	b := createStep()
 	b.At(3500 * ms).Add(tt.Phase(0, trace.Settled)).
 		At(5500 * ms).Add(tt.Phase(0, trace.Confirmed)).
 		At(5500 * ms).Add(tt.Phase(1, trace.FaultPeriod)).
-		At(5600 * ms).Add(tt.Exit("signal: terminated", true, "bye")).
+		At(5600 * ms).Add(exit).
 		At(5700 * ms).Add(tt.Start(2)).
 		At(5700 * ms).Add(tt.EndFaults(1, 20*s, false)).
 		At(5800 * ms).Add(tt.Call(ctl, "list", widgetA, 200, "")).
@@ -291,6 +295,105 @@ func TestJudgeNotesAFailedAction(t *testing.T) {
 	notes := check.Judge(b.Index(), spec).Notes
 	if len(notes) != 1 || notes[0] != "Step 1, action 2 (create) failed at 10s: the slot's name is still taken after the create waited 1s" {
 		t.Fatalf("notes = %q", notes)
+	}
+}
+
+func TestJudgeNotesAStopThatSentSIGKILL(t *testing.T) {
+	const sentSIGKILL = "the controller did not exit within launch.gracePeriod of SIGTERM, so the harness sent SIGKILL."
+	killed := trace.Event{Proc: &trace.Proc{Event: trace.Exit, Exit: "signal: killed", HarnessCaused: true, GracePeriodPassed: true}}
+	kill := trace.Event{Proc: &trace.Proc{Event: trace.Exit, Exit: "signal: killed", HarnessCaused: true}}
+	restart := restartRun(killed).Events()
+	// endsInFaults ends at the restart's exit, before step 1's faults end.
+	endsInFaults := restart[:slices.IndexFunc(restart, func(e trace.Event) bool { return e.Proc != nil && e.Proc.Event == trace.Exit })+1]
+	// cut ends in step 1's settle wait, as after a harness error, with the
+	// run's stop.
+	cut := createStep()
+	cut.At(3500*ms).Add(tt.Phase(0, trace.Settled)).
+		At(5500*ms).Add(tt.Phase(0, trace.Confirmed), tt.Phase(1, trace.FaultPeriod)).
+		At(5600*ms).Add(killed).
+		At(5700*ms).Add(tt.Start(2), tt.EndFaults(1, 20*s, false)).
+		At(7 * s).Add(killed)
+	run := tt.Run("toy", "widgets")
+	run.Run.Primaries[0].Kind = widgets
+	var early tt.Builder
+	early.Add(run, tt.Start(1), killed)
+	for name, c := range map[string]struct {
+		events []trace.Event
+		want   []string
+	}{
+		"a stop before step 0":                  {early.Events(), []string{"Before step 0, at 0s: " + sentSIGKILL}},
+		"a restart's stop":                      {restart, []string{"Step 1, at 5.6s: " + sentSIGKILL}},
+		"a restart's stop that ends the trace":  {endsInFaults, []string{"Step 1, at 5.6s: " + sentSIGKILL}},
+		"the run's stop":                        {cleanRun().At(10 * s).Add(killed).Events(), []string{"After the last step, at 10s: " + sentSIGKILL}},
+		"the run's stop after a timed-out step": {churn(false).At(11 * s).Add(killed).Events(), []string{"After the last step, at 11s: " + sentSIGKILL}},
+		"both stops of a run cut short": {cut.Events(), []string{
+			"Step 1, at 5.6s: " + sentSIGKILL, "After the last step, at 7s: " + sentSIGKILL,
+			"Step 1 is not judged: the trace ends at 7s, before its deadline 20s.",
+		}},
+		"a kill": {cleanRun().At(10 * s).Add(kill).Events(), nil},
+	} {
+		if notes := check.Judge(trace.NewIndex(c.events), spec).Notes; !slices.Equal(notes, c.want) {
+			t.Errorf("%s: notes = %q, want %q", name, notes, c.want)
+		}
+	}
+}
+
+// A step without a period ends its faults as its last action returns, so
+// a fault meant for the controller's next request never acts. A period
+// does not help while a kill or a stop keeps the controller down. Nor does
+// it help a hold of a kind that the controller does not watch later in the
+// hold's step.
+func TestJudgeNotesAFaultPeriodOfZero(t *testing.T) {
+	const what, hint = "killAfter on verb=update resource=clusters nth=2", " because the step has no period. Set one to keep faults on after the last action returns."
+	request := func(ended bool) trace.Event { return tt.Fault(1, 1, ended, what) }
+	model := func(ended bool) trace.Event { return tt.ModelFault(1, 1, ended, "stuck", "model:gadgets.toy") }
+	secrets := trace.Ref{System: "kube", Resource: "secrets"}
+	hold := func(ended bool) trace.Event { return tt.HoldFault(1, 1, ended, secrets) }
+	kill := []trace.Event{{Action: &trace.Action{Step: 1, Do: "kill"}}, tt.Exit("signal: killed", true, "")}
+	stop := []trace.Event{{Action: &trace.Action{Step: 1, Do: "stop"}}, tt.Exit("signal: terminated", true, "")}
+	watch := tt.Call(ctl, "watch", secrets, 200, "")
+	watch.Call.Watch, watch.Call.Stream = true, 7
+	watchOpens := []trace.Event{watch}
+	watchOpensAndCloses := []trace.Event{watch, {WatchEnd: &trace.WatchEnd{Caller: ctl, System: "kube", Stream: 7}}}
+	nextStep := []trace.Event{tt.FaultPeriod(2, 0)}
+	watchOpensInNextStep := []trace.Event{watch, tt.EndFaults(2, 10*s, false)}
+	for name, c := range map[string]struct {
+		phase                        trace.Event
+		fault                        func(ended bool) trace.Event
+		before, during, after, later []trace.Event
+		lasted                       time.Duration
+		want                         string
+	}{
+		"a request fault":                               {phase: tt.FaultPeriod(1, 0), fault: request, want: "Step 1, fault 1 (" + what + ") picked no request: it lasted 0s" + hint},
+		"a longer request fault":                        {phase: tt.FaultPeriod(1, 0), fault: request, lasted: 1234567 * time.Microsecond, want: "Step 1, fault 1 (" + what + ") picked no request: it lasted 1.235s" + hint},
+		"a model fault":                                 {phase: tt.FaultPeriod(1, 0), fault: model, lasted: s, want: "Step 1, fault 1 (stuck) held no object: it lasted 1s" + hint},
+		"a holdWatch":                                   {phase: tt.FaultPeriod(1, 0), fault: hold, after: watchOpens, lasted: s, want: "Step 1, fault 1 (holdWatch) held no watch: it lasted 1s" + hint},
+		"a holdWatch of a kind never watched":           {phase: tt.FaultPeriod(1, 0), fault: hold, lasted: s, want: "Step 1, fault 1 (holdWatch) held no watch."},
+		"a holdWatch of a kind watched only before it":  {phase: tt.FaultPeriod(1, 0), fault: hold, before: watchOpensAndCloses, lasted: s, want: "Step 1, fault 1 (holdWatch) held no watch."},
+		"a holdWatch of a kind watched in a later step": {phase: tt.FaultPeriod(1, 0), fault: hold, after: nextStep, later: watchOpensInNextStep, lasted: s, want: "Step 1, fault 1 (holdWatch) held no watch."},
+		"a request fault of a step with period":         {phase: tt.FaultPeriod(1, s), fault: request, lasted: s, want: "Step 1, fault 1 (" + what + ") picked no request."},
+		"a model fault of a step with period":           {phase: tt.FaultPeriod(1, s), fault: model, lasted: s, want: "Step 1, fault 1 (stuck) held no object."},
+		"a holdWatch of a step with period":             {phase: tt.FaultPeriod(1, s), fault: hold, after: watchOpens, lasted: s, want: "Step 1, fault 1 (holdWatch) held no watch."},
+		"a trace that lacks the period":                 {phase: tt.Phase(1, trace.FaultPeriod), fault: request, want: "Step 1, fault 1 (" + what + ") picked no request."},
+		"a request fault that ends after a kill":        {phase: tt.FaultPeriod(1, 0), fault: request, during: kill, lasted: s, want: "Step 1, fault 1 (" + what + ") picked no request."},
+		"a model fault that ends after a stop":          {phase: tt.FaultPeriod(1, 0), fault: model, during: stop, lasted: s, want: "Step 1, fault 1 (stuck) held no object."},
+	} {
+		b := createStep()
+		b.At(1600*ms).Add(c.before...).At(2*s).Add(c.phase, c.fault(false)).At(2*s + c.lasted/2).Add(c.during...).At(2*s + c.lasted).Add(c.fault(true)).
+			At(3*s + c.lasted).Add(c.after...).At(4*s + c.lasted).Add(c.later...)
+		notes := slices.DeleteFunc(check.Judge(b.Index(), spec).Notes, func(n string) bool { return !strings.HasPrefix(n, "Step 1, fault") })
+		if !slices.Equal(notes, []string{c.want}) {
+			t.Errorf("%s: fault notes = %q, want %q", name, notes, c.want)
+		}
+	}
+}
+
+// A trace that ends during a hold does not say how long the hold lasted.
+func TestJudgeGivesNoLengthOfAHoldThatNeverEnded(t *testing.T) {
+	b := createStep()
+	b.At(2*s).Add(tt.FaultPeriod(1, 0), tt.HoldFault(1, 0, false, trace.Ref{System: "kube", Resource: "secrets"}))
+	if notes := check.Judge(b.Index(), spec).Notes; !slices.Contains(notes, "Step 1, fault 0 (holdWatch) held no watch.") {
+		t.Errorf("notes = %q, want the hold's note without a length", notes)
 	}
 }
 
@@ -607,6 +710,54 @@ func TestJudgeNotesAHoldWatchOnlyWithoutAWatchOfItsKind(t *testing.T) {
 		}
 		if slices.ContainsFunc(notes, func(n string) bool { return strings.Contains(n, "picked no request") }) {
 			t.Errorf("%s: notes = %q, want no picked-no-request note", name, notes)
+		}
+	}
+}
+
+// A role that fails on every resource of a kind the controller created gets
+// a note, which names the first error. A Secret whose role works does not
+// excuse the ConfigMaps. The harness's objects and ignored kinds, such as
+// Events, do not count.
+func TestJudgeNotesARoleThatFailedOnEveryResourceOfAKind(t *testing.T) {
+	const noLabels, noRole, hasRole = 0, 1, 2
+	body := func(name string, labels int) map[string]any {
+		metadata := map[string]any{"name": name}
+		switch labels {
+		case noRole:
+			metadata["labels"] = map[string]any{"other": name}
+		case hasRole:
+			metadata["labels"] = map[string]any{"role": name}
+		}
+		return map[string]any{"metadata": metadata}
+	}
+	// The first ConfigMap that fails has no labels at all.
+	const note = `kube/configmaps: the role failed on every resource of this kind the controller created: evaluating "self.metadata.labels['role']": no such key: labels`
+	for name, c := range map[string]struct {
+		configMaps []int
+		notes      []string
+	}{
+		"fails on every configmap": {[]int{noLabels, noRole}, []string{note}},
+		"works on one configmap":   {[]int{noLabels, hasRole}, nil},
+	} {
+		r := newRun(1)
+		r.Spec.Systems = []trace.System{{Name: "kube", Role: "self.metadata.labels['role']"}}
+		r.Begin()
+		r.Create(trace.Harness, widgetA, body("a", noLabels))
+		r.Act("create", "a", &widgetA)
+		r.Create(ctl, tt.Ref("events", "ns", "a.1"), body("a.1", noLabels))
+		r.Create(ctl, tt.Ref("secrets", "ns", "a-tls"), tt.OwnedBy(body("a-tls", hasRole), r.UID(widgetA), true))
+		for n, labels := range c.configMaps {
+			child := fmt.Sprintf("a-%d", n)
+			r.Create(ctl, tt.Ref("configmaps", "ns", child), tt.OwnedBy(body(child, labels), r.UID(widgetA), true))
+		}
+		r.Ready(widgetA).EndFaults().Settle()
+		ix := r.Index()
+		spec, err := check.SpecFor(nil, ix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if notes := check.Judge(ix, spec).Notes; !slices.Equal(notes, c.notes) {
+			t.Errorf("%s: notes = %q, want %q", name, notes, c.notes)
 		}
 	}
 }
