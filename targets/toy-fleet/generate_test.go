@@ -8,10 +8,8 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 )
 
-// A Database's Cluster is a fixture. Deleting it while a Database lives,
-// then restarting, is how a seed reaches B150, as
-// database/plans/restart-cluster-delete does.
-func TestSomeSeedDeletesTheFixtureCluster(t *testing.T) {
+// Seeds reach B150 this way, as database/plans/restart-cluster-delete does.
+func TestSomeSeedDeletesTheClusterOfALiveDatabaseThenRestarts(t *testing.T) {
 	c, err := config.Load(databaseConfig)
 	if err != nil {
 		t.Fatal(err)

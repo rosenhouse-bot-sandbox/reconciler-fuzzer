@@ -9,8 +9,8 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 )
 
-// deletableConfig lists two fixture files. Its values.deletable lists the
-// first, which holds the ConfigMap settings and the Secret password.
+// deletableConfig's deletable.yaml holds the ConfigMap settings and the
+// Secret password.
 const deletableConfig = "testdata/deletable/config.yaml"
 
 // addedSteps draws the plans of seeds 1 to n of deletableConfig, with and

@@ -39,8 +39,8 @@ type Config struct {
 	// system's.
 	FixtureValues map[string][]string
 	// Deletable are the files of Fixtures whose objects generated plans may
-	// delete in their last step. They hold no Namespace, and no object of a
-	// kube kind that a reference's to names.
+	// delete in their last step. They hold no Namespace, no CRD, and no
+	// object of a kube kind that a reference's to names.
 	Deletable  []string
 	Models     []Model
 	Systems    []System
@@ -673,8 +673,8 @@ func refuseListedFixtures(declared, paths []string, listed []schema.GroupKind) e
 }
 
 // refuseDeletable refuses a values.deletable file that holds a Namespace or
-// an object of a kube kind that a reference's to names. Deleting a Namespace
-// deletes what it holds, and plans delete such objects already.
+// a CRD, whose delete deletes other objects, or an object of a kube kind that
+// a reference's to names, which plans delete already.
 func (c *Config) refuseDeletable(path string) error {
 	headers, err := readFixtureHeaders(path)
 	if err != nil {
@@ -685,6 +685,8 @@ func (c *Config) refuseDeletable(path string) error {
 		switch {
 		case kind == (schema.GroupKind{Kind: "Namespace"}):
 			return fmt.Errorf("deleting Namespace %s deletes what it holds", header.Metadata.Name)
+		case kind == (schema.GroupKind{Group: "apiextensions.k8s.io", Kind: "CustomResourceDefinition"}):
+			return fmt.Errorf("deleting CustomResourceDefinition %s deletes its CRs", header.Metadata.Name)
 		case slices.ContainsFunc(c.References, func(r Reference) bool { return r.System == "" && r.To.GroupKind() == kind }):
 			return fmt.Errorf("plans delete %s %s already, since a reference names its kind", header.Kind, header.Metadata.Name)
 		}
