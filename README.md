@@ -131,6 +131,10 @@ timeouts: {settle: 30s, stable: 3s}
 - `values` steers generated CRs: `overlay` narrows the CRD schema, `distinct` fields differ
   across a plan's CRs, `mutate` names the fields updates change, and `fixtures` names the
   fixture strings `changeFixture` sets.
+- `values.deletable` lists `fixtures` files. Half the generated plans then end with a step that
+  deletes one of their objects, and maybe restarts or kills the controller. A CR may rightly stay
+  not ready without the object, so list a file only if the controller holds its objects'
+  deletion until no CR needs them.
 
 ### Several kinds
 
@@ -148,7 +152,7 @@ primaries:
     values: {mutate: [spec.size]}
   - {kind: example.com/v1/Database, sample: database.yaml, ready: *ready}
 fixtures: [settings.yaml]
-values: {fixtures: {settings.yaml: [data.theme]}}   # with primaries, only fixtures
+values: {fixtures: {settings.yaml: [data.theme]}}   # with primaries, only fixtures and deletable
 ```
 
 - Every check judges the CRs of each listed kind by their own entry, and the settle condition

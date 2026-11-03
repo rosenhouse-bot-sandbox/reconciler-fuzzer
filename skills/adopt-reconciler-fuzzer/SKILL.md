@@ -157,6 +157,8 @@ Fill each key from the project:
   `{enum: [<sample's value>]}`.
   `distinct` names fields that must differ between CRs, such as a Secret's name. `mutate`
   names the fields updates change. `values.fixtures` names fixture strings to change.
+  `values.deletable` lists `fixtures` files whose objects a plan's last step may delete. List a
+  file only if the controller holds its objects' deletion until no CR needs them.
 - `fixtures`: objects the controller reads and does not create, of kinds the config does not
   list. Drop `metadata.namespace` unless the controller reads the object in another namespace;
   the harness creates that namespace.

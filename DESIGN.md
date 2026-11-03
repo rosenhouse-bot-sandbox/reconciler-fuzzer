@@ -417,7 +417,7 @@ primaries:                                  # every kind the controller serves
 references:                                 # fields by which a CR names what it does not own
   - {from: toy.reconciler-fuzzer/v1/Bucket, to: v1/Secret, name: "spec.keys[*].secretName",
      ready: has(self.data.key), required: false, track: 2s}   # required defaults to true
-values: {fixtures: {kv.yaml: [value]}}              # with primaries, only fixtures
+values: {fixtures: {kv.yaml: [value]}}              # with primaries, only fixtures and deletable
 models: [{kind: toy.reconciler-fuzzer/v1/Gadget, after: 200ms, dependency: {track: 1s}}]
 systems:
   - {name: kube, owner: "self.metadata.labels['widget-uid']"}   # kube takes only owner and role
@@ -484,6 +484,9 @@ writes `missing`, a name no object has. `namespace` values stay as drawn.
 `changeFixture` draws kube and system fixtures alike. It also deletes a live
 kube fixture of a `to` kind other than a Namespace, and `createFixture` makes
 it again. Plans of a config without references are as before.
+`values.deletable` gives half the plans a last step that deletes a live fixture
+it lists, then restarts, kills or does neither. The step comes last, since a CR
+created or updated after it may rightly never be ready.
 
 **Hunt.** `hunt.Hunt` runs each seed, keeps runs with a new signature, replays
 each `--replays` times (5) and shrinks it (`shrink.go`), trying at most
