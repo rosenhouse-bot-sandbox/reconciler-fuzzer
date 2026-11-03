@@ -474,9 +474,10 @@ its kind, such as one with a misspelt resource.
 
 ### Upgrading
 
-A `restart` stops the controller with SIGTERM and starts it again with its current binary, args
-and env. The harness installs `crds:` before step 0, and the CRDs stay fixed unless a
-restart installs new ones. A restart that names `binary`, `args` or `crds` tests an upgrade:
+A `restart` stops the controller and starts it again with its current binary, args and env. The
+stop sends SIGTERM, and SIGKILL if the controller outlives `launch.gracePeriod`. The harness
+installs `crds:` before step 0, and the CRDs stay fixed unless a restart installs new ones. A
+restart that names `binary`, `args` or `crds` tests an upgrade:
 
 ```json
 {"actions": [{"do": "restart", "args": ["--version=2"], "crds": ["../v2/crds/"]}]}
