@@ -311,6 +311,23 @@ func TestHuntExits2WhenEverySeedFails(t *testing.T) {
 	}
 }
 
+func TestHuntWithoutTheControlPlaneStopsAfterItsFirstSeed(t *testing.T) {
+	t.Setenv("KUBEBUILDER_ASSETS", t.TempDir())
+	toy, err := filepath.Abs("../../targets/toy-widget")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(t.TempDir(), "config.yaml")
+	body := fmt.Sprintf("launch: {binary: /bin/true}\ncrds: [%s/crds/]\nprimary: {kind: toy.reconciler-fuzzer/v1/Widget, sample: %s/widget.yaml, ready: \"true\"}\n", toy, toy)
+	if err := os.WriteFile(config, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr := cliOutput("hunt", "--config", config, "--seeds", "2", "--out", t.TempDir())
+	if code != 2 || !strings.HasPrefix(stdout, "No findings over 1 seeds.") || strings.Count(stderr, "KUBEBUILDER_ASSETS") != 1 {
+		t.Errorf("cli = %d, stdout %q, stderr %q; want 2 after seed 1, and its error once", code, stdout, stderr)
+	}
+}
+
 func TestHuntExits1WhenASeedFindsAndAnotherFails(t *testing.T) {
 	runPlan = func(_ context.Context, o run.Options) (check.Report, error) {
 		if filepath.Base(o.Out) == "seed-1" {

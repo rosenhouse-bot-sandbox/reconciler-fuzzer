@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/check"
@@ -248,25 +250,42 @@ func TestHuntRecordsASeedsHarnessErrorAndGoesOn(t *testing.T) {
 	wantKept(t, fake.out, map[string]bool{"seed-1/trace.jsonl": true})
 }
 
-func TestHuntStopsAtASeedWhoseRunFindsAProgramMissing(t *testing.T) {
-	var log strings.Builder
-	out := t.TempDir()
-	runs := 0
-	missing := fmt.Errorf("launch.binary: %w", &exec.Error{Name: "/missing", Err: exec.ErrNotFound})
-	_, err := Hunt(context.Background(), Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1, 2, 3}), Out: out, Log: &log,
-		Run: func(context.Context, *plan.Plan, string) (check.Report, error) {
-			runs++
-			return check.Report{}, missing
-		}})
-	if runs != 1 || !errors.Is(err, missing) || err.Error() != "seed 1: "+missing.Error() {
-		t.Errorf("Hunt ran %d seeds and returned %v; want one seed and its error.", runs, err)
+var (
+	missingBinary = fmt.Errorf("launch.binary: %w", &exec.Error{Name: "/missing", Err: exec.ErrNotFound})
+	missingEtcd   = fmt.Errorf("starting envtest: %w", &fs.PathError{Op: "fork/exec", Path: "/missing/etcd", Err: syscall.ENOENT})
+)
+
+func TestHuntStopsAtASeedWhoseRunCannotStartAProgram(t *testing.T) {
+	for name, cannotStart := range map[string]error{"launch.binary": missingBinary, "etcd": missingEtcd} {
+		t.Run(name, func(t *testing.T) {
+			var log strings.Builder
+			out := t.TempDir()
+			runs := 0
+			_, err := Hunt(context.Background(), Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1, 2, 3}), Out: out, Log: &log,
+				Run: func(context.Context, *plan.Plan, string) (check.Report, error) {
+					runs++
+					return check.Report{}, cannotStart
+				}})
+			if runs != 1 || !errors.Is(err, cannotStart) || err.Error() != "seed 1: "+cannotStart.Error() {
+				t.Errorf("Hunt ran %d seeds and returned %v; want one seed and its error.", runs, err)
+			}
+			if log.Len() > 0 {
+				t.Errorf("the log repeats the error:\n%s", log.String())
+			}
+			summary, _ := os.ReadFile(filepath.Join(out, "summary.md"))
+			if want := "No findings over 1 seeds.\n\nRuns that failed:\n\n- seed 1: " + cannotStart.Error() + "\n"; string(summary) != want {
+				t.Errorf("summary.md = %q, want %q", summary, want)
+			}
+		})
 	}
-	if log.Len() > 0 {
-		t.Errorf("the log repeats the error:\n%s", log.String())
-	}
-	summary, _ := os.ReadFile(filepath.Join(out, "summary.md"))
-	if want := "No findings over 1 seeds.\n\nRuns that failed:\n\n- seed 1: " + missing.Error() + "\n"; string(summary) != want {
-		t.Errorf("summary.md = %q, want %q", summary, want)
+}
+
+func TestOnlyAProgramThatCannotStartEndsTheHunt(t *testing.T) {
+	missingCRDs := fmt.Errorf("installing CRDs: %w", &fs.PathError{Op: "open", Path: "crds", Err: fs.ErrNotExist})
+	for err, want := range map[error]bool{missingBinary: true, missingEtcd: true, missingCRDs: false, boom: false} {
+		if got := cannotStart(err); got != want {
+			t.Errorf("cannotStart(%v) = %t, want %t", err, got, want)
+		}
 	}
 }
 
