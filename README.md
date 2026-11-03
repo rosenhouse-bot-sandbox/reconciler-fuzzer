@@ -650,9 +650,6 @@ reconciler-fuzzer shrink --config targets/toy-widget/config.yaml \
   --plan reconciler-fuzzer-out/b3/plan.json --launch-arg --bug=3 --out reconciler-fuzzer-out/b3-shrunk
 ```
 
-Without `--config`, `judge` reads each whole number in a CR as an int, even under `type: number`,
-since a trace holds no schema.
-
 ## CI
 
 Every command exits 0 with no findings, 1 with findings, and 2 on a usage or harness error.
