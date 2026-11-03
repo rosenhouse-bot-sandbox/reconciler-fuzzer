@@ -11,6 +11,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	gvk "k8s.io/apimachinery/pkg/runtime/schema"
 	"pgregory.net/rapid"
+
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/suggest"
 )
 
 // schema is the part of a CRD's OpenAPI v3 schema the generator reads. What
@@ -220,7 +222,11 @@ func mutableField(s *schema, dotted string) (field, error) {
 	for i, segment := range path {
 		next := at.Properties[segment]
 		if next == nil {
-			return field{}, fmt.Errorf("the schema describes no %s", strings.Join(path[:i+1], "."))
+			err := fmt.Errorf("the schema describes no %s", strings.Join(path[:i+1], "."))
+			if near := nearestPath(s, path); near != "" {
+				return field{}, fmt.Errorf("%w; did you mean %s?", err, near)
+			}
+			return field{}, err
 		}
 		optional = !slices.Contains(at.Required, segment)
 		at = next
@@ -230,6 +236,20 @@ func mutableField(s *schema, dotted string) (field, error) {
 		return field{}, err
 	}
 	return field{path: path, dotted: dotted, values: values, optional: optional}, nil
+}
+
+// nearestPath is the path that s describes nearest path, segment by
+// segment. It is empty when no property is near a segment.
+func nearestPath(s *schema, path []string) string {
+	var near []string
+	for _, segment := range path {
+		name := suggest.Nearest(segment, slices.Sorted(maps.Keys(s.Properties)))
+		if name == "" {
+			return ""
+		}
+		near, s = append(near, name), s.Properties[name]
+	}
+	return strings.Join(near, ".")
 }
 
 // specFields are the paths under spec that the schema says enough about to

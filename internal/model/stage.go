@@ -176,9 +176,12 @@ func (s *Stage) Pending() bool {
 }
 
 // Takes reports whether f is a model fault on this stage's kind.
-func (s *Stage) Takes(f plan.Fault) bool {
+func (s *Stage) Takes(f plan.Fault) bool { return Takes(f, s.gvr) }
+
+// Takes reports whether f is a model fault on the objects of gvr.
+func Takes(f plan.Fault, gvr schema.GroupVersionResource) bool {
 	return f.ModelFault() && (f.System == "" || f.System == kube.Name) &&
-		(f.Match.Group == "" || f.Match.Group == s.gvr.Group) && f.Match.Resource == s.gvr.Resource
+		(f.Match.Group == "" || f.Match.Group == gvr.Group) && f.Match.Resource == gvr.Resource
 }
 
 // Fault starts stuck or slowDelete on the objects f matches, and returns
