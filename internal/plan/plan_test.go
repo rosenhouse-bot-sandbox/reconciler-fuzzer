@@ -3,9 +3,14 @@ package plan
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -43,6 +48,73 @@ func TestLoadRejectsUnknownFields(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "when") {
 		t.Fatalf("Load = %v, want an unknown field error", err)
 	}
+}
+
+func TestLoadRejectsAMiscasedField(t *testing.T) {
+	_, err := Load(write(t, `{"steps": [{"actions": [{"do": "create", "slot": "a"}]}, {"actions": [{"do": "delete", "Slot": "a"}]}]}`))
+	if err == nil || !strings.Contains(err.Error(), "Slot") {
+		t.Fatalf("Load = %v, want an unknown field error naming Slot", err)
+	}
+}
+
+func TestLoadPlacesAnUnknownField(t *testing.T) {
+	for body, want := range map[string]string{
+		`{"steps": [{}, {"actions": [{"do": "restart", "slott": "a"}]}]}`:                        `steps[1].actions[0]: unknown field "slott"; did you mean slot?`,
+		`{"steps": [{"faults": [{"stuck": true, "match": {"resourse": "gadgets"}}]}]}`:           `steps[0].faults[0].match: unknown field "resourse"; did you mean resource?`,
+		`{"steps": [{"actions": [{"do": "damage", "target": {"resource": "a", "nmae": "b"}}]}]}`: `steps[0].actions[0].target: unknown field "nmae"; did you mean name?`,
+		`{"steps": [{"actions": [{"do": "restart", "Upgrade": {"args": []}}]}]}`:                 `steps[0].actions[0]: unknown field "Upgrade"`,
+		`{"stepz": []}`: `unknown field "stepz"; did you mean steps?`,
+	} {
+		if _, err := Load(write(t, body)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("Load(%s) = %v, want the field's place and the nearest key: %s", body, err, want)
+		}
+	}
+}
+
+func TestLoadReadsAnObjectsAndAPatchsKeysAsData(t *testing.T) {
+	_, err := Load(write(t, `{"steps": [{"actions": [{"do": "create", "slot": "a", "object": {"apiVersion": "v1", "kind": "ConfigMap", "Slot": 1}},
+		{"do": "update", "slot": "a", "patch": {"Data": {"slott": "b"}}}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoadListsTheActionsOnAnUnknownDo(t *testing.T) {
+	dos := declaredDos(t)
+	want := strings.Join(dos[:len(dos)-1], ", ") + " or " + dos[len(dos)-1]
+	_, err := Load(write(t, `{"steps": [{"actions": [{"do": "patch"}]}]}`))
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("Load = %v, want the valid actions listed: %s", err, want)
+	}
+}
+
+// declaredDos are the values of plan.go's Do constants, in order.
+func declaredDos(t *testing.T) []string {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), "plan.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dos []string
+	for _, declaration := range file.Decls {
+		constants, ok := declaration.(*ast.GenDecl)
+		if !ok || constants.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range constants.Specs {
+			if value := spec.(*ast.ValueSpec); fmt.Sprint(value.Type) == "Do" {
+				do, err := strconv.Unquote(value.Values[0].(*ast.BasicLit).Value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				dos = append(dos, do)
+			}
+		}
+	}
+	if len(dos) < 2 {
+		t.Fatalf("plan.go declares the Do constants %q, want several", dos)
+	}
+	return dos
 }
 
 func TestLoadRejectsTrailingData(t *testing.T) {
