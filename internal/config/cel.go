@@ -3,6 +3,8 @@ package config
 import (
 	"errors"
 	"fmt"
+	"regexp"
+	"slices"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/ext"
@@ -16,10 +18,14 @@ var ErrNotBool = errors.New("the expression did not yield a bool")
 // ErrNotString marks an expression whose result is not a string.
 var ErrNotString = errors.New("the expression did not yield a string")
 
+// library is what each expression may use beyond self. As in the API
+// server, numbers of different types compare.
+var library = []cel.EnvOption{ext.Strings(), cel.CrossTypeNumericComparisons(true)}
+
 func compile(expr string) (cel.Program, error) { return compileTo(expr, cel.BoolType) }
 
 func compileTo(expr string, want *cel.Type) (cel.Program, error) {
-	env, err := cel.NewEnv(cel.Variable("self", cel.DynType), ext.Strings())
+	env, err := cel.NewEnv(append([]cel.EnvOption{cel.Variable("self", cel.DynType)}, library...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +55,7 @@ func checked(env *cel.Env, expr string, want *cel.Type) (*cel.Ast, error) {
 func typeCheck(expr string, root map[string]any, want *cel.Type) error {
 	self := declType(root, true).MaybeAssignTypeName("selfType")
 	provider := apiservercel.NewDeclTypeProvider(self)
-	base, err := cel.NewEnv(ext.Strings())
+	base, err := cel.NewEnv(library...)
 	if err != nil {
 		return err
 	}
@@ -67,7 +73,8 @@ func typeCheck(expr string, root map[string]any, want *cel.Type) error {
 
 // declType types a value that s, an OpenAPI v3 schema, describes. A
 // resource has apiVersion, kind and any metadata. Any value fits where s
-// keeps unknown fields, embeds a resource or names no type.
+// keeps unknown fields, embeds a resource or names no type. An object with
+// a property that CEL cannot select is a map, which CEL can index.
 func declType(s map[string]any, resource bool) *apiservercel.DeclType {
 	if s["x-kubernetes-preserve-unknown-fields"] == true || s["x-kubernetes-embedded-resource"] == true {
 		return apiservercel.DynType
@@ -80,6 +87,9 @@ func declType(s map[string]any, resource bool) *apiservercel.DeclType {
 		properties, _ := s["properties"].(map[string]any)
 		fields := map[string]*apiservercel.DeclField{}
 		for name, property := range properties {
+			if !selectable(name) {
+				return apiservercel.NewMapType(apiservercel.StringType, apiservercel.DynType, -1)
+			}
 			property, _ := property.(map[string]any)
 			fields[name] = apiservercel.NewDeclField(name, declType(property, false), false, nil, nil)
 		}
@@ -104,6 +114,15 @@ func declType(s map[string]any, resource bool) *apiservercel.DeclType {
 		return apiservercel.BoolType
 	}
 	return apiservercel.DynType
+}
+
+var identifier = regexp.MustCompile(`^[_a-zA-Z][_a-zA-Z0-9]*$`)
+
+// selectable reports whether CEL can select a field by name, as in
+// self.spec.name. CEL reads another field only by index, as in
+// self.spec['app.kubernetes.io/name'].
+func selectable(name string) bool {
+	return identifier.MatchString(name) && !slices.Contains([]string{"true", "false", "null", "in"}, name)
 }
 
 func evalBool(program cel.Program, self map[string]any, expr string) (bool, error) {

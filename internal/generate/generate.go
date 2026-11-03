@@ -137,7 +137,7 @@ func build(cfg *config.Config) (*Generator, error) {
 	if err := g.readRBAC(cfg.Launch.RBAC); err != nil {
 		return nil, err
 	}
-	g.readModels(cfg.Models, crds)
+	g.readModels(cfg.Models)
 	g.favorKinds(cfg, crds)
 	g.addRequests()
 	for _, gr := range g.resources {
@@ -360,9 +360,9 @@ func (g *Generator) readRBAC(paths []string) error {
 
 // readModels records each model kind's resource and the longest dependency
 // track.
-func (g *Generator) readModels(models []config.Model, crds []map[string]any) {
+func (g *Generator) readModels(models []config.Model) {
 	for _, m := range models {
-		g.models = append(g.models, resourceOf(crds, m.Kind))
+		g.models = append(g.models, gvk.GroupResource{Group: m.Kind.Group, Resource: m.Resource})
 		if m.Dependency != nil {
 			g.track = max(g.track, m.Dependency.Track)
 		}
@@ -412,7 +412,7 @@ func ownedKinds(cfg *config.Config, crds []map[string]any) []gvk.GroupResource {
 	}
 	for _, m := range cfg.Models {
 		if m.Dependency != nil {
-			owned = append(owned, resourceOf(crds, m.Kind))
+			owned = append(owned, gvk.GroupResource{Group: m.Kind.Group, Resource: m.Resource})
 		}
 	}
 	return owned

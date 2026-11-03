@@ -922,9 +922,6 @@ func owns(entryKey string, entries []declaredOwns, fakes []System, kinds servedK
 			if field.expr == "" {
 				continue
 			}
-			if _, err := CompileString(field.expr); err != nil {
-				return nil, fmt.Errorf("%s.%s: %w", key, field.key, err)
-			}
 			if err := typeCheck(field.expr, crSchema, cel.StringType); err != nil {
 				return nil, fmt.Errorf("%s.%s: %w", key, field.key, err)
 			}

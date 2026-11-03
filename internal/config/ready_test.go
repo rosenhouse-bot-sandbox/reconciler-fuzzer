@@ -43,8 +43,8 @@ func TestEachExpressionOverTheCRTypesAgainstTheCRDSchema(t *testing.T) {
 	}
 }
 
-// The harness reads a CR as JSON: any metadata field, and a string in any
-// format.
+// The harness reads a CR as JSON, so metadata takes any field and a
+// date-time is a string.
 func TestAReadyTypesTheCRAsTheHarnessReadsIt(t *testing.T) {
 	for _, ready := range []string{
 		`self.metadata.generation == self.status.observedGeneration && self.metadata.labels['a'] == 'b'`,
@@ -103,6 +103,8 @@ spec:
                 template: {type: object, x-kubernetes-embedded-resource: true, properties: {spec: {type: object}}}
                 labels: {type: object, additionalProperties: {type: string}}
                 items: {type: array, items: {type: object, properties: {name: {type: string}}}}
+                selector: {type: object, properties: {app.kubernetes.io/name: {type: string}}}
+                range: {type: object, properties: {"in": {type: integer}}}
 `
 
 // thingConfig writes a config whose primary is a Thing, with the entry's
@@ -125,6 +127,8 @@ func TestAReadyTypesEachSchemaType(t *testing.T) {
 		"self.spec.labels['app'] == 'web'":                                                     true,
 		"self.spec.items.exists(i, i.name == 'a')":                                             true,
 		"self.spec.namespace == 'a' && self.kind == 'Thing' && self.apiVersion == 'toy/v1'":    true,
+		"self.spec.selector['app.kubernetes.io/name'] == 'web' && self.spec.range['in'] > 1":   true,
+		"self.spec.ratio > 1 && self.spec.size < 2.5":                                          true,
 		"self.spec.size == 'a'":                                                                false,
 		"self.spec.ratio == 'a'":                                                               false,
 		"self.spec.on == 1":                                                                    false,

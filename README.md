@@ -118,7 +118,8 @@ timeouts: {settle: 30s, stable: 3s}
   webhooks, set `ENABLE_WEBHOOKS: "false"` in `env`.
 - `ready` is CEL over the CR, typed by its CRD's schema. It must be true only once the
   controller has acted on the current spec, so compare an `observedGeneration` with
-  `metadata.generation`.
+  `metadata.generation`. Read a property whose name is not a CEL identifier by index, as in
+  `self.spec.selector['app.kubernetes.io/name']`.
 - `stable` is how long the controller must stay quiet before a step counts as settled.
 - `launch.rbac` also tells generation which requests a fault can pick. A generated `damage` of
   a kube object targets an unlisted kind that `launch.rbac` lets the controller create. Faults

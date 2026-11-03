@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/generate"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 )
 
@@ -115,6 +116,36 @@ func TestCheckFaultsRefusesAFaultNothingTakes(t *testing.T) {
 		err := checkFaults(cfg, p)
 		if got := fmt.Sprint(err); want == "" && err != nil || want != "" && got != want {
 			t.Errorf("checkFaults(%s) = %v, want %q", fault, err, want)
+		}
+	}
+}
+
+func TestCheckFaultsTakesEveryGeneratedFault(t *testing.T) {
+	paths, err := filepath.Glob("../../targets/*/config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nested, err := filepath.Glob("../../targets/*/*/config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range append(paths, nested...) {
+		cfg, err := config.Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		g, err := generate.New(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for seed := range uint64(20) {
+			p, err := g.Plan(seed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := checkFaults(cfg, p); err != nil {
+				t.Errorf("%s, seed %d: %v", path, seed, err)
+			}
 		}
 	}
 }
