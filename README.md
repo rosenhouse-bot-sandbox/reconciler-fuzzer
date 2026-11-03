@@ -3,8 +3,8 @@
 reconciler-fuzzer finds bugs in Kubernetes controllers. It runs your controller on your machine
 against envtest's kube-apiserver and etcd. It follows a plan of steps: CR changes, faults on the
 controller's API requests, restarts, and damage to objects the controller created. It records
-every request and object version in a trace, including requests to fake HTTP services. Then it judges the trace with nine checks: Converge,
-Crash, Clean, Restore, Unique, Honest, Ordered, Backoff and Finalizers ([DESIGN.md §12](DESIGN.md#12-checks)).
+every request and object version in a trace, including requests to fake HTTP services. Then it judges the trace with ten checks: Converge,
+Crash, Clean, Restore, Unique, Honest, Ordered, Teardown, Backoff and Finalizers ([DESIGN.md §12](DESIGN.md#12-checks)).
 
 You write no test code. One YAML config describes your controller.
 
@@ -302,6 +302,17 @@ systems:
   none lived is shared, and fails only if the run ends with more shared children of its kind and
   [role](#roles) than the first create saw.
 
+Kubernetes' garbage collector deletes a child only through an ownerReference chain. So a
+controller must delete each other child of a CR before it removes its finalizer from the CR.
+Teardown fails a controller write that removes the controller's last finalizer from a CR being
+deleted while such a child, which `owns` or `owner` names, is not yet being deleted:
+`released a CR before deleting its resources`. A child with a `deletionTimestamp`, a child whose
+delete has answered, and a child in a namespace being deleted are being deleted. The controller
+need not wait until the child is gone. A fake service's objects have no ownerReferences, so
+Teardown judges each one that `owns` or `owner` names. The CR's `retain` allows its children to
+stay. To judge the order of children that have ownerReferences, write a
+[property](#properties).
+
 ### Roles
 
 A child's role is the part it plays for its CR. Clean, Restore and Unique group children by
@@ -485,6 +496,22 @@ and the other kinds the checks ignore. The harness skips a kind that the server 
 and watch in the named group. The `run` event of `trace.jsonl` lists these kinds in `kinds`. A
 fake collection that an entry's `owns` names also maps to an empty list. Any other kind or
 collection has a key only if the trace holds an object of it.
+
+Teardown skips a child whose ownerReference chain reaches its CR, since the garbage collector
+deletes it after the CR whatever the controller's order. A `when: always` property can require
+that such children go first, as
+[targets/toy-fleet/order](targets/toy-fleet/order/config.yaml) does:
+
+```yaml
+properties:
+  - name: volumes-go-before-their-cluster
+    when: always
+    expr: >-
+      world.kube['volumes.storage.thirdparty'].all(v, !has(v.metadata.ownerReferences)
+        || v.metadata.ownerReferences.all(o, crs.exists(c, c.metadata.uid == o.uid)))
+```
+
+It fails at the first version that shows a Volume whose owner is no longer a live CR.
 
 `firstWrittenUnder(object, path)` names the CR that owned the object when its value at `path`
 first appeared, across deletes and recreates. cert-manager's `fresh-key` property uses it. A

@@ -5,7 +5,7 @@ description: Sets up reconciler-fuzzer for a Kubernetes controller. Writes confi
 # Adopt reconciler-fuzzer
 
 reconciler-fuzzer runs a controller against envtest, follows a plan of CR changes, faults,
-restarts and damage, and judges the trace with nine checks. This skill writes the config for
+restarts and damage, and judges the trace with ten checks. This skill writes the config for
 one controller and runs it until reconciler-fuzzer tests the controller.
 
 Never edit the controller's source without the user's consent.
@@ -355,7 +355,7 @@ controller:
 | Ordered | The controller does not hold the named object's deletion by design. | Drop the reference's `onDelete`. |
 | Converge, clause 1, `the controller last saw … ready` | The entry's `ready` accepts an object that the controller treats as not ready. | Fix the entry's `ready`. |
 | Converge, clause 1, `the controller last saw … missing` or `not ready`, on an object that is ready now | Nothing, if the controller does not watch the named kind: it missed the change. | Report the bug (step 11). The controller should watch that kind and requeue the CRs that name the object. |
-| Clean | The controller keeps resources by design. | Set the entry's `retain`. |
+| Clean or Teardown | The controller keeps resources by design. | Set the entry's `retain`. |
 | Unique | The CR owns several resources of one kind and role by design, such as several with one `generateName`, or several in one collection of a fake. | Set the system's `role`. |
 | Restore, `did not restore damaged resources` | The controller recreates a damaged resource under a new name by design. | Set the system's `role` to CEL that gives both names one role. |
 | Converge or Restore, with a CR that halted after a create of unknown outcome | The controller stops on purpose and waits for a person. | Set the entry's `halted` to CEL over its halted condition. |

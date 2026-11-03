@@ -51,10 +51,10 @@ defines each one. Follow these steps in order.
 
    A bug about a dependency runs under `targets/toy-widget/gadget/config.yaml`,
    with its plan in `gadget/plans/` and its gate row naming that config.
-   A bug about a reference goes in `targets/toy-fleet`: its constant and
-   `bugs` entry in `controller/bug.go`, its case and test in `controller/`,
-   its description in `bugmatrix_test.go`, a plan in `plans/` and a `gate`
-   row in `gate_test.go`.
+   A bug about a reference or a teardown's order goes in `targets/toy-fleet`:
+   its constant and `bugs` entry in `controller/bug.go`, its case and test in
+   `controller/`, its description in `bugmatrix_test.go`, a plan in the
+   `plans/` beside its config and a `gate` row in `gate_test.go`.
 
 6. **Verify.**
 

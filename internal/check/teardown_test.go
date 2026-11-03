@@ -409,3 +409,62 @@ func TestTeardownPassesResourcesOfOtherOwners(t *testing.T) {
 		})
 	}
 }
+
+// A controller keeps what its CR's deletion policy retains.
+func TestTeardownPassesWhatRetainKeeps(t *testing.T) {
+	for retain, want := range map[string]int{`self.metadata.name == "a"`: 0, `self.metadata.name == "b"`: 1, `self.policy == "Retain"`: 1} {
+		t.Run(retain, func(t *testing.T) {
+			r, uid := deletingA(ruleTwo)
+			r.Spec.Primaries[0].Retain = retain
+			releaseA(r, uid)
+			if got := len(teardown(t, r)); got != want {
+				t.Errorf("Found %d findings, want %d.", got, want)
+			}
+		})
+	}
+}
+
+// The namespace controller deletes what a deleting namespace holds.
+func TestTeardownCountsAChildInADeletingNamespaceAsBeingDeleted(t *testing.T) {
+	namespace := tt.Ref("namespaces", "", "other")
+	for name, row := range map[string]struct {
+		deleteNamespace func(r *tt.Script)
+		failed          bool
+	}{
+		"with a deletionTimestamp": {func(r *tt.Script) {
+			r.Add(tt.Version(namespace, r.UID(namespace), "n2", tt.Deleting(tt.Object("other"))))
+		}, false},
+		"after an answered delete": {func(r *tt.Script) { r.Call(ctl, "delete", namespace, 200) }, false},
+		"while it is live":         {func(r *tt.Script) {}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, uid := finalized(ruleTwo)
+			r.Create(trace.Harness, namespace, tt.Object("other"))
+			r.Create(ctl, ruleTwo.ref, ruleTwo.body)
+			deleteA(r, uid, own)
+			row.deleteNamespace(r)
+			releaseA(r, uid)
+			if findings := teardown(t, r); row.failed {
+				requireFinding(t, findings, "Teardown", 1, releasedFirst, ruleTwo.kind, ruleTwo.detail)
+			} else {
+				requireNone(t, findings)
+			}
+		})
+	}
+}
+
+// A kube namespace holds no fake's resource.
+func TestTeardownJudgesAFakesResourceInANamespaceThatKubeDeletes(t *testing.T) {
+	namespace, bucket := tt.Ref("namespaces", "", "other"), trace.Ref{System: "cloud", Resource: "buckets", Namespace: "other", Name: "b1"}
+	r := newRun(2)
+	r.Spec.Systems, r.Spec.Owners = []trace.System{cloudSystem}, tagOwner
+	r.Begin()
+	uid := r.CreateCR("a", widgetA)
+	r.Add(write(ctl, "update", widgetA, "f1", own), tt.Version(widgetA, uid, "f1", finalizedA(false)))
+	r.Create(trace.Harness, namespace, tt.Object("other"))
+	r.Create(ctl, bucket, bucketBody("READY", uid))
+	deleteA(r, uid, own)
+	r.Call(ctl, "delete", namespace, 200)
+	releaseA(r, uid)
+	requireFinding(t, teardown(t, r), "Teardown", 1, releasedFirst, "cloud/buckets", "cloud buckets b1 (rule 2, slot a)")
+}

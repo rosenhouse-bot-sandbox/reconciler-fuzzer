@@ -374,13 +374,19 @@ seeing its dependency not ready`. Each finding takes the `to` kind. Under
 `onDelete: block`, Honest, unlike Converge and Restore, also counts a look at
 the object being deleted `ready` if its last version before the deletion was.
 
-**Ordered.** Under `onDelete: block`, a `to` instance's **release** is its
-deleted version, and its deletion starts at its first `deletionTimestamp`, or
-else at the release. Ordered fails a release if the controller saw the instance
-and a version of a `from` CR that names it in time to hold it, and the CR stays
-live and names the instance in each later version up to the release: `released
-an object that another names`. Entry 89 says when a sight is in time, and which
-CRs on a cycle do not count.
+**Ordered** and Teardown judge the order of a deletion. Under `onDelete: block`,
+a `to` instance's **release** is its deleted version, and its deletion starts at
+its first `deletionTimestamp`, or else at the release. Ordered fails a release
+if the controller saw the instance and a version of a `from` CR that names it in
+time to hold it, and the CR stays live and names the instance in each later
+version up to the release: `released an object that another names`. Entry 89
+says when a sight is in time, and which CRs on a cycle do not count.
+
+**Teardown.** A controller `update` or `patch` that leaves a deleting CR none
+of the finalizers that the controller may own (entry 85) fails while a live
+controller resource of the CR by rules 1 to 3, unless gc deletes it or the CR's
+`retain` allows it, has no `deletionTimestamp` or answered delete, nor has its
+kube namespace (entry 90): `released a CR before deleting its resources`.
 
 **Backoff.** A controller call is **futile** if it fails, or writes and changes
 nothing (entry 88). Futile calls with one system, verb, object, subresource and
@@ -495,9 +501,8 @@ A create, or an update that draws a `mutate` path at or above a reference's
 holds: the name of any slot's CR of a listed `to` kind, or of a fixture of
 another, live half the time when one is. With `required: false`, 1 in 4
 writes `missing`, a name no object has. `namespace` values stay as drawn.
-`changeFixture` draws kube and system fixtures alike. It also deletes a live
-kube fixture of a `to` kind other than a Namespace, and `createFixture` makes
-it again.
+`changeFixture` draws kube and system fixtures alike, and may delete a live
+kube fixture of a `to` kind other than a Namespace, which `createFixture` remakes.
 
 **Hunt.** `hunt.Hunt` runs each seed, keeps runs with a new signature, replays
 each `--replays` times (5) and shrinks it (`shrink.go`), trying at most
@@ -527,12 +532,8 @@ owns one bucket in the `crudfake` system `cloud`; its bugs start at B30, and
 Cluster owns modelled third-party Volumes, a Database names a Cluster and maybe
 a Secret, and a User a Database. Its bugs start at B100. `config.yaml` lists all
 three kinds, and blocks on the references to Clusters and Databases. The
-generated test fuzzes `cluster/`, which lists Clusters alone, `database/`, which
-lists Databases on a fixture Cluster, `protect/`, whose Volume model holds each
-Volume's deletion with its finalizer, and `upgrade/`, `cluster/` with an upgrade
-to `--version=2`. Only gate rows run `config.yaml`, `secret/`, which runs
-`--protect-secrets` and blocks on the Secret reference, `upgrade/properties/`,
-which adds a property, and `uninstall/`, whose Database CRD a plan may delete.
+generated test fuzzes `cluster/`, `database/`, `protect/` and `upgrade/`. Only
+gate rows run the other configs. Each config's first comment says what it adds.
 
 Each config's `plans/` holds its gated bugs' and B0's plans. A toy's
 `gate_envtest_test.go` runs `gate_test.go`'s rows, and its `bugmatrix_test.go`
@@ -594,3 +595,4 @@ Each entry changes a check, exception, `System` interface or ignore list.
 87. At a step whose restart upgrades the controller, Restore allows changed resources but not replaced ones, since a release often rewrites its children's labels or templates (#137).
 88. Backoff counts a no-op write, such as a delete of an object already being deleted, as futile (#139). A no-op success ends a run of failing calls, since its reconcile may have reset the rate limiter. A run of no-op writes allows twice the calls, since a reconcile may repeat a write, as a deferred status update after an explicit one does. An update that empties a deleting object's finalizers is not futile, since it deletes the object (entry 85). A kube `deletecollection` answers with the resourceVersion of its list. By default that is the latest, which repeats only while nothing in the cluster changes. So a repeat counts as a no-op. The rule assumes that the repeat has the earlier call's selector and options.
 89. Under `onDelete: block` (#126, #127), a `to` CR that waits in deletion while a live `from` CR names it meets clauses 1 and 2 from `stable` after its deletion started, and not before the step's `backoff + stable` after `endFaults`, since its controller may write it as it starts to wait, from retry backoff if a fault failed that write, and may report it not `ready` while it waits. Ordered needs the `from` CR to name the instance in each version up to the release, so a moved reference releases the old object, and a CR being deleted still names it. It skips a CR that waits for the instance in turn, through CRs being deleted, since such a cycle waits for good unless the controller breaks it, as Kubernetes' garbage collector breaks a cycle of foreground deletions. Clause 2 holds the cycle's CRs to it. Ordered also skips what the trace cannot order: a delete that the observer recorded from a relist, which carries the resourceVersion of the version before it, and a CR with a version that the controller saw and the observer missed. It counts a seen of the instance or the CR only if the controller must hold the instance by the deletion's start. A hold is due `stable` after the seen, stalls aside (entry 86). If a step's faults stalled the controller after the seen and began by then, the hold is due no sooner than the step's `backoff + stable` after `endFaults`. A controller that adds its finalizer in a reconcile cannot hold an object deleted first, and one in retry backoff reconciles only after the backoff. Only admission control closes the first race. It compares resourceVersions as integers, as etcd assigns them, since the observer's watches order no events across kinds. Honest counts an object that waits in deletion `ready` if it is, or if its last version before the deletion was, since a controller may still use that version. Converge and Restore judge the object as it is, so they still excuse a CR that is not `ready` on it.
+90. Teardown skips a kube resource whose ownerReferences name the CR, or a resource that gc deletes with it, since gc deletes it after the CR whatever the controller's order (#130). An answered delete counts, since the observer may record the deletion after the release, but not one sent before the resource appeared, which may have hit an earlier instance of its name. A deleting namespace counts for what it holds, which the namespace controller deletes.

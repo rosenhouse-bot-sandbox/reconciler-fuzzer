@@ -22,12 +22,12 @@ func Teardown(ix *trace.Index, s Spec) []Finding {
 	details, at := map[int]map[string][]string{}, map[int]time.Duration{}
 	for _, e := range ix.Calls(trace.Controller, -1, math.MaxInt64) {
 		cr, released := releasedBy(ix, e, s)
-		if !released {
+		if !released || retains(s, cr.Ref, cr.Body) {
 			continue
 		}
 		for _, i := range w.Instances(e.At) {
 			o := w.Owner(i, e.At)
-			if uid, _ := o.Named(); uid != cr || !controllerResource(i) || w.Collected(i, cr, e.At) || beingDeleted(ix, w, deletes, i, e.At) {
+			if uid, _ := o.Named(); uid != cr.UID || !controllerResource(i) || w.Collected(i, cr.UID, e.At) || beingDeleted(ix, w, deletes, i, e.At) {
 				continue
 			}
 			step := stepAt(steps, e.At-e.Call.Latency)
@@ -45,12 +45,12 @@ func Teardown(ix *trace.Index, s Spec) []Finding {
 	return findings
 }
 
-// releasedBy returns the uid of the object that e, a controller write,
+// releasedBy returns the version of the object that e, a controller write,
 // released: the write left the object, which was being deleted, none of the
 // finalizers that the controller may own.
-func releasedBy(ix *trace.Index, e trace.Event, s Spec) (string, bool) {
+func releasedBy(ix *trace.Index, e trace.Event, s Spec) (trace.Version, bool) {
 	if !judgedWrite(*e.Call, s) {
-		return "", false
+		return trace.Version{}, false
 	}
 	base := replaced(ix, e)
 	own := slices.DeleteFunc(finalizers(base), func(f string) bool {
@@ -58,19 +58,25 @@ func releasedBy(ix *trace.Index, e trace.Event, s Spec) (string, bool) {
 		return foreign
 	})
 	kept := slices.ContainsFunc(own, func(f string) bool { return slices.Contains(*e.Call.ResultFinalizers, f) })
-	return base.UID, deleting(base.Body) && len(own) > 0 && !kept
+	return base, deleting(base.Body) && len(own) > 0 && !kept
 }
 
-// beingDeleted reports whether, by t, i had a deletionTimestamp or a delete
-// of it had answered. A delete sent before i appeared may have hit an
-// earlier instance of i's ref, so it does not count.
+// beingDeleted reports whether, by t, i or the kube namespace that holds it
+// had a deletionTimestamp or a delete of it had answered. The namespace
+// controller deletes what a deleting namespace holds. A delete sent before
+// an instance appeared may have hit an earlier instance of its ref, so it
+// does not count.
 func beingDeleted(ix *trace.Index, w *owner.World, deletes []trace.Event, i owner.Instance, t time.Duration) bool {
 	if start, found := deletionStart(w.Versions(i)); found && start <= t {
 		return true
 	}
-	return slices.ContainsFunc(deletes, func(d trace.Event) bool {
+	if slices.ContainsFunc(deletes, func(d trace.Event) bool {
 		return d.At <= t && d.Call.Object().Covers(i.Ref) && d.At-d.Call.Latency >= appeared(ix, i)
-	})
+	}) {
+		return true
+	}
+	namespace, found := w.Latest(trace.Ref{System: "kube", Resource: "namespaces", Name: i.Ref.Namespace}, t)
+	return i.Ref.System == "kube" && found && beingDeleted(ix, w, deletes, namespace, t)
 }
 
 // deleteCalls are the delete and deletecollection calls of every caller

@@ -74,14 +74,19 @@ func (v *view) allDeleted(o owner.Owner, t time.Duration) bool {
 func (v *view) retained(o owner.Owner, t time.Duration) bool {
 	return len(o.CRs) > 0 && !slices.ContainsFunc(o.CRs, func(uid string) bool {
 		cr, _ := v.w.Instance(uid)
-		p, _ := v.s.primary(cr.Ref)
-		var body map[string]any
-		if p.Retain == nil || json.Unmarshal(v.w.Body(cr, t), &body) != nil {
-			return true
-		}
-		keep, err := p.Retain(body)
-		return err != nil || !keep
+		return !retains(v.s, cr.Ref, v.w.Body(cr, t))
 	})
+}
+
+// retains reports whether the retain of the CR kind of ref holds over body.
+func retains(s Spec, ref trace.Ref, body []byte) bool {
+	p, _ := s.primary(ref)
+	var cr map[string]any
+	if p.Retain == nil || json.Unmarshal(body, &cr) != nil {
+		return false
+	}
+	keep, err := p.Retain(cr)
+	return err == nil && keep
 }
 
 // grown returns the groups of shared resources that hold more live
