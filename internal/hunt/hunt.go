@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"iter"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -78,10 +80,11 @@ type Found struct {
 // Hunt runs each seed's plan into <Out>/seed-<n>. For each finding whose
 // signature no earlier seed found, it replays the plan Replays times and
 // shrinks it. It removes the run of a seed that found nothing new. A seed
-// whose run fails is noted, and the hunt continues. It writes summary.md under
-// Out after each seed, and as the replays and shrinks of a seed's findings
-// finish. It returns the distinct findings, and an error when a seed failed
-// or the context ended.
+// whose run fails is noted, and the hunt continues. A run that finds a
+// program missing ends the hunt, since the setup is at fault, not the seed.
+// It writes summary.md under Out after each seed, and as the replays and
+// shrinks of a seed's findings finish. It returns the distinct findings, and
+// an error when a seed failed or the context ended.
 func Hunt(ctx context.Context, o Options) ([]Found, error) {
 	cfg, err := config.Load(o.ConfigPath)
 	if err != nil {
@@ -127,10 +130,18 @@ func Hunt(ctx context.Context, o Options) ([]Found, error) {
 			return found, errors.Join(err, writeSummary(o.Out, fmt.Sprintf("%d seeds", seeds), found, failed))
 		}
 		seeds++
+		missing := missingProgram(err)
 		if err != nil {
-			failed = append(failed, fmt.Sprintf("seed %d: %v", seed, err))
+			err = fmt.Errorf("seed %d: %w", seed, err)
+			failed = append(failed, err.Error())
+			if !missing {
+				h.logf("%v", err)
+			}
 		}
 		if err := writeSummary(o.Out, fmt.Sprintf("%d seeds", seeds), found, failed); err != nil {
+			return found, err
+		}
+		if missing {
 			return found, err
 		}
 	}
@@ -139,6 +150,17 @@ func Hunt(ctx context.Context, o Options) ([]Found, error) {
 		err = errors.Join(err, fmt.Errorf("%d of %d seeds failed", len(failed), seeds))
 	}
 	return found, err
+}
+
+// missingProgram reports whether err says that a program is missing.
+// exec.LookPath returns an *exec.Error when it finds no executable file.
+// os.StartProcess returns an *fs.PathError with Op "fork/exec" and ENOENT
+// when the file is missing, as when envtest finds no etcd. Other fork/exec
+// errors, such as EAGAIN, can be transient.
+func missingProgram(err error) bool {
+	var start *fs.PathError
+	return errors.As(err, new(*exec.Error)) ||
+		errors.As(err, &start) && start.Op == "fork/exec" && errors.Is(start.Err, fs.ErrNotExist)
 }
 
 // ShrinkOptions configure the shrink of one plan file, as Options do a
@@ -212,7 +234,6 @@ func (h *hunter) logf(format string, args ...any) {
 func (h *hunter) investigate(ctx context.Context, p *plan.Plan, dir, name string) ([]Found, error) {
 	report, err := h.run(ctx, p, dir)
 	if err != nil {
-		h.logf("%s: %v", name, err)
 		return nil, err
 	}
 	var found []Found

@@ -119,7 +119,7 @@ primary:
   kind: toy.reconciler-fuzzer/v1/Widget
   sample: ` + widget + `/widget.yaml
   ready: "true"
-  halted: has(self.halted)
+  halted: has(self.status.gadgetReady)
 timeouts: {stable: 2s}
 systems:
 - {name: cloud, api: crud, process: {command: [x]}, ready: self.state == 'READY', poll: 700ms, dependency: {track: 1s}}
@@ -146,7 +146,7 @@ func TestSpecForTakesFakesFromTheConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := got.Primaries[0].Halted(map[string]any{"halted": 1}); !ok || err != nil {
+	if ok, err := got.Primaries[0].Halted(map[string]any{"status": map[string]any{"gadgetReady": false}}); !ok || err != nil {
 		t.Errorf("Halted = %v, %v", ok, err)
 	}
 	if want := map[string]time.Duration{"cloud": 700 * ms, "other": 2 * s}; !reflect.DeepEqual(got.Polls, want) {

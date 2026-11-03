@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/cel-go/cel"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
@@ -48,6 +49,8 @@ type Config struct {
 	Timeouts   Timeouts
 	Properties []Property
 	References []Reference
+
+	kinds servedKinds
 }
 
 // Values say how the generator draws CRs of one kind. Paths are dotted,
@@ -122,7 +125,9 @@ type Owns struct {
 	// <system>:<collection>; Kind is then empty.
 	System, Collection string
 	Kind               schema.GroupVersionKind
-	Name               string
+	// Resource is the plural that serves Kind, such as configmaps.
+	Resource string
+	Name     string
 	// Namespace is empty when unset: the resource is in the CR's namespace,
 	// or cluster-scoped.
 	Namespace string
@@ -218,8 +223,10 @@ const ReadyConditionCEL = `has(self.status) && has(self.status.conditions) && se
 
 // Model is one models entry: the harness plays the controller of Kind.
 type Model struct {
-	Kind  schema.GroupVersionKind
-	Stage string
+	Kind schema.GroupVersionKind
+	// Resource is the plural that serves Kind, such as gadgets.
+	Resource string
+	Stage    string
 	// Status holds literal fields the stage sets in each status write, and
 	// StuckStatus those it sets in their place while a stuck fault lasts.
 	// A nil StuckStatus means Status, and an empty one means no fields.
@@ -440,6 +447,9 @@ func load(path string) (*Config, error) {
 	if c.CRDs, err = existing(dir, "crds", d.CRDs); err != nil {
 		return nil, err
 	}
+	if c.kinds, err = readKinds(c.CRDs); err != nil {
+		return nil, err
+	}
 	if c.Fixtures, err = existing(dir, "fixtures", d.Fixtures); err != nil {
 		return nil, err
 	}
@@ -489,16 +499,16 @@ func load(path string) (*Config, error) {
 	if c.Systems, err = systems(d, dir, c.Timeouts.Stable); err != nil {
 		return nil, err
 	}
-	if c.Primaries, err = primaries(d, dir, c.Fakes()); err != nil {
+	if c.Primaries, err = primaries(d, dir, c.Fakes(), c.kinds); err != nil {
 		return nil, err
 	}
-	if c.Models, err = models(d, c.ListedKinds()); err != nil {
+	if c.Models, err = models(d, c.ListedKinds(), c.kinds); err != nil {
 		return nil, err
 	}
 	if err := refuseListedFixtures(d.Fixtures, c.Fixtures, c.ListedKinds()); err != nil {
 		return nil, err
 	}
-	if c.References, err = c.references(d.References); err != nil {
+	if c.References, err = c.references(d.References, c.kinds); err != nil {
 		return nil, err
 	}
 	fixtures := slices.Clone(c.Fixtures)
@@ -534,7 +544,7 @@ func load(path string) (*Config, error) {
 
 // primaries loads the primaries entries, or primary as the one entry with
 // the top-level values.
-func primaries(d declaration, dir string, fakes []System) ([]Primary, error) {
+func primaries(d declaration, dir string, fakes []System, kinds servedKinds) ([]Primary, error) {
 	entries, key := d.Primaries, func(i int) string { return fmt.Sprintf("primaries[%d]", i) }
 	switch {
 	case d.Primary != nil && d.Primaries != nil:
@@ -558,7 +568,7 @@ func primaries(d declaration, dir string, fakes []System) ([]Primary, error) {
 	}
 	var listed []Primary
 	for i, declared := range entries {
-		p, err := primary(key(i), declared, dir, fakes)
+		p, err := primary(key(i), declared, dir, fakes, kinds)
 		if err != nil {
 			return nil, err
 		}
@@ -571,13 +581,17 @@ func primaries(d declaration, dir string, fakes []System) ([]Primary, error) {
 }
 
 // primary loads one entry. key names it in errors.
-func primary(key string, declared declaredEntry, dir string, fakes []System) (Primary, error) {
+func primary(key string, declared declaredEntry, dir string, fakes []System, kinds servedKinds) (Primary, error) {
 	if declared.Kind == "" {
 		return Primary{}, fmt.Errorf("%s.kind is required", key)
 	}
 	kind, err := parseGVK(declared.Kind)
 	if err != nil {
 		return Primary{}, fmt.Errorf("%s.kind %q: %w", key, declared.Kind, err)
+	}
+	served, err := kinds.serving(kind)
+	if err != nil {
+		return Primary{}, fmt.Errorf("%s.kind %s: %w", key, declared.Kind, err)
 	}
 	p := Primary{Kind: kind, Ready: declared.Ready, Retain: declared.Retain, Halted: declared.Halted, Values: Values(declared.Values)}
 	if declared.Sample == "" {
@@ -591,23 +605,23 @@ func primary(key string, declared declaredEntry, dir string, fakes []System) (Pr
 	if p.Ready == "" {
 		return Primary{}, fmt.Errorf("%s.ready is required", key)
 	}
-	if p.ready, err = CompileReady(p.Ready); err != nil {
+	if p.ready, err = CompileReady(p.Ready, served.schema); err != nil {
 		return Primary{}, fmt.Errorf("%s.ready: %w", key, err)
 	}
 	if p.Retain != "" {
-		if p.retain, err = CompileReady(p.Retain); err != nil {
+		if p.retain, err = CompileReady(p.Retain, served.schema); err != nil {
 			return Primary{}, fmt.Errorf("%s.retain: %w", key, err)
 		}
 	}
 	if p.Halted != "" {
-		if p.halted, err = CompileReady(p.Halted); err != nil {
+		if p.halted, err = CompileReady(p.Halted, served.schema); err != nil {
 			return Primary{}, fmt.Errorf("%s.halted: %w", key, err)
 		}
 	}
 	if p.Periodic, err = periodic(key, declared.Periodic); err != nil {
 		return Primary{}, err
 	}
-	if p.Owns, err = owns(key, declared.Owns, fakes); err != nil {
+	if p.Owns, err = owns(key, declared.Owns, fakes, kinds, served.schema); err != nil {
 		return Primary{}, err
 	}
 	return p, nil
@@ -789,7 +803,7 @@ func keys(s string) ([]string, bool) {
 	}
 }
 
-func models(d declaration, listed []schema.GroupKind) ([]Model, error) {
+func models(d declaration, listed []schema.GroupKind, kinds servedKinds) ([]Model, error) {
 	var models []Model
 	seen := map[schema.GroupKind]bool{}
 	for _, kind := range listed {
@@ -804,11 +818,15 @@ func models(d declaration, listed []schema.GroupKind) ([]Model, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s.kind %q: %w", key, declared.Kind, err)
 		}
+		served, err := kinds.serving(kind)
+		if err != nil {
+			return nil, fmt.Errorf("%s.kind %s: %w", key, declared.Kind, err)
+		}
 		if seen[kind.GroupKind()] {
 			return nil, fmt.Errorf("%s.kind %s: a primary or another model has this kind", key, declared.Kind)
 		}
 		seen[kind.GroupKind()] = true
-		m := Model{Kind: kind, Stage: ReadyCondition, Status: declared.Status, StuckStatus: declared.StuckStatus}
+		m := Model{Kind: kind, Resource: served.resource, Stage: ReadyCondition, Status: declared.Status, StuckStatus: declared.StuckStatus}
 		if declared.Stages != "" && declared.Stages != ReadyCondition {
 			return nil, fmt.Errorf("%s.stages %q: the only stage is %s", key, declared.Stages, ReadyCondition)
 		}
@@ -871,7 +889,9 @@ func dependency(key string, declared *declaredDependency) (*Dependency, error) {
 	return dep, nil
 }
 
-func owns(entryKey string, entries []declaredOwns, fakes []System) ([]Owns, error) {
+// owns loads an entry's owns. crSchema is the openAPIV3Schema of the entry's
+// CRs, or nil.
+func owns(entryKey string, entries []declaredOwns, fakes []System, kinds servedKinds, crSchema map[string]any) ([]Owns, error) {
 	var owns []Owns
 	for i, declared := range entries {
 		key := fmt.Sprintf("%s.owns[%d]", entryKey, i)
@@ -893,17 +913,21 @@ func owns(entryKey string, entries []declaredOwns, fakes []System) ([]Owns, erro
 			if err != nil {
 				return nil, fmt.Errorf("%s.kind %q: %w", key, declared.Kind, err)
 			}
-			o.Kind = kind
+			served, err := kinds.serving(kind)
+			if err != nil {
+				return nil, fmt.Errorf("%s.kind %s: %w", key, declared.Kind, err)
+			}
+			o.Kind, o.Resource = kind, served.resource
 		}
 		if declared.Name == "" {
 			return nil, fmt.Errorf("%s.name is required", key)
 		}
-		if _, err := CompileString(declared.Name); err != nil {
-			return nil, fmt.Errorf("%s.name: %w", key, err)
-		}
-		if declared.Namespace != "" {
-			if _, err := CompileString(declared.Namespace); err != nil {
-				return nil, fmt.Errorf("%s.namespace: %w", key, err)
+		for _, field := range []struct{ key, expr string }{{"name", declared.Name}, {"namespace", declared.Namespace}} {
+			if field.expr == "" {
+				continue
+			}
+			if err := typeCheck(field.expr, crSchema, cel.StringType); err != nil {
+				return nil, fmt.Errorf("%s.%s: %w", key, field.key, err)
 			}
 		}
 		o.Name, o.Namespace = declared.Name, declared.Namespace
@@ -996,12 +1020,12 @@ func systems(d declaration, dir string, stable time.Duration) ([]System, error) 
 }
 
 func compileString(expr string) error {
-	_, err := CompileString(expr)
+	_, err := CompileString(expr, nil)
 	return err
 }
 
 func compileBool(expr string) error {
-	_, err := CompileReady(expr)
+	_, err := CompileReady(expr, nil)
 	return err
 }
 
@@ -1049,6 +1073,10 @@ func parseGVK(declared string) (schema.GroupVersionKind, error) {
 	}
 	return gvk, nil
 }
+
+// Schema is the openAPIV3Schema of the CRD under crds that serves kind, or
+// nil.
+func (c *Config) Schema(kind schema.GroupVersionKind) map[string]any { return c.kinds[kind].schema }
 
 // Ready evaluates the Ready of cr's entry over cr, a CR's body. Ready,
 // Retain and Halted take the entry of cr's group and kind. With one entry,

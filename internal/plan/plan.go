@@ -6,14 +6,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/suggest"
 )
 
 // Plan is the list of steps for one run.
@@ -72,6 +76,9 @@ const (
 	// and fixture changes, and the runner appends no steps.
 	Stop Do = "stop"
 )
+
+// dos are the actions, in the order of their declarations.
+var dos = []Do{Create, Update, Delete, Restart, Kill, Damage, ChangeFixture, CreateFixture, Stop}
 
 // Action is something the harness does once in a step, At after the fault
 // period starts.
@@ -204,21 +211,28 @@ func (d *Duration) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// Load reads plan.json strictly and validates it. It resolves each
-// restart's binary and crds against the file's directory.
+// Load reads plan.json and validates it. It refuses a key that no field's
+// json name spells exactly. It resolves each restart's binary and crds
+// against the file's directory.
 func Load(path string) (*Plan, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	var p Plan
-	if err := decoder.Decode(&p); err != nil {
+	var raw any
+	if err := decoder.Decode(&raw); err != nil {
 		return nil, fmt.Errorf("loading plan %s: %w", path, err)
 	}
 	if decoder.More() {
 		return nil, fmt.Errorf("loading plan %s: data after the plan", path)
+	}
+	if err := knownFields(reflect.TypeFor[Plan](), raw, ""); err != nil {
+		return nil, fmt.Errorf("loading plan %s: %w", path, err)
+	}
+	var p Plan
+	if err := json.Unmarshal(data, &p); err != nil {
+		return nil, fmt.Errorf("loading plan %s: %w", path, err)
 	}
 	if err := p.Validate(); err != nil {
 		return nil, fmt.Errorf("loading plan %s: %w", path, err)
@@ -229,6 +243,60 @@ func Load(path string) (*Plan, error) {
 	}
 	p.resolve(filepath.Dir(abs))
 	return &p, nil
+}
+
+// knownFields refuses a key of value, at path, that no json name of t's
+// fields spells exactly. It reads an object's and a patch's keys as data.
+func knownFields(t reflect.Type, value any, path string) error {
+	switch t.Kind() {
+	case reflect.Pointer:
+		return knownFields(t.Elem(), value, path)
+	case reflect.Slice:
+		items, _ := value.([]any)
+		for i, item := range items {
+			if err := knownFields(t.Elem(), item, fmt.Sprintf("%s[%d]", path, i)); err != nil {
+				return err
+			}
+		}
+	case reflect.Struct:
+		object, _ := value.(map[string]any)
+		fields := jsonFields(t)
+		for _, key := range slices.Sorted(maps.Keys(object)) {
+			field, known := fields[key]
+			if !known {
+				return unknownField(path, key, slices.Sorted(maps.Keys(fields)))
+			}
+			if err := knownFields(field, object[key], strings.TrimPrefix(path+"."+key, ".")); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// jsonFields maps the json name of each of t's fields, an embedded
+// struct's included, to its type.
+func jsonFields(t reflect.Type) map[string]reflect.Type {
+	fields := map[string]reflect.Type{}
+	for field := range t.Fields() {
+		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		if field.Anonymous && name == "" {
+			maps.Copy(fields, jsonFields(field.Type))
+			continue
+		}
+		fields[name] = field.Type
+	}
+	return fields
+}
+
+func unknownField(path, key string, names []string) error {
+	if path != "" {
+		path += ": "
+	}
+	if near := suggest.Nearest(key, names); near != "" {
+		return fmt.Errorf("%sunknown field %q; did you mean %s?", path, key, near)
+	}
+	return fmt.Errorf("%sunknown field %q", path, key)
 }
 
 // Marshal returns p as indented JSON, as Save writes it.
@@ -395,7 +463,7 @@ func (a Action) validateDo(names map[string]string, deleted map[Target]bool) err
 	case CreateFixture:
 		return a.validateCreateFixture(deleted)
 	default:
-		return fmt.Errorf("unknown do %q", a.Do)
+		return fmt.Errorf("unknown do %q; want %s", a.Do, suggest.List(dos, "or"))
 	}
 	return nil
 }

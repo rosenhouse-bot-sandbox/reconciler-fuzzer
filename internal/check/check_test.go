@@ -603,6 +603,73 @@ func TestSpecFor(t *testing.T) {
 	}
 }
 
+// thingCR is a CR of testdata/numbers as a trace holds it, so that its
+// numbers decode to float64s.
+func thingCR(t *testing.T) map[string]any {
+	t.Helper()
+	var cr map[string]any
+	if err := json.Unmarshal([]byte(`{"metadata": {"name": "abc"}, "spec": {"size": 2, "ratio": 1}}`), &cr); err != nil {
+		t.Fatal(err)
+	}
+	return cr
+}
+
+func TestSpecForComputesWithTheTypesTheCRDSchemaGives(t *testing.T) {
+	c, err := config.Load("testdata/numbers/config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	things := trace.Kind{Group: "toy", Version: "v1", Kind: "Thing", Resource: "things"}
+	run := tt.Run("toy", "things")
+	run.Run.Primaries[0].Kind = things
+	run.Run.References = []trace.Reference{{From: things, To: things, Name: "spec.peer", Ready: "true"}}
+	var b tt.Builder
+	spec, err := check.SpecFor(c, b.Add(run).Index())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := spec.Primaries[0]
+	for name, expr := range map[string]func(map[string]any) (bool, error){"ready": p.Ready, "retain": p.Retain, "halted": p.Halted} {
+		if ok, err := expr(thingCR(t)); !ok || err != nil {
+			t.Errorf("%s = %v, %v; want true", name, ok, err)
+		}
+	}
+	if name, err := spec.Owners.Owns[0].Name(thingCR(t)); name != "ab1.5" || err != nil {
+		t.Errorf("owns name = %q, %v; want ab1.5", name, err)
+	}
+	if namespace, err := spec.Owners.Owns[0].Namespace(thingCR(t)); namespace != "ns-1.5" || err != nil {
+		t.Errorf("owns namespace = %q, %v; want ns-1.5", namespace, err)
+	}
+	if ready, err := spec.References[0].Ready(thingCR(t)); !ready || err != nil {
+		t.Errorf("reference ready = %v, %v; want true", ready, err)
+	}
+}
+
+// Without a config, the run event's schema types the CR. An older trace
+// holds no schema, so each whole number in its CRs is an int.
+func TestSpecForWithoutAConfigTypesTheCRByTheRunEventsSchema(t *testing.T) {
+	c, err := config.Load("testdata/numbers/config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for ready, recorded := range map[string]map[string]any{
+		"self.spec.ratio + 0.5 == 1.5": c.Schema(schema.GroupVersionKind{Group: "toy", Version: "v1", Kind: "Thing"}),
+		"self.spec.ratio + 1 == 2":     nil,
+	} {
+		run := tt.Run("toy", "things")
+		run.Run.Primaries[0].Ready, run.Run.Primaries[0].Schema = ready, recorded
+		run.Run.Stable, run.Run.Reads, run.Run.Writes = 4*s, 3, 5
+		var b tt.Builder
+		spec, err := check.SpecFor(nil, b.Add(run).Index())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := spec.Primaries[0].Ready(thingCR(t)); !ok || err != nil {
+			t.Errorf("ready %s: Ready = %v, %v; want true", ready, ok, err)
+		}
+	}
+}
+
 func TestSpecForRefusesAConfigThatListsOtherKinds(t *testing.T) {
 	c, err := config.Load("../../targets/toy-widget/config.yaml")
 	if err != nil {
