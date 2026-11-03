@@ -138,13 +138,14 @@ deadline. The toy with `--bug=2` gives:
 ````
 ## Converge: did not settle (clause 1)
 
-Step 0, at 11.953863534s.
+Step 0, at 14.008s.
+Actions: create slot a.
 
 ```
-widgets.toy.reconciler-fuzzer rf-6d6981a4/widget is not ready
+widgets.toy.reconciler-fuzzer rf-f232d025/widget is not ready; it has status {"observedGeneration":1,"ready":440}
 model gc has work pending
-the controller made 226 changed writes in (9.953863534s, 11.953863534s]; first it changed configmaps rf-6d6981a4/widget-0-5dt88 with create at 9.9584852s
-the controller made 238 writes in (9.953863534s, 11.953863534s], over the budget of 4
+the controller made 290 changed writes in (12.007871362s, 14.007871362s]; first it changed widgets.toy.reconciler-fuzzer rf-f232d025/widget with patch at 12.00893056s
+the controller made 305 writes in (12.007871362s, 14.007871362s], over the budget of 4
 ```
 ````
 
@@ -185,8 +186,9 @@ does so once `stable`, and the time the step's faults lasted, at most
 Clause 1's line quotes the CR's status as stored, such as `it has status
 {"ready":false}`, or says `it has no status`. It then says what the
 controller last saw of each object that the CR names, such as `; the
-controller last saw secrets ns/admin-password ready at 7.24s`. If it saw the object ready, the reference's `ready`
-accepts an object that the controller treats as not ready. If it saw the
+controller last saw secrets ns/admin-password ready at 7.24s`. If it saw
+the object ready, the reference's `ready` accepts an object that the
+controller treats as not ready. If it saw the
 object missing under `required: false`, the controller treats the object
 as required. If it saw the object missing or not ready, and the object is
 ready now, the controller missed the change, as when it does not watch the
@@ -327,10 +329,11 @@ deletion started, shows it ready.
 
 An object that a `references` entry with `onDelete: block` names was
 released, that is gone, while a CR named it. Each line names the object and
-the CR, by its slot or else by its kind and name:
+the CR, by its slot or else by its kind and name. It then says when the
+object's deletion started, with which finalizers, and when it was gone:
 
 ```
-secrets rf-1b0b8a35/admin-password: slot a names it
+secrets rf-a419ddab/admin-password: slot a names it; it was deleted at 13.308348852s with no finalizers
 ```
 
 The controller saw both in time to hold the object: `stable` before the

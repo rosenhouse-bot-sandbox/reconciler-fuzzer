@@ -19,7 +19,7 @@ func TestReadmeCommandsAndPathsExist(t *testing.T) {
 }
 
 func TestReadmeProblemsCatchesMistakes(t *testing.T) {
-	const good = "See [failures](docs/failures.md) and targets/toy-widget/config.yaml.\n\n" +
+	const good = "See [failures](docs/failures.md), [the web](https://example.com/x) and targets/toy-widget/config.yaml.\n\n" +
 		"```sh\nmake setup\nexport KUBEBUILDER_ASSETS=$(make -s assets-path)\n" +
 		"reconciler-fuzzer run --config c.yaml --plan p.json \\\n  --launch-arg --bug=3 --out o\n" +
 		"reconciler-fuzzer hunt --config c.yaml --seeds 5 --out o\n```\n"
@@ -55,7 +55,7 @@ var (
 	usageLine     = regexp.MustCompile(`(?m)^\s*reconciler-fuzzer (\w+)\s+(.*)$`)
 	longFlag      = regexp.MustCompile(`--[a-z][\w-]*`)
 	repoPath      = regexp.MustCompile(`\b(?:targets|examples|docs)/[\w./-]*[\w/]`)
-	relativeLink  = regexp.MustCompile(`\]\(([^)#:\s]+)[^)]*\)`)
+	relativeLink  = regexp.MustCompile(`\]\(([^)#:\s]+)(?:[#\s][^)]*)?\)`)
 	continuedLine = regexp.MustCompile(`\\\n\s*`)
 )
 
