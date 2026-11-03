@@ -21,7 +21,11 @@ const (
 // bugs describes the correct controller and each bug that the gate runs.
 var bugs = map[int]string{
 	0:   "The correct controller.",
+	115: "Releases a deleted Cluster once it has deleted its Volumes, before they are gone.",
 	116: "Removes every finalizer from a deleting Volume while its Cluster is deleted.",
+	117: "Stops finalizing a Cluster for good once a Volume reports Ready False.",
+	118: "Deletes Volumes with orphan propagation.",
+	119: "Under --storage-classes, releases a deleted Cluster before it deletes its StorageClass.",
 	120: "Releases a Cluster while a Database names it.",
 	121: "Releases a Database while a User names it.",
 	122: "Does not requeue Users when their Database changes.",
@@ -77,7 +81,7 @@ func TestRenderBugMatrix(t *testing.T) {
 	for _, want := range []string{
 		"\n## Fleet toy\n",
 		"| Bug | Description | Plan | Check | Step |\n|---|---|---|---|---|\n",
-		"| B0 | The correct controller. | all 2 plans of config.yaml, database/config.yaml, protect/config.yaml, secret/config.yaml, upgrade/config.yaml | none | |\n",
+		"| B0 | The correct controller. | all 2 plans of config.yaml, database/config.yaml, order/config.yaml, protect/config.yaml, secret/config.yaml, storageclass/config.yaml, upgrade/config.yaml | none | |\n",
 		"| B116 | Removes every finalizer from a deleting Volume while its Cluster is deleted. | protect/b0 | Finalizers | 2 |\n" +
 			"| B116 | Removes every finalizer from a deleting Volume while its Cluster is deleted. | slow-delete | Finalizers | 1 |\n",
 		"| B0 | The correct controller. | uninstall/stop-first | none | |\n",

@@ -40,7 +40,7 @@ func Clean(ix *trace.Index, s Spec) []Finding {
 			o := v.w.Owner(i, end)
 			if !reported[i.UID] && !o.Shared() && !v.retained(o, end) && (last && !stopped || v.allGone(o, end) && v.allDeleted(o, stopAt)) {
 				reported[i.UID] = true
-				left[kind(i.Ref)] = append(left[kind(i.Ref)], v.describe(i, o))
+				left[kind(i.Ref)] = append(left[kind(i.Ref)], describeOwned(v.w, i, o))
 			}
 		}
 		if last {
@@ -74,14 +74,19 @@ func (v *view) allDeleted(o owner.Owner, t time.Duration) bool {
 func (v *view) retained(o owner.Owner, t time.Duration) bool {
 	return len(o.CRs) > 0 && !slices.ContainsFunc(o.CRs, func(uid string) bool {
 		cr, _ := v.w.Instance(uid)
-		p, _ := v.s.primary(cr.Ref)
-		var body map[string]any
-		if p.Retain == nil || json.Unmarshal(v.w.Body(cr, t), &body) != nil {
-			return true
-		}
-		keep, err := p.Retain(body)
-		return err != nil || !keep
+		return !retains(v.s, cr.Ref, v.w.Body(cr, t))
 	})
+}
+
+// retains reports whether the retain of the CR kind of ref holds over body.
+func retains(s Spec, ref trace.Ref, body []byte) bool {
+	p, _ := s.primary(ref)
+	var cr map[string]any
+	if p.Retain == nil || json.Unmarshal(body, &cr) != nil {
+		return false
+	}
+	keep, err := p.Retain(cr)
+	return err == nil && keep
 }
 
 // grown returns the groups of shared resources that hold more live
@@ -195,11 +200,11 @@ func (v *view) groupOf(i owner.Instance, t time.Duration) group {
 	return group{kind: k, owner: o.Key(), root: root.Key(), role: i.Role}
 }
 
-// describe names an instance, its owning rule and its CRs, or its unlisted
-// owner.
-func (v *view) describe(i owner.Instance, o owner.Owner) string {
+// describeOwned names an instance, its owning rule and its CRs, or its
+// unlisted owner.
+func describeOwned(w *owner.World, i owner.Instance, o owner.Owner) string {
 	if o.Unlisted != "" {
-		unlisted, _ := v.w.Instance(o.Unlisted)
+		unlisted, _ := w.Instance(o.Unlisted)
 		return fmt.Sprintf("%s (rule 1, unlisted owner %s)", describe(i.Ref), describe(unlisted.Ref))
 	}
 	if o.Shared() {
@@ -207,7 +212,7 @@ func (v *view) describe(i owner.Instance, o owner.Owner) string {
 	}
 	crs := make([]string, len(o.CRs))
 	for n, uid := range o.CRs {
-		crs[n] = crName(v.w, uid)
+		crs[n] = crName(w, uid)
 	}
 	return fmt.Sprintf("%s (rule %d, %s)", describe(i.Ref), o.Rule, strings.Join(crs, ", "))
 }
@@ -224,7 +229,7 @@ func crName(w *owner.World, uid string) string {
 func (v *view) describeAll(instances []owner.Instance, t time.Duration) []string {
 	described := make([]string, len(instances))
 	for n, i := range instances {
-		described[n] = v.describe(i, v.w.Owner(i, t))
+		described[n] = describeOwned(v.w, i, v.w.Owner(i, t))
 	}
 	return described
 }

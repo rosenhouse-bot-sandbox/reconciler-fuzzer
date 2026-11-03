@@ -318,7 +318,7 @@ const (
 func (h *honesty) dependencies(uid string, m Model, t time.Duration) []owner.Instance {
 	var owned []owner.Instance
 	for _, i := range h.w.All() {
-		if !m.covers(i.Ref) || h.appeared(i) > t || h.controllerDeleted(i, t) {
+		if !m.covers(i.Ref) || appeared(h.ix, i) > t || h.controllerDeleted(i, t) {
 			continue
 		}
 		seen, found := lastSeen(h.ix.Seen(trace.Controller, i.UID), t)
@@ -339,13 +339,17 @@ func (h *honesty) dependencies(uid string, m Model, t time.Duration) []owner.Ins
 	return owned
 }
 
-// appeared is when the trace first shows i: its first version, or the
-// controller's first sight of it if that is earlier.
-func (h *honesty) appeared(i owner.Instance) time.Duration {
-	if seens := h.ix.Seen(trace.Controller, i.UID); len(seens) > 0 {
-		return min(i.Created, seens[0].At)
+// appeared is when the trace first shows i: its first version, the answer
+// to its create, or the controller's first sight of it, whichever is first.
+func appeared(ix *trace.Index, i owner.Instance) time.Duration {
+	first := i.Created
+	if i.Creator != trace.Cluster {
+		first = min(first, i.Answered)
 	}
-	return i.Created
+	if seens := ix.Seen(trace.Controller, i.UID); len(seens) > 0 {
+		first = min(first, seens[0].At)
+	}
+	return first
 }
 
 // controllerDeleted reports whether the controller sent a `delete` of i's
@@ -353,8 +357,8 @@ func (h *honesty) appeared(i owner.Instance) time.Duration {
 // delete sent before i appeared does not count, as it may have hit an
 // earlier instance of i's ref.
 func (h *honesty) controllerDeleted(i owner.Instance, t time.Duration) bool {
-	appeared := h.appeared(i)
-	return slices.ContainsFunc(h.deletes[i.Ref], func(sent time.Duration) bool { return sent >= appeared && sent <= t })
+	since := appeared(h.ix, i)
+	return slices.ContainsFunc(h.deletes[i.Ref], func(sent time.Duration) bool { return sent >= since && sent <= t })
 }
 
 // controllerDeletes returns, by ref, the send times of the controller's

@@ -315,6 +315,25 @@ object that a CR names. Before it removes the finalizer, it should list the
 CRs live, since its cache can miss a new one. If the controller does not
 hold such objects by design, drop the entry's `onDelete`.
 
+### Teardown: released a CR before deleting its resources
+
+A controller write removed the controller's last finalizer from a CR being
+deleted while a resource of the CR was not yet being deleted. Each line names
+the resource, its rule and the CR:
+
+```
+storageclasses.storage.k8s.io fleet-rf-1b0b8a35-cluster (rule 3, slot a)
+```
+
+Kubernetes' garbage collector deletes a resource only through an
+ownerReference chain. It never follows a cluster-scoped resource's
+ownerReference to a namespaced owner. So nothing deletes this one once the CR
+is gone. Delete each such resource and wait for the delete to succeed before
+you remove the finalizer. The resource need not be gone. A dry run alone, or a
+`deletecollection` whose selector misses the resource, does not count. If
+several CRs name the resource, delete it before you release the last of them.
+If the controller keeps the resource by design, set the CR entry's `retain`.
+
 ### Backoff: retried a failing request in a tight loop
 
 The controller repeated a failing request with gaps under 100 ms. The line

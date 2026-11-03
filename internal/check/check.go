@@ -62,7 +62,8 @@ type Reference struct {
 type Primary struct {
 	Kind  trace.Kind
 	Ready func(cr map[string]any) (bool, error)
-	// Retain says whether Clean allows a deleted CR's resources to stay.
+	// Retain says whether Clean and Teardown allow a deleted CR's resources
+	// to stay.
 	// Retain, Halted and Periodic are nil when the entry sets none.
 	Retain, Halted func(cr map[string]any) (bool, error)
 	Periodic       *trace.Periodic
@@ -430,6 +431,7 @@ func Judge(ix *trace.Index, s Spec) Report {
 	findings = append(findings, Unique(ix, s)...)
 	findings = append(findings, Honest(ix, s)...)
 	findings = append(findings, Ordered(ix, s)...)
+	findings = append(findings, Teardown(ix, s)...)
 	findings = append(findings, Backoff(ix, s)...)
 	findings = append(findings, Finalizers(ix, s)...)
 	findings = append(findings, Property(ix, s)...)

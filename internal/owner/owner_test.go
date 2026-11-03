@@ -107,6 +107,16 @@ func TestCreatorIsTheCallerWhoseCreateCarriedTheUID(t *testing.T) {
 	}
 }
 
+func TestAnsweredIsWhenTheResponseThatCarriedTheUIDEnded(t *testing.T) {
+	create := tt.Create(ctl, cmA0, "c1", "3")
+	create.Call.Latency = 2 * s
+	tl := twoWidgets()
+	tl.At(4*s, create).At(5*s, tt.Version(cmA0, "c1", "3", tt.Object("a-0")))
+	if got := instance(t, owner.New(tl.Index(), owner.Rules{}), "c1").Answered; got != 4*s {
+		t.Errorf("answered = %v, want 4s", got)
+	}
+}
+
 func TestCreatorOfAnApplyIsItsCaller(t *testing.T) {
 	apply := tt.Create(ctl, cmA0, "c1", "3")
 	apply.Call.Verb = "patch"
@@ -248,6 +258,32 @@ func TestOwnerKeyIsTheCRSet(t *testing.T) {
 	}
 	if len(keys) != 3 || (owner.Owner{Rule: 4}).Shared() == false || (owner.Owner{Rule: 4, CRs: []string{"ua"}}).Shared() {
 		t.Fatalf("keys = %v", keys)
+	}
+}
+
+// gc resolves no ownerReference of a cluster-scoped object to a namespaced
+// owner.
+func TestCollectedNeedsOwnerReferencesThatGCResolves(t *testing.T) {
+	class := func(name string) trace.Ref { return tt.Ref("storage.k8s.io/storageclasses", "", name) }
+	tl := twoWidgets()
+	tl.At(3*s, tt.Version(tt.Ref("toy/widgets", "", "z"), "uz", "3", tt.Object("z")),
+		tt.Version(cmA0, "c1", "3", tt.OwnedBy(tt.Object("a-0"), "ua", true)),
+		tt.Version(class("of-a"), "u-of-a", "3", tt.OwnedBy(tt.Object("of-a"), "ua", true)),
+		tt.Version(class("of-c1"), "u-of-c1", "3", tt.OwnedBy(tt.Object("of-c1"), "c1", true)),
+		tt.Version(class("of-z"), "u-of-z", "3", tt.OwnedBy(tt.Object("of-z"), "uz", true)))
+	w := owner.New(tl.Index(), owner.Rules{})
+	for name, row := range map[string]struct {
+		uid, cr string
+		want    bool
+	}{
+		"a namespaced child of a namespaced CR":             {"c1", "ua", true},
+		"a cluster-scoped child of a namespaced CR":         {"u-of-a", "ua", false},
+		"a cluster-scoped child through a namespaced owner": {"u-of-c1", "ua", false},
+		"a cluster-scoped child of a cluster-scoped CR":     {"u-of-z", "uz", true},
+	} {
+		if got := w.Collected(instance(t, w, row.uid), row.cr, 3*s); got != row.want {
+			t.Errorf("Collected(%s) = %v, want %v", name, got, row.want)
+		}
 	}
 }
 
