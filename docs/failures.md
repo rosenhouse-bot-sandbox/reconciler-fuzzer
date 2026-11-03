@@ -39,7 +39,8 @@ Each finding is one section:
 ````
 ## Restore: did not restore damaged resources
 
-Step 1, at 16.907430335s.
+Step 1, at 16.907s.
+Actions: damage configmaps rf-da5dd4dd/widget-0.
 
 ```
 configmaps rf-da5dd4dd/widget-0 (rule 1, slot a)
@@ -50,14 +51,18 @@ The heading is the check and its summary. The first line names the step,
 counting from 0, and the time since the run started. `Before step 0` means
 during startup. The runner appends two steps to every plan without a
 `stop`: `Step N (delete all)` and `Step N+1 (restart)`.
-A `Labels:` line may follow. The block lists the detail lines.
+The `Actions:` line lists the step's actions. A `damage`, `changeFixture` or
+`createFixture` names its object, and any other action its slot. A failed
+action says `(failed)`. A `Labels:` line may follow. The block lists the
+detail lines.
 
 A `# Notes` section follows the findings. A note says what the checks
 could not judge, or names a config mistake: an action that failed, a fault
 that picked no request, a step the trace ended too early to judge, a CR
-still being deleted that a `stop` did not wait for, an unmapped request, or
-a `role` that failed on every resource of a kind. A note also names each
-time the controller outlived `launch.gracePeriod`. Notes do not fail a run.
+still being deleted that a `stop` did not wait for, an unmapped request, a
+request that `launch.rbac` forbids, a `ready` that no CR met, or a `role`
+that failed on every resource of a kind. A note also names each time the
+controller outlived `launch.gracePeriod`. Notes do not fail a run.
 A fault that picked no request tested nothing, so a plan with such notes
 may need a different fault. A step without a `period` ends its faults by
 the time its last action returns. Such a fault's note says how long the
@@ -85,6 +90,16 @@ objects the harness created, such as fixtures. Neither matches a CRD that
 `crds:` or a restart installed. The note of a `changeFixture` that targets
 CRDs says so.
 
+`kube: launch.rbac forbids the controller's watch on
+volumes.storage.thirdparty, 14 times` counts the API server's 403 answers to
+the controller's requests of one verb and kind. An injected `error(403)`
+does not count. Add the rule to `launch.rbac` if the controller needs it.
+
+`primary.ready held for no CR version; the last of widgets.toy ns/a has
+status {...}` follows a clause 1 finding when no version of that kind's CRs
+met `ready`. `primaries[1]` names the second entry. Either `ready` or the
+controller is wrong. Compare the quoted status with `ready`.
+
 `cloud: unmapped request POST /v2/buckets/b-1/acl` means the system's API
 map could not place a controller request on a resource. No check judges
 that request, so a leak or duplicate it causes goes unseen. The `crud` map
@@ -103,6 +118,10 @@ for a `restart` or a `stop` waited `launch.gracePeriod` after SIGTERM and
 then killed it. Such a stop tested a crash, not a clean shutdown. A note
 that begins `After the last step` names the stop at the run's end. Raise
 `launch.gracePeriod` if the controller needs longer to shut down.
+
+A report with findings ends with `# Next steps`. It gives the command that
+replays the plan into `<out>/replay`, and a link to this page. `judge` gives
+only the link.
 
 Hunt and shrink match findings by check, summary and kind, so a replay
 need not fail at the same step or on the same names.

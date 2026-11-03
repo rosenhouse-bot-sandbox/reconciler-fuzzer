@@ -494,14 +494,15 @@ func unmapped(ix *trace.Index) []string {
 }
 
 // forbidden notes how many times the API server answered the controller
-// with 403 for each verb and kind. An injected error does not count.
+// with 403 for each verb and kind. An injected error does not count, nor
+// does a create in a namespace being deleted.
 func forbidden(ix *trace.Index) []string {
 	type request struct{ verb, on string }
 	var order []request
 	counts := map[request]int{}
 	for _, e := range ix.Calls(trace.Controller, -1, math.MaxInt64) {
 		c := e.Call
-		if c.Ref.System != "kube" || c.Status != http.StatusForbidden || strings.HasPrefix(c.Injected, "error") {
+		if c.Ref.System != "kube" || c.Status != http.StatusForbidden || strings.HasPrefix(c.Injected, "error") || createsInTerminating(ix, e) {
 			continue
 		}
 		on := c.Path
@@ -522,6 +523,17 @@ func forbidden(ix *trace.Index) []string {
 		notes[i] = fmt.Sprintf("kube: launch.rbac forbids the controller's %s on %s, %s", r.verb, r.on, times(counts[r]))
 	}
 	return notes
+}
+
+// createsInTerminating reports whether call e is a create in a namespace
+// that the trace shows being deleted by e's answer. The API server forbids
+// such a create whatever the caller's role.
+func createsInTerminating(ix *trace.Index, e trace.Event) bool {
+	if e.Call.Verb != "create" || e.Call.Ref.Namespace == "" {
+		return false
+	}
+	namespace, found := ix.LatestAt(trace.Ref{System: "kube", Resource: "namespaces", Name: e.Call.Ref.Namespace}, e.At)
+	return found && deleting(namespace.Body)
 }
 
 // times says n times, as "1 time" or "2 times".

@@ -370,17 +370,25 @@ func TestJudgeNotesARequestLaunchRBACForbids(t *testing.T) {
 	}
 }
 
-// A 403 counts only when the API server gave it to the controller. A delay
-// fault passes the request on.
+// A 403 counts only when the API server gave it to the controller for want
+// of a role. A delay fault passes the request on. A create in a namespace
+// being deleted gets a 403 whatever the role.
 func TestJudgeNotesOnlyTheControllersRealDenials(t *testing.T) {
 	b := cleanRun()
 	status := call("update", widgetA, 403, "delay(1s)")
 	status.Call.Subresource = "status"
 	harness := tt.Call(trace.Harness, "get", cm, 403, "")
 	bucket := tt.Call(ctl, "get", trace.Ref{System: "cloud", Resource: "buckets", Name: "b1"}, 403, "")
-	b.At(2*s).Add(call("get", widgetA, 403, "error(403)"), status, harness, bucket)
+	terminating := tt.Version(tt.Ref("namespaces", "", "ns"), "ns-uid", "9", objectBody("ns", true))
+	live := tt.Version(tt.Ref("namespaces", "", "other"), "other-uid", "10", objectBody("other", false))
+	b.At(2*s).Add(call("get", widgetA, 403, "error(403)"), status, harness, bucket, terminating, live,
+		call("create", cm, 403, ""), call("create", tt.Ref("configmaps", "other", "c"), 403, ""))
 	notes := slices.DeleteFunc(check.Judge(b.Index(), spec).Notes, func(n string) bool { return !strings.HasPrefix(n, "kube: launch.rbac") })
-	if want := []string{"kube: launch.rbac forbids the controller's update on the status subresource of widgets.toy, 1 time"}; !slices.Equal(notes, want) {
+	want := []string{
+		"kube: launch.rbac forbids the controller's update on the status subresource of widgets.toy, 1 time",
+		"kube: launch.rbac forbids the controller's create on configmaps, 1 time",
+	}
+	if !slices.Equal(notes, want) {
 		t.Fatalf("notes = %q, want %q", notes, want)
 	}
 }
