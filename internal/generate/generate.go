@@ -137,8 +137,8 @@ func build(cfg *config.Config) (*Generator, error) {
 	if err := g.readRBAC(cfg.Launch.RBAC); err != nil {
 		return nil, err
 	}
-	g.readModels(cfg.Models, crds)
-	g.favorKinds(cfg, crds)
+	g.readModels(cfg.Models)
+	g.favorKinds(cfg)
 	g.addRequests()
 	for _, gr := range g.resources {
 		if g.grants(gr, "watch") {
@@ -360,30 +360,19 @@ func (g *Generator) readRBAC(paths []string) error {
 
 // readModels records each model kind's resource and the longest dependency
 // track.
-func (g *Generator) readModels(models []config.Model, crds []map[string]any) {
+func (g *Generator) readModels(models []config.Model) {
 	for _, m := range models {
-		g.models = append(g.models, resourceOf(crds, m.Kind))
+		g.models = append(g.models, gvk.GroupResource{Group: m.Kind.Group, Resource: m.Resource})
 		if m.Dependency != nil {
 			g.track = max(g.track, m.Dependency.Track)
 		}
 	}
 }
 
-// resourceOf is the resource of kind: the plural its CRD names, or else a
-// guess.
-func resourceOf(crds []map[string]any, kind gvk.GroupVersionKind) gvk.GroupResource {
-	gvr, _ := meta.UnsafeGuessKindToResource(kind)
-	gr := gvr.GroupResource()
-	if plural := pluralOf(crds, kind.GroupKind()); plural != "" {
-		gr.Resource = plural
-	}
-	return gr
-}
-
 // favorKinds records the kinds that faults and damage favor, and the
 // resources that damage targets.
-func (g *Generator) favorKinds(cfg *config.Config, crds []map[string]any) {
-	owned := ownedKinds(cfg, crds)
+func (g *Generator) favorKinds(cfg *config.Config) {
+	owned := ownedKinds(cfg)
 	g.favors = map[gvk.GroupResource]bool{}
 	for _, gr := range slices.Concat(g.resources[:len(g.kinds)], owned) {
 		g.favors[gr] = true
@@ -401,18 +390,18 @@ func (g *Generator) favorKinds(cfg *config.Config, crds []map[string]any) {
 // ownedKinds are the kinds the listed CRs own: the kube kinds that owns
 // entries name, and the model kinds that are dependencies. A model without
 // a dependency can serve a fixture instead.
-func ownedKinds(cfg *config.Config, crds []map[string]any) []gvk.GroupResource {
+func ownedKinds(cfg *config.Config) []gvk.GroupResource {
 	var owned []gvk.GroupResource
 	for _, p := range cfg.Primaries {
 		for _, o := range p.Owns {
 			if o.System == "" {
-				owned = append(owned, resourceOf(crds, o.Kind))
+				owned = append(owned, gvk.GroupResource{Group: o.Kind.Group, Resource: o.Resource})
 			}
 		}
 	}
 	for _, m := range cfg.Models {
 		if m.Dependency != nil {
-			owned = append(owned, resourceOf(crds, m.Kind))
+			owned = append(owned, gvk.GroupResource{Group: m.Kind.Group, Resource: m.Resource})
 		}
 	}
 	return owned

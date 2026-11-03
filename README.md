@@ -116,8 +116,10 @@ timeouts: {settle: 30s, stable: 3s}
   with an empty path.
 - `args` turns off the scaffold's fixed ports, so runs cannot clash on them. If it has
   webhooks, set `ENABLE_WEBHOOKS: "false"` in `env`.
-- `ready` is CEL over the CR. It must be true only once the controller has acted on the
-  current spec, so compare an `observedGeneration` with `metadata.generation`.
+- `ready` is CEL over the CR, typed by its CRD's schema. It must be true only once the
+  controller has acted on the current spec, so compare an `observedGeneration` with
+  `metadata.generation`. Read a property whose name is not a CEL identifier by index, as in
+  `self.spec.selector['app.kubernetes.io/name']`.
 - `stable` is how long the controller must stay quiet before a step counts as settled.
 - `launch.rbac` also tells generation which requests a fault can pick. A generated `damage` of
   a kube object targets an unlisted kind that `launch.rbac` lets the controller create. Faults
@@ -299,8 +301,8 @@ systems:
     owner: self.metadata.labels['example.com/owner-uid']   # a label on the child names the CR
 ```
 
-- `owns` takes CEL over the CR. Without `namespace`, a namespaced child is in the CR's namespace.
-  A cluster-scoped kind takes no `namespace`.
+- `owns` takes CEL over the CR, typed by its CRD's schema. Without `namespace`, a namespaced
+  child is in the CR's namespace. A cluster-scoped kind takes no `namespace`.
 - `owner` takes CEL over the child. It yields the CR's UID, `namespace/name` or name. A bare name
   prefers a CR in the child's namespace, and names no CR when it matches CRs in two other namespaces.
   A name that CRs of two kinds share names no CR.
@@ -439,10 +441,10 @@ collections:
   drops the response to the first bucket create. Without its `period`, the fault would end as
   the CR's create returns, usually before the controller creates the bucket. `damage` takes
   `"target": {"system": "cloud"}`.
-- An entry's `halted` is CEL over its CR. It counts a CR as done after a request of unknown
-  outcome, for a controller that stops on purpose. While such a CR is not ready, Restore lets its
-  damaged resources stay gone. [targets/toy-bucket/halted](targets/toy-bucket/halted/config.yaml)
-  uses it.
+- An entry's `halted` is CEL over its CR, typed by its CRD's schema. It counts a CR as done after
+  a request of unknown outcome, for a controller that stops on purpose. While such a CR is not
+  ready, Restore lets its damaged resources stay gone.
+  [targets/toy-bucket/halted](targets/toy-bucket/halted/config.yaml) uses it.
 - Any program can be a fake. The harness runs it in the config's directory and sets
   `RECONCILER_FUZZER_ADDR`, where it serves its API and the fake contract: `GET /_fake/resources`
   answers `{"collections": [<c>], "pending": <bool>, "resources": [{"collection": <c>, "body":
@@ -636,8 +638,8 @@ kind must be one the config does not list. `changeFixture` without a `patch` del
 ```
 
 - A CRD under both `crds:` and `fixtures:` fails the run with `already exists`.
-- A listed kind's CRD must stay in `crds:`. As a fixture alone, the run fails with `no matches for
-  kind`, and generation with `the CRDs describe no <kind>`.
+- A listed kind's CRD must stay in `crds:`. As a fixture alone, the config fails to load with
+  `no CRD under crds and no built-in kind serves it`.
 - No target matches a CRD that `crds:` or a restart installed. A `changeFixture` of one only gets
   a `no instance matches` note that says so.
 

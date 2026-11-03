@@ -3,6 +3,7 @@
 package run
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,6 +31,7 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/owner"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/s3"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/suggest"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/system"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/vault"
@@ -172,9 +174,15 @@ func Run(ctx context.Context, o Options) (check.Report, error) {
 	if err := checkUpgrades(cfg, p); err != nil {
 		return check.Report{}, err
 	}
+	if err := checkFaults(cfg, p); err != nil {
+		return check.Report{}, err
+	}
 	samples, err := loadSamples(cfg.Primaries)
 	if err != nil {
 		return check.Report{}, err
+	}
+	if _, err := exec.LookPath(cfg.Launch.Binary); err != nil {
+		return check.Report{}, fmt.Errorf("launch.binary: %w", err)
 	}
 	if err := os.MkdirAll(o.Out, 0o755); err != nil {
 		return check.Report{}, err
@@ -233,6 +241,58 @@ func checkUpgrades(cfg *config.Config, p *plan.Plan) error {
 		}
 	}
 	return nil
+}
+
+// checkFaults refuses a fault of p on a system that the config lacks, and a
+// model fault that no model takes.
+func checkFaults(cfg *config.Config, p *plan.Plan) error {
+	for i, step := range p.Steps {
+		for j, f := range step.Faults {
+			if err := checkFault(cfg, f); err != nil {
+				return fmt.Errorf("steps[%d].faults[%d]: %w", i, j, err)
+			}
+		}
+	}
+	return nil
+}
+
+// checkFault refuses f where the runner would: on a system that the config
+// lacks, or as a model fault that neither a crud fake nor a model takes.
+func checkFault(cfg *config.Config, f plan.Fault) error {
+	system := cmp.Or(f.System, kube.Name)
+	fakes := cfg.Fakes()
+	i := slices.IndexFunc(fakes, func(s config.System) bool { return s.Name == system })
+	switch {
+	case system != kube.Name && i < 0:
+		systems := []string{kube.Name}
+		for _, s := range fakes {
+			systems = append(systems, s.Name)
+		}
+		err := fmt.Errorf("unknown system %q", system)
+		if near := suggest.Nearest(system, systems); near != "" {
+			return fmt.Errorf("%w; did you mean %s?", err, near)
+		}
+		return err
+	case !f.ModelFault() || i >= 0 && fakes[i].Map().ModelFaults:
+		return nil
+	}
+	var resources []string
+	for _, m := range cfg.Models {
+		gvr := m.Kind.GroupVersion().WithResource(m.Resource)
+		if model.Takes(f, gvr) {
+			return nil
+		}
+		renamed := f
+		renamed.Match.Resource = gvr.Resource
+		if model.Takes(renamed, gvr) {
+			resources = append(resources, gvr.Resource)
+		}
+	}
+	err := fmt.Errorf("no model takes %s", f)
+	if near := suggest.Nearest(f.Match.Resource, resources); near != "" {
+		return fmt.Errorf("%w; did you mean resource=%s?", err, near)
+	}
+	return err
 }
 
 func checkPaths(u plan.Upgrade) error {

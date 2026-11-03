@@ -298,6 +298,20 @@ func TestWithSeveralKindsNotesNameTheKindAndErrorsNameTheEntry(t *testing.T) {
 	}
 }
 
+func TestAMutatePathNearOneTheSchemaDescribesSuggestsIt(t *testing.T) {
+	for path, want := range map[string]string{
+		"spec.Count":    "values.mutate spec.Count: the schema describes no spec.Count; did you mean spec.count?",
+		"sepc.count":    "values.mutate sepc.count: the schema describes no sepc; did you mean spec.count?",
+		"spec.nonesuch": "values.mutate spec.nonesuch: the schema describes no spec.nonesuch",
+	} {
+		cfg := loadConfig(t, toyConfig)
+		cfg.Primaries[0].Values.Mutate = []string{path}
+		if _, err := New(cfg); err == nil || !strings.HasSuffix(err.Error(), want) {
+			t.Errorf("New returned %v, want an error that ends %q.", err, want)
+		}
+	}
+}
+
 func TestNewRefusesASampleOfAnotherKind(t *testing.T) {
 	cfg := loadConfig(t, fleetConfig)
 	cfg.Primaries[1].Sample = cfg.Primaries[0].Sample

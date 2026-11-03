@@ -115,6 +115,8 @@ type Reference struct {
 	Required   bool          `json:"required,omitempty"`
 	Track      time.Duration `json:"track,omitempty"`
 	Block      bool          `json:"block,omitempty"`
+	// Schema is the openAPIV3Schema of To's CRD. It types Ready.
+	Schema map[string]any `json:"schema,omitempty"`
 }
 
 // ToRef names r's To kind by a ref with no namespace or name.
@@ -132,6 +134,9 @@ type Primary struct {
 	Halted   string    `json:"halted,omitempty"`
 	Owns     []Owns    `json:"owns,omitempty"`
 	Periodic *Periodic `json:"periodic,omitempty"`
+	// Schema is the openAPIV3Schema of Kind's CRD. It types the CEL over a
+	// CR.
+	Schema map[string]any `json:"schema,omitempty"`
 }
 
 // Property is one config property. When is "step" or "always".

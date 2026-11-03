@@ -34,7 +34,7 @@ primaries:
 
 // writeReferences writes referencesHead, then rest, with the CRDs of
 // Cluster and Database in crd.yaml and of User, Tenant, Volume and Gadget in
-// crds/.
+// crds/. Gadget's CRD serves v1 and v2.
 func writeReferences(t *testing.T, rest string) string {
 	t.Helper()
 	path := writeConfig(t, referencesHead+rest)
@@ -44,7 +44,7 @@ func writeReferences(t *testing.T, rest string) string {
 	}
 	for file, content := range map[string]string{
 		"crd.yaml":                crd("Cluster", "Namespaced") + "---\n" + crd("Database", "Namespaced"),
-		"crds/more.yaml":          crd("User", "Namespaced") + "---\n" + crd("Tenant", "Cluster") + "---\n" + crd("Volume", "Namespaced") + "---\n" + crd("Gadget", "Namespaced"),
+		"crds/more.yaml":          crd("User", "Namespaced") + "---\n" + crd("Tenant", "Cluster") + "---\n" + crd("Volume", "Namespaced") + "---\n" + crdOf("toy", "Gadget", "Namespaced", "v1", "v2"),
 		"crds/kustomization.yaml": "resources: [more.yaml]\n",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o644); err != nil {
@@ -54,17 +54,26 @@ func writeReferences(t *testing.T, rest string) string {
 	return path
 }
 
-func crd(kind, scope string) string {
+func crd(kind, scope string) string { return crdOf("toy", kind, scope, "v1") }
+
+// crdOf is a CRD of kind in group that lists versions, each served unless
+// it ends in "!".
+func crdOf(group, kind, scope string, versions ...string) string {
+	var listed []string
+	for i, v := range versions {
+		name, unserved := strings.CutSuffix(v, "!")
+		listed = append(listed, fmt.Sprintf("{name: %s, served: %t, storage: %t}", name, !unserved, i == 0))
+	}
 	plural := strings.ToLower(kind) + "s"
 	return fmt.Sprintf(`apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
-metadata: {name: %s.toy}
+metadata: {name: %s.%s}
 spec:
-  group: toy
+  group: %s
   names: {kind: %s, plural: %s}
   scope: %s
-  versions: [{name: v1, served: true, storage: true}]
-`, plural, kind, plural, scope)
+  versions: [%s]
+`, plural, group, group, kind, plural, scope, strings.Join(listed, ", "))
 }
 
 func toyKind(group, kind string) schema.GroupVersionKind {
@@ -113,8 +122,9 @@ func TestReferencesRefusals(t *testing.T) {
 		"a model's to at another version":            {"{from: toy/v1/Database, to: toy/v2/Volume, name: spec.volume}", "references[0].to toy/v2/Volume: the config declares this kind at version v1"},
 		"no to":                                      {"{from: toy/v1/Database, name: spec.s, ready: \"true\"}", "references[0].to is required"},
 		"a malformed to":                             {"{from: toy/v1/Database, to: Secret, name: spec.s, ready: \"true\"}", "references[0].to"},
-		"a to of unknown scope":                      {"{from: toy/v1/Database, to: example.com/v1/Widget, name: spec.w, ready: \"true\"}", "references[0].to example.com/v1/Widget: no CRD in crds and no built-in kind has this group and kind"},
-		"a core kind's name in a group":              {"{from: toy/v1/Database, to: example.com/v1/Secret, name: spec.s, ready: \"true\"}", "references[0].to example.com/v1/Secret: no CRD in crds and no built-in kind has this group and kind; did you mean v1/Secret?"},
+		"a to no CRD serves":                         {"{from: toy/v1/Database, to: example.com/v1/Widget, name: spec.w, ready: \"true\"}", "references[0].to example.com/v1/Widget: no CRD under crds and no built-in kind serves it; the CRDs serve toy/v1/Cluster"},
+		"a to at a version no CRD serves":            {"{from: toy/v1/Database, to: toy/v3/Gadget, name: spec.g, ready: \"true\"}", "references[0].to toy/v3/Gadget: no CRD under crds and no built-in kind serves it; the CRDs serve toy/v1/Cluster, toy/v1/Database, toy/v1/Gadget, toy/v1/Tenant, toy/v1/User, toy/v1/Volume and toy/v2/Gadget; did you mean toy/v1/Gadget or toy/v2/Gadget?"},
+		"a core kind's name in a group":              {"{from: toy/v1/Database, to: example.com/v1/Secret, name: spec.s, ready: \"true\"}", "references[0].to example.com/v1/Secret: no CRD under crds and no built-in kind serves it; the CRDs serve toy/v1/Cluster, toy/v1/Database, toy/v1/Gadget, toy/v1/Tenant, toy/v1/User, toy/v1/Volume and toy/v2/Gadget; did you mean v1/Secret?"},
 		"a core kind in group core":                  {"{from: toy/v1/Database, to: core/v1/Secret, name: spec.s, ready: \"true\"}", "did you mean v1/Secret?"},
 		"a core kind in lower case":                  {"{from: toy/v1/Database, to: v1/secret, name: spec.s, ready: \"true\"}", "did you mean v1/Secret?"},
 		"a built-in kind without its group":          {"{from: toy/v1/Database, to: v1/Deployment, name: spec.d, ready: \"true\"}", "did you mean apps/v1/Deployment?"},
@@ -206,18 +216,6 @@ func TestOnDeleteRefusals(t *testing.T) {
 	}
 }
 
-// TestAFromKindOfUnknownScopeNeedsNoNamespace loads a reference from
-// Database, whose CRD crds lacks, to a namespaced kind.
-func TestAFromKindOfUnknownScopeNeedsNoNamespace(t *testing.T) {
-	path := writeReferences(t, "references: [{from: toy/v1/Database, to: v1/Secret, name: spec.s, ready: \"true\"}]\n")
-	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "crd.yaml"), []byte(crd("Cluster", "Namespaced")), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := config.Load(path); err != nil {
-		t.Errorf("Load = %v, want no namespace needed for a from kind that crds do not describe.", err)
-	}
-}
-
 func TestACRDWithoutAScopeIsNamespaced(t *testing.T) {
 	path := writeReferences(t, "references: [{from: toy/v1/Database, to: toy/v1/Cluster, name: spec.clusterRef, namespace: spec.clusterNamespace}]\n")
 	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "crd.yaml"), []byte(crd("Cluster", "")+"---\n"+crd("Database", "Namespaced")), 0o644); err != nil {
@@ -228,14 +226,14 @@ func TestACRDWithoutAScopeIsNamespaced(t *testing.T) {
 	}
 }
 
-func TestOnlyCRDsGiveScopes(t *testing.T) {
+func TestOnlyCRDsServeKinds(t *testing.T) {
 	path := writeReferences(t, "references: [{from: toy/v1/Database, to: toy/v1/Widget, name: spec.widget, ready: \"true\"}]\n")
 	xrd := strings.Replace(crd("Widget", "Namespaced"), "kind: CustomResourceDefinition", "kind: CompositeResourceDefinition", 1)
 	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "crds", "xrd.yaml"), []byte(xrd), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := config.Load(path); err == nil || !strings.Contains(err.Error(), "references[0].to toy/v1/Widget: no CRD in crds and no built-in kind has this group and kind") {
-		t.Errorf("Load = %v, want toy/v1/Widget of unknown scope, since only a CompositeResourceDefinition describes it.", err)
+	if _, err := config.Load(path); err == nil || !strings.Contains(err.Error(), "references[0].to toy/v1/Widget: no CRD under crds and no built-in kind serves it") {
+		t.Errorf("Load = %v, want toy/v1/Widget refused, since only a CompositeResourceDefinition describes it.", err)
 	}
 }
 
@@ -321,13 +319,13 @@ func TestReferencesOfTwoKindsMayShareAName(t *testing.T) {
 	}
 }
 
-func TestAConfigWithoutReferencesNeedsNoCRDs(t *testing.T) {
+func TestLoadRefusesCRDsItCannotRead(t *testing.T) {
 	path := writeConfig(t, minimal(t))
 	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "crd.yaml"), []byte("{not: [yaml"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := config.Load(path); err != nil {
-		t.Errorf("Load = %v, want a config without references to load whatever its CRDs hold.", err)
+	if _, err := config.Load(path); err == nil || !strings.Contains(err.Error(), "crds: ") {
+		t.Errorf("Load = %v, want an error that names crds.", err)
 	}
 }
 

@@ -49,7 +49,7 @@ func TestTheKubeRoleDropsASuffixAfterAVolumesIndex(t *testing.T) {
 	if len(c.Systems) != 1 || c.Systems[0].Name != "kube" {
 		t.Fatalf("systems = %+v, want kube alone", c.Systems)
 	}
-	role, err := config.CompileString(c.Systems[0].Role)
+	role, err := config.CompileString(c.Systems[0].Role, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

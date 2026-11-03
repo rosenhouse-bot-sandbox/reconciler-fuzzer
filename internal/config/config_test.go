@@ -259,11 +259,20 @@ func minimal(t *testing.T) string {
 	return string(data)
 }
 
-// writeConfig writes content next to copies of the testdata files.
+// testCRDs serve the CR kinds that the tests' configs name.
+var testCRDs = strings.Join([]string{
+	crdOf("toy", "Cluster", "Namespaced", "v1"), crdOf("toy", "Database", "Namespaced", "v1"),
+	crdOf("other", "Cluster", "Namespaced", "v1"), crdOf("model", "Cluster", "Namespaced", "v1"),
+	crdOf("example.com", "Gadget", "Namespaced", "v1"), crdOf("example.com", "Doohickey", "Namespaced", "v1"),
+	crdOf("example.com", "Gizmo", "Namespaced", "v1"), crdOf("x.io", "Thing", "Namespaced", "v1beta2"),
+}, "---\n")
+
+// writeConfig writes content beside a crd.yaml of testCRDs and empty
+// sample.yaml, role.yaml and fixture.yaml files.
 func writeConfig(t *testing.T, content string) string {
 	dir := t.TempDir()
-	for _, file := range []string{"crd.yaml", "sample.yaml", "role.yaml", "fixture.yaml"} {
-		if err := os.WriteFile(filepath.Join(dir, file), nil, 0o644); err != nil {
+	for file, data := range map[string]string{"crd.yaml": testCRDs, "sample.yaml": "", "role.yaml": "", "fixture.yaml": ""} {
+		if err := os.WriteFile(filepath.Join(dir, file), []byte(data), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -462,7 +471,7 @@ func TestModelsRefuseMistakes(t *testing.T) {
 }
 
 func TestModelReady(t *testing.T) {
-	ready, err := config.CompileReady(config.ReadyConditionCEL)
+	ready, err := config.CompileReady(config.ReadyConditionCEL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -489,19 +498,19 @@ func TestModelReady(t *testing.T) {
 }
 
 func TestCompileString(t *testing.T) {
-	name, err := config.CompileString("self.metadata.name + '-0'")
+	name, err := config.CompileString("self.metadata.name + '-0'", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got, err := name(map[string]any{"metadata": map[string]any{"name": "a"}}); got != "a-0" || err != nil {
 		t.Errorf("name = %q, %v", got, err)
 	}
-	if got, err := config.CompileString("self.x.lowerAscii()"); err != nil {
+	if got, err := config.CompileString("self.x.lowerAscii()", nil); err != nil {
 		t.Errorf("string extensions: %v", err)
 	} else if s, _ := got(map[string]any{"x": "AB"}); s != "ab" {
 		t.Errorf("lowerAscii = %q", s)
 	}
-	dyn, err := config.CompileString("self.x")
+	dyn, err := config.CompileString("self.x", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -512,7 +521,7 @@ func TestCompileString(t *testing.T) {
 		t.Error("a missing field is no error")
 	}
 	for _, expr := range []string{"1 + 2", "true", "self.(", "other"} {
-		if _, err := config.CompileString(expr); err == nil {
+		if _, err := config.CompileString(expr, nil); err == nil {
 			t.Errorf("%s compiles", expr)
 		}
 	}
@@ -527,8 +536,8 @@ func TestOwns(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []config.Owns{
-		{Kind: schema.GroupVersionKind{Version: "v1", Kind: "Secret"}, Name: "self.spec.secretName"},
-		{Kind: schema.GroupVersionKind{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRole"}, Name: "'cr-' + self.metadata.name", Namespace: "''"},
+		{Kind: schema.GroupVersionKind{Version: "v1", Kind: "Secret"}, Resource: "secrets", Name: "self.spec.secretName"},
+		{Kind: schema.GroupVersionKind{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRole"}, Resource: "clusterroles", Name: "'cr-' + self.metadata.name", Namespace: "''"},
 	}
 	if !reflect.DeepEqual(c.Primaries[0].Owns, want) {
 		t.Errorf("owns = %+v", c.Primaries[0].Owns)

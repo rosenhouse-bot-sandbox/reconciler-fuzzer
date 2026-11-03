@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -311,6 +312,27 @@ func TestHuntExits2WhenEverySeedFails(t *testing.T) {
 	}
 }
 
+func TestHuntWithoutTheControlPlaneStopsAfterItsFirstSeed(t *testing.T) {
+	t.Setenv("KUBEBUILDER_ASSETS", t.TempDir())
+	toy, err := filepath.Abs("../../targets/toy-widget")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary, err := exec.LookPath("true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(t.TempDir(), "config.yaml")
+	body := fmt.Sprintf("launch: {binary: %s}\ncrds: [%s/crds/]\nprimary: {kind: toy.reconciler-fuzzer/v1/Widget, sample: %s/widget.yaml, ready: \"true\"}\n", binary, toy, toy)
+	if err := os.WriteFile(config, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr := cliOutput("hunt", "--config", config, "--seeds", "2", "--out", t.TempDir())
+	if code != 2 || !strings.HasPrefix(stdout, "No findings over 1 seeds.") || strings.Count(stderr, "KUBEBUILDER_ASSETS") != 1 {
+		t.Errorf("cli = %d, stdout %q, stderr %q; want 2 after seed 1, and its error once", code, stdout, stderr)
+	}
+}
+
 func TestHuntExits1WhenASeedFindsAndAnotherFails(t *testing.T) {
 	runPlan = func(_ context.Context, o run.Options) (check.Report, error) {
 		if filepath.Base(o.Out) == "seed-1" {
@@ -405,8 +427,8 @@ func TestShrinkExits2WhenItsPlanFailsToRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, stdout, stderr := cliOutput("shrink", "--config", toyConfig, "--plan", "../../targets/toy-widget/plans/b13.json", "--out", out)
-	if code != 2 || stdout != "" || !strings.Contains(stderr, "no controller") {
-		t.Errorf("cli = %d, stdout %q, stderr %q; want 2 and only the error", code, stdout, stderr)
+	if code != 2 || stdout != "" || strings.Count(stderr, "no controller") != 1 {
+		t.Errorf("cli = %d, stdout %q, stderr %q; want 2 and only the error, once", code, stdout, stderr)
 	}
 }
 

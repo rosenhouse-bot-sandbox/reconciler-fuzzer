@@ -26,8 +26,8 @@ var (
 )
 
 // owning gives entry i of cfg an owns entry of the kube kind.
-func owning(cfg *config.Config, i int, kind gvk.GroupVersionKind) *config.Config {
-	cfg.Primaries[i].Owns = append(cfg.Primaries[i].Owns, config.Owns{Kind: kind, Name: "self.metadata.name"})
+func owning(cfg *config.Config, i int, kind gvk.GroupVersionKind, resource string) *config.Config {
+	cfg.Primaries[i].Owns = append(cfg.Primaries[i].Owns, config.Owns{Kind: kind, Resource: resource, Name: "self.metadata.name"})
 	return cfg
 }
 
@@ -38,8 +38,8 @@ func TestFaultsFavorTheListedAndOwnedKinds(t *testing.T) {
 		favored []string
 	}{
 		{"a dependency model", loadConfig(t, fleetClusterConfig), []string{"clusters", "volumes"}},
-		{"owns in each entry", owning(owning(loadConfig(t, fleetConfig), 0, volume), 1, configMap), []string{"clusters", "databases", "volumes", "configmaps"}},
-		{"a dependency model and owns", owning(loadConfig(t, fleetClusterConfig), 0, configMap), []string{"clusters", "volumes", "configmaps"}},
+		{"owns in each entry", owning(owning(loadConfig(t, fleetConfig), 0, volume, "volumes"), 1, configMap, "configmaps"), []string{"clusters", "databases", "volumes", "configmaps"}},
+		{"a dependency model and owns", owning(loadConfig(t, fleetClusterConfig), 0, configMap, "configmaps"), []string{"clusters", "volumes", "configmaps"}},
 		// Without owned kinds, the core kinds the RBAC lets the controller
 		// create stand in for them.
 		{"neither", loadConfig(t, fleetConfig), []string{"clusters", "databases", "configmaps", "secrets"}},
@@ -91,7 +91,7 @@ func TestWeightedDrawsEachElementInProportionToItsWeight(t *testing.T) {
 	}
 }
 
-func TestAnOwnedKindIsFavoredUnderThePluralItsCRDNames(t *testing.T) {
+func TestAnOwnedKindIsFavoredUnderItsPlural(t *testing.T) {
 	mouse := gvk.GroupVersionKind{Group: "models.reconciler-fuzzer", Version: "v1", Kind: "Mouse"}
 	withoutModels := loadConfig(t, modelsConfig)
 	withoutModels.Models = nil
@@ -99,7 +99,7 @@ func TestAnOwnedKindIsFavoredUnderThePluralItsCRDNames(t *testing.T) {
 		name string
 		cfg  *config.Config
 	}{
-		{"an owns entry", owning(withoutModels, 0, mouse)},
+		{"an owns entry", owning(withoutModels, 0, mouse, "mice")},
 		{"a dependency model", loadConfig(t, modelsConfig)},
 	} {
 		if w := newGenerator(t, c.cfg).kindWeight(gvk.GroupResource{Group: mouse.Group, Resource: "mice"}); w != favored {

@@ -1,0 +1,4 @@
+apiVersion: toy/v1
+kind: Thing
+metadata: {name: sample}
+spec: {size: 2, ratio: 1, peer: other}
