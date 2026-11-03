@@ -534,10 +534,12 @@ func TestMarkdown(t *testing.T) {
 	var b tt.Builder
 	run := tt.Run("toy", "widgets")
 	run.Run.PlanSteps = 2
+	upgrade := trace.Event{Action: &trace.Action{Step: 1, Index: 2, Do: "restart", Upgrade: true}}
+	kill := trace.Event{Action: &trace.Action{Step: 1, Index: 3, Do: "kill"}}
+	failed := trace.Event{Action: &trace.Action{Step: 1, Index: 4, Do: "changeFixture", Error: "no instance matches"}}
 	ix := b.Add(run).
 		At(1*s).Add(tt.SlotAction(1, "create", "a", widgetA), tt.SlotAction(1, "damage", "a", cm)).
-		At(2*s).Add(trace.Event{Action: &trace.Action{Step: 1, Index: 2, Do: "restart", Upgrade: true}}, trace.Event{Action: &trace.Action{Step: 1, Index: 3, Do: "kill"}},
-			trace.Event{Action: &trace.Action{Step: 1, Index: 4, Do: "changeFixture", Error: "no instance matches"}}).
+		At(2*s).Add(upgrade, kill, failed).
 		Index()
 	const replay = "reconciler-fuzzer run --config c.yaml --plan out/plan.json --out out/replay"
 	if got := check.Markdown(ix, check.Report{}, replay); got != "No findings.\n" {
