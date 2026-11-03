@@ -277,8 +277,8 @@ func loadSamples(cfg *config.Config) ([]map[string]any, error) {
 	return samples, nil
 }
 
-// Summary is summary.md: one row for each finding, then the seeds whose
-// run failed.
+// Summary is summary.md: one row for each finding, then the first line of
+// each failed run's error.
 func Summary(over string, found []Found, failed []string) string {
 	var b strings.Builder
 	if len(found) == 0 {
@@ -299,8 +299,9 @@ func Summary(over string, found []Found, failed []string) string {
 	}
 	if len(failed) > 0 {
 		b.WriteString("\nRuns that failed:\n\n")
-		for _, line := range failed {
-			fmt.Fprintf(&b, "- %s\n", line)
+		for _, run := range failed {
+			first, _, _ := strings.Cut(run, "\n")
+			fmt.Fprintf(&b, "- %s\n", first)
 		}
 	}
 	return b.String()

@@ -36,6 +36,11 @@ const (
 	// B162 requeues a Cluster being deleted every 1 ms while its Volumes
 	// remain, and deletes them again each time.
 	B162 Bug = 162
+	// B170 leaves the fleet's kinds out of the scheme, so setup fails before
+	// the manager starts.
+	B170 Bug = 170
+	// B171 ignores KUBECONFIG and dials localhost:8080.
+	B171 Bug = 171
 )
 
 // B140 to B142 are bugs of version 2 that show only on a Cluster that
@@ -52,7 +57,7 @@ const (
 )
 
 // bugs holds every seeded bug ID.
-var bugs = map[Bug]bool{B116: true, B123: true, B124: true, B125: true, B135: true, B140: true, B141: true, B142: true, B150: true, B151: true, B152: true, B160: true, B161: true, B162: true}
+var bugs = map[Bug]bool{B116: true, B123: true, B124: true, B125: true, B135: true, B140: true, B141: true, B142: true, B150: true, B151: true, B152: true, B160: true, B161: true, B162: true, B170: true, B171: true}
 
 // ParseBug converts a --bug value into a Bug.
 func ParseBug(id int) (Bug, error) {
