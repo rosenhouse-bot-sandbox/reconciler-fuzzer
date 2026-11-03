@@ -345,8 +345,8 @@ func TestSelectSaysACRDFromCRDsIsNoFixture(t *testing.T) {
 		creator trace.Caller
 		want    string
 	}{
-		{children(), trace.Harness, crds + "harness has no live customresourcedefinitions.apiextensions.k8s.io; a CRD in the config's crds is not a fixture"},
-		{withGadgets, trace.Harness, crds + "harness's live customresourcedefinitions.apiextensions.k8s.io are gadgets.toy; a CRD in the config's crds is not a fixture"},
+		{children(), trace.Harness, crds + "harness has no live customresourcedefinitions.apiextensions.k8s.io; a CRD that the config's crds or a restart installed is not a fixture"},
+		{withGadgets, trace.Harness, crds + "harness's live customresourcedefinitions.apiextensions.k8s.io are gadgets.toy; a CRD that the config's crds or a restart installed is not a fixture"},
 		{children(), ctl, crds + "controller has no live customresourcedefinitions.apiextensions.k8s.io"},
 	} {
 		if _, err := owner.New(c.tl.Index(), owner.Rules{}).Select(c.creator, target, "", 10*s); err == nil || err.Error() != c.want {

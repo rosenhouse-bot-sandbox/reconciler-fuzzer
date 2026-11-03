@@ -552,8 +552,8 @@ kind must be one the config does not list. `changeFixture` without a `patch` del
 - A CRD under both `crds:` and `fixtures:` fails the run with `already exists`.
 - A listed kind's CRD must stay in `crds:`. As a fixture alone, the run fails with `no matches for
   kind`, and generation with `the CRDs describe no <kind>`.
-- No target matches a CRD that `crds:` or a restart installed. Such an action only gets the note
-  `no instance matches`.
+- No target matches a CRD that `crds:` or a restart installed. A `changeFixture` of one only gets
+  a `no instance matches` note that says so.
 
 [targets/toy-fleet/uninstall](targets/toy-fleet/uninstall/config.yaml) makes the Database CRD a
 fixture this way.

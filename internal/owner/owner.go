@@ -763,7 +763,7 @@ func candidates(creator trace.Caller, target plan.Target, system, slot string, l
 		}
 	}
 	if creator == trace.Harness && target.Resource == "customresourcedefinitions" {
-		said += "; a CRD in the config's crds is not a fixture"
+		said += "; a CRD that the config's crds or a restart installed is not a fixture"
 	}
 	return said
 }

@@ -502,7 +502,7 @@ func (e *execution) act(ctx context.Context, a plan.Action, s *stepRun) (*trace.
 		key := a.Target.Key()
 		deleted, found := e.fixtures[key]
 		if !found {
-			return nil, fmt.Errorf("%w: no changeFixture deleted it", owner.ErrNoMatch)
+			return nil, fmt.Errorf("%w %s: no changeFixture deleted it", owner.ErrNoMatch, a.Target)
 		}
 		delete(e.fixtures, key)
 		if err := s.awaitGone(ctx, a, deleted); err != nil {
