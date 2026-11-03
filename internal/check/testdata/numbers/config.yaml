@@ -5,5 +5,10 @@ primary:
   kind: toy/v1/Thing
   sample: sample.yaml
   ready: self.spec.size + 1 == 3 && self.spec.ratio + 0.5 == 1.5
-  owns: [{kind: v1/ConfigMap, name: "self.metadata.name.substring(0, self.spec.size) + string(self.spec.ratio + 0.5)"}]
+  retain: self.spec.ratio * 2.0 == 2.0
+  halted: self.spec.ratio - 0.5 == 0.5
+  owns:
+    - kind: v1/ConfigMap
+      name: self.metadata.name.substring(0, self.spec.size) + string(self.spec.ratio + 0.5)
+      namespace: "'ns-' + string(self.spec.ratio + 0.5)"
 references: [{from: toy/v1/Thing, to: toy/v1/Thing, name: spec.peer, ready: self.spec.ratio + 0.5 == 1.5}]

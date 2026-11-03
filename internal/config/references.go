@@ -134,6 +134,9 @@ func (c *Config) reference(key string, d declaredReference, kinds servedKinds) (
 		if r.Ready = c.defaultReady(r, fake); r.Ready == "" {
 			return Reference{}, fmt.Errorf("%s.ready is required: %s is no listed kind, model or fake with a ready", key, d.To)
 		}
+		if _, err := CompileReady(r.Ready, to.schema); err != nil {
+			return Reference{}, fmt.Errorf("%s.ready is unset, and the model ready does not fit %s: %w", key, d.To, err)
+		}
 	} else if _, err := CompileReady(r.Ready, to.schema); err != nil {
 		return Reference{}, fmt.Errorf("%s.ready: %w", key, err)
 	}

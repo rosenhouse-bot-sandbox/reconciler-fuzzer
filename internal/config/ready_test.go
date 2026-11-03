@@ -169,6 +169,24 @@ func TestAReferenceReadyTypesTheToKind(t *testing.T) {
 	}
 }
 
+// A model's ready, the default, reads status.conditions, which Thing's
+// schema lacks.
+func TestAReferencesDefaultReadyTypesTheToKind(t *testing.T) {
+	path := writeConfig(t, `launch: {binary: bin/controller}
+crds: [crd.yaml, thing.yaml]
+models: [{kind: toy/v1/Thing, after: 1s}]
+primary: {kind: toy/v1/Cluster, sample: sample.yaml, ready: "true"}
+references: [{from: toy/v1/Cluster, to: toy/v1/Thing, name: spec.thing}]
+`)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "thing.yaml"), []byte(thingCRD), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := config.Load(path)
+	if want := "references[0].ready is unset, and the model ready does not fit toy/v1/Thing: "; err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("Load = %v, want an error with %q", err, want)
+	}
+}
+
 // A JSON number decodes to a float64. Ready reads it as the API server
 // reads a CR: an int, unless the schema types it number.
 func TestAReadyComputesWithTheTypesTheSchemaGives(t *testing.T) {

@@ -3,6 +3,7 @@ package trace_test
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -90,6 +91,28 @@ func TestLoadReadsAFaultPeriodsPeriod(t *testing.T) {
 	}
 	if want := []string{"0s", "2s", "none"}; !slices.Equal(got, want) {
 		t.Errorf("loaded periods %q, want %q", got, want)
+	}
+}
+
+// judge without a config types each kind's CEL by the schema the run
+// event holds.
+func TestLoadReadsTheSchemasOfTheRunEvent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "trace.jsonl")
+	r, err := trace.NewRecorder(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := map[string]any{"type": "object", "properties": map[string]any{"ratio": map[string]any{"type": "number"}}}
+	r.Record(trace.Event{Run: &trace.Run{Primaries: []trace.Primary{{Schema: schema}}, References: []trace.Reference{{Schema: schema}}}})
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := trace.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run := loaded[0].Run; !reflect.DeepEqual(run.Primaries[0].Schema, schema) || !reflect.DeepEqual(run.References[0].Schema, schema) {
+		t.Errorf("loaded schemas %v and %v, want %v", run.Primaries[0].Schema, run.References[0].Schema, schema)
 	}
 }
 
