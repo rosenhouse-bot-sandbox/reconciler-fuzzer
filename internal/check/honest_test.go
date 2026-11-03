@@ -133,6 +133,8 @@ func TestHonestRequiresADependency(t *testing.T) {
 		Ready: config.ReadyConditionCEL, Dependency: &trace.Dependency{Required: true}}}
 	r.Begin().CreateCR("a", widgetA)
 	r.Ready(widgetA)
+	// The cluster makes a Gadget only after the ready write.
+	r.Add(tt.Version(gadgetA, "ug", "50", gadget(r, true)))
 	requireFinding(t, honest(t, r), "Honest", 0, noDependency, "kube/toy/widgets", "slot a")
 
 	r = newRun(1)
@@ -325,17 +327,24 @@ func TestHonestSkipsADependencyTheControllerDeleted(t *testing.T) {
 	}
 }
 
-// The controller sees Gadget b in its create's response, and deletes it,
-// before the observer records the create.
+// The controller learns of Gadget b, and deletes it, before the observer
+// records the create.
 func TestHonestSkipsADependencyTheControllerDeletedBeforeTheObserverSawIt(t *testing.T) {
 	gadgetB := tt.Ref("toy/gadgets", "ns", "b")
-	r := gadgetRun(trace.Dependency{Required: true})
-	r.See(ctl, gadgetA)
-	r.Add(tt.Create(ctl, gadgetB, "ub", "50"), tt.Seen(ctl, gadgetB, "ub", "50"))
-	r.Add(tt.Call(ctl, "delete", gadgetB, 200, "90"))
-	r.Add(tt.Version(gadgetB, "ub", "50", gadget(r, false))).Ready(widgetA)
-	r.Add(tt.Deleted(gadgetB, "ub", "90", gadget(r, false)))
-	requireNone(t, honest(t, r))
+	for name, learn := range map[string]trace.Event{
+		"from its create's answer": tt.Create(ctl, gadgetB, "ub", "50"),
+		"from a watch event":       tt.Seen(ctl, gadgetB, "ub", "50"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := gadgetRun(trace.Dependency{Required: true})
+			r.See(ctl, gadgetA)
+			r.Add(learn)
+			r.Add(tt.Call(ctl, "delete", gadgetB, 200, "90"))
+			r.Add(tt.Version(gadgetB, "ub", "50", gadget(r, false))).Ready(widgetA)
+			r.Add(tt.Deleted(gadgetB, "ub", "90", gadget(r, false)))
+			requireNone(t, honest(t, r))
+		})
+	}
 }
 
 // A delete's response can be lost after the server deletes the object.

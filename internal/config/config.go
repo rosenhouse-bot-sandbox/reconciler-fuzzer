@@ -91,8 +91,8 @@ type Primary struct {
 	Sample string
 	// Ready is CEL over self, the CR.
 	Ready string
-	// Retain is CEL over self, a deleted CR. Where it holds, Clean allows
-	// the CR's resources to stay. It is empty when unset.
+	// Retain is CEL over self, a deleted CR. Where it holds, Clean and
+	// Teardown allow the CR's resources to stay. It is empty when unset.
 	Retain string
 	// Owns are owning-CR rule 3: fields of the CR that name its resources.
 	Owns []Owns

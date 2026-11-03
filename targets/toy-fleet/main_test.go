@@ -85,7 +85,7 @@ func TestRunPrintsTheUsageForHelp(t *testing.T) {
 	if !errors.Is(err, flag.ErrHelp) {
 		t.Errorf("run returned %v for --help, want flag.ErrHelp so that main exits 0.", err)
 	}
-	for _, name := range []string{"-bug", "-kubeconfig", "-metrics-bind-address", "-protect-secrets", "-version"} {
+	for _, name := range []string{"-bug", "-kubeconfig", "-metrics-bind-address", "-protect-secrets", "-storage-classes", "-version"} {
 		if !strings.Contains(printed.String(), name) {
 			t.Errorf("run printed %q for --help, want the usage of %s.", printed.String(), name)
 		}

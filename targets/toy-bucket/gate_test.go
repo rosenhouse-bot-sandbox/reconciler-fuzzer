@@ -56,11 +56,14 @@ func plans(config string) ([]string, error) {
 // finding means the bug must pass the plan.
 var gate = []gateRow{
 	{"b30", 30, "Clean: left resources behind", 1, "cloud buckets buckets-1 (rule 2, slot a)", ""},
+	{"b30", 30, "Teardown: released a CR before deleting its resources", 1, "cloud buckets buckets-1 (rule 2, slot a)", ""},
 	{"b31", 31, "Unique: duplicate resources", 0, "cloud buckets buckets-1 (rule 2, slot a), cloud buckets buckets-2", ""},
 	{"b31", 31, "Clean: left resources behind", 2, "cloud buckets buckets-1 (rule 2, slot a)", ""},
+	{"b31", 31, "Teardown: released a CR before deleting its resources", 2, "cloud buckets buckets-1 (rule 2, slot a)", ""},
 	{"b31", 31, "Honest: reported ready before seeing its dependency ready", 0, "slot a: cloud buckets buckets-1 not seen", ""},
 	{"b32", 32, "Unique: duplicate resources", 0, "cloud buckets buckets-1 (rule 2, slot a), cloud buckets buckets-2", ""},
 	{"b32", 32, "Clean: left resources behind", 2, "cloud buckets buckets-1 (rule 2, slot a)", ""},
+	{"b32", 32, "Teardown: released a CR before deleting its resources", 2, "cloud buckets buckets-1 (rule 2, slot a)", ""},
 	{"b32", 32, "Honest: reported ready before seeing its dependency ready", 0, "slot a: cloud buckets buckets-1 not seen", ""},
 	{"b33", 33, "Honest: reported ready before seeing its dependency ready", 0, "cloud buckets buckets-1 seen not ready", ""},
 	{"b34", 34, "Restore: did not restore damaged resources", 1, "cloud buckets buckets-1 (rule 2, slot a)", ""},

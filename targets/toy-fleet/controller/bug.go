@@ -7,9 +7,20 @@ import "fmt"
 type Bug int
 
 const (
+	// B115 releases a deleted Cluster once it has deleted its Volumes, before
+	// they are gone.
+	B115 Bug = 115
 	// B116 removes every finalizer from a deleting Volume while its Cluster is
 	// deleted.
 	B116 Bug = 116
+	// B117 stops finalizing a Cluster for good once a Volume reports Ready
+	// False.
+	B117 Bug = 117
+	// B118 deletes Volumes with orphan propagation.
+	B118 Bug = 118
+	// B119, under --storage-classes, releases a deleted Cluster before it
+	// deletes its StorageClass.
+	B119 Bug = 119
 	// B120 releases a Cluster while a Database names it.
 	B120 Bug = 120
 	// B121 releases a Database while a User names it.
@@ -67,9 +78,9 @@ const (
 
 // bugs holds every seeded bug ID.
 var bugs = map[Bug]bool{
-	B116: true, B120: true, B121: true, B122: true, B123: true, B124: true, B125: true, B126: true, B135: true,
-	B140: true, B141: true, B142: true, B150: true, B151: true, B152: true, B160: true, B161: true, B162: true,
-	B170: true, B171: true,
+	B115: true, B116: true, B117: true, B118: true, B119: true, B120: true, B121: true, B122: true, B123: true,
+	B124: true, B125: true, B126: true, B135: true, B140: true, B141: true, B142: true, B150: true, B151: true,
+	B152: true, B160: true, B161: true, B162: true, B170: true, B171: true,
 }
 
 // ParseBug converts a --bug value into a Bug.
