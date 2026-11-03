@@ -18,7 +18,7 @@ const (
 	section       = "\n## Fleet toy\n"
 )
 
-// bugs describes each seeded bug of controller/.
+// bugs describes the correct controller and each bug that the gate runs.
 var bugs = map[int]string{
 	0:   "The correct controller.",
 	116: "Removes every finalizer from a deleting Volume while its Cluster is deleted.",

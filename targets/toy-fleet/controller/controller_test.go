@@ -40,7 +40,7 @@ type fleet struct {
 
 func newClient(t *testing.T, objects ...client.Object) client.WithWatch {
 	t.Helper()
-	scheme, err := NewScheme()
+	scheme, err := NewScheme(0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -940,7 +940,7 @@ func TestReconcileOfAMissingCRSucceeds(t *testing.T) {
 }
 
 func TestParseBugAcceptsOnlyKnownBugs(t *testing.T) {
-	for _, id := range []int{0, 116, 120, 121, 122, 123, 124, 125, 126, 135, 140, 141, 142, 150, 151, 152, 160, 161, 162} {
+	for _, id := range []int{0, 116, 120, 121, 122, 123, 124, 125, 126, 135, 140, 141, 142, 150, 151, 152, 160, 161, 162, 170, 171} {
 		if b, err := ParseBug(id); int(b) != id || err != nil {
 			t.Errorf("ParseBug(%d) = %v, %v", id, b, err)
 		}
