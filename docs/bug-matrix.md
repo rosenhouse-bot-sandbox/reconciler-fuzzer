@@ -51,11 +51,14 @@ Each Bucket owns one bucket in the `crudfake` system `cloud` (targets/toy-bucket
 | B0 | The correct controller. With --halt, it stops after a create of unknown outcome. | halted/halt | none | |
 | B0 | The correct controller. With --halt and no primary.halted, it never settles. | halted/halt | Converge | 0 |
 | B30 | Leaks the bucket on CR delete. | b30 | Clean | 1 |
+| B30 | Leaks the bucket on CR delete. | b30 | Teardown | 1 |
 | B31 | Retries a create of unknown outcome under a new random name and keeps both buckets. | b31 | Unique | 0 |
 | B31 | Retries a create of unknown outcome under a new random name and keeps both buckets. | b31 | Clean | 2 |
+| B31 | Retries a create of unknown outcome under a new random name and keeps both buckets. | b31 | Teardown | 2 |
 | B31 | Retries a create of unknown outcome under a new random name and keeps both buckets. | b31 | Honest | 0 |
 | B32 | Names its bucket with a per-process nonce, so a restart after the create makes a second one. | b32 | Unique | 0 |
 | B32 | Names its bucket with a per-process nonce, so a restart after the create makes a second one. | b32 | Clean | 2 |
+| B32 | Names its bucket with a per-process nonce, so a restart after the create makes a second one. | b32 | Teardown | 2 |
 | B32 | Names its bucket with a per-process nonce, so a restart after the create makes a second one. | b32 | Honest | 0 |
 | B33 | Reports ready right after the create, while the bucket is CREATING. | b33 | Honest | 0 |
 | B34 | Never recreates a missing bucket. | b34 | Restore | 1 |
