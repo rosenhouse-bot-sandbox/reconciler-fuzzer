@@ -87,8 +87,8 @@ func TestValuesDeletableRefusesASystemFixture(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "secrets.yaml"), []byte("- {resource: secret, name: app/db, body: {}}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := config.Load(path); err == nil || !strings.Contains(err.Error(), "values.deletable secrets.yaml") {
-		t.Errorf("err = %v, want one naming values.deletable secrets.yaml", err)
+	if _, err := config.Load(path); err == nil || !strings.Contains(err.Error(), "values.deletable secrets.yaml: the top-level fixtures key does not list this file") {
+		t.Errorf("err = %v, want one saying the top-level fixtures key does not list secrets.yaml", err)
 	}
 }
 

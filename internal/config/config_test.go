@@ -327,6 +327,18 @@ func TestValues(t *testing.T) {
 	}
 }
 
+// Deleting a Namespace deletes what it holds.
+func TestValuesDeletableRefusesANamespace(t *testing.T) {
+	path := writeConfig(t, minimal(t)+"values: {deletable: [fixture.yaml]}\n")
+	objects := "{apiVersion: v1, kind: Secret, metadata: {name: password}}\n---\n{apiVersion: v1, kind: Namespace, metadata: {name: other}}\n"
+	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "fixture.yaml"), []byte(objects), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err == nil || !strings.Contains(err.Error(), "values.deletable fixture.yaml: deleting Namespace other deletes what it holds") {
+		t.Errorf("err = %v, want one naming values.deletable fixture.yaml and Namespace other", err)
+	}
+}
+
 func TestModels(t *testing.T) {
 	c, err := config.Load(writeConfig(t, minimal(t)+`models:
   - kind: example.com/v1/Gadget

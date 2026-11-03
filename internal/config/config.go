@@ -39,7 +39,8 @@ type Config struct {
 	// system's.
 	FixtureValues map[string][]string
 	// Deletable are the files of Fixtures whose objects generated plans may
-	// delete in their last step.
+	// delete in their last step. They hold no Namespace and no object of a
+	// references to kind.
 	Deletable  []string
 	Models     []Model
 	Systems    []System
@@ -515,7 +516,10 @@ func load(path string) (*Config, error) {
 	for _, file := range d.Values.Deletable {
 		path := resolve(dir, file)
 		if !slices.Contains(c.Fixtures, path) {
-			return nil, fmt.Errorf("values.deletable %s: the fixtures key does not list this file", file)
+			return nil, fmt.Errorf("values.deletable %s: the top-level fixtures key does not list this file", file)
+		}
+		if err := c.refuseDeletable(path); err != nil {
+			return nil, fmt.Errorf("values.deletable %s: %w", file, err)
 		}
 		c.Deletable = append(c.Deletable, path)
 	}
@@ -613,34 +617,75 @@ func primary(key string, declared declaredEntry, dir string, fakes []System) (Pr
 // fixture before it parses the file.
 var fixtureKey = regexp.MustCompile(`\$\{[^}\n]*\}`)
 
+// fixtureHeader is what config reads of a kube fixture's object.
+type fixtureHeader struct {
+	APIVersion string `json:"apiVersion"`
+	Kind       string `json:"kind"`
+	Metadata   struct {
+		Name string `json:"name"`
+	} `json:"metadata"`
+}
+
+func (h fixtureHeader) groupKind() schema.GroupKind {
+	return schema.FromAPIVersionAndKind(h.APIVersion, h.Kind).GroupKind()
+}
+
+// readFixtureHeaders reads the header of each object in a kube fixture file.
+func readFixtureHeaders(path string) ([]fixtureHeader, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	data = fixtureKey.ReplaceAllLiteral(data, []byte("key"))
+	reader := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(data)))
+	var headers []fixtureHeader
+	for {
+		document, err := reader.Read()
+		if errors.Is(err, io.EOF) {
+			return headers, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		var header fixtureHeader
+		if err := yaml.Unmarshal(document, &header); err != nil {
+			return nil, err
+		}
+		headers = append(headers, header)
+	}
+}
+
 // refuseListedFixtures refuses a kube fixture of a listed kind. declared
 // are the fixtures as the config names them, and paths the files.
 func refuseListedFixtures(declared, paths []string, listed []schema.GroupKind) error {
 	for i, path := range paths {
-		data, err := os.ReadFile(path)
+		headers, err := readFixtureHeaders(path)
 		if err != nil {
 			return fmt.Errorf("fixtures %s: %w", declared[i], err)
 		}
-		data = fixtureKey.ReplaceAllLiteral(data, []byte("key"))
-		reader := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(data)))
-		for {
-			document, err := reader.Read()
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			if err != nil {
-				return fmt.Errorf("fixtures %s: %w", declared[i], err)
-			}
-			var header struct {
-				APIVersion string `json:"apiVersion"`
-				Kind       string `json:"kind"`
-			}
-			if err := yaml.Unmarshal(document, &header); err != nil {
-				return fmt.Errorf("fixtures %s: %w", declared[i], err)
-			}
-			if kind := schema.FromAPIVersionAndKind(header.APIVersion, header.Kind).GroupKind(); slices.Contains(listed, kind) {
+		for _, header := range headers {
+			if slices.Contains(listed, header.groupKind()) {
 				return fmt.Errorf("fixtures %s: the file holds a %s CR; create CRs in a plan", declared[i], header.Kind)
 			}
+		}
+	}
+	return nil
+}
+
+// refuseDeletable refuses a values.deletable file that holds a Namespace,
+// or an object of a references to kind, which plans delete already.
+func (c *Config) refuseDeletable(path string) error {
+	headers, err := readFixtureHeaders(path)
+	if err != nil {
+		return err
+	}
+	for _, header := range headers {
+		kind := header.groupKind()
+		switch {
+		case kind == (schema.GroupKind{Kind: "Namespace"}):
+			return fmt.Errorf("deleting Namespace %s deletes what it holds", header.Metadata.Name)
+		case slices.ContainsFunc(c.References, func(r Reference) bool { return r.System == "" && r.To.GroupKind() == kind }):
+			return fmt.Errorf("plans delete %s %s already, since a reference names its kind", header.Kind, header.Metadata.Name)
 		}
 	}
 	return nil
