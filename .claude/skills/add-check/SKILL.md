@@ -10,14 +10,15 @@ defines each one. Follow these steps in order.
 
 1. **Design first.** Add the check's rule to DESIGN.md §12, and an entry to
    the §17 decision log. An entry is one line that says what changed and
-   which bug or target needs it. DESIGN.md must stay under 530 lines.
+   which bug or target needs it. DESIGN.md must stay under 585 lines.
 
 2. **Write a failing test.** In `internal/check/<name>_test.go`, build
    traces with `internal/trace/tracetest` (`tt.NewScript`, `Begin`,
    `CreateCR`, `Create`, `EndFaults`, `Settle`). Use the helpers in
    `clean_test.go`: `newRun`, `judgeWith` and `requireFinding`. A check on
    dependencies can start from `gadgetRun` in `honest_test.go`, with
-   `tt.ReadyCondition`, `Script.See` and `tt.ModelFault`. Write one trace
+   `tt.ReadyCondition`, `Script.See` and `tt.ModelFault`, and one on
+   references from `secretRun` in `references_test.go`. Write one trace
    that fails the check and one that passes. Run them red.
 
 3. **Implement it.** Write `internal/check/<name>.go` as
@@ -50,6 +51,10 @@ defines each one. Follow these steps in order.
 
    A bug about a dependency runs under `targets/toy-widget/gadget/config.yaml`,
    with its plan in `gadget/plans/` and its gate row naming that config.
+   A bug about a reference goes in `targets/toy-fleet`: its constant and
+   `bugs` entry in `controller/bug.go`, its case and test in `controller/`,
+   its description in `bugmatrix_test.go`, a plan in `plans/` and a `gate`
+   row in `gate_test.go`.
 
 6. **Verify.**
 
