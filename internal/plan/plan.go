@@ -66,10 +66,10 @@ const (
 	// waits as a create of a slot does.
 	CreateFixture Do = "createFixture"
 	// Stop waits until the CRs that deletes removed are gone, as a create's
-	// wait for its slot does, and then stops the controller for good, as
-	// Restart does. A CR is gone once its name is free or another CR holds
-	// it. After a stop, a plan's only actions are deletes and fixture
-	// changes, and the runner appends no steps.
+	// wait for its slot does, and then stops the controller for good. The
+	// stop works as Restart's does. A CR is gone once its name is free or
+	// another CR holds it. After a stop, a plan's only actions are deletes
+	// and fixture changes, and the runner appends no steps.
 	Stop Do = "stop"
 )
 

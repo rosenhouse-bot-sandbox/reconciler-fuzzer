@@ -487,8 +487,8 @@ restart that names `binary`, `args` or `crds` tests an upgrade:
 - `args` replace `launch.args`, and `[]` drops them. The `--launch-arg`s still come after the
   new args, and `${systems.<name>.<key>}` expands as in `launch.args`.
 - Every later start keeps the new `binary` and `args`: restarts, crash restarts, the start after
-  a `kill`, and the appended restart. Env and RBAC do not change, so `launch.rbac` must grant
-  what both versions need.
+  a `kill`, and the appended restart. Env, RBAC and `launch.gracePeriod` do not change, so
+  `launch.rbac` must grant what both versions need.
 - Paths resolve against the plan's directory. Before it starts, `run` refuses a `binary` that
   is not an executable file, a `crds` path that holds no CRD, and an unknown or unclosed
   `${key}`. It checks `launch.upgrades` the same way.

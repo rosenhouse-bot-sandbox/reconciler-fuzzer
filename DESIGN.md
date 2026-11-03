@@ -229,7 +229,7 @@ until no object holds the name it needs. Once `period` has passed, the wait ends
 the step's faults and restarts a killed controller. It gives up `deadline -
 endFaults` after the later of the faults' end and the delete, and the plan ends
 after the step. A `stop` waits the same way until each CR that a `delete`
-removed is gone, then sends SIGTERM even if one stays. A model fault that
+removed is gone, then stops the controller even if one stays. A model fault that
 nothing `Takes` is a harness error, as is any other action error except an
 unmatched target or a `createFixture` whose `changeFixture` deleted nothing.
 
@@ -274,8 +274,8 @@ reviews, non-resource URLs and unmapped requests.
 
 ## 11. Instances, owning CRs and roles
 
-`owner.New(ix, rules)` indexes every instance the trace shows. `rules` come
-from the config, or else the run event.
+`owner.New(ix, rules)` indexes every instance the trace shows. `rules`, like
+the checks' `Spec`, come from the config, or else the run event.
 
 - An instance is a (ref, UID), from its first version until a deleted
   version, or one its system's `gone` CEL accepts.
