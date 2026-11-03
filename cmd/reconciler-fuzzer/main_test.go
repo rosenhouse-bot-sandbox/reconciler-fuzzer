@@ -405,8 +405,8 @@ func TestShrinkExits2WhenItsPlanFailsToRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, stdout, stderr := cliOutput("shrink", "--config", toyConfig, "--plan", "../../targets/toy-widget/plans/b13.json", "--out", out)
-	if code != 2 || stdout != "" || !strings.Contains(stderr, "no controller") {
-		t.Errorf("cli = %d, stdout %q, stderr %q; want 2 and only the error", code, stdout, stderr)
+	if code != 2 || stdout != "" || strings.Count(stderr, "no controller") != 1 {
+		t.Errorf("cli = %d, stdout %q, stderr %q; want 2 and only the error, once", code, stdout, stderr)
 	}
 }
 
