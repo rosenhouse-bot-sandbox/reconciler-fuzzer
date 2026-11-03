@@ -62,7 +62,8 @@ type Reference struct {
 type Primary struct {
 	Kind  trace.Kind
 	Ready func(cr map[string]any) (bool, error)
-	// Retain says whether Clean allows a deleted CR's resources to stay.
+	// Retain says whether Clean and Teardown allow a deleted CR's resources
+	// to stay.
 	// Retain, Halted and Periodic are nil when the entry sets none.
 	Retain, Halted func(cr map[string]any) (bool, error)
 	Periodic       *trace.Periodic

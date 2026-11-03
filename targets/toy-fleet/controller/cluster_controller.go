@@ -45,7 +45,8 @@ type ClusterReconciler struct {
 	// finalizing holds, under B161, the Clusters this process began to finalize.
 	finalizing map[types.NamespacedName]bool
 	// storageClasses gives each Cluster a StorageClass. The StorageClass is
-	// cluster-scoped, so no ownerReference can name the Cluster.
+	// cluster-scoped, so the garbage collector resolves no ownerReference
+	// from it to the namespaced Cluster.
 	storageClasses bool
 }
 

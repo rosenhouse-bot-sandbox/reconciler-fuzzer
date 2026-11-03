@@ -310,16 +310,18 @@ systems:
   [role](#roles) than the first create saw.
 
 Kubernetes' garbage collector deletes a child only through an ownerReference chain. It never
-follows a cluster-scoped child's ownerReference to a namespaced owner. So a controller must delete
-each other child of a CR before it removes its finalizer from the CR. Teardown fails a controller
-write that removes the controller's last finalizer from a CR being deleted while such a child is
-not yet being deleted: `released a CR before deleting its resources`. It finds the CR's children
-through `owns`, `owner` and ownerReferences. A child with a `deletionTimestamp`, a child whose
-delete has answered, and a child in a namespace being deleted are being deleted. The controller
-need not wait until the child is gone. But a kube child's delete counts only if the trace shows the
-child deleting or gone at some time, so a dry run does not count. The garbage collector deletes no
-fake service's object. The CR's `retain` allows its children to stay. To judge the order of children
-that the garbage collector deletes, write a [property](#properties).
+follows a cluster-scoped child's ownerReference to a namespaced owner. So before a controller
+removes its finalizer from a CR, it must delete each child of the CR that the garbage collector
+does not delete. Teardown fails a controller write that removes the controller's last finalizer
+from a CR being deleted while such a child is not yet being deleted: `released a CR before deleting
+its resources`. It finds the CR's children through `owns`, `owner` and ownerReferences. A child
+with a `deletionTimestamp`, a child whose delete succeeded or found it gone, and a child in a
+namespace being deleted are being deleted. The controller need not wait until the child is gone.
+But a kube child's delete counts only if the trace shows the child deleting or gone at some time,
+so a dry run alone does not count. The garbage collector deletes no fake service's object. The CR's
+`retain` allows its children to stay. A child that the `owns` entries of several CRs name fails
+only at the release of the last of them, and only if none of them retains it. To judge the order
+of children that the garbage collector deletes, write a [property](#properties).
 
 ### Roles
 
@@ -506,8 +508,8 @@ fake collection that an entry's `owns` names also maps to an empty list. Any oth
 collection has a key only if the trace holds an object of it.
 
 Teardown skips a child that the garbage collector deletes through its ownerReference chain, since
-it goes after the CR whatever the controller's order. A `when: always` property can require
-that such children go first, as
+the garbage collector deletes it after the CR whatever the controller's order. A `when: always`
+property can require that such children are deleted first, as
 [targets/toy-fleet/order](targets/toy-fleet/order/config.yaml) does:
 
 ```yaml
