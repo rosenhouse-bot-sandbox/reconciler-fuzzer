@@ -1,0 +1,13 @@
+# toy-widget's config with two fixture files. values.deletable lets plans
+# delete the two objects of deletable.yaml, and not widget-config.
+launch:
+  binary: none
+  rbac: [../../../../targets/toy-widget/rbac/role.yaml]
+crds: [../../../../targets/toy-widget/crds/]
+primary:
+  kind: toy.reconciler-fuzzer/v1/Widget
+  sample: ../../../../targets/toy-widget/widget.yaml
+  ready: "true"
+fixtures: [deletable.yaml, ../../../../targets/toy-widget/widget-config.yaml]
+values: {deletable: [deletable.yaml]}
+timeouts: {stable: 2s}

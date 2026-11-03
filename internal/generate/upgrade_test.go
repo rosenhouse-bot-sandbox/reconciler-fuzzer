@@ -157,7 +157,7 @@ func TestSomeUpgradesComeBeforeADelete(t *testing.T) {
 // step included, so a seed's plan only gains the restarts.
 func TestUpgradesOnlyAddRestarts(t *testing.T) {
 	upgrading := loadConfig(t, upgradesConfig)
-	fixtureDeleting := deleting(loadConfig(t, noFixtureValues))
+	fixtureDeleting := loadConfig(t, deletableConfig)
 	fixtureDeleting.Launch.Upgrades = upgrading.Launch.Upgrades
 	for name, cfg := range map[string]*config.Config{"upgrades": upgrading, "values.deletable": fixtureDeleting} {
 		without := *cfg
