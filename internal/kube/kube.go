@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"net/url"
 	"os"
@@ -120,6 +121,16 @@ func (k *Kube) Start(ctx context.Context, env *system.Env) (system.Endpoints, er
 	return endpoints, nil
 }
 
+// assetsHint says where to get the control plane when err is envtest's
+// failure to run etcd or kube-apiserver.
+func assetsHint(err error) string {
+	var missing *fs.PathError
+	if !errors.As(err, &missing) || missing.Op != "fork/exec" {
+		return ""
+	}
+	return `; set KUBEBUILDER_ASSETS to the directory that "setup-envtest use 1.37.0 -p path" prints`
+}
+
 func (k *Kube) start(ctx context.Context, env *system.Env) (system.Endpoints, error) {
 	roles, clusterRoles, err := readRBAC(k.o.RBAC)
 	if err != nil {
@@ -140,7 +151,7 @@ func (k *Kube) start(ctx context.Context, env *system.Env) (system.Endpoints, er
 	admin, err := k.env.Start()
 	if err != nil {
 		k.env = nil
-		return system.Endpoints{}, fmt.Errorf("starting envtest: %w", err)
+		return system.Endpoints{}, fmt.Errorf("starting envtest: %w%s", err, assetsHint(err))
 	}
 	admin.QPS, admin.Burst = -1, 0
 	k.admin = admin
