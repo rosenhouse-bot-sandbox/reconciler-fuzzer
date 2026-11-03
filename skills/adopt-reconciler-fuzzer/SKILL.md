@@ -151,8 +151,9 @@ Fill each key from the project:
   acted on the current spec.
   Compare an `observedGeneration` with `metadata.generation`. If the controller writes no
   status, use `"true"` and tell the user.
-- An entry's `retain`: CEL over a deleted CR that allows its resources to stay. Set it only where
-  the controller keeps resources by design, such as under a `deletionPolicy: Retain`.
+- An entry's `retain`: CEL over a deleted CR, typed by its CRD's schema. Where it holds, the CR's
+  resources may stay. Set it only where the controller keeps resources by design, such as under a
+  `deletionPolicy: Retain`.
 - `values`: no webhook runs, so `overlay` narrows the CRD schema to what the webhooks admit.
   A field naming another object gets a `references` entry, or else
   `{enum: [<sample's value>]}`.
@@ -182,8 +183,8 @@ Fill each key from the project:
 - An entry's `owns`, and `systems`: a child without an ownerReference to its CR, such as one in
   another namespace, or a cluster-scoped child of a namespaced CR, needs one. Otherwise Clean
   judges it only by the CRs alive at its creation that the controller did not create.
-  `owns: [{kind, name, namespace?}]` holds CEL over the CR that names the child; a
-  cluster-scoped kind takes no `namespace`.
+  `owns: [{kind, name, namespace?}]` holds CEL over the CR that names the child. The CR's CRD
+  schema types that CEL. A cluster-scoped kind takes no `namespace`.
   `systems: [{name: kube, owner}]` holds CEL over a child that yields its CR's UID,
   `namespace/name` or name, such as an owner label. Prefer the UID: a bare name that
   matches CRs in two other namespaces, or CRs of two kinds, names none.

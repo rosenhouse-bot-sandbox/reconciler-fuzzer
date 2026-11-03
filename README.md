@@ -301,8 +301,8 @@ systems:
     owner: self.metadata.labels['example.com/owner-uid']   # a label on the child names the CR
 ```
 
-- `owns` takes CEL over the CR. Without `namespace`, a namespaced child is in the CR's namespace.
-  A cluster-scoped kind takes no `namespace`.
+- `owns` takes CEL over the CR, typed by its CRD's schema. Without `namespace`, a namespaced
+  child is in the CR's namespace. A cluster-scoped kind takes no `namespace`.
 - `owner` takes CEL over the child. It yields the CR's UID, `namespace/name` or name. A bare name
   prefers a CR in the child's namespace, and names no CR when it matches CRs in two other namespaces.
   A name that CRs of two kinds share names no CR.
@@ -441,10 +441,10 @@ collections:
   drops the response to the first bucket create. Without its `period`, the fault would end as
   the CR's create returns, usually before the controller creates the bucket. `damage` takes
   `"target": {"system": "cloud"}`.
-- An entry's `halted` is CEL over its CR. It counts a CR as done after a request of unknown
-  outcome, for a controller that stops on purpose. While such a CR is not ready, Restore lets its
-  damaged resources stay gone. [targets/toy-bucket/halted](targets/toy-bucket/halted/config.yaml)
-  uses it.
+- An entry's `halted` is CEL over its CR, typed by its CRD's schema. It counts a CR as done after
+  a request of unknown outcome, for a controller that stops on purpose. While such a CR is not
+  ready, Restore lets its damaged resources stay gone.
+  [targets/toy-bucket/halted](targets/toy-bucket/halted/config.yaml) uses it.
 - Any program can be a fake. The harness runs it in the config's directory and sets
   `RECONCILER_FUZZER_ADDR`, where it serves its API and the fake contract: `GET /_fake/resources`
   answers `{"collections": [<c>], "pending": <bool>, "resources": [{"collection": <c>, "body":
