@@ -21,3 +21,16 @@ func TestNearest(t *testing.T) {
 		t.Errorf("Nearest(stat) = %q, want the first of two at one edit", got)
 	}
 }
+
+func TestList(t *testing.T) {
+	for want, names := range map[string][]string{
+		"":          nil,
+		"a":         {"a"},
+		"a or b":    {"a", "b"},
+		"a, b or c": {"a", "b", "c"},
+	} {
+		if got := List(names, "or"); got != want {
+			t.Errorf("List(%q) = %q, want %q", names, got, want)
+		}
+	}
+}

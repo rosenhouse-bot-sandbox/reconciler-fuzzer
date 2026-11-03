@@ -1,4 +1,5 @@
-// Package suggest finds the name a mistyped one most likely meant.
+// Package suggest finds the name a mistyped one most likely meant, and
+// lists the valid names.
 package suggest
 
 import "strings"
@@ -13,6 +14,22 @@ func Nearest(key string, names []string) string {
 		}
 	}
 	return best
+}
+
+// List joins names as "a, b or c", with conjunction in place of "or".
+func List[Name ~string](names []Name, conjunction string) string {
+	var list string
+	for i, name := range names {
+		switch {
+		case i == 0:
+		case i == len(names)-1:
+			list += " " + conjunction + " "
+		default:
+			list += ", "
+		}
+		list += string(name)
+	}
+	return list
 }
 
 // editDistance counts the fewest insertions, deletions, substitutions and

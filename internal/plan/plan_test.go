@@ -43,13 +43,6 @@ func write(t *testing.T, body string) string {
 	return path
 }
 
-func TestLoadRejectsUnknownFields(t *testing.T) {
-	_, err := Load(write(t, `{"steps": [{"actions": [{"do": "restart", "when": "now"}]}]}`))
-	if err == nil || !strings.Contains(err.Error(), "when") {
-		t.Fatalf("Load = %v, want an unknown field error", err)
-	}
-}
-
 func TestLoadRejectsAMiscasedField(t *testing.T) {
 	_, err := Load(write(t, `{"steps": [{"actions": [{"do": "create", "slot": "a"}]}, {"actions": [{"do": "delete", "Slot": "a"}]}]}`))
 	if err == nil || !strings.Contains(err.Error(), "Slot") {
@@ -65,7 +58,8 @@ func TestLoadPlacesAnUnknownField(t *testing.T) {
 		`{"steps": [{"actions": [{"do": "restart", "Upgrade": {"args": []}}]}]}`:                 `steps[0].actions[0]: unknown field "Upgrade"`,
 		`{"stepz": []}`: `unknown field "stepz"; did you mean steps?`,
 	} {
-		if _, err := Load(write(t, body)); err == nil || !strings.Contains(err.Error(), want) {
+		path := write(t, body)
+		if _, err := Load(path); err == nil || err.Error() != "loading plan "+path+": "+want {
 			t.Errorf("Load(%s) = %v, want the field's place and the nearest key: %s", body, err, want)
 		}
 	}
