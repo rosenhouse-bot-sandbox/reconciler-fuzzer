@@ -461,6 +461,37 @@ func TestACancelDoesNotCutShortAShrinkThatFinished(t *testing.T) {
 	}
 }
 
+// A cancel cuts short the replays or shrink it ends, also of a finding that
+// has no replays or no candidates.
+func TestACancelCutsShortAFindingWithoutReplaysOrCandidates(t *testing.T) {
+	for _, testCase := range []struct {
+		name                string
+		replays, candidates int
+		cutAt               string
+		shrunk              bool
+		reproduced          string
+	}{
+		{"no replays", 0, DefaultCandidates, "shrink-1-1-1", true, "0/0"},
+		{"no candidates", DefaultReplays, 0, "replay-2", false, "1/5"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			fake := &fakeRun{out: t.TempDir(), finds: always(clean)}
+			ctx, run := cancelAt(t, fake, testCase.cutAt)
+			found, err := Hunt(ctx, Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1}), Out: fake.out, Run: run,
+				Replays: testCase.replays, Candidates: testCase.candidates})
+			shrunk := "not shrunk"
+			if testCase.shrunk {
+				shrunk = filepath.Join(fake.out, "seed-1", "shrunk.json")
+			}
+			summary, _ := os.ReadFile(filepath.Join(fake.out, "summary.md"))
+			row := "| " + testCase.reproduced + " | " + shrunk + " (cut short) |"
+			if !errors.Is(err, context.Canceled) || len(found) != 1 || !found[0].CutShort || !strings.Contains(string(summary), row) {
+				t.Errorf("Hunt = %+v, %v, and wrote:\n%s\nwant a row that ends %q.", found, err, summary, row)
+			}
+		})
+	}
+}
+
 func TestHuntRemovesTheRunOfASeedWithNothingNew(t *testing.T) {
 	_, fake := hunt(t, []uint64{1, 2}, always(clean))
 	wantKept(t, fake.out, map[string]bool{"seed-1": true, "seed-2": false})
