@@ -79,12 +79,12 @@ func beingDeleted(ix *trace.Index, w *owner.World, deletes []trace.Event, i owne
 	return i.Ref.System == "kube" && found && beingDeleted(ix, w, deletes, namespace, t)
 }
 
-// deleteCalls are the delete and deletecollection calls of every caller
-// that the server answered with a 2xx or a 404.
+// deleteCalls are the delete and deletecollection calls of every caller,
+// with no subresource, that the server answered with a 2xx or a 404.
 func deleteCalls(ix *trace.Index) []trace.Event {
 	var deletes []trace.Event
 	for _, e := range ix.Events() {
-		if c := e.Call; c != nil && (c.Verb == "delete" || c.Verb == "deletecollection") && (succeeded(*c) || c.Status == 404) {
+		if c := e.Call; c != nil && (c.Verb == "delete" || c.Verb == "deletecollection") && c.Subresource == "" && (succeeded(*c) || c.Status == 404) {
 			deletes = append(deletes, e)
 		}
 	}

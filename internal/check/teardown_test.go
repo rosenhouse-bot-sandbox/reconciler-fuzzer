@@ -156,6 +156,17 @@ func TestTeardownFailsAReleaseAfterAFailedDelete(t *testing.T) {
 	requireFinding(t, teardown(t, r), "Teardown", 1, releasedFirst, ruleThree.kind, ruleThree.detail)
 }
 
+// S3's DeleteBucketTagging is a delete of the bucket's tagging subresource.
+func TestTeardownFailsAReleaseAfterOnlyASubresourceDelete(t *testing.T) {
+	r, uid := deletingA(ruleThree)
+	tagging := tt.Call(ctl, "delete", ruleThree.ref, 204, "")
+	tagging.Call.Subresource = "tagging"
+	r.Add(tagging)
+	releaseA(r, uid)
+	r.Delete(ctl, ruleThree.ref)
+	requireFinding(t, teardown(t, r), "Teardown", 1, releasedFirst, ruleThree.kind, ruleThree.detail)
+}
+
 // A deletecollection's object is its collection.
 func TestTeardownPassesADeleteOfTheChildsCollectionBeforeTheRelease(t *testing.T) {
 	r, uid := deletingA(ruleTwo)
