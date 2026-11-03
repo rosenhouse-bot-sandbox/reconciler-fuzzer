@@ -536,8 +536,8 @@ func TestOwns(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []config.Owns{
-		{Kind: schema.GroupVersionKind{Version: "v1", Kind: "Secret"}, Name: "self.spec.secretName"},
-		{Kind: schema.GroupVersionKind{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRole"}, Name: "'cr-' + self.metadata.name", Namespace: "''"},
+		{Kind: schema.GroupVersionKind{Version: "v1", Kind: "Secret"}, Resource: "secrets", Name: "self.spec.secretName"},
+		{Kind: schema.GroupVersionKind{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRole"}, Resource: "clusterroles", Name: "'cr-' + self.metadata.name", Namespace: "''"},
 	}
 	if !reflect.DeepEqual(c.Primaries[0].Owns, want) {
 		t.Errorf("owns = %+v", c.Primaries[0].Owns)

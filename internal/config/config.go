@@ -125,7 +125,9 @@ type Owns struct {
 	// <system>:<collection>; Kind is then empty.
 	System, Collection string
 	Kind               schema.GroupVersionKind
-	Name               string
+	// Resource is the plural that serves Kind, such as configmaps.
+	Resource string
+	Name     string
 	// Namespace is empty when unset: the resource is in the CR's namespace,
 	// or cluster-scoped.
 	Namespace string
@@ -911,10 +913,11 @@ func owns(entryKey string, entries []declaredOwns, fakes []System, kinds servedK
 			if err != nil {
 				return nil, fmt.Errorf("%s.kind %q: %w", key, declared.Kind, err)
 			}
-			if _, err := kinds.serving(kind); err != nil {
+			served, err := kinds.serving(kind)
+			if err != nil {
 				return nil, fmt.Errorf("%s.kind %s: %w", key, declared.Kind, err)
 			}
-			o.Kind = kind
+			o.Kind, o.Resource = kind, served.resource
 		}
 		if declared.Name == "" {
 			return nil, fmt.Errorf("%s.name is required", key)

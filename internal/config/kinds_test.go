@@ -63,3 +63,20 @@ func TestLoadTakesEachServedVersion(t *testing.T) {
 		}
 	}
 }
+
+func TestOwnsNameThePluralThatServesEachKind(t *testing.T) {
+	path := writeConfig(t, kindsHead+`primary: {kind: toy/v1/Cluster, sample: sample.yaml, ready: "true",
+  owns: [{kind: toy/v1/Mouse, name: self.metadata.name}, {kind: v1/Endpoints, name: self.metadata.name}]}
+`)
+	crds := crdOf("toy", "Cluster", "Namespaced", "v1") + "---\n" + strings.ReplaceAll(crdOf("toy", "Mouse", "Namespaced", "v1"), "mouses", "mice")
+	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "crd.yaml"), []byte(crds), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owns := c.Primaries[0].Owns; owns[0].Resource != "mice" || owns[1].Resource != "endpoints" {
+		t.Errorf("owns = %+v, want the resources mice and endpoints", owns)
+	}
+}
