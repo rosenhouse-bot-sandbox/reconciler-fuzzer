@@ -277,6 +277,63 @@ func TestAProtobufCreateRecordsTheResultingObject(t *testing.T) {
 	}
 }
 
+// A deletecollection answers with the list it deleted.
+func TestADeleteCollectionRecordsItsListsResourceVersion(t *testing.T) {
+	list := &corev1.ConfigMapList{ListMeta: metav1.ListMeta{ResourceVersion: "7"},
+		Items: []corev1.ConfigMap{{ObjectMeta: metav1.ObjectMeta{Name: "cm", UID: "u-1", ResourceVersion: "5"}}}}
+	raw, err := list.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := (&runtime.Unknown{TypeMeta: runtime.TypeMeta{APIVersion: "v1", Kind: "ConfigMapList"}, Raw: raw}).Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, upstream := range map[string]http.Handler{
+		"json":     respondOK("application/json", "", `{"kind":"ConfigMapList","metadata":{"resourceVersion":"7"},"items":[{"metadata":{"name":"cm","uid":"u-1","resourceVersion":"5"}}]}`),
+		"protobuf": respondOK("application/vnd.kubernetes.protobuf", "", "k8s\x00"+string(envelope)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			l, recorded := listen(t, upstream)
+
+			do(t, l, "DELETE", "/api/v1/namespaces/ns1/configmaps")
+
+			got := recorded.waitCalls(t, 1)[0]
+			if got.ResultName != "" || got.ResultUID != "" || got.ResultRV != "7" {
+				t.Errorf("Recorded name %q, uid %q, rv %q, want the list's rv 7 alone.", got.ResultName, got.ResultUID, got.ResultRV)
+			}
+		})
+	}
+}
+
+// Each metadata holds a name or a resourceVersion, then a field of wire type
+// 7, which fails to decode.
+func TestAProtobufAnswerWithBadMetadataRecordsNoResult(t *testing.T) {
+	for _, c := range []struct {
+		kind, path string
+		metadata   []byte
+	}{
+		{"ConfigMap", "/api/v1/namespaces/ns1/configmaps/cm", []byte{0x0a, 2, 'c', 'm', 0x0f}},
+		{"ConfigMapList", "/api/v1/namespaces/ns1/configmaps", []byte{0x12, 1, '7', 0x0f}},
+	} {
+		t.Run(c.kind, func(t *testing.T) {
+			raw := append([]byte{0x0a, byte(len(c.metadata))}, c.metadata...)
+			envelope, err := (&runtime.Unknown{TypeMeta: runtime.TypeMeta{APIVersion: "v1", Kind: c.kind}, Raw: raw}).Marshal()
+			if err != nil {
+				t.Fatal(err)
+			}
+			l, recorded := listen(t, respondOK("application/vnd.kubernetes.protobuf", "", "k8s\x00"+string(envelope)))
+
+			do(t, l, "DELETE", c.path)
+
+			got := recorded.waitCalls(t, 1)[0]
+			if got.ResultName != "" || got.ResultUID != "" || got.ResultRV != "" {
+				t.Errorf("Recorded name %q, uid %q, rv %q, want none.", got.ResultName, got.ResultUID, got.ResultRV)
+			}
+		})
+	}
+}
+
 func TestAResponseOfAnotherTypeRecordsNoResult(t *testing.T) {
 	for _, c := range []struct{ name, verb, contentType string }{
 		{"protobuf without its magic", "POST", "application/vnd.kubernetes.protobuf"},
@@ -827,16 +884,30 @@ func TestAGetOfASeenKindRecordsSeen(t *testing.T) {
 	}
 }
 
-func TestAListOfASeenKindRecordsSeenForEachItem(t *testing.T) {
-	body := `{"kind":"GadgetList","metadata":{"resourceVersion":"9"},"items":[` + gadgetJSON("g1", "u1", "5") + "," + gadgetJSON("g2", "u2", "6") + "]}"
+func TestAnObjectOfAKindNamedTableRecordsSeen(t *testing.T) {
+	body := `{"apiVersion":"toy.reconciler-fuzzer/v1","kind":"Table","metadata":{"name":"g1","namespace":"ns1","uid":"u1","resourceVersion":"5"}}`
 	l, recorded := listen(t, respondOK("application/json", "", body), seeingGadgets)
 
-	do(t, l, "GET", gadgetsPath)
+	do(t, l, "GET", gadgetsPath+"/g1")
 
 	recorded.waitCalls(t, 1)
-	want := []trace.Seen{seenGadget("g1", "u1", "5"), seenGadget("g2", "u2", "6")}
-	if got := recorded.seen(); !reflect.DeepEqual(got, want) {
+	if got, want := recorded.seen(), []trace.Seen{seenGadget("g1", "u1", "5")}; !reflect.DeepEqual(got, want) {
 		t.Errorf("Recorded %+v, want %+v.", got, want)
+	}
+}
+
+func TestAListOfASeenKindRecordsSeenForEachItem(t *testing.T) {
+	for _, header := range []string{`"kind":"GadgetList"`, `"apiVersion":"meta.k8s.io/v1","kind":"PartialObjectMetadataList"`} {
+		body := `{` + header + `,"metadata":{"resourceVersion":"9"},"items":[` + gadgetJSON("g1", "u1", "5") + "," + gadgetJSON("g2", "u2", "6") + "]}"
+		l, recorded := listen(t, respondOK("application/json", "", body), seeingGadgets)
+
+		do(t, l, "GET", gadgetsPath)
+
+		recorded.waitCalls(t, 1)
+		want := []trace.Seen{seenGadget("g1", "u1", "5"), seenGadget("g2", "u2", "6")}
+		if got := recorded.seen(); !reflect.DeepEqual(got, want) {
+			t.Errorf("A list with %s recorded %+v, want %+v.", header, got, want)
+		}
 	}
 }
 
@@ -936,6 +1007,7 @@ func TestAWriteOfASeenKindRecordsSeen(t *testing.T) {
 
 func TestAResponseOfASeenKindItCannotDecodeRecordsAnOpaqueSeen(t *testing.T) {
 	big := `{"items":[` + strings.Repeat(gadgetJSON("g1", "u1", "5")+",", interpose.MaxResultBody/80) + gadgetJSON("g1", "u1", "5") + "]}"
+	const table = `{"apiVersion":"meta.k8s.io/v1","kind":"Table","metadata":{"resourceVersion":"9"},"rows":[]}`
 	for _, c := range []struct {
 		name, path string
 		handler    http.Handler
@@ -946,6 +1018,9 @@ func TestAResponseOfASeenKindItCannotDecodeRecordsAnOpaqueSeen(t *testing.T) {
 		{"a watch in an unknown encoding", gadgetsPath + "?watch=true", respondOK("application/json", "br", "")},
 		{"bad JSON", gadgetsPath + "/g1", respondOK("application/json", "", "{")},
 		{"a big list", gadgetsPath, respondOK("application/json", "", big)},
+		{"a table", gadgetsPath, respondOK("application/json", "", table)},
+		{"a table of one", gadgetsPath + "/g1", respondOK("application/json", "", table)},
+		{"a watch of tables", gadgetsPath + "?watch=true", respondOK("application/json", "", `{"type":"ADDED","object":`+table+"}\n")},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			l, recorded := listen(t, c.handler, seeingGadgets)
@@ -959,7 +1034,7 @@ func TestAResponseOfASeenKindItCannotDecodeRecordsAnOpaqueSeen(t *testing.T) {
 			switch {
 			case strings.Contains(c.path, "watch"):
 				want.Stream = 1
-			case c.name != "a big list":
+			case strings.HasSuffix(c.path, "/g1"):
 				want.Ref.Name = "g1"
 			}
 			if got := recorded.seen(); !reflect.DeepEqual(got, []trace.Seen{want}) {

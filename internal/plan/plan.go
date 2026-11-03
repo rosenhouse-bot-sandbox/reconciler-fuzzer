@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -44,7 +45,10 @@ const (
 	Update Do = "update"
 	// Delete deletes the slot's CR.
 	Delete Do = "delete"
-	// Restart stops the controller with SIGTERM and starts it again.
+	// Restart installs the Upgrade's CRDs, stops the controller and starts
+	// it again. The stop sends SIGTERM, and SIGKILL if the controller
+	// outlives launch.gracePeriod. The binary and args the Upgrade sets
+	// replace the current ones for every later start.
 	Restart Do = "restart"
 	// Kill sends SIGKILL. The controller stays down until the fault period
 	// ends, or until a create's or a stop's wait for a deleted CR restarts
@@ -54,14 +58,18 @@ const (
 	// created, or merge-patches it with Patch when set. The harness never
 	// undoes it.
 	Damage Do = "damage"
-	// ChangeFixture merge-patches the fixture Target names with Patch, or
-	// deletes it when Patch is empty.
+	// ChangeFixture merge-patches the fixture Target names with Patch when
+	// set, and deletes it otherwise.
 	ChangeFixture Do = "changeFixture"
+	// CreateFixture creates again, as its file declares it, the kube
+	// fixture that an earlier changeFixture of an equal Target deleted. It
+	// waits as a create of a slot does.
+	CreateFixture Do = "createFixture"
 	// Stop waits until the CRs that deletes removed are gone, as a create's
-	// wait for its slot does, and then stops the controller with SIGTERM for
-	// good. A CR is gone once its name is free or another CR holds it. After
-	// a stop, a plan's only actions are deletes and fixture changes, and the
-	// runner appends no steps.
+	// wait for its slot does, and then stops the controller for good. The
+	// stop works as Restart's does. A CR is gone once its name is free or
+	// another CR holds it. After a stop, a plan's only actions are deletes
+	// and fixture changes, and the runner appends no steps.
 	Stop Do = "stop"
 )
 
@@ -77,6 +85,8 @@ type Action struct {
 	// Propagation is a delete's propagation policy. Empty is the server's
 	// default.
 	Propagation Propagation `json:"propagation,omitempty"`
+	// Upgrade holds a restart's new binary, args and crds.
+	Upgrade
 }
 
 // Propagation is a delete's propagation policy.
@@ -85,9 +95,10 @@ type Propagation string
 // Foreground deletes the CR's blocking dependents before the CR.
 const Foreground Propagation = "Foreground"
 
-// Target selects one object for damage or changeFixture. It is resolved
-// when the action runs. An empty field matches any value. Resource is
-// required on kube.
+// Target selects one object for damage, changeFixture or createFixture. It
+// is resolved when the action runs. An empty field matches any value.
+// Resource is required on kube. Group is empty on other systems, whose
+// objects have none.
 type Target struct {
 	// System defaults to "kube".
 	System   string `json:"system,omitempty"`
@@ -100,6 +111,22 @@ type Target struct {
 	// Nth picks the nth match in creation order, counting from 1. Zero
 	// picks the first.
 	Nth int `json:"nth,omitempty"`
+}
+
+// String names the target's set fields, as "resource=secrets name=token".
+func (t Target) String() string {
+	var set []string
+	for _, field := range []struct{ name, value string }{
+		{"system", t.System}, {"group", t.Group}, {"resource", t.Resource}, {"namespace", t.Namespace}, {"name", t.Name}, {"role", t.Role},
+	} {
+		if field.value != "" {
+			set = append(set, field.name+"="+field.value)
+		}
+	}
+	if t.Nth > 0 {
+		set = append(set, fmt.Sprintf("nth=%d", t.Nth))
+	}
+	return strings.Join(set, " ")
 }
 
 // Fault starts with the fault period and ends with it, or when a create's
@@ -177,7 +204,8 @@ func (d *Duration) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// Load reads plan.json strictly and validates it.
+// Load reads plan.json strictly and validates it. It resolves each
+// restart's binary and crds against the file's directory.
 func Load(path string) (*Plan, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -195,16 +223,51 @@ func Load(path string) (*Plan, error) {
 	if err := p.Validate(); err != nil {
 		return nil, fmt.Errorf("loading plan %s: %w", path, err)
 	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("loading plan %s: %w", path, err)
+	}
+	p.resolve(filepath.Dir(abs))
 	return &p, nil
+}
+
+// Marshal returns p as indented JSON, as Save writes it.
+func Marshal(p *Plan) ([]byte, error) {
+	data, err := json.MarshalIndent(p, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
+}
+
+// resolve joins each relative binary and crds path to dir.
+func (p *Plan) resolve(dir string) {
+	join := func(path string) string {
+		if filepath.IsAbs(path) {
+			return path
+		}
+		return filepath.Join(dir, path)
+	}
+	for i := range p.Steps {
+		for j := range p.Steps[i].Actions {
+			u := &p.Steps[i].Actions[j].Upgrade
+			if u.Binary != "" {
+				u.Binary = join(u.Binary)
+			}
+			for k, path := range u.CRDs {
+				u.CRDs[k] = join(path)
+			}
+		}
+	}
 }
 
 // Save writes p as indented JSON.
 func Save(path string, p *Plan) error {
-	data, err := json.MarshalIndent(p, "", "  ")
+	data, err := Marshal(p)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0o644)
+	return os.WriteFile(path, data, 0o644)
 }
 
 // Validate reports the first malformed step, action or fault, naming its
@@ -214,13 +277,16 @@ func (p *Plan) Validate() error {
 	// namespace and name, which is sampleName for the sample and empty for a
 	// generated name. A slot an earlier delete emptied maps to emptied.
 	names := map[string]string{}
+	// deleted holds the Key of each changeFixture target that deleted a
+	// fixture no later createFixture made again.
+	deleted := map[Target]bool{}
 	stopped := false
 	for i, step := range p.Steps {
 		if step.Period < 0 {
 			return fmt.Errorf("steps[%d]: period is negative", i)
 		}
 		for j, a := range step.Actions {
-			if err := a.validate(names); err != nil {
+			if err := a.validate(names, deleted); err != nil {
 				return fmt.Errorf("steps[%d].actions[%d]: %w", i, j, err)
 			}
 			if stopped && a.Do != Delete && a.Do != ChangeFixture {
@@ -265,19 +331,29 @@ const (
 	emptied    = "\x00emptied"
 )
 
-func (a Action) validate(names map[string]string) error {
+func (a Action) validate(names map[string]string, deleted map[Target]bool) error {
 	if a.At < 0 {
 		return errors.New("at is negative")
 	}
-	if a.Target != nil && a.Do != Damage && a.Do != ChangeFixture {
-		return fmt.Errorf("%s takes no target", a.Do)
+	if err := a.validateDo(names, deleted); err != nil {
+		return err
 	}
 	switch {
+	case a.Target != nil && a.Do != Damage && a.Do != ChangeFixture && a.Do != CreateFixture:
+		return fmt.Errorf("%s takes no target", a.Do)
+	case a.Upgrades() && a.Do != Restart:
+		return fmt.Errorf("%s takes no binary, args or crds", a.Do)
 	case a.Propagation != "" && a.Do != Delete:
 		return fmt.Errorf("%s takes no propagation", a.Do)
 	case a.Propagation != "" && a.Propagation != Foreground:
 		return fmt.Errorf("delete propagation %q is not %s", a.Propagation, Foreground)
 	}
+	return nil
+}
+
+// validateDo refuses an unknown Do, checks what a's Do needs, and updates
+// names and deleted, which Validate describes.
+func (a Action) validateDo(names map[string]string, deleted map[Target]bool) error {
 	switch a.Do {
 	case Create:
 		if a.Slot == "" {
@@ -315,22 +391,27 @@ func (a Action) validate(names map[string]string) error {
 			return fmt.Errorf("%s takes no slot, object or patch", a.Do)
 		}
 	case Damage, ChangeFixture:
-		return a.validateChange(names)
+		return a.validateChange(names, deleted)
+	case CreateFixture:
+		return a.validateCreateFixture(deleted)
 	default:
 		return fmt.Errorf("unknown do %q", a.Do)
 	}
 	return nil
 }
 
-func (a Action) validateChange(names map[string]string) error {
+func (a Action) validateChange(names map[string]string, deleted map[Target]bool) error {
 	if a.Target == nil {
 		return fmt.Errorf("%s needs a target with a resource", a.Do)
 	}
 	if err := validSystem(a.Target.System); err != nil {
 		return err
 	}
-	if onKube(a.Target.System) && a.Target.Resource == "" {
+	switch kube := onKube(a.Target.System); {
+	case kube && a.Target.Resource == "":
 		return fmt.Errorf("%s needs a target with a resource", a.Do)
+	case !kube && a.Target.Group != "":
+		return fmt.Errorf("%s target on %s takes no group, since only kube objects have one", a.Do, a.Target.System)
 	}
 	if a.Patch != nil && !isObject(a.Patch) {
 		return fmt.Errorf("%s needs a JSON object patch", a.Do)
@@ -341,6 +422,9 @@ func (a Action) validateChange(names map[string]string) error {
 		}
 		if a.Target.Name == "" {
 			return errors.New("changeFixture needs a target name")
+		}
+		if a.Patch == nil {
+			deleted[a.Target.Key()] = true
 		}
 		return nil
 	}
@@ -357,6 +441,44 @@ func (a Action) validateChange(names map[string]string) error {
 		return fmt.Errorf("damage names slot %q, which an earlier delete emptied", a.Slot)
 	}
 	return nil
+}
+
+func (a Action) validateCreateFixture(deleted map[Target]bool) error {
+	switch {
+	case a.Target == nil || a.Target.Resource == "" || a.Target.Name == "":
+		return errors.New("createFixture needs a target with a resource and a name")
+	case !onKube(a.Target.System):
+		return errors.New("createFixture acts only on kube")
+	case a.Slot != "" || a.Object != nil || a.Patch != nil:
+		return errors.New("createFixture takes no slot, object or patch")
+	}
+	target := a.Target.Key()
+	if !deleted[target] {
+		return fmt.Errorf("createFixture of %s follows no changeFixture that deleted it", target.object())
+	}
+	delete(deleted, target)
+	return nil
+}
+
+// Key is t with an empty system read as kube, so that a createFixture finds
+// the changeFixture of an equal target.
+func (t Target) Key() Target {
+	if t.System == "" {
+		t.System = "kube"
+	}
+	return t
+}
+
+// object names t's resource and object, such as "secrets ns/admin-password".
+func (t Target) object() string {
+	resource, name := t.Resource, t.Name
+	if t.Group != "" {
+		resource += "." + t.Group
+	}
+	if t.Namespace != "" {
+		name = t.Namespace + "/" + name
+	}
+	return resource + " " + name
 }
 
 // createdName is the group, kind, namespace and name of object, sampleName
@@ -405,7 +527,8 @@ func isObject(raw json.RawMessage) bool {
 // Validate requires exactly one effect, an error code from 400 to 599, a
 // system name and a non-negative nth. A model fault takes no verb,
 // subresource or nth, and on kube needs a resource. A holdWatch acts on
-// kube, needs a resource and takes only a group besides.
+// kube, needs a resource and takes only a group besides. Only a fault on
+// kube takes a group.
 func (f Fault) Validate() error {
 	effects := 0
 	for _, set := range []bool{f.Error != nil, f.Delay != nil, f.Drop, f.DropResponse, f.KillAfter, f.Stuck, f.SlowDelete, f.HoldWatch} {
@@ -425,6 +548,9 @@ func (f Fault) Validate() error {
 		case f.Match.Verb != "" || f.Match.Subresource != "" || f.Match.Name != "" || f.Nth != 0:
 			return errors.New("holdWatch takes no verb, subresource, name or nth")
 		}
+	}
+	if !onKube(f.System) && f.Match.Group != "" {
+		return fmt.Errorf("a fault on %s takes no group, since only kube objects have one", f.System)
 	}
 	if f.ModelFault() {
 		switch effect := f.Effect(); {

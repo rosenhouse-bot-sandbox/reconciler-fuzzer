@@ -4,6 +4,7 @@ package run
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
@@ -91,6 +93,10 @@ timeouts: {settle: 10s, stable: 1s}
 	}
 }
 
+// widgetLister is a controller that only lists widgets, which the toy's RBAC
+// allows.
+const widgetLister = `while true; do curl -sf ${systems.kube.url}/apis/toy.reconciler-fuzzer/v1/widgets >/dev/null; sleep 1; done`
+
 // TestAPropertyOverAnInstalledCRDWithNoObjectHolds runs a property over the
 // toy's grants CRD, which the run event in trace.jsonl lists in kinds. The
 // controller only lists widgets, so no Grant exists.
@@ -102,7 +108,7 @@ func TestAPropertyOverAnInstalledCRDWithNoObjectHolds(t *testing.T) {
 	dir := t.TempDir()
 	config := fmt.Sprintf(`launch:
   binary: /bin/sh
-  args: [-c, 'while true; do curl -sf ${systems.kube.url}/apis/toy.reconciler-fuzzer/v1/widgets >/dev/null; sleep 1; done']
+  args: [-c, '%[2]s']
   rbac: [%[1]s/rbac/role.yaml]
 crds: [%[1]s/crds/]
 primary:
@@ -113,7 +119,7 @@ timeouts: {settle: 10s, stable: 1s}
 properties:
   - name: no-stuck-grants
     expr: "world.kube['grants.toy.reconciler-fuzzer'].all(g, !has(g.metadata.deletionTimestamp))"
-`, toyDir)
+`, toyDir, widgetLister)
 	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -133,6 +139,62 @@ properties:
 	grants := trace.Ref{System: "kube", Group: "toy.reconciler-fuzzer", Resource: "grants"}
 	if i := slices.IndexFunc(events, func(e trace.Event) bool { return e.Run != nil }); i < 0 || !slices.Contains(events[i].Run.Kinds, grants) {
 		t.Errorf("the trace's run event does not list grants in kinds")
+	}
+}
+
+// TestClientGoLogsToHarnessLog deletes the grants CRD, a fixture, at step 1.
+// The harness watches grants after a request for them that comes once
+// discovery serves them, so the controller requests grants each second.
+// client-go writes its failed watch of grants to harness.log, not to stderr.
+func TestClientGoLogsToHarnessLog(t *testing.T) {
+	toyDir, err := filepath.Abs(toy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	config := fmt.Sprintf(`launch:
+  binary: /bin/sh
+  args: [-c, 'while true; do curl -s ${systems.kube.url}/apis/toy.reconciler-fuzzer/v1/grants >/dev/null; curl -sf ${systems.kube.url}/apis/toy.reconciler-fuzzer/v1/widgets >/dev/null; sleep 1; done']
+  rbac: [%[1]s/rbac/role.yaml]
+crds: [%[1]s/crds/toy.reconciler-fuzzer_widgets.yaml]
+fixtures: [%[1]s/crds/toy.reconciler-fuzzer_grants.yaml]
+primary:
+  kind: toy.reconciler-fuzzer/v1/Widget
+  sample: %[1]s/widget.yaml
+  ready: "true"
+timeouts: {settle: 10s, stable: 1s}
+`, toyDir)
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	grantsCRD := &plan.Target{Group: "apiextensions.k8s.io", Resource: "customresourcedefinitions", Name: "grants.toy.reconciler-fuzzer"}
+	p := &plan.Plan{Steps: []plan.Step{
+		{Actions: []plan.Action{{Do: plan.Create, Slot: "a"}}},
+		{Actions: []plan.Action{{Do: plan.ChangeFixture, Target: grantsCRD}}},
+		{Period: plan.Duration(2 * time.Second)},
+	}}
+	stderr, err := os.Create(filepath.Join(dir, "stderr"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stderr.Close()
+	saved := os.Stderr
+	os.Stderr = stderr
+	out := filepath.Join(dir, "out")
+	_, err = Run(context.Background(), Options{ConfigPath: filepath.Join(dir, "config.yaml"), Plan: p, Out: out})
+	os.Stderr = saved
+	if err != nil {
+		t.Fatal(err)
+	}
+	if printed, _ := os.ReadFile(stderr.Name()); strings.Contains(string(printed), "Failed to watch") {
+		t.Errorf("stderr holds client-go's log:\n%s", printed)
+	}
+	harnessLog, err := os.ReadFile(filepath.Join(out, "harness.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(harnessLog), "Failed to watch") || !strings.Contains(string(harnessLog), "grants") {
+		t.Errorf("harness.log lacks the failed watch of grants:\n%s", harnessLog)
 	}
 }
 
@@ -223,8 +285,14 @@ func TestTheControllerGetsTheHarnessKubeconfigByDefault(t *testing.T) {
 	}
 	dir := t.TempDir()
 	got := filepath.Join(dir, "got")
-	config := fmt.Sprintf("launch: {binary: /bin/sh, args: [-c, 'echo \"$KUBECONFIG\" > %[2]s; exec sleep 60']}\ncrds: [%[1]s/crds/]\nprimary: {kind: toy.reconciler-fuzzer/v1/Widget, sample: %[1]s/widget.yaml, ready: \"true\"}\ntimeouts: {settle: 3s, stable: 1s}\n",
-		toyDir, got)
+	config := fmt.Sprintf(`launch:
+  binary: /bin/sh
+  args: [-c, 'echo "$KUBECONFIG" > %[2]s; %[3]s']
+  rbac: [%[1]s/rbac/role.yaml]
+crds: [%[1]s/crds/]
+primary: {kind: toy.reconciler-fuzzer/v1/Widget, sample: %[1]s/widget.yaml, ready: "true"}
+timeouts: {settle: 3s, stable: 1s}
+`, toyDir, got, widgetLister)
 	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -239,5 +307,240 @@ func TestTheControllerGetsTheHarnessKubeconfigByDefault(t *testing.T) {
 	}
 	if want := filepath.Join(out, "kubeconfig") + "\n"; string(text) != want {
 		t.Errorf("The controller got KUBECONFIG %q, want %q.", text, want)
+	}
+}
+
+// A restart's args expand ${key}s and keep the --launch-args after them,
+// and the appended restart starts the same command.
+func TestARestartExpandsItsArgsAndKeepsTheLaunchArgs(t *testing.T) {
+	toyDir, err := filepath.Abs(toy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	got := filepath.Join(dir, "got")
+	script := fmt.Sprintf(`echo "$0 $*" >> %s; %s`, got, widgetLister)
+	config := fmt.Sprintf("launch: {binary: /bin/sh, args: [-c, '%[2]s', v1], rbac: [%[1]s/rbac/role.yaml]}\ncrds: [%[1]s/crds/]\nprimary: {kind: toy.reconciler-fuzzer/v1/Widget, sample: %[1]s/widget.yaml, ready: \"true\"}\ntimeouts: {settle: 3s, stable: 200ms}\n",
+		toyDir, script)
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "out")
+	restart := plan.Action{Do: plan.Restart, Upgrade: plan.Upgrade{Args: []string{"-c", script, "v2", "${systems.kube.kubeconfig}"}}}
+	o := Options{ConfigPath: filepath.Join(dir, "config.yaml"), Plan: &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{restart}}}}, Out: out,
+		LaunchArgs: []string{"--kubeconfig=${systems.kube.kubeconfig}"}}
+	if _, err := Run(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	text, err := os.ReadFile(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kubeconfig := filepath.Join(out, "kubeconfig")
+	v2 := fmt.Sprintf("v2 %[1]s --kubeconfig=%[1]s\n", kubeconfig)
+	if want := "v1 --kubeconfig=" + kubeconfig + "\n" + v2 + v2; string(text) != want {
+		t.Errorf("The controller started as\n%s\nwant\n%s", text, want)
+	}
+}
+
+// TestRunSeesAReferencedFixtureAndCreatesItAgain runs a controller that lists
+// Secrets in protobuf, under a config whose reference names the fixture
+// Secret pw. The plan deletes pw and creates it again.
+func TestRunSeesAReferencedFixtureAndCreatesItAgain(t *testing.T) {
+	toyDir, err := filepath.Abs(toy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	files := map[string]string{
+		"role.yaml":   "apiVersion: rbac.authorization.k8s.io/v1\nkind: Role\nmetadata: {name: secret-reader}\nrules: [{apiGroups: [''], resources: [secrets], verbs: [list]}]\n",
+		"secret.yaml": "apiVersion: v1\nkind: Secret\nmetadata: {name: pw}\nstringData: {password: p1}\n",
+		"config.yaml": fmt.Sprintf(`launch:
+  binary: /bin/sh
+  args: [-c, 'while true; do curl -sf -H "Accept: application/vnd.kubernetes.protobuf" "${systems.kube.url}/api/v1/namespaces/${systems.kube.namespace}/secrets" >/dev/null; sleep 0.2; done']
+  rbac: [role.yaml]
+crds: [%[1]s/crds/]
+fixtures: [secret.yaml]
+primary: {kind: toy.reconciler-fuzzer/v1/Widget, sample: %[1]s/widget.yaml, ready: "true"}
+references:
+  - {from: toy.reconciler-fuzzer/v1/Widget, to: v1/Secret, name: metadata.annotations.secret, ready: has(self.data.password)}
+timeouts: {settle: 10s, stable: 500ms}
+budgets: {reads: 100}
+`, toyDir),
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pw := &plan.Target{Resource: "secrets", Name: "pw"}
+	p := &plan.Plan{Steps: []plan.Step{
+		{Actions: []plan.Action{{Do: plan.Create, Slot: "a"}}},
+		{Actions: []plan.Action{{Do: plan.ChangeFixture, Target: pw}}},
+		{Actions: []plan.Action{{Do: plan.CreateFixture, Target: pw}}},
+	}}
+	out := filepath.Join(dir, "out")
+	report, err := Run(context.Background(), Options{ConfigPath: filepath.Join(dir, "config.yaml"), Plan: p, Out: out})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Findings) > 0 || len(report.Notes) > 0 {
+		t.Errorf("findings %+v, notes %q, want none", report.Findings, report.Notes)
+	}
+	events, err := trace.Load(filepath.Join(out, "trace.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ix := trace.NewIndex(events)
+	run, _ := ix.Run()
+	if len(run.References) != 1 || run.References[0].To.Resource != "secrets" {
+		t.Errorf("the run event's references are %+v, want the one to secrets", run.References)
+	}
+	deleted, _ := findAction(events, 1, 0)
+	created, _ := findAction(events, 2, 0)
+	for _, a := range []trace.Event{deleted, created} {
+		if a.Action == nil || a.Action.Error != "" || a.Action.Ref == nil || a.Action.Ref.Name != "pw" {
+			t.Fatalf("action %+v, want one of pw without an error", a.Action)
+		}
+	}
+	ref := *created.Action.Ref
+	first, _ := ix.LatestAt(ref, deleted.At)
+	again, _ := ix.LatestAt(ref, created.At)
+	if !first.Deleted || again.Deleted || again.UID == first.UID {
+		t.Errorf("pw is %+v at its delete and %+v after the createFixture, want a deleted instance and then a new one", first, again)
+	}
+	var sawFirst, sawMissing, sawAgain bool
+	for _, look := range ix.Looks(trace.Controller, ref) {
+		switch {
+		case look.Seen != nil:
+			sawFirst = sawFirst || look.Seen.UID == first.UID
+			sawAgain = sawAgain || look.Seen.UID == again.UID
+		case look.At > deleted.At && look.At < created.At:
+			sawMissing = true
+		}
+	}
+	if !sawFirst || !sawMissing || !sawAgain {
+		t.Errorf("the controller's lists showed it pw's first instance %v, pw missing %v and its second instance %v, want all", sawFirst, sawMissing, sawAgain)
+	}
+}
+
+// TestARestartSendsSIGKILLOnceTheGracePeriodPasses runs a controller that
+// ignores SIGTERM. Its children write nowhere, so its reap is quick.
+func TestARestartSendsSIGKILLOnceTheGracePeriodPasses(t *testing.T) {
+	toyDir, err := filepath.Abs(toy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	config := fmt.Sprintf(`launch:
+  binary: /bin/sh
+  args: [-c, 'trap "" TERM; while true; do curl -sf ${systems.kube.url}/apis/toy.reconciler-fuzzer/v1/widgets >/dev/null 2>&1; sleep 1 >/dev/null 2>&1; done']
+  rbac: [%[1]s/rbac/role.yaml]
+  gracePeriod: 500ms
+crds: [%[1]s/crds/]
+primary:
+  kind: toy.reconciler-fuzzer/v1/Widget
+  sample: %[1]s/widget.yaml
+  ready: "true"
+timeouts: {settle: 3s, stable: 1s}
+`, toyDir)
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := &plan.Plan{Steps: []plan.Step{
+		{Actions: []plan.Action{{Do: plan.Create, Slot: "a"}}},
+		{Actions: []plan.Action{{Do: plan.Restart}}},
+	}}
+	out := filepath.Join(dir, "out")
+	report, err := Run(context.Background(), Options{ConfigPath: filepath.Join(dir, "config.yaml"), Plan: p, Out: out})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var killed []string
+	for _, note := range report.Notes {
+		if strings.Contains(note, "SIGKILL") {
+			killed = append(killed, note)
+		}
+	}
+	if len(report.Findings) > 0 || len(killed) != 3 || !strings.HasPrefix(killed[0], "Step 1, at ") ||
+		!strings.HasPrefix(killed[1], "Step 3 (restart), at ") || !strings.HasPrefix(killed[2], "After the last step, at ") {
+		t.Errorf("findings %+v, notes %q, want no findings and a SIGKILL note for each restart and the run's stop", report.Findings, report.Notes)
+	}
+	events, err := trace.Load(filepath.Join(out, "trace.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	restart := slices.IndexFunc(events, func(e trace.Event) bool {
+		return e.Phase != nil && e.Phase.Step == 1 && e.Phase.Name == trace.FaultPeriod
+	})
+	exit := slices.IndexFunc(events, func(e trace.Event) bool { return e.Proc != nil && e.Proc.Event == trace.Exit })
+	if restart < 0 || exit < 0 {
+		t.Fatal("the trace holds no step 1 or no exit")
+	}
+	if p := events[exit].Proc; p.Exit != "signal: killed" || !p.GracePeriodPassed {
+		t.Errorf("the first exit is %+v, want a SIGKILL once the grace period passed", *p)
+	}
+	if took := events[exit].At - events[restart].At; took < 500*time.Millisecond || took >= 3*time.Second {
+		t.Errorf("the controller exited %v into the restart step, want just after the 500ms grace period", took)
+	}
+}
+
+// TestAnInterruptDoesNotWaitOutTheGracePeriod interrupts a run whose
+// controller ignores SIGTERM. The plan has no restart, so the run's final
+// stop is its only stop. A ready of false keeps step 0 from settling.
+func TestAnInterruptDoesNotWaitOutTheGracePeriod(t *testing.T) {
+	toyDir, err := filepath.Abs(toy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	started := filepath.Join(dir, "started")
+	config := fmt.Sprintf(`launch:
+  binary: /bin/sh
+  args: [-c, 'trap "" TERM; touch %[2]s; while true; do curl -sf ${systems.kube.url}/apis/toy.reconciler-fuzzer/v1/widgets >/dev/null 2>&1; sleep 1 >/dev/null 2>&1; done']
+  rbac: [%[1]s/rbac/role.yaml]
+  gracePeriod: 1m
+crds: [%[1]s/crds/]
+primary:
+  kind: toy.reconciler-fuzzer/v1/Widget
+  sample: %[1]s/widget.yaml
+  ready: "false"
+timeouts: {settle: 1m, stable: 1s}
+`, toyDir, started)
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, interrupt := context.WithCancel(context.Background())
+	defer interrupt()
+	out := filepath.Join(dir, "out")
+	ran := make(chan error, 1)
+	go func() {
+		p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{{Do: plan.Create, Slot: "a"}}}}}
+		_, err := Run(ctx, Options{ConfigPath: filepath.Join(dir, "config.yaml"), Plan: p, Out: out})
+		ran <- err
+	}()
+	exists := func(path string) bool { _, err := os.Stat(path); return err == nil }
+	for !exists(started) {
+		select {
+		case err := <-ran:
+			t.Fatalf("Run returned %v before the controller started", err)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	interrupt()
+	interrupted := time.Now()
+	if err := <-ran; !errors.Is(err, context.Canceled) {
+		t.Errorf("Run returned %v, want context.Canceled", err)
+	}
+	if took := time.Since(interrupted); took > 20*time.Second {
+		t.Errorf("Run returned %v after the interrupt, want no wait for the 1m grace period", took)
+	}
+	events, err := trace.Load(filepath.Join(out, "trace.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	exit := slices.IndexFunc(events, func(e trace.Event) bool { return e.Proc != nil && e.Proc.Event == trace.Exit })
+	if exit < 0 || events[exit].Proc.Exit != "signal: killed" || events[exit].Proc.GracePeriodPassed {
+		t.Errorf("the trace holds no SIGKILL exit before the grace period passed")
 	}
 }

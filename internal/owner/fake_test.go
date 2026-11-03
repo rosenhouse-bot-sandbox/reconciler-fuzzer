@@ -64,8 +64,13 @@ func TestRoleIsTheSystemsRoleCELOverTheFirstBody(t *testing.T) {
 		At(6*s, tt.Version(trace.Ref{System: "other", Resource: "buckets", Name: "b3"}, "u3", "4", bucketBody("b3", "READY", nil)))
 	w := owner.New(tl.Index(), compileSystems(t, nil, nil, cloud))
 	for uid, want := range map[string]string{"u1": "data", "u2": "", "u3": "", "ua": "a"} {
-		if got := instance(t, w, uid).Role; got != want {
-			t.Errorf("%s role = %q, want %q", uid, got, want)
+		i := instance(t, w, uid)
+		if i.Role != want {
+			t.Errorf("%s role = %q, want %q", uid, i.Role, want)
+		}
+		// The CEL fails only on b2, whose tags are null.
+		if err := w.RoleError(i); (err != nil) != (uid == "u2") {
+			t.Errorf("%s role error = %v", uid, err)
 		}
 	}
 }
@@ -103,6 +108,10 @@ func TestSelectOnAFakeWithNoResourceMatchesEveryCollection(t *testing.T) {
 			t.Errorf("Select(%+v) = %+v, %v; want %q", c.target, ref, err, c.want)
 		}
 	}
+	_, err := w.Select(ctl, plan.Target{System: "cloud", Nth: 3}, "", 5*s)
+	if want := "no instance matches system=cloud nth=3: the controller's live cloud objects are buckets/b1, disks/d1"; err == nil || err.Error() != want {
+		t.Errorf("Select of a third cloud object = %v, want %q", err, want)
+	}
 }
 
 func TestSourcesAndSystemsOfAFake(t *testing.T) {
@@ -126,6 +135,17 @@ func TestSourcesAndSystemsOfAFake(t *testing.T) {
 		Ignore: []string{"version"}, Poll: s, Dependency: &trace.Dependency{Required: true}}}
 	if got := owner.Systems(c); !reflect.DeepEqual(got, want) {
 		t.Errorf("systems = %+v", got)
+	}
+}
+
+func TestSystemsListKubeOnlyWithARole(t *testing.T) {
+	c := &config.Config{Systems: []config.System{{Name: "kube", Owner: "self.x", Role: "self.metadata.name"}}}
+	if want := []trace.System{{Name: "kube", Role: "self.metadata.name"}}; !reflect.DeepEqual(owner.Systems(c), want) {
+		t.Errorf("systems = %+v, want %+v", owner.Systems(c), want)
+	}
+	c.Systems[0].Role = ""
+	if got := owner.Systems(c); got != nil {
+		t.Errorf("without a role, systems = %+v", got)
 	}
 }
 

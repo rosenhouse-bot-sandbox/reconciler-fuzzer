@@ -137,6 +137,27 @@ func TestDefaults(t *testing.T) {
 	if c.Timeouts != (config.Timeouts{Settle: 30 * time.Second, Stable: 3 * time.Second, BackoffCap: 60 * time.Second}) {
 		t.Errorf("timeouts = %+v", c.Timeouts)
 	}
+	if c.Launch.GracePeriod != 5*time.Second {
+		t.Errorf("launch.gracePeriod = %v, want 5s", c.Launch.GracePeriod)
+	}
+}
+
+func TestLaunchGracePeriod(t *testing.T) {
+	withGracePeriod := func(value string) string {
+		return writeConfig(t, strings.Replace(minimal(t), "launch:\n", "launch:\n  gracePeriod: "+value+"\n", 1))
+	}
+	c, err := config.Load(withGracePeriod("30s"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Launch.GracePeriod != 30*time.Second {
+		t.Errorf("launch.gracePeriod = %v, want 30s", c.Launch.GracePeriod)
+	}
+	for _, bad := range []string{"soon", "30", "0s", "-1s"} {
+		if _, err := config.Load(withGracePeriod(bad)); err == nil || !strings.Contains(err.Error(), "gracePeriod") {
+			t.Errorf("gracePeriod %s: err = %v, want one naming gracePeriod", bad, err)
+		}
+	}
 }
 
 func TestLaunchEnvKubeconfigDefaultsToTheHarnessKubeconfig(t *testing.T) {
@@ -520,13 +541,22 @@ func TestSystems(t *testing.T) {
 	}
 }
 
+func TestKubeTakesARole(t *testing.T) {
+	const role = "self.metadata.labels['index']"
+	c, err := config.Load(writeConfig(t, minimal(t)+"systems: [{name: kube, role: \""+role+"\"}]\n"))
+	if err != nil || c.Systems[0].Role != role {
+		t.Errorf("systems = %+v, %v", c, err)
+	}
+}
+
 func TestSystemsRefuseMistakes(t *testing.T) {
 	for systems, want := range map[string]string{
 		"[{name: kube}, {name: kube}]":                             "systems[1].name kube",
 		"[{name: kube, owner: '1 + 2'}]":                           "systems[0].owner",
+		"[{name: kube, role: '1 + 2'}]":                            "systems[0].role",
 		"[{name: kube, ownr: self.x}]":                             "did you mean owner",
-		"[{name: kube, process: {command: [x]}}]":                  "systems[0]: kube takes only name and owner",
-		"[{name: kube, poll: 1s}]":                                 "systems[0]: kube takes only name and owner",
+		"[{name: kube, process: {command: [x]}}]":                  "systems[0]: kube takes only name, owner and role",
+		"[{name: kube, poll: 1s}]":                                 "systems[0]: kube takes only name, owner and role",
 		"[{name: s3}]":                                             "systems[0].process.command is required",
 		"[{name: s3, api: crud, process: {}}]":                     "systems[0].process.command is required",
 		"[{name: s3, api: crud, process: {command: ['']}}]":        "systems[0].process.command is required",
@@ -676,5 +706,12 @@ func TestLaunchVarsNameDeclaredSystems(t *testing.T) {
 		if _, err := config.Load(writeConfig(t, launch(value))); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: err = %v, want one containing %q", value, err, want)
 		}
+	}
+}
+
+func TestLaunchArgsNameDeclaredSystems(t *testing.T) {
+	_, err := config.Load(writeConfig(t, strings.Replace(minimal(t), "launch:\n", "launch:\n  args: [--a, '${systems.cloud.port}']\n", 1)+"systems: ["+fake+"]\n"))
+	if want := "launch args[1]: system cloud has no port"; err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("err = %v, want one containing %q", err, want)
 	}
 }

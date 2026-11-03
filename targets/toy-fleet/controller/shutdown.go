@@ -36,7 +36,11 @@ func Shutdown(ctx context.Context, c client.Client, namespace string, bug Bug) e
 		if o.GetDeletionTimestamp().IsZero() {
 			continue
 		}
-		if controllerutil.RemoveFinalizer(o, fleetv1.ClusterFinalizer) || controllerutil.RemoveFinalizer(o, fleetv1.DatabaseFinalizer) {
+		stripped := false
+		for _, f := range []string{fleetv1.ClusterFinalizer, fleetv1.ClusterFinalizerV2, fleetv1.DatabaseFinalizer} {
+			stripped = controllerutil.RemoveFinalizer(o, f) || stripped
+		}
+		if stripped {
 			if err := c.Update(ctx, o); client.IgnoreNotFound(err) != nil {
 				return fmt.Errorf("releasing %s: %w", o.GetName(), err)
 			}

@@ -15,6 +15,12 @@ func TestRunRejectsAnUnknownBug(t *testing.T) {
 	}
 }
 
+func TestRunRejectsAnUnknownVersion(t *testing.T) {
+	if err := run([]string{"--version=3"}, nil); err == nil || !strings.Contains(err.Error(), "--version=3: want 1 or 2") {
+		t.Errorf("run(--version=3) = %v, want an error naming --version=3", err)
+	}
+}
+
 func TestCacheOptionsFollowTheWatchNamespace(t *testing.T) {
 	if got := cacheOptions(""); got.DefaultNamespaces != nil {
 		t.Errorf("no namespace gave %v", got.DefaultNamespaces)
@@ -79,7 +85,7 @@ func TestRunPrintsTheUsageForHelp(t *testing.T) {
 	if !errors.Is(err, flag.ErrHelp) {
 		t.Errorf("run returned %v for --help, want flag.ErrHelp so that main exits 0.", err)
 	}
-	for _, name := range []string{"-bug", "-kubeconfig", "-metrics-bind-address"} {
+	for _, name := range []string{"-bug", "-kubeconfig", "-metrics-bind-address", "-version"} {
 		if !strings.Contains(printed.String(), name) {
 			t.Errorf("run printed %q for --help, want the usage of %s.", printed.String(), name)
 		}

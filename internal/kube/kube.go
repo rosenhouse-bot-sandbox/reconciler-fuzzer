@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"maps"
 	"net/url"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -88,6 +89,7 @@ type Kube struct {
 	upstream  *url.URL
 	record    func(trace.Event)
 	kinds     []trace.Ref
+	fixtures  []fixture
 
 	mu        sync.Mutex
 	listeners []*interpose.Listener
@@ -202,7 +204,7 @@ func (k *Kube) start(ctx context.Context, env *system.Env) (system.Endpoints, er
 		grs = append(grs, schema.GroupResource{Group: crd.Spec.Group, Resource: crd.Spec.Names.Plural})
 	}
 	grs = append(grs, ruleKinds(roles, clusterRoles)...)
-	if err := k.observer.watchAll(grs); err != nil {
+	if err := k.observer.watchAll(ctx, grs); err != nil {
 		return system.Endpoints{}, err
 	}
 	// No listener exists yet, so the observer watches only the kinds above.
@@ -265,11 +267,19 @@ func (k *Kube) start(ctx context.Context, env *system.Env) (system.Endpoints, er
 	}, nil
 }
 
-func (k *Kube) createFixtures(ctx context.Context, fixtures []*unstructured.Unstructured) error {
-	for _, fixture := range fixtures {
-		if _, err := k.Create(ctx, fixture.Object); err != nil {
-			return fmt.Errorf("creating fixture %s %s: %w", fixture.GetKind(), fixture.GetName(), err)
+// fixture is an object a fixture file declares, at the ref Start created it.
+type fixture struct {
+	ref    trace.Ref
+	object map[string]any
+}
+
+func (k *Kube) createFixtures(ctx context.Context, objects []*unstructured.Unstructured) error {
+	for _, object := range objects {
+		ref, err := k.Create(ctx, object.Object)
+		if err != nil {
+			return fmt.Errorf("creating fixture %s %s: %w", object.GetKind(), object.GetName(), err)
 		}
+		k.fixtures = append(k.fixtures, fixture{ref, object.Object})
 	}
 	return nil
 }
@@ -415,6 +425,17 @@ func (k *Kube) Create(ctx context.Context, obj map[string]any) (trace.Ref, error
 	return ref, k.awaitVersion(ctx, ref, created.GetResourceVersion())
 }
 
+// CreateFixture creates the fixture at ref again, as its file declares it,
+// and returns the created object's ref. A ref no fixture file declares is
+// an error.
+func (k *Kube) CreateFixture(ctx context.Context, ref trace.Ref) (trace.Ref, error) {
+	i := slices.IndexFunc(k.fixtures, func(f fixture) bool { return f.ref == ref })
+	if i < 0 {
+		return trace.Ref{}, fmt.Errorf("no fixture file declares %s", describe(ref))
+	}
+	return k.Create(ctx, k.fixtures[i].object)
+}
+
 func (k *Kube) awaitVersion(ctx context.Context, ref trace.Ref, rv string) error {
 	return k.observer.await(ctx, describe(ref)+" at "+rv, func() bool { return k.observer.recorded(ref, rv) })
 }
@@ -551,6 +572,47 @@ func (k *Kube) Subscribe(hear func(trace.Version)) {
 		hear(k.observer.latest[ref])
 	}
 	k.observer.hear = append(k.observer.hear, hear)
+}
+
+// InstallCRDs creates or updates, as admin, the CRDs in paths, files or
+// directories, and waits until discovery serves them. The mapper then
+// rediscovers every kind, and the observer watches the CRDs' kinds. Kinds and
+// StatusKinds stay as Start left them. It installs nothing if a CRD stops
+// serving the version the observer watches. ctx bounds only the wait for the
+// kinds' first lists, since envtest's install takes no context.
+func (k *Kube) InstallCRDs(ctx context.Context, paths []string) error {
+	read := envtest.CRDInstallOptions{Paths: paths, ErrorIfPathMissing: true}
+	if err := envtest.ReadCRDFiles(&read); err != nil {
+		return fmt.Errorf("installing CRDs: %w", err)
+	}
+	if err := k.observer.checkServed(read.CRDs); err != nil {
+		return fmt.Errorf("installing CRDs: %w", err)
+	}
+	crds, err := envtest.InstallCRDs(k.admin, envtest.CRDInstallOptions{CRDs: read.CRDs})
+	if err != nil {
+		return fmt.Errorf("installing CRDs: %w", err)
+	}
+	k.mapper.Reset()
+	var grs []schema.GroupResource
+	for _, crd := range crds {
+		grs = append(grs, schema.GroupResource{Group: crd.Spec.Group, Resource: crd.Spec.Names.Plural})
+	}
+	return k.observer.watchAll(ctx, grs)
+}
+
+// CheckCRDs refuses a path, a file or a directory, that holds no CRD.
+func CheckCRDs(path string) error {
+	if _, err := os.Stat(path); err != nil {
+		return err
+	}
+	o := envtest.CRDInstallOptions{Paths: []string{path}}
+	if err := envtest.ReadCRDFiles(&o); err != nil {
+		return fmt.Errorf("reading CRDs in %s: %w", path, err)
+	}
+	if len(o.CRDs) == 0 {
+		return fmt.Errorf("%s holds no CustomResourceDefinition", path)
+	}
+	return nil
 }
 
 // Kinds names each kind the observer watches from the start, by a ref with

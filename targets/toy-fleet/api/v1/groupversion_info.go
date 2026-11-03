@@ -29,6 +29,8 @@ const (
 	Provisioning Phase = "Provisioning"
 	Ready        Phase = "Ready"
 	Deleting     Phase = "Deleting"
+	// Creating replaces Provisioning in version 2.
+	Creating Phase = "Creating"
 )
 
 // CommonStatus is every fleet kind's status, so one ready expression fits
@@ -42,4 +44,9 @@ type CommonStatus struct {
 	// Message says what the CR waits for.
 	// +optional
 	Message string `json:"message,omitempty"`
+}
+
+// ReadyAt says whether s reports Ready for generation.
+func (s CommonStatus) ReadyAt(generation int64) bool {
+	return s.Phase == Ready && s.ObservedGeneration == generation
 }

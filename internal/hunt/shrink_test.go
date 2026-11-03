@@ -91,6 +91,38 @@ func TestCandidatesDropEachActionAndFaultOfAStepThatKeepsOne(t *testing.T) {
 	}
 }
 
+// A candidate restarts into a prefix of the plan's versions, as a
+// generated plan restarts into each version in order.
+func TestCandidatesDropOnlyTheLastUpgrade(t *testing.T) {
+	v2, v3 := `{"do":"restart","args":["--version=2"]}`, `{"do":"restart","args":["--version=3"]}`
+	p := parsePlan(t, `{"steps":[{"actions":[`+create+`,`+v2+`]},{"actions":[{"do":"kill"},`+v3+`]}]}`)
+	keepsV2 := false
+	for _, c := range encodedAll(t, Candidates(p, samples)) {
+		hasV2, hasV3 := strings.Contains(c, "--version=2"), strings.Contains(c, "--version=3")
+		if hasV3 && !hasV2 {
+			t.Errorf("A candidate skips version 2: %s.", c)
+		}
+		keepsV2 = keepsV2 || hasV2 && !hasV3
+	}
+	if !keepsV2 {
+		t.Error("No candidate drops the upgrade to version 3 alone.")
+	}
+}
+
+func TestCandidatesDropOtherActionsAroundAnUpgrade(t *testing.T) {
+	for _, c := range []struct{ upgrade, version string }{
+		{`{"do":"restart","args":["--version=2"]}`, "--version=2"},
+		{`{"do":"restart","binary":"/v2","crds":[]}`, "/v2"},
+	} {
+		p := parsePlan(t, `{"steps":[{"actions":[`+create+`,{"do":"restart"}]},{"actions":[{"do":"kill"},`+c.upgrade+`]}]}`)
+		if !slices.ContainsFunc(encodedAll(t, Candidates(p, samples)), func(candidate string) bool {
+			return strings.Count(candidate, `"do":"restart"`) == 1 && strings.Contains(candidate, c.version) && strings.Contains(candidate, `{"do":"kill"}`)
+		}) {
+			t.Errorf("No candidate of %s drops the plain restart alone.", c.upgrade)
+		}
+	}
+}
+
 func TestCandidatesHalvePeriodsAndOffsetsDownToHalfASecond(t *testing.T) {
 	for _, testCase := range []struct{ period, at, wantPeriod, wantAt string }{
 		{"3s", "41ms", "1.5s", "20ms"},
