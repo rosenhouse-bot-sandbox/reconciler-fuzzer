@@ -64,6 +64,18 @@ func TestLoadReadsAFaultPeriodsPeriod(t *testing.T) {
 	if err := r.Close(); err != nil {
 		t.Fatal(err)
 	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"period":0`, `"period":2000000000`} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("trace lacks %s:\n%s", want, raw)
+		}
+	}
+	if n := strings.Count(string(raw), `"period"`); n != 2 {
+		t.Errorf("trace holds %d periods, want 2, as a nil period is left out:\n%s", n, raw)
+	}
 	loaded, err := trace.Load(path)
 	if err != nil {
 		t.Fatal(err)
