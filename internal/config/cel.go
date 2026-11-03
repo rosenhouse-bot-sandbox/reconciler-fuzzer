@@ -124,9 +124,9 @@ func selectable(name string) bool {
 	return identifier.MatchString(name) && !slices.Contains([]string{"true", "false", "null", "in"}, name)
 }
 
-// typed converts v, decoded from JSON, to the CEL types t declares, as the
-// API server converts a CR: a whole number is an int unless t types it
-// double.
+// typed converts v, decoded by encoding/json, to the CEL types t declares,
+// as the API server converts a CR: a whole number is an int unless t types
+// it double.
 func typed(v any, t *apiservercel.DeclType) any {
 	switch v := v.(type) {
 	case map[string]any:
@@ -154,14 +154,6 @@ func typed(v any, t *apiservercel.DeclType) any {
 	case float64:
 		if t != apiservercel.DoubleType && v == math.Trunc(v) && v >= math.MinInt64 && v < math.MaxInt64 {
 			return int64(v)
-		}
-	case int64:
-		if t == apiservercel.DoubleType {
-			return float64(v)
-		}
-	case int:
-		if t == apiservercel.DoubleType {
-			return float64(v)
 		}
 	}
 	return v

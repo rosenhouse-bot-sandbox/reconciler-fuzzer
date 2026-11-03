@@ -112,7 +112,7 @@ spec:
                 items: {type: array, items: {type: object, properties: {name: {type: string}}}}
                 selector: {type: object, properties: {app.kubernetes.io/name: {type: string}}}
                 range: {type: object, properties: {"in": {type: integer}}}
-                sizes: {type: array, items: {type: integer}}
+                ratios: {type: array, items: {type: number}}
                 weights: {type: object, additionalProperties: {type: number}}
 `
 
@@ -171,15 +171,17 @@ func TestAReferenceReadyTypesTheToKind(t *testing.T) {
 // A JSON number decodes to a float64. Ready reads it as the API server
 // reads a CR: an int, unless the schema types it number.
 func TestAReadyComputesWithTheTypesTheSchemaGives(t *testing.T) {
-	cr := `{"spec": {"size": 2, "ratio": 1, "name": "abc", "sizes": [1], "weights": {"a": 1}, "extra": {"count": 2}, "port": 80}}`
+	cr := `{"spec": {"size": 2, "ratio": 1, "name": "abc", "ratios": [1], "weights": {"a": 1}, "extra": {"count": 2, "half": 0.5, "big": 1e19}, "port": 80}}`
 	for _, ready := range []string{
 		"self.spec.size + 1 == 3",
 		"self.spec.size % 2 == 0",
 		"self.spec.name.substring(0, self.spec.size) == 'ab'",
 		"self.spec.ratio + 0.5 == 1.5",
-		"self.spec.sizes[0] + 1 == 2",
+		"self.spec.ratios[0] + 0.5 == 1.5",
 		"self.spec.weights['a'] + 0.5 == 1.5",
 		"self.spec.extra.count + 1 == 3",
+		"self.spec.extra.half + 0.5 == 1.0",
+		"self.spec.extra.big > 1e18",
 		"self.spec.port + 1 == 81",
 	} {
 		c, err := config.Load(thingConfig(t, `ready: "`+ready+`"`, ""))
