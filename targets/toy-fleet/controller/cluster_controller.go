@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	k8sstoragev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -21,12 +22,20 @@ import (
 	storagev1 "github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/targets/toy-fleet/thirdparty/storage/v1"
 )
 
-// ClusterLabel names a Volume's Cluster. Version 2 also sets VersionLabel to
-// 2, as a release often labels its children with its version.
+// ClusterLabel names a Volume's or StorageClass's Cluster, and
+// NamespaceLabel a StorageClass's Cluster's namespace. Version 2 also sets
+// VersionLabel to 2, as a release often labels its children with its version.
 const (
-	ClusterLabel = "fleet.toy/cluster"
-	VersionLabel = "fleet.toy/version"
+	ClusterLabel   = "fleet.toy/cluster"
+	NamespaceLabel = "fleet.toy/namespace"
+	VersionLabel   = "fleet.toy/version"
 )
+
+// Provisioner is the provisioner of each Cluster's StorageClass.
+const Provisioner = "storage.thirdparty/volumes"
+
+// manualCleanup is the message of a Cluster that B117 stopped finalizing.
+const manualCleanup = "a Volume failed; clean up by hand"
 
 // ClusterReconciler moves a Cluster through its phases and keeps its Volumes.
 type ClusterReconciler struct {
@@ -35,6 +44,9 @@ type ClusterReconciler struct {
 	suffix string
 	// finalizing holds, under B161, the Clusters this process began to finalize.
 	finalizing map[types.NamespacedName]bool
+	// storageClasses gives each Cluster a StorageClass. The StorageClass is
+	// cluster-scoped, so no ownerReference can name the Cluster.
+	storageClasses bool
 }
 
 func (r *ClusterReconciler) SetupWithManager(m ctrl.Manager) error {
@@ -43,10 +55,22 @@ func (r *ClusterReconciler) SetupWithManager(m ctrl.Manager) error {
 		Watches(&fleetv1.Database{}, handler.EnqueueRequestsFromMapFunc(func(_ context.Context, o client.Object) []reconcile.Request {
 			return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: o.GetNamespace(), Name: o.(*fleetv1.Database).Spec.ClusterRef}}}
 		}))
+	if r.storageClasses {
+		b = b.Watches(&k8sstoragev1.StorageClass{}, handler.EnqueueRequestsFromMapFunc(clusterOfStorageClass))
+	}
 	if r.Bug == B160 {
 		return b.Watches(&storagev1.Volume{}, handler.EnqueueRequestsFromMapFunc(clusterOfVolume)).Complete(r)
 	}
 	return b.Owns(&storagev1.Volume{}).Complete(r)
+}
+
+// clusterOfStorageClass maps a StorageClass to the Cluster its labels name.
+func clusterOfStorageClass(_ context.Context, o client.Object) []reconcile.Request {
+	labels := o.GetLabels()
+	if labels[ClusterLabel] == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: labels[NamespaceLabel], Name: labels[ClusterLabel]}}}
 }
 
 // clusterOfVolume maps a Volume to the Cluster its label names.
@@ -83,6 +107,9 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, r.writeStatus(ctx, cluster, old, cluster.Status)
 	case r.Version == 2 && r.Bug == B142 && old.Phase == fleetv1.Provisioning:
 		return ctrl.Result{}, nil // B142 leaves a Cluster that version 1 was provisioning.
+	}
+	if err := r.syncStorageClass(ctx, cluster); err != nil {
+		return ctrl.Result{}, err
 	}
 	ready, err := r.syncVolumes(ctx, cluster)
 	if err != nil {
@@ -178,12 +205,57 @@ func (r *ClusterReconciler) syncVolumes(ctx context.Context, cluster *fleetv1.Cl
 	}
 	for i := range volumes {
 		if v := &volumes[i]; !want[v.Name] && r.mine(v) && v.DeletionTimestamp.IsZero() {
-			if err := r.Delete(ctx, v); client.IgnoreNotFound(err) != nil {
-				return 0, fmt.Errorf("deleting Volume %s: %w", v.Name, err)
+			if err := r.deleteVolume(ctx, v); err != nil {
+				return 0, err
 			}
 		}
 	}
 	return ready, nil
+}
+
+// deleteVolume deletes the Volume. B118 orphans its dependents.
+func (r *ClusterReconciler) deleteVolume(ctx context.Context, v *storagev1.Volume) error {
+	var opts []client.DeleteOption
+	if r.Bug == B118 {
+		opts = append(opts, client.PropagationPolicy(metav1.DeletePropagationOrphan))
+	}
+	if err := r.Delete(ctx, v, opts...); client.IgnoreNotFound(err) != nil {
+		return fmt.Errorf("deleting Volume %s: %w", v.Name, err)
+	}
+	return nil
+}
+
+// storageClassOf is the Cluster's StorageClass.
+func storageClassOf(cluster *fleetv1.Cluster) *k8sstoragev1.StorageClass {
+	return &k8sstoragev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "fleet-" + cluster.Namespace + "-" + cluster.Name}}
+}
+
+// syncStorageClass creates the Cluster's StorageClass, when it has one.
+func (r *ClusterReconciler) syncStorageClass(ctx context.Context, cluster *fleetv1.Cluster) error {
+	if !r.storageClasses {
+		return nil
+	}
+	sc := storageClassOf(cluster)
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sc, func() error {
+		sc.Labels = map[string]string{ClusterLabel: cluster.Name, NamespaceLabel: cluster.Namespace}
+		sc.Provisioner = Provisioner
+		return nil
+	}); err != nil {
+		return fmt.Errorf("ensuring StorageClass %s: %w", sc.Name, err)
+	}
+	return nil
+}
+
+// deleteStorageClass deletes the Cluster's StorageClass, when it has one.
+func (r *ClusterReconciler) deleteStorageClass(ctx context.Context, cluster *fleetv1.Cluster) error {
+	if !r.storageClasses {
+		return nil
+	}
+	sc := storageClassOf(cluster)
+	if err := r.Delete(ctx, sc); client.IgnoreNotFound(err) != nil {
+		return fmt.Errorf("deleting StorageClass %s: %w", sc.Name, err)
+	}
+	return nil
 }
 
 // volumeName names the Cluster's ith Volume.
@@ -202,10 +274,14 @@ func (r *ClusterReconciler) mine(v *storagev1.Volume) bool {
 }
 
 // finalize waits until no Database names the Cluster, deletes its Volumes,
-// waits until none remains, and then removes its finalizers.
+// waits until none remains, deletes its StorageClass, and then removes its
+// finalizers.
 func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Cluster) (ctrl.Result, error) {
 	mine := r.finalizers()
 	if !slices.ContainsFunc(mine, func(f string) bool { return controllerutil.ContainsFinalizer(cluster, f) }) {
+		return ctrl.Result{}, nil
+	}
+	if r.Bug == B117 && cluster.Status.Message == manualCleanup {
 		return ctrl.Result{}, nil
 	}
 	if r.Bug == B161 {
@@ -229,9 +305,12 @@ func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Clust
 	}
 	old := cluster.Status
 	cluster.Status.Phase = fleetv1.Deleting
+	failed := r.Bug == B117 && slices.ContainsFunc(volumes, volumeFailed)
 	switch {
 	case named:
 		cluster.Status.Message = "waiting until no Database names the Cluster"
+	case failed:
+		cluster.Status.Message = manualCleanup
 	case len(volumes) > 0:
 		cluster.Status.Message = "waiting until no Volume of the Cluster remains"
 	default:
@@ -240,7 +319,7 @@ func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Clust
 	if err := r.writeStatus(ctx, cluster, old, cluster.Status); err != nil {
 		return ctrl.Result{}, err
 	}
-	if named {
+	if named || failed {
 		return ctrl.Result{}, nil // A Database's deletion requeues the Cluster.
 	}
 	if r.Bug == B160 {
@@ -250,8 +329,8 @@ func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Clust
 	}
 	for i := range volumes {
 		if v := &volumes[i]; v.DeletionTimestamp.IsZero() || r.Bug == B162 {
-			if err := r.Delete(ctx, v); client.IgnoreNotFound(err) != nil {
-				return ctrl.Result{}, fmt.Errorf("deleting Volume %s: %w", v.Name, err)
+			if err := r.deleteVolume(ctx, v); err != nil {
+				return ctrl.Result{}, err
 			}
 		} else if r.Bug == B116 {
 			v.Finalizers = nil
@@ -265,8 +344,16 @@ func (r *ClusterReconciler) finalize(ctx context.Context, cluster *fleetv1.Clust
 		return ctrl.Result{}, nil // It released the Cluster above.
 	case len(volumes) > 0 && r.Bug == B162:
 		return ctrl.Result{RequeueAfter: time.Millisecond}, nil
-	case len(volumes) > 0 && r.Bug != B151:
+	case len(volumes) > 0 && r.Bug != B151 && r.Bug != B115:
 		return ctrl.Result{}, nil // A Volume's deletion requeues the Cluster.
+	case r.Bug == B119:
+		if err := r.release(ctx, cluster); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, r.deleteStorageClass(ctx, cluster)
+	}
+	if err := r.deleteStorageClass(ctx, cluster); err != nil {
+		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, r.release(ctx, cluster)
 }
@@ -309,6 +396,11 @@ func (r *ClusterReconciler) ownedVolumes(ctx context.Context, reader client.Read
 		}
 	}
 	return owned, nil
+}
+
+// volumeFailed says whether the Volume's Ready condition is False.
+func volumeFailed(v storagev1.Volume) bool {
+	return meta.IsStatusConditionFalse(v.Status.Conditions, "Ready")
 }
 
 // volumeReady says whether the Volume's Ready condition is True for its

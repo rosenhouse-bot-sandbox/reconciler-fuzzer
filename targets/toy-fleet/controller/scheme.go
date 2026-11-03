@@ -53,8 +53,9 @@ func NewScheme(bug Bug) (*runtime.Scheme, error) {
 }
 
 // Setup indexes the references and adds the three reconcilers of version to m,
-// and the SecretReconciler with protectSecrets.
-func Setup(m ctrl.Manager, bug Bug, version int, protectSecrets bool) error {
+// and the SecretReconciler with protectSecrets. With storageClasses, each
+// Cluster gets a StorageClass.
+func Setup(m ctrl.Manager, bug Bug, version int, protectSecrets, storageClasses bool) error {
 	ctx := context.Background()
 	indexer := m.GetFieldIndexer()
 	if err := indexer.IndexField(ctx, &fleetv1.Database{}, clusterRefField, clusterRef); err != nil {
@@ -68,7 +69,8 @@ func Setup(m ctrl.Manager, bug Bug, version int, protectSecrets bool) error {
 	}
 	base := reconciler{Client: m.GetClient(), APIReader: m.GetAPIReader(), Scheme: m.GetScheme(), Bug: bug, Version: version}
 	reconcilers := []interface{ SetupWithManager(ctrl.Manager) error }{
-		&ClusterReconciler{reconciler: base, suffix: strings.ToLower(rand.Text()[:5])}, &DatabaseReconciler{base}, &UserReconciler{base},
+		&ClusterReconciler{reconciler: base, suffix: strings.ToLower(rand.Text()[:5]), storageClasses: storageClasses},
+		&DatabaseReconciler{base}, &UserReconciler{base},
 	}
 	if protectSecrets {
 		reconcilers = append(reconcilers, &SecretReconciler{base})

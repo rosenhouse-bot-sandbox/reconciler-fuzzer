@@ -67,15 +67,19 @@ Each Cluster owns Volumes of a third party's kind, which a model sets ready. A D
 
 | Bug | Description | Plan | Check | Step |
 |---|---|---|---|---|
-| B0 | The correct controller. | all 43 plans of config.yaml, database/config.yaml, protect/config.yaml, secret/config.yaml, upgrade/config.yaml | none | |
+| B0 | The correct controller. | all 47 plans of config.yaml, database/config.yaml, order/config.yaml, protect/config.yaml, secret/config.yaml, storageclass/config.yaml, upgrade/config.yaml | none | |
 | B0 | The correct controller. | uninstall/crd-first-stop | none | |
 | B0 | The correct controller. | uninstall/kill-recreate | none | |
 | B0 | The correct controller. | uninstall/recreate | none | |
 | B0 | The correct controller. | uninstall/stop-after-delete | none | |
 | B0 | The correct controller. | uninstall/stop-first | none | |
 | B0 | The correct controller. | upgrade/properties/upgrade-and-update | none | |
+| B115 | Releases a deleted Cluster once it has deleted its Volumes, before they are gone. | order/slow-delete | Property | 1 |
 | B116 | Removes every finalizer from a deleting Volume while its Cluster is deleted. | protect/b0 | Finalizers | 2 |
 | B116 | Removes every finalizer from a deleting Volume while its Cluster is deleted. | slow-delete | Finalizers | 1 |
+| B117 | Stops finalizing a Cluster for good once a Volume reports Ready False. | stuck-delete | Converge | 1 |
+| B118 | Deletes Volumes with orphan propagation. | slow-delete | none | |
+| B119 | Under --storage-classes, releases a deleted Cluster before it deletes its StorageClass. | storageclass/slow-delete | Teardown | 1 |
 | B120 | Releases a Cluster while a Database names it. | blocked-delete | Ordered | 1 |
 | B120 | Releases a Cluster while a Database names it. | database/cluster-delete | Converge | 1 |
 | B120 | Releases a Cluster while a Database names it. | delete-cluster-first | Ordered | 1 |
@@ -99,6 +103,7 @@ Each Cluster owns Volumes of a third party's kind, which a model sets ready. A D
 | B151 | Puts a finalizer on each Volume, and releases a deleted Cluster before its Volumes, whose finalizers it strips only afterwards. | uninstall/stop-after-delete | Clean | 1 |
 | B152 | Errors when a dependent kind is not served, as after its CRD is deleted, so the parent's deletion never ends. | uninstall/crd-first-stop | Converge | 2 |
 | B160 | Gives Volumes no owner, and releases a deleted Cluster before it deletes them. A kill between the two leaks them. | kill-finalize | Clean | 1 |
+| B160 | Gives Volumes no owner, and releases a deleted Cluster before it deletes them. A kill between the two leaks them. | kill-finalize | Teardown | 1 |
 | B161 | Finalizes only Clusters whose finalization this process began. | foreground-kill | Converge | 1 |
 | B161 | Finalizes only Clusters whose finalization this process began. | restart-deleting | Converge | 1 |
 | B162 | Requeues a Cluster being deleted every 1 ms while its Volumes remain, and deletes them again each time. | slow-delete | Backoff | 1 |
