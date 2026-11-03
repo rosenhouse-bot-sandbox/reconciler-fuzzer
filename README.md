@@ -233,7 +233,7 @@ references:
 - `onDelete: block` says that the object's deletion waits for the CRs that name it, as
   `kubernetes.io/pvc-protection` holds a claim that a Pod uses. The controller holds the
   object, usually with a finalizer that it removes once no CR names the object. A fake's
-  collection cannot take it. Without `onDelete`, a reference sets no deletion order.
+  collection cannot take it. Without `onDelete`, the deletion need not wait for those CRs.
 - Under `block`, Ordered fails an object that is deleted while a CR names it: `released an
   object that another names`. A CR names the object until the CR is gone, even while the CR is
   being deleted. A CR that moves its reference releases the old object. Ordered counts only a CR
