@@ -29,7 +29,7 @@ func Honest(ix *trace.Index, s Spec) []Finding {
 		return nil
 	}
 	h := &honesty{ix: ix, s: s, w: owner.New(ix, s.Owners), steps: ix.Steps(), deletes: controllerDeletes(ix), found: map[findingKey]*Finding{}}
-	h.stalls = stalls(ix)
+	h.stalls = stalls(ix, faultStalls(ix))
 	order, crs := crVersions(ix, s)
 	for _, uid := range order {
 		versions := crs[uid]
@@ -114,7 +114,7 @@ func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, d
 			}
 		}
 		for _, n := range h.s.names(v.Ref, body) {
-			g := h.s.sight(h.ix, n, t0)
+			g := h.sight(n, t0)
 			if g.allowsReady(h.s.References[n.ref].Required) || h.stale(n, g, t0) && h.corrected(p, versions[i+1:], n, due()) {
 				continue
 			}
@@ -133,9 +133,45 @@ func (h *honesty) judgeTriggers(uid string, p Primary, versions []trace.Event, d
 // no start since, must have shown n as it lets the CR be ready.
 func (h *honesty) stale(n named, g sight, t0 time.Duration) bool {
 	required := h.s.References[n.ref].Required
-	return t0 <= until(g.at, 2*h.s.Stable, h.stalls) && slices.ContainsFunc(h.ix.Looks(trace.Controller, n.object), func(look trace.Event) bool {
-		return look.At < g.at && !h.restarted(look.At, t0) && !h.s.shown(h.ix, n, look).holds(required)
+	return t0 <= until(g.look.At, 2*h.s.Stable, h.stalls) && slices.ContainsFunc(h.ix.Looks(trace.Controller, n.object), func(look trace.Event) bool {
+		return look.At < g.look.At && !h.restarted(look.At, t0) && !h.shown(n, look).holds(required)
 	})
+}
+
+// sight is the controller's sight of n at t, with its last look judged by
+// shown.
+func (h *honesty) sight(n named, t time.Duration) sight {
+	g := h.s.sight(h.ix, n, t)
+	if g.looked {
+		g.state = h.shown(n, g.look)
+	}
+	return g
+}
+
+// shown is what look, one of the controller's looks at n, showed. Under
+// block, a version that waits in deletion and is not ready shows as the last
+// version before its deletion started, which the controller may still use
+// (DESIGN.md §12).
+func (h *honesty) shown(n named, look trace.Event) state {
+	st := h.s.shown(h.ix, n, look)
+	if !h.s.References[n.ref].Block || st.missing || st.ready {
+		return st
+	}
+	v, _ := h.ix.VersionOf(look.Seen.Ref, look.Seen.RV)
+	return h.s.showing(n, decode(beforeDeletion(h.ix, v).Body))
+}
+
+// beforeDeletion is v, or, while v waits in deletion, the last version of its
+// instance before the deletion started, if the trace holds one.
+func beforeDeletion(ix *trace.Index, v trace.Version) trace.Version {
+	if !deleting(v.Body) {
+		return v
+	}
+	versions := ix.Versions(v.Ref, v.UID)
+	if n := firstDeleting(versions); n > 0 {
+		return *versions[n-1].Version
+	}
+	return v
 }
 
 // restarted reports whether the controller started in (from, to].
@@ -205,10 +241,10 @@ func unconfirmed(c trace.Call) bool { return !succeeded(c) || c.Unknown() }
 // A stall is a time in which the controller cannot act on what it saw.
 type stall struct{ start, end time.Duration }
 
-// stalls returns the run's stalls, merged and in order of start. A step's
-// fault events stall the controller from the first until the last, if a
-// fault altered one of its requests. An exit stalls it until the next start.
-func stalls(ix *trace.Index) []stall {
+// faultStalls are the steps' stalls, by step. A step's fault events stall
+// the controller from the first until the last, if a fault altered one of
+// its requests.
+func faultStalls(ix *trace.Index) map[int]stall {
 	byStep := map[int]stall{}
 	for _, e := range ix.Events() {
 		if f := e.Fault; f != nil && f.Model == "" && f.Hold == nil {
@@ -220,12 +256,14 @@ func stalls(ix *trace.Index) []stall {
 			byStep[f.Step] = s
 		}
 	}
-	var all []stall
-	for _, s := range byStep {
-		if altered(ix, s) {
-			all = append(all, s)
-		}
-	}
+	maps.DeleteFunc(byStep, func(_ int, s stall) bool { return !altered(ix, s) })
+	return byStep
+}
+
+// stalls returns the run's stalls, merged and in order of start: faulted,
+// the steps' stalls, and each time from an exit until the next start.
+func stalls(ix *trace.Index, faulted map[int]stall) []stall {
+	all := slices.Collect(maps.Values(faulted))
 	procs := ix.Procs()
 	for i := 1; i < len(procs); i++ {
 		if procs[i-1].Proc.Event == trace.Exit {
@@ -484,7 +522,7 @@ func (h *honesty) judgeReferenceTrack(uid string, p Primary, versions []trace.Ev
 	for _, n := range objects {
 		r := h.s.References[n.ref]
 		looks := h.ix.Looks(trace.Controller, n.object)
-		holds := func(look trace.Event) bool { return h.s.shown(h.ix, n, look).holds(r.Required) }
+		holds := func(look trace.Event) bool { return h.shown(n, look).holds(r.Required) }
 		readyNaming := func(body map[string]any) bool { return p.ready(body) && slices.Contains(h.s.names(cr, body), n) }
 		for i, look := range looks {
 			at := until(look.At, r.Track, h.stalls)
@@ -492,7 +530,7 @@ func (h *honesty) judgeReferenceTrack(uid string, p Primary, versions []trace.Ev
 				!through(versions, look.At, at, readyNaming) || h.excused(uid, look.At, at) || h.ix.Opaque(trace.Controller, n.object, look.At, at) {
 				continue
 			}
-			h.add(at, stayedReady, kind(n.object), fmt.Sprintf("%s: %s %s at %v", crName(h.w, uid), describe(n.object), h.s.shown(h.ix, n, look).describe(), look.At))
+			h.add(at, stayedReady, kind(n.object), fmt.Sprintf("%s: %s %s at %v", crName(h.w, uid), describe(n.object), h.shown(n, look).describe(), look.At))
 			break
 		}
 	}

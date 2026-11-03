@@ -52,8 +52,9 @@ func NewScheme(bug Bug) (*runtime.Scheme, error) {
 	return scheme, nil
 }
 
-// Setup indexes the references and adds the three reconcilers of version to m.
-func Setup(m ctrl.Manager, bug Bug, version int) error {
+// Setup indexes the references and adds the three reconcilers of version to m,
+// and the SecretReconciler with protectSecrets.
+func Setup(m ctrl.Manager, bug Bug, version int, protectSecrets bool) error {
 	ctx := context.Background()
 	indexer := m.GetFieldIndexer()
 	if err := indexer.IndexField(ctx, &fleetv1.Database{}, clusterRefField, clusterRef); err != nil {
@@ -66,9 +67,13 @@ func Setup(m ctrl.Manager, bug Bug, version int) error {
 		return fmt.Errorf("indexing Users: %w", err)
 	}
 	base := reconciler{Client: m.GetClient(), APIReader: m.GetAPIReader(), Scheme: m.GetScheme(), Bug: bug, Version: version}
-	for _, r := range []interface{ SetupWithManager(ctrl.Manager) error }{
+	reconcilers := []interface{ SetupWithManager(ctrl.Manager) error }{
 		&ClusterReconciler{reconciler: base, suffix: strings.ToLower(rand.Text()[:5])}, &DatabaseReconciler{base}, &UserReconciler{base},
-	} {
+	}
+	if protectSecrets {
+		reconcilers = append(reconcilers, &SecretReconciler{base})
+	}
+	for _, r := range reconcilers {
 		if err := r.SetupWithManager(m); err != nil {
 			return err
 		}

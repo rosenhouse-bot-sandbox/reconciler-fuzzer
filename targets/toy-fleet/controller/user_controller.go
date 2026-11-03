@@ -30,7 +30,11 @@ func (r *UserReconciler) SetupWithManager(m ctrl.Manager) error {
 		Complete(r)
 }
 
+// usersOf maps a Database to the Users that name it. B122 maps it to none.
 func (r *UserReconciler) usersOf(ctx context.Context, db client.Object) []reconcile.Request {
+	if r.Bug == B122 {
+		return nil
+	}
 	list := &fleetv1.UserList{}
 	if err := r.List(ctx, list, client.InNamespace(db.GetNamespace()), client.MatchingFields{databaseRefField: db.GetName()}); err != nil {
 		return nil

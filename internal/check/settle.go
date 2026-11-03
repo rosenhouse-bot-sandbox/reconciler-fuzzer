@@ -35,6 +35,7 @@ type unmet struct {
 func unmetClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 	stop, stopped := ix.Stop(t)
 	step, _ := latestStep(ix, t)
+	inUse := s.inUse(ix, t)
 	var unmets []unmet
 	crs := 0
 	for _, p := range s.Primaries {
@@ -42,10 +43,10 @@ func unmetClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 		switch {
 		case !stopped:
 			for _, cr := range live {
-				unmets = append(unmets, crClauses(ix, p, cr, t, s)...)
+				unmets = append(unmets, crClauses(ix, p, cr, t, s, inUse)...)
 			}
 		case step.Step == stop.Action.Step:
-			unmets = append(unmets, unfinalized(ix, live)...)
+			unmets = append(unmets, unfinalized(ix, live, t, s, inUse)...)
 		}
 		crs += len(live)
 	}
@@ -58,12 +59,13 @@ func unmetClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 	return append(unmets, quietClauses(ix, t, s, max(1, crs))...)
 }
 
-// unfinalized are the CRs of live being deleted that the stop waited for.
-func unfinalized(ix *trace.Index, live []trace.Version) []unmet {
+// unfinalized judges by deletionClauses each CR of live that is being
+// deleted at t and that the stop waited for.
+func unfinalized(ix *trace.Index, live []trace.Version, t time.Duration, s Spec, inUse func(trace.Ref) bool) []unmet {
 	var unmets []unmet
 	for _, cr := range live {
 		if deleting(cr.Body) && ix.StopWaitedFor(cr.UID) {
-			unmets = append(unmets, unmet{2, kind(cr.Ref), describe(cr.Ref) + " is being deleted"})
+			unmets = append(unmets, deletionClauses(ix, cr, t, s, inUse)...)
 		}
 	}
 	return unmets
@@ -82,7 +84,7 @@ func runClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 	if !MadeSuccessfulRequest(ix, since, t) {
 		unmets = append(unmets, unmet{4, "", fmt.Sprintf("the controller has made no successful request since it started at %v", since)})
 	}
-	return append(unmets, lookClauses(ix, t, s)...)
+	return slices.Concat(unmets, lookClauses(ix, t, s), releaseClauses(ix, t, s))
 }
 
 // MadeSuccessfulRequest says whether the controller sent a request that a
@@ -96,9 +98,9 @@ func MadeSuccessfulRequest(ix *trace.Index, since, t time.Duration) bool {
 // lookClauses holds the controller to looking at each object that the
 // latest step's damage, changeFixture and createFixture actions changed,
 // until the step's lapse time. It also holds the step for Stable after each
-// change, after a holdWatch released the watch that saw it, and, without a
-// watch across the change, after the first request that looked, so that
-// clause 7 sees the controller's reaction. A held watch does not look.
+// change and, without a watch across the change, after the first request
+// that looked, so that clause 7 sees the controller's reaction. A held watch
+// does not look.
 func lookClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 	step, found := latestStep(ix, t)
 	if !found || step.Reached[trace.EndFaults] && t >= lapse(ix, step, s) {
@@ -107,20 +109,29 @@ func lookClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 	var unmets []unmet
 	for _, change := range changes(ix, step.Step) {
 		ref := *change.Action.Ref
-		watched := ix.Watching(trace.Controller, ref, change.At, t)
-		released, holding, held := ix.Released(ref, change.At, t)
-		watched = watched && !holding
+		watched := ix.Watching(trace.Controller, ref, change.At, t) && !ix.Holding(ref, t)
 		calls := ix.Calls(trace.Controller, change.At, t)
 		first := slices.IndexFunc(calls, func(e trace.Event) bool { return looksAt(*e.Call, ref) })
 		switch {
 		case t < change.At+s.Stable:
 			unmets = append(unmets, unmet{5, kind(ref), fmt.Sprintf("%s was changed at %v, less than stable ago", describe(ref), change.At)})
-		case watched && held && t < released+s.Stable:
-			unmets = append(unmets, unmet{5, kind(ref), fmt.Sprintf("a holdWatch released the controller's watch of %s at %v, less than stable ago", describe(ref), released)})
 		case !watched && first >= 0 && t < calls[first].At+s.Stable:
 			unmets = append(unmets, unmet{5, kind(ref), fmt.Sprintf("the controller looked at %s at %v, less than stable ago", describe(ref), calls[first].At)})
 		case !watched && first < 0:
 			unmets = append(unmets, unmet{5, kind(ref), fmt.Sprintf("the controller has not looked at %s since the %s at %v", describe(ref), change.Action.Do, change.At)})
+		}
+	}
+	return unmets
+}
+
+// releaseClauses holds the controller for Stable after each holdWatch fault
+// ends, with no lapse. The events that the hold delivers may show the
+// controller work, such as its own write that the hold kept from its cache.
+func releaseClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
+	var unmets []unmet
+	for _, h := range ix.Holds() {
+		if h.End <= t && t < h.End+s.Stable {
+			unmets = append(unmets, unmet{5, kind(h.Kind), fmt.Sprintf("a holdWatch released the controller's watch of %s at %v, less than stable ago", worldKey(h.Kind), h.End)})
 		}
 	}
 	return unmets
@@ -169,16 +180,17 @@ func looksAt(c trace.Call, ref trace.Ref) bool {
 	return (succeeded(c) || c.Status == 404) && !c.Unknown() && c.Ref.Covers(ref)
 }
 
-// crClauses says whether cr, a CR of p's kind, is done at t, and not being
-// deleted: ready, halted, or held back by a reference.
-func crClauses(ix *trace.Index, p Primary, cr trace.Version, t time.Duration, s Spec) []unmet {
+// crClauses holds cr, a CR of p's kind, to clauses 1 and 2 at t. A CR being
+// deleted meets them only as deletionClauses says. Any other must be ready,
+// halted, or held back by a reference.
+func crClauses(ix *trace.Index, p Primary, cr trace.Version, t time.Duration, s Spec, inUse func(trace.Ref) bool) []unmet {
 	name, k := describe(cr.Ref), kind(cr.Ref)
 	var body map[string]any
 	if err := json.Unmarshal(cr.Body, &body); err != nil {
 		return []unmet{{1, k, fmt.Sprintf("%s has a body that is not a JSON object: %v", name, err)}}
 	}
 	if metadata, _ := body["metadata"].(map[string]any); metadata["deletionTimestamp"] != nil {
-		return []unmet{{2, k, name + " is being deleted"}}
+		return deletionClauses(ix, cr, t, s, inUse)
 	}
 	if ready, err := p.Ready(body); err != nil {
 		return []unmet{{1, k, fmt.Sprintf("%s: ready: %v", name, err)}}
@@ -186,6 +198,42 @@ func crClauses(ix *trace.Index, p Primary, cr trace.Version, t time.Duration, s 
 		return []unmet{{1, k, name + " is not ready" + s.describeLooks(ix, cr.Ref, body, t)}}
 	}
 	return nil
+}
+
+// deletionClauses holds cr, being deleted at t, to clause 2. It excuses a CR
+// that inUse says a CR names, from stable after its deletion started but not
+// before the latest step's excuseStart, so that clause 7 sees the controller
+// react to the deletion, even from retry backoff.
+func deletionClauses(ix *trace.Index, cr trace.Version, t time.Duration, s Spec, inUse func(trace.Ref) bool) []unmet {
+	name, k := describe(cr.Ref), kind(cr.Ref)
+	if !inUse(cr.Ref) {
+		return []unmet{{2, k, name + " is being deleted"}}
+	}
+	start, _ := deletionStart(ix.Versions(cr.Ref, cr.UID))
+	step, _ := latestStep(ix, t)
+	switch from := max(start+s.Stable, s.excuseStart(step)); {
+	case from == math.MaxInt64:
+		return []unmet{{2, k, name + " waits in deletion, which counts as settled only once the step's faults end"}}
+	case t < from:
+		return []unmet{{2, k, fmt.Sprintf("%s waits in deletion, which counts as settled only from %v", name, from)}}
+	}
+	return nil
+}
+
+// deletionStart is when an instance got its deletionTimestamp: the time of
+// the first of its versions that has one.
+func deletionStart(versions []trace.Event) (time.Duration, bool) {
+	n := firstDeleting(versions)
+	if n < 0 {
+		return 0, false
+	}
+	return versions[n].At, true
+}
+
+// firstDeleting is the index of the first of versions with a
+// deletionTimestamp, or -1.
+func firstDeleting(versions []trace.Event) int {
+	return slices.IndexFunc(versions, func(e trace.Event) bool { return deleting(e.Version.Body) })
 }
 
 // halted reports whether p.Halted accepts cr's body and the controller

@@ -21,21 +21,21 @@ func TestReferencesConfigLoads(t *testing.T) {
 		return schema.GroupVersionKind{Group: "toy.reconciler-fuzzer", Version: "v1", Kind: kind}
 	}
 	type entry struct {
-		from, to schema.GroupVersionKind
-		name     string
-		tracked  bool
+		from, to        schema.GroupVersionKind
+		name            string
+		tracked, blocks bool
 	}
 	var got []entry
 	for _, r := range c.References {
 		if !r.Required {
 			t.Errorf("The reference from %s at %s is optional, want required.", r.From.Kind, r.Name)
 		}
-		got = append(got, entry{r.From, r.To, r.Name, r.Track > 0})
+		got = append(got, entry{r.From, r.To, r.Name, r.Track > 0, r.Block})
 	}
 	want := []entry{
-		{toy("Database"), toy("Cluster"), "spec.clusterRef", false},
-		{toy("Database"), schema.GroupVersionKind{Version: "v1", Kind: "Secret"}, "spec.passwordSecretRef.name", true},
-		{toy("User"), toy("Database"), "spec.databaseRef", false},
+		{toy("Database"), toy("Cluster"), "spec.clusterRef", false, true},
+		{toy("Database"), schema.GroupVersionKind{Version: "v1", Kind: "Secret"}, "spec.passwordSecretRef.name", true, false},
+		{toy("User"), toy("Database"), "spec.databaseRef", false, true},
 	}
 	if len(got) != len(want) || slices.ContainsFunc(want, func(e entry) bool { return !slices.Contains(got, e) }) {
 		t.Errorf("References = %+v, want %+v in any order.", got, want)

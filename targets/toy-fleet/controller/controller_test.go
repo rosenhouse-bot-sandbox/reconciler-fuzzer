@@ -35,6 +35,7 @@ type fleet struct {
 	clusters  *ClusterReconciler
 	databases *DatabaseReconciler
 	users     *UserReconciler
+	secrets   *SecretReconciler
 }
 
 func newClient(t *testing.T, objects ...client.Object) client.WithWatch {
@@ -56,7 +57,7 @@ func newFleet(t *testing.T, objects ...client.Object) *fleet { return newBuggyFl
 func newBuggyFleet(t *testing.T, bug Bug, objects ...client.Object) *fleet {
 	c := newClient(t, objects...)
 	base := reconciler{Client: c, APIReader: c, Scheme: c.Scheme(), Bug: bug, Version: 1}
-	return &fleet{t, c, &ClusterReconciler{reconciler: base}, &DatabaseReconciler{base}, &UserReconciler{base}}
+	return &fleet{t, c, &ClusterReconciler{reconciler: base}, &DatabaseReconciler{base}, &UserReconciler{base}, &SecretReconciler{base}}
 }
 
 func (f *fleet) reconcileOnce(r reconcile.Reconciler, name string) {
@@ -94,6 +95,15 @@ func (f *fleet) database() *fleetv1.Database {
 		f.t.Fatal(err)
 	}
 	return db
+}
+
+func (f *fleet) secret() *corev1.Secret {
+	f.t.Helper()
+	s := &corev1.Secret{}
+	if err := f.get("admin-password", s); err != nil {
+		f.t.Fatal(err)
+	}
+	return s
 }
 
 func (f *fleet) listVolumes() []storagev1.Volume {
@@ -174,7 +184,7 @@ func passwordSecret(data map[string][]byte) *corev1.Secret {
 // readyCluster is clusterObj reporting Ready for its generation.
 func readyCluster() *fleetv1.Cluster {
 	c := clusterObj()
-	c.Status.CommonStatus = readyStatus()
+	c.Status = fleetv1.ClusterStatus{CommonStatus: readyStatus(), ReadyVolumes: c.Spec.Volumes}
 	return c
 }
 
@@ -593,24 +603,48 @@ func TestDatabaseWaitsForItsClusterToReportItsGenerationReady(t *testing.T) {
 	}
 }
 
-// Deletion raises a CR's generation before its controller writes Deleting.
-// A deleting Cluster readies no Database, and leaves a Ready one as it is,
-// even after its spec changes.
-func TestADeletingClusterReadiesNoDatabase(t *testing.T) {
+// Deletion raises a CR's generation by one, and the Cluster then writes only
+// its phase and message. A Cluster that waits in deletion readies no new
+// Database, and keeps a Ready one Ready through a change to its spec.
+func TestADeletingClusterKeepsOnlyItsReadyDatabasesReady(t *testing.T) {
 	cluster := deleting(readyCluster(), fleetv1.ClusterFinalizer)
-	cluster.Generation = 2
+	cluster.Generation, cluster.Status.Phase = 2, fleetv1.Deleting
 	ready := databaseObj()
-	ready.Generation, ready.Status = 2, readyStatus()
+	ready.Generation, ready.Spec.Engine, ready.Status = 2, "mysql", readyStatus()
 	pending := databaseObj()
 	pending.Name = "pending"
 	f := newFleet(t, cluster, ready, pending)
 	f.settle(f.databases, "db")
 	f.settle(f.databases, "pending")
-	if got := f.database().Status; got != readyStatus() {
-		t.Errorf("On a deleting Cluster, the Ready Database of generation 2 is %+v, want it Ready for generation 1.", got)
+	if got, want := f.database().Status, (fleetv1.CommonStatus{Phase: fleetv1.Ready, ObservedGeneration: 2}); got != want {
+		t.Errorf("On a deleting Cluster, the Ready Database of generation 2 is %+v, want %+v.", got, want)
+	}
+	cm := &corev1.ConfigMap{}
+	if err := f.get("db-db", cm); err != nil || cm.Data["engine"] != "mysql" {
+		t.Errorf("On a deleting Cluster, the Ready Database's ConfigMap is %v, %v; want engine mysql.", cm.Data, err)
 	}
 	if err := f.get("pending", pending); err != nil || pending.Status != pendingStatus("waiting for Cluster cluster to be Ready") {
 		t.Errorf("On a deleting Cluster, the new Database is %+v, %v.", pending.Status, err)
+	}
+}
+
+// A Cluster that was not Ready when its deletion started keeps no Database
+// Ready through a change to its spec.
+func TestADeletingClusterThatWasNotReadyKeepsNoDatabaseReady(t *testing.T) {
+	for when, status := range map[string]fleetv1.ClusterStatus{
+		"before it saw its spec":       {CommonStatus: fleetv1.CommonStatus{Phase: fleetv1.Deleting, ObservedGeneration: 1}, ReadyVolumes: 2},
+		"while a Volume was not ready": {CommonStatus: fleetv1.CommonStatus{Phase: fleetv1.Deleting, ObservedGeneration: 2}, ReadyVolumes: 1},
+	} {
+		cluster := deleting(readyCluster(), fleetv1.ClusterFinalizer)
+		cluster.Generation, cluster.Status = 3, status
+		db := databaseObj()
+		db.Generation, db.Status = 2, readyStatus()
+		f := newFleet(t, cluster, db)
+		f.settle(f.databases, "db")
+		want := fleetv1.CommonStatus{Phase: fleetv1.Pending, ObservedGeneration: 2, Message: "waiting for Cluster cluster to be Ready"}
+		if got := f.database().Status; got != want {
+			t.Errorf("On a Cluster deleted %s, the Ready Database of generation 2 is %+v, want %+v.", when, got, want)
+		}
 	}
 }
 
@@ -681,6 +715,93 @@ func TestADatabaseNamingAnEmptySecretNameNeedsNoSecret(t *testing.T) {
 	}
 }
 
+// heldSecret is the admin-password Secret, held by the in-use finalizer.
+func heldSecret() *corev1.Secret {
+	s := passwordSecret(nil)
+	s.Finalizers = []string{fleetv1.SecretInUseFinalizer}
+	return s
+}
+
+func TestASecretIsHeldWhileADatabaseNamesIt(t *testing.T) {
+	f := newFleet(t, passwordSecret(nil), databaseNaming("admin-password"))
+	f.settle(f.secrets, "admin-password")
+	if got := f.secret().Finalizers; !slices.Equal(got, []string{fleetv1.SecretInUseFinalizer}) {
+		t.Fatalf("While a Database names it, the Secret has finalizers %q.", got)
+	}
+	f.delete(f.secret())
+	f.settle(f.secrets, "admin-password")
+	if s := f.secret(); s.DeletionTimestamp.IsZero() || !slices.Equal(s.Finalizers, []string{fleetv1.SecretInUseFinalizer}) {
+		t.Fatalf("While a Database names it, the deleted Secret has finalizers %q.", s.Finalizers)
+	}
+	f.delete(f.database())
+	f.settle(f.secrets, "admin-password")
+	if err := f.get("admin-password", &corev1.Secret{}); !apierrors.IsNotFound(err) {
+		t.Errorf("Once no Database names it, the deleted Secret gives %v, want not found.", err)
+	}
+}
+
+func TestADeletingDatabaseStillHoldsItsSecret(t *testing.T) {
+	f := newFleet(t, passwordSecret(nil), deleting(databaseNaming("admin-password"), fleetv1.DatabaseFinalizer))
+	f.settle(f.secrets, "admin-password")
+	if got := f.secret().Finalizers; !slices.Equal(got, []string{fleetv1.SecretInUseFinalizer}) {
+		t.Errorf("While a deleting Database names it, the Secret has finalizers %q.", got)
+	}
+}
+
+// A Secret takes no new finalizer once its deletion starts.
+func TestADeletingSecretIsNotHeld(t *testing.T) {
+	f := newFleet(t, deleting(passwordSecret(nil), "other.example/hold"), databaseNaming("admin-password"))
+	f.settle(f.secrets, "admin-password")
+	if got := f.secret().Finalizers; !slices.Equal(got, []string{"other.example/hold"}) {
+		t.Errorf("The deleting Secret has finalizers %q, want only its own.", got)
+	}
+}
+
+func TestASecretNoDatabaseNamesIsReleased(t *testing.T) {
+	inOther := databaseNaming("admin-password")
+	inOther.Namespace = "other"
+	f := newFleet(t, heldSecret(), databaseNaming("another"), inOther)
+	f.settle(f.secrets, "admin-password")
+	if got := f.secret().Finalizers; len(got) != 0 {
+		t.Errorf("With no Database in its namespace naming it, the Secret has finalizers %q.", got)
+	}
+}
+
+// The cache can miss a new Database, so the release lists Databases past it.
+func TestSecretReleaseSeesDatabasesTheCacheMisses(t *testing.T) {
+	f := newFleet(t, heldSecret())
+	f.secrets.APIReader = newClient(t, databaseNaming("admin-password"))
+	f.settle(f.secrets, "admin-password")
+	if got := f.secret().Finalizers; !slices.Equal(got, []string{fleetv1.SecretInUseFinalizer}) {
+		t.Errorf("With a Database the cache misses, the Secret has finalizers %q.", got)
+	}
+}
+
+// A stale cache can show the finalizer on a Secret that an earlier
+// reconcile released.
+func TestASecretGoneBeforeItsReleaseIsDone(t *testing.T) {
+	f := newFleet(t, deleting(passwordSecret(nil), fleetv1.SecretInUseFinalizer))
+	f.secrets.Client = interceptor.NewClient(f.c, interceptor.Funcs{
+		Update: func(_ context.Context, _ client.WithWatch, obj client.Object, _ ...client.UpdateOption) error {
+			return apierrors.NewNotFound(corev1.Resource("secrets"), obj.GetName())
+		},
+	})
+	f.reconcileOnce(f.secrets, "admin-password")
+}
+
+func TestOnlyAReleaseListsDatabasesPastTheCache(t *testing.T) {
+	for name, objects := range map[string][]client.Object{
+		"an unheld Secret that no Database names": {passwordSecret(nil), databaseNaming("another")},
+		"a held Secret that a Database names":     {heldSecret(), databaseNaming("admin-password")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFleet(t, objects...)
+			f.secrets.APIReader = unserved{f.c, &fleetv1.DatabaseList{}, apierrors.NewInternalError(errors.New("injected"))}
+			f.reconcileOnce(f.secrets, "admin-password")
+		})
+	}
+}
+
 func TestUserWaitsForItsDatabase(t *testing.T) {
 	f := newFleet(t, userObj())
 	f.settle(f.users, "alice")
@@ -744,7 +865,7 @@ func TestDatabaseFinalizeSeesUsersTheCacheMisses(t *testing.T) {
 }
 
 // A change to a Cluster or a Secret requeues the Databases that name it, and
-// a change to a Database the Users.
+// a change to a Database its Users and its Secret.
 func TestAChangeRequeuesWhatNamesIt(t *testing.T) {
 	inOther := func(o client.Object) client.Object {
 		o.SetNamespace("other")
@@ -766,6 +887,12 @@ func TestAChangeRequeuesWhatNamesIt(t *testing.T) {
 	}
 	if got := f.users.usersOf(t.Context(), databaseObj()); !slices.Equal(got, only("alice")) {
 		t.Errorf("A Database's change requeues %v, want its User.", got)
+	}
+	if got := secretOf(t.Context(), databaseNaming("admin-password")); !slices.Equal(got, only("admin-password")) {
+		t.Errorf("A Database's change requeues %v, want the Secret it names.", got)
+	}
+	if got := secretOf(t.Context(), databaseObj()); len(got) != 0 {
+		t.Errorf("A change to a Database that names no Secret requeues %v.", got)
 	}
 }
 
@@ -807,19 +934,48 @@ func TestReconcileWritesNoUnchangedStatus(t *testing.T) {
 // A queued request can outlive its CR.
 func TestReconcileOfAMissingCRSucceeds(t *testing.T) {
 	f := newFleet(t)
-	for _, r := range []reconcile.Reconciler{f.clusters, f.databases, f.users} {
+	for _, r := range []reconcile.Reconciler{f.clusters, f.databases, f.users, f.secrets} {
 		f.reconcileOnce(r, "missing")
 	}
 }
 
 func TestParseBugAcceptsOnlyKnownBugs(t *testing.T) {
-	for _, id := range []int{0, 116, 123, 124, 125, 135, 140, 141, 142, 150, 151, 152, 160, 161, 162, 170, 171} {
+	for _, id := range []int{0, 116, 120, 121, 122, 123, 124, 125, 126, 135, 140, 141, 142, 150, 151, 152, 160, 161, 162, 170, 171} {
 		if b, err := ParseBug(id); int(b) != id || err != nil {
 			t.Errorf("ParseBug(%d) = %v, %v", id, b, err)
 		}
 	}
 	if _, err := ParseBug(100); err == nil {
 		t.Error("ParseBug(100) succeeded, want an error.")
+	}
+}
+
+func TestB120ReleasesAClusterWhileADatabaseNamesIt(t *testing.T) {
+	f := newBuggyFleet(t, B120, clusterObj(), databaseObj())
+	f.settle(f.clusters, "cluster")
+	f.readyVolumes()
+	f.settle(f.clusters, "cluster")
+	f.delete(f.cluster())
+	f.settle(f.clusters, "cluster")
+	if err := f.get("cluster", &fleetv1.Cluster{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("Under B120, with a Database, the Cluster gives %v, want not found.", err)
+	}
+}
+
+func TestB121ReleasesADatabaseWhileAUserNamesIt(t *testing.T) {
+	f := newBuggyFleet(t, B121, databaseObj(), userObj())
+	f.settle(f.databases, "db")
+	f.delete(f.database())
+	f.settle(f.databases, "db")
+	if err := f.get("db", &fleetv1.Database{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("Under B121, with a User, the Database gives %v, want not found.", err)
+	}
+}
+
+func TestB122RequeuesNoUserWhenItsDatabaseChanges(t *testing.T) {
+	f := newBuggyFleet(t, B122, databaseObj(), userObj())
+	if got := f.users.usersOf(t.Context(), databaseObj()); len(got) != 0 {
+		t.Errorf("Under B122, a Database's change requeues %v, want no User.", got)
 	}
 }
 
@@ -858,5 +1014,13 @@ func TestB125KeepsADatabaseReadyAfterItsSecretGoes(t *testing.T) {
 	f.settle(f.databases, "db")
 	if got := f.database().Status; got != readyStatus() {
 		t.Errorf("Under B125, after its Secret went, the Database is %+v, want Ready.", got)
+	}
+}
+
+func TestB126NeverHoldsASecret(t *testing.T) {
+	f := newBuggyFleet(t, B126, passwordSecret(nil), databaseNaming("admin-password"))
+	f.settle(f.secrets, "admin-password")
+	if got := f.secret().Finalizers; len(got) != 0 {
+		t.Errorf("Under B126, while a Database names it, the Secret has finalizers %q.", got)
 	}
 }

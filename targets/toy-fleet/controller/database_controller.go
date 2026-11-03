@@ -77,9 +77,7 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		db.Status.Message = fmt.Sprintf("waiting for Cluster %s", db.Spec.ClusterRef)
 	case secretWait != "" && r.Bug != B124 && (r.Bug != B125 || old.Phase != fleetv1.Ready):
 		db.Status.Message = secretWait
-	case !cluster.DeletionTimestamp.IsZero() && old.Phase == fleetv1.Ready:
-		db.Status = old // A deleting Cluster keeps its Ready Databases as they are.
-	case !cluster.Status.ReadyAt(cluster.Generation) && r.Bug != B123:
+	case !hosts(cluster, old.Phase) && r.Bug != B123:
 		db.Status.Message = fmt.Sprintf("waiting for Cluster %s to be Ready", cluster.Name)
 	default:
 		if err := r.syncConfigMap(ctx, db); err != nil {
@@ -88,6 +86,18 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		db.Status.Phase = fleetv1.Ready
 	}
 	return ctrl.Result{}, r.writeStatus(ctx, db, old, db.Status)
+}
+
+// hosts says whether cluster hosts a Database in phase. A Cluster that waits
+// in deletion hosts only a Database that is already Ready, and only if the
+// Cluster was Ready when its deletion started: deletion raised its generation
+// by one, and its controller then wrote only the phase and message.
+func hosts(cluster *fleetv1.Cluster, phase fleetv1.Phase) bool {
+	if !cluster.DeletionTimestamp.IsZero() {
+		was := cluster.Status
+		return phase == fleetv1.Ready && was.ObservedGeneration == cluster.Generation-1 && was.ReadyVolumes == cluster.Spec.Volumes
+	}
+	return cluster.Status.ReadyAt(cluster.Generation)
 }
 
 // secretWait says what the Database waits for in the Secret it names, or ""
@@ -131,7 +141,7 @@ func (r *DatabaseReconciler) finalize(ctx context.Context, db *fleetv1.Database)
 	if err := r.APIReader.List(ctx, users, client.InNamespace(db.Namespace)); err != nil && !r.unserved(err) {
 		return fmt.Errorf("listing Users: %w", err)
 	}
-	named := slices.ContainsFunc(users.Items, func(u fleetv1.User) bool { return u.Spec.DatabaseRef == db.Name })
+	named := r.Bug != B121 && slices.ContainsFunc(users.Items, func(u fleetv1.User) bool { return u.Spec.DatabaseRef == db.Name })
 	old := db.Status
 	db.Status.Phase, db.Status.Message = fleetv1.Deleting, ""
 	if named {

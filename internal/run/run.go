@@ -366,13 +366,15 @@ func execute(ctx context.Context, o Options, cfg *config.Config, p *plan.Plan, s
 // kubeOptions configure the kube system, which expands vars in the
 // fixtures and warms up with samples. Its observer watches the listed,
 // owned, modelled and referenced kinds from the start. Its controller
-// listener records Seen events of the dependency and referenced kinds.
+// listener records Seen events of the dependency and referenced kinds, and
+// of the block references' from kinds.
 func kubeOptions(cfg *config.Config, vars map[string]string, samples []map[string]any) kube.Options {
 	watch, seen := modelKinds(cfg.Models)
 	referenced := referenceKinds(cfg.References)
 	return kube.Options{
 		CRDs: cfg.CRDs, RBAC: cfg.Launch.RBAC, Fixtures: cfg.Fixtures, Vars: vars, Warm: samples,
-		Watch: slices.Concat(primaryKinds(cfg.Primaries), watch, referenced), Seen: slices.Concat(seen, referenced),
+		Watch: slices.Concat(primaryKinds(cfg.Primaries), watch, referenced),
+		Seen:  appendBlockKinds(slices.Concat(seen, referenced), cfg.References),
 	}
 }
 
@@ -474,6 +476,18 @@ func referenceKinds(references []config.Reference) []schema.GroupVersionKind {
 	for _, r := range references {
 		if r.System == "" && !slices.Contains(kinds, r.To) {
 			kinds = append(kinds, r.To)
+		}
+	}
+	return kinds
+}
+
+// appendBlockKinds appends to kinds the from kind of each block reference
+// that kinds lacks, in config order. Ordered judges the controller's seens
+// of them.
+func appendBlockKinds(kinds []schema.GroupVersionKind, references []config.Reference) []schema.GroupVersionKind {
+	for _, r := range references {
+		if r.Block && !slices.Contains(kinds, r.From) {
+			kinds = append(kinds, r.From)
 		}
 	}
 	return kinds

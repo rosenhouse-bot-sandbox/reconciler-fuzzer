@@ -3,6 +3,8 @@ package check
 import (
 	"cmp"
 	"fmt"
+	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -39,6 +41,62 @@ func (s Spec) names(cr trace.Ref, body map[string]any) []named {
 	return objects
 }
 
+// blocked are the objects that body, a version of the CR at cr, names by
+// block references, so that their deletion waits for the CR.
+func (s Spec) blocked(cr trace.Ref, body map[string]any) []trace.Ref {
+	var objects []trace.Ref
+	for _, n := range s.names(cr, body) {
+		if s.References[n.ref].Block {
+			objects = append(objects, n.object)
+		}
+	}
+	return objects
+}
+
+// inUse returns a func that reports whether the deletion of a CR, being
+// deleted at t, waits for a live CR that names it by a block reference. A
+// namer that waits for the CR in turn, through CRs being deleted, does not
+// count, since the two would wait for good. A CR that names itself is such a
+// namer.
+func (s Spec) inUse(ix *trace.Index, t time.Duration) func(trace.Ref) bool {
+	var blocked map[trace.Ref][]trace.Ref
+	deletingCR := map[trace.Ref]bool{}
+	return func(cr trace.Ref) bool {
+		if blocked == nil {
+			blocked = map[trace.Ref][]trace.Ref{}
+			for _, p := range s.Primaries {
+				for _, v := range ix.Live(p.Kind.Group, p.Kind.Resource, t) {
+					blocked[v.Ref], deletingCR[v.Ref] = s.blocked(v.Ref, decode(v.Body)), deleting(v.Body)
+				}
+			}
+		}
+		for namer, objects := range blocked {
+			if slices.Contains(objects, cr) && !reaches(blocked, deletingCR, cr, namer) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// reaches reports whether the CR from is the CR to, or names it through a
+// chain of block references among CRs being deleted.
+func reaches(blocked map[trace.Ref][]trace.Ref, deleting map[trace.Ref]bool, from, to trace.Ref) bool {
+	seen := map[trace.Ref]bool{}
+	var visit func(trace.Ref) bool
+	visit = func(cr trace.Ref) bool {
+		if cr == to {
+			return true
+		}
+		if seen[cr] {
+			return false
+		}
+		seen[cr] = true
+		return slices.ContainsFunc(blocked[cr], func(n trace.Ref) bool { return deleting[n] && visit(n) })
+	}
+	return visit(from)
+}
+
 // state is what a look at a named object shows.
 type state struct{ missing, ready bool }
 
@@ -59,11 +117,11 @@ func (st state) describe() string {
 }
 
 // sight is what the controller knows of a named object: the state its last
-// look, at at, showed, or, if it never looked, the object's state.
+// look showed, or, if it never looked, the object's state.
 type sight struct {
 	state
 	looked bool
-	at     time.Duration
+	look   trace.Event
 	// unknown says an opaque response may have shown the object since.
 	unknown bool
 }
@@ -94,7 +152,7 @@ func (s Spec) sight(ix *trace.Index, n named, t time.Duration) sight {
 	if !looked {
 		return sight{state: s.world(ix, n, t), unknown: ix.Opaque(trace.Controller, n.object, -1, t)}
 	}
-	return sight{state: s.shown(ix, n, look), looked: true, at: look.At, unknown: ix.Opaque(trace.Controller, n.object, look.At, t)}
+	return sight{state: s.shown(ix, n, look), looked: true, look: look, unknown: ix.Opaque(trace.Controller, n.object, look.At, t)}
 }
 
 // shown is what look, one of the controller's looks at n, showed. The
@@ -142,7 +200,7 @@ func (s Spec) describeLooks(ix *trace.Index, cr trace.Ref, body map[string]any, 
 		case !g.ready:
 			shown = "not ready"
 		}
-		fmt.Fprintf(&seen, "; the controller last saw %s %s at %v", describe(n.object), shown, g.at)
+		fmt.Fprintf(&seen, "; the controller last saw %s %s at %v", describe(n.object), shown, g.look.At)
 	}
 	return seen.String()
 }
@@ -152,7 +210,7 @@ func (s Spec) describeLooks(ix *trace.Index, cr trace.Ref, body map[string]any, 
 // or leaves it unknown. It excuses no CR before the latest step's
 // excuseStart.
 func (s Spec) heldBack(ix *trace.Index, cr trace.Ref, body map[string]any, t time.Duration) bool {
-	if step, _ := latestStep(ix, t); !step.Reached[trace.EndFaults] || t < s.excuseStart(step) {
+	if step, _ := latestStep(ix, t); t < s.excuseStart(step) {
 		return false
 	}
 	for _, n := range s.names(cr, body) {
@@ -165,9 +223,13 @@ func (s Spec) heldBack(ix *trace.Index, cr trace.Ref, body map[string]any, t tim
 }
 
 // excuseStart is when the settle condition starts to excuse a CR that a
-// reference holds back in step: once the step's backoff allowance and
-// stable have passed since its faults ended, so that clause 7 sees a
-// controller in backoff react to the step's create or update.
+// reference holds back in step, or that waits in deletion: once the step's
+// backoff allowance and stable have passed since its faults ended, so that
+// clause 7 sees a controller in backoff react to the step's actions. It is
+// never while the faults go on, since the backoff may last as long.
 func (s Spec) excuseStart(step trace.StepSpan) time.Duration {
+	if !step.Reached[trace.EndFaults] {
+		return math.MaxInt64
+	}
 	return step.EndFaults + step.Backoff + s.Stable
 }

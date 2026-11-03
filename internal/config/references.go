@@ -33,6 +33,9 @@ type Reference struct {
 	Required bool
 	// Track is zero when unset.
 	Track time.Duration
+	// Block says the to object's deletion waits for the from CRs that name
+	// it (onDelete: block).
+	Block bool
 }
 
 type declaredReference struct {
@@ -43,6 +46,7 @@ type declaredReference struct {
 	Ready     string `json:"ready"`
 	Required  *bool  `json:"required"`
 	Track     string `json:"track"`
+	OnDelete  string `json:"onDelete"`
 }
 
 // references loads the references entries. Only a config with entries
@@ -145,6 +149,17 @@ func (c *Config) reference(key string, d declaredReference, crds map[schema.Grou
 		if r.Track, err = time.ParseDuration(d.Track); err != nil || r.Track <= 0 {
 			return Reference{}, fmt.Errorf("%s.track %q: want a positive duration", key, d.Track)
 		}
+	}
+
+	switch d.OnDelete {
+	case "":
+	case "block":
+		if r.System != "" {
+			return Reference{}, fmt.Errorf("%s.onDelete: a fake's resources have no finalizers to wait with", key)
+		}
+		r.Block = true
+	default:
+		return Reference{}, fmt.Errorf("%s.onDelete %q: want block", key, d.OnDelete)
 	}
 	return r, nil
 }
