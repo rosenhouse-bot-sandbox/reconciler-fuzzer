@@ -302,16 +302,16 @@ systems:
   none lived is shared, and fails only if the run ends with more shared children of its kind and
   [role](#roles) than the first create saw.
 
-Kubernetes' garbage collector deletes a child only through an ownerReference chain. So a
-controller must delete each other child of a CR before it removes its finalizer from the CR.
-Teardown fails a controller write that removes the controller's last finalizer from a CR being
-deleted while such a child, which `owns` or `owner` names, is not yet being deleted:
-`released a CR before deleting its resources`. A child with a `deletionTimestamp`, a child whose
+Kubernetes' garbage collector deletes a child only through an ownerReference chain. It never
+follows a cluster-scoped child's ownerReference to a namespaced owner. So a controller must delete
+each other child of a CR before it removes its finalizer from the CR. Teardown fails a controller
+write that removes the controller's last finalizer from a CR being deleted while such a child is
+not yet being deleted: `released a CR before deleting its resources`. It finds the CR's children
+through `owns`, `owner` and ownerReferences. A child with a `deletionTimestamp`, a child whose
 delete has answered, and a child in a namespace being deleted are being deleted. The controller
-need not wait until the child is gone. A fake service's objects have no ownerReferences, so
-Teardown judges each one that `owns` or `owner` names. The CR's `retain` allows its children to
-stay. To judge the order of children that have ownerReferences, write a
-[property](#properties).
+need not wait until the child is gone. The garbage collector deletes no fake service's object.
+The CR's `retain` allows its children to stay. To judge the order of children that the garbage
+collector deletes, write a [property](#properties).
 
 ### Roles
 
@@ -497,8 +497,8 @@ and watch in the named group. The `run` event of `trace.jsonl` lists these kinds
 fake collection that an entry's `owns` names also maps to an empty list. Any other kind or
 collection has a key only if the trace holds an object of it.
 
-Teardown skips a child whose ownerReference chain reaches its CR, since the garbage collector
-deletes it after the CR whatever the controller's order. A `when: always` property can require
+Teardown skips a child that the garbage collector deletes through its ownerReference chain, since
+it goes after the CR whatever the controller's order. A `when: always` property can require
 that such children go first, as
 [targets/toy-fleet/order](targets/toy-fleet/order/config.yaml) does:
 

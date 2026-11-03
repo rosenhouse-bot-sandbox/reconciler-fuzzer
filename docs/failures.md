@@ -318,8 +318,9 @@ storageclasses.storage.k8s.io fleet-rf-1b0b8a35-cluster (rule 3, slot a)
 ```
 
 Kubernetes' garbage collector deletes a resource only through an
-ownerReference chain, so nothing deletes this one once the CR is gone. Delete
-each such resource before you remove the finalizer. The delete must answer,
+ownerReference chain. It never follows a cluster-scoped resource's
+ownerReference to a namespaced owner. So nothing deletes this one once the CR
+is gone. Delete each such resource before you remove the finalizer. The delete must answer,
 or the resource must show a `deletionTimestamp`; it need not be gone. If the
 controller keeps the resource by design, set the CR entry's `retain`.
 

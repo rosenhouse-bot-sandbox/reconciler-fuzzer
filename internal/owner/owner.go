@@ -654,7 +654,8 @@ func (w *World) unlisted(i Instance, t time.Duration, seen map[string]bool) (str
 
 // Collected reports whether gc deletes i once the CR with uid cr is gone:
 // i is a kube object whose ownerReferences at t name cr, an instance that
-// cr owns, or an instance that gc deletes once cr is gone.
+// cr owns, or an instance that gc deletes once cr is gone. The gc resolves
+// no ownerReference of a cluster-scoped object to a namespaced owner.
 func (w *World) Collected(i Instance, cr string, t time.Duration) bool {
 	return i.Ref.System == "kube" && w.collected(i, cr, t, map[string]bool{})
 }
@@ -663,7 +664,7 @@ func (w *World) collected(i Instance, cr string, t time.Duration, seen map[strin
 	seen[i.UID] = true
 	for _, ref := range w.ownerReferences(i, t) {
 		owner, found := w.Instance(ref.UID)
-		if !found || seen[owner.UID] {
+		if !found || seen[owner.UID] || i.Ref.Namespace == "" && owner.Ref.Namespace != "" {
 			continue
 		}
 		if uid, named := w.Owner(owner, t).Named(); owner.UID == cr || named && uid == cr || w.collected(owner, cr, t, seen) {

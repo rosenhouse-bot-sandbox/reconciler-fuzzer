@@ -130,7 +130,9 @@ func makers(ix *trace.Index, ref trace.Ref, rv string) []trace.Caller {
 // adder made the first version of the unbroken run, ending at v, that holds
 // f. f may be the controller's own when the trace names no maker of that
 // version, or names the controller or the harness. A sample, a fixture or a
-// plan may carry the controller's own finalizer.
+// plan may carry the controller's own finalizer. When f may be the
+// controller's own, the caller is the harness if the makers name the harness
+// but not the controller, and empty otherwise.
 func adder(ix *trace.Index, v trace.Version, f string) (trace.Caller, bool) {
 	if f == metav1.FinalizerDeleteDependents || f == metav1.FinalizerOrphanDependents {
 		return trace.GC, true
@@ -142,11 +144,14 @@ func adder(ix *trace.Index, v trace.Version, f string) (trace.Caller, bool) {
 		}
 		v = previous
 	}
-	callers := makers(ix, v.Ref, v.RV)
-	if len(callers) == 0 || slices.ContainsFunc(callers, func(c trace.Caller) bool { return c == trace.Controller || c == trace.Harness }) {
+	switch callers := makers(ix, v.Ref, v.RV); {
+	case len(callers) == 0 || slices.Contains(callers, trace.Controller):
 		return "", false
+	case slices.Contains(callers, trace.Harness):
+		return trace.Harness, false
+	default:
+		return callers[0], true
 	}
-	return callers[0], true
 }
 
 func finalizers(v trace.Version) []string {

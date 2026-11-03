@@ -251,6 +251,32 @@ func TestOwnerKeyIsTheCRSet(t *testing.T) {
 	}
 }
 
+// gc resolves no ownerReference of a cluster-scoped object to a namespaced
+// owner.
+func TestCollectedNeedsOwnerReferencesThatGCResolves(t *testing.T) {
+	class := func(name string) trace.Ref { return tt.Ref("storage.k8s.io/storageclasses", "", name) }
+	tl := twoWidgets()
+	tl.At(3*s, tt.Version(tt.Ref("toy/widgets", "", "z"), "uz", "3", tt.Object("z")),
+		tt.Version(cmA0, "c1", "3", tt.OwnedBy(tt.Object("a-0"), "ua", true)),
+		tt.Version(class("of-a"), "u-of-a", "3", tt.OwnedBy(tt.Object("of-a"), "ua", true)),
+		tt.Version(class("of-c1"), "u-of-c1", "3", tt.OwnedBy(tt.Object("of-c1"), "c1", true)),
+		tt.Version(class("of-z"), "u-of-z", "3", tt.OwnedBy(tt.Object("of-z"), "uz", true)))
+	w := owner.New(tl.Index(), owner.Rules{})
+	for name, row := range map[string]struct {
+		uid, cr string
+		want    bool
+	}{
+		"a namespaced child of a namespaced CR":             {"c1", "ua", true},
+		"a cluster-scoped child of a namespaced CR":         {"u-of-a", "ua", false},
+		"a cluster-scoped child through a namespaced owner": {"u-of-c1", "ua", false},
+		"a cluster-scoped child of a cluster-scoped CR":     {"u-of-z", "uz", true},
+	} {
+		if got := w.Collected(instance(t, w, row.uid), row.cr, 3*s); got != row.want {
+			t.Errorf("Collected(%s) = %v, want %v", name, got, row.want)
+		}
+	}
+}
+
 func TestSlotIsTheSlotWhoseCreateMadeTheCR(t *testing.T) {
 	tl := twoWidgets()
 	tl.At(3*s, tt.Deleted(widgetA, "ua", "3", tt.Object("a"))).

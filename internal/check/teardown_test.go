@@ -134,16 +134,51 @@ func TestJudgeRunsTeardown(t *testing.T) {
 	}
 }
 
-// The observer may record a deletion after the release that followed it.
+// A fake's gone CEL may never accept what its delete left.
 func TestTeardownPassesADeleteAnsweredBeforeTheRelease(t *testing.T) {
 	for name, status := range map[string]int{"accepted": 200, "of a child already gone": 404} {
 		t.Run(name, func(t *testing.T) {
 			r, uid := deletingA(ruleThree)
-			child := r.UID(ruleThree.ref)
 			r.Call(ctl, "delete", ruleThree.ref, status)
 			releaseA(r, uid)
-			r.Add(tt.Deleted(ruleThree.ref, child, "x", ruleThree.body))
 			requireNone(t, teardown(t, r))
+		})
+	}
+}
+
+// The observer may record a deletion after the release that followed it.
+func TestTeardownPassesAKubeDeleteWhoseEffectTheTraceShowsAfterTheRelease(t *testing.T) {
+	for name, effect := range map[string]func(r *tt.Script, child string){
+		"gone": func(r *tt.Script, child string) {
+			r.Add(tt.Deleted(ruleTwo.ref, child, "c2", heldChild(false)))
+		},
+		"deleting": func(r *tt.Script, child string) {
+			r.Add(tt.Version(ruleTwo.ref, child, "c2", heldChild(true)))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := ruleTwo
+			c.body = heldChild(false)
+			r, uid := deletingA(c)
+			r.Call(ctl, "delete", c.ref, 200)
+			releaseA(r, uid)
+			effect(r, r.UID(c.ref))
+			requireNone(t, teardown(t, r))
+		})
+	}
+}
+
+// A dry run, or a deletecollection whose selector the trace lacks, may
+// leave the child alone.
+func TestTeardownFailsAReleaseAfterAKubeDeleteThatLeftTheChildAlone(t *testing.T) {
+	collection := ruleTwo.ref
+	collection.Name = ""
+	for verb, ref := range map[string]trace.Ref{"delete": ruleTwo.ref, "deletecollection": collection} {
+		t.Run(verb, func(t *testing.T) {
+			r, uid := deletingA(ruleTwo)
+			r.Call(ctl, verb, ref, 200)
+			releaseA(r, uid)
+			requireFinding(t, teardown(t, r), "Teardown", 1, releasedFirst, ruleTwo.kind, ruleTwo.detail)
 		})
 	}
 }
@@ -245,7 +280,34 @@ func TestTeardownFailsAReleaseAfterOnlyAnEarlierChildWasDeleted(t *testing.T) {
 	r.Delete(ctl, ruleTwo.ref)
 	r.Create(ctl, ruleTwo.ref, ruleTwo.body)
 	releaseA(r, uid)
+	r.Delete(ctl, ruleTwo.ref)
 	requireFinding(t, teardown(t, r), "Teardown", 1, releasedFirst, ruleTwo.kind, ruleTwo.detail)
+}
+
+// A delete sent before the child appeared may have hit an earlier instance
+// of its name, though its answer came after.
+func TestTeardownFailsAReleaseAfterOnlyADeleteSentBeforeTheChildAppeared(t *testing.T) {
+	r, uid := deletingA(ruleTwo)
+	sentAt := r.Now
+	r.Add(tt.Deleted(ruleTwo.ref, r.UID(ruleTwo.ref), "c2", ruleTwo.body))
+	r.Create(ctl, ruleTwo.ref, ruleTwo.body)
+	r.Add(sent(tt.Call(ctl, "delete", ruleTwo.ref, 200, ""), r.Now-sentAt))
+	releaseA(r, uid)
+	r.Delete(ctl, ruleTwo.ref)
+	requireFinding(t, teardown(t, r), "Teardown", 1, releasedFirst, ruleTwo.kind, ruleTwo.detail)
+}
+
+// The controller may see a child, and delete it, before the observer
+// records it.
+func TestTeardownPassesADeleteOfAChildThatTheObserverRecordedLate(t *testing.T) {
+	r, uid := finalized(ruleTwo)
+	r.Add(tt.Create(ctl, ruleTwo.ref, "c", "c1"), tt.Seen(ctl, ruleTwo.ref, "c", "c1"))
+	deleteA(r, uid, own)
+	r.Call(ctl, "delete", ruleTwo.ref, 200)
+	r.Add(tt.Version(ruleTwo.ref, "c", "c1", ruleTwo.body))
+	releaseA(r, uid)
+	r.Add(tt.Deleted(ruleTwo.ref, "c", "c2", ruleTwo.body))
+	requireNone(t, teardown(t, r))
 }
 
 // Like Clean, Teardown judges only what the controller created.
@@ -335,6 +397,37 @@ func TestTeardownFailsAReleaseThatLeavesAnotherCallersFinalizer(t *testing.T) {
 	requireFinding(t, teardown(t, r), "Teardown", 1, releasedFirst, ruleTwo.kind, ruleTwo.detail)
 }
 
+// sampled has the harness create slot a's Widget with finalizers, as a
+// sample may carry them, and the controller create ruleTwo's child. It
+// returns the Widget's uid.
+func sampled(finalizers ...string) (*tt.Script, string) {
+	r := newRun(2)
+	ruleTwo.tie(r)
+	r.Begin()
+	uid := r.Create(trace.Harness, widgetA, objectBody("a", false, finalizers...))
+	r.Act("create", "a", &widgetA)
+	r.Create(ctl, ruleTwo.ref, ruleTwo.body)
+	return r, uid
+}
+
+// A sample may carry the controller's own finalizer.
+func TestTeardownFailsAReleaseOfAFinalizerThatTheSampleCarried(t *testing.T) {
+	r, uid := sampled(own)
+	deleteA(r, uid, own)
+	releaseA(r, uid)
+	requireFinding(t, teardown(t, r), "Teardown", 1, releasedFirst, ruleTwo.kind, ruleTwo.detail)
+}
+
+// Once the controller adds a finalizer, one that the harness added is not
+// its own.
+func TestTeardownFailsAReleaseThatLeavesTheSamplesFinalizer(t *testing.T) {
+	r, uid := sampled(protect)
+	r.Add(write(ctl, "update", widgetA, "f1", protect, own), tt.Version(widgetA, uid, "f1", objectBody("a", false, protect, own)))
+	deleteA(r, uid, protect, own)
+	r.Add(write(ctl, "update", widgetA, "d2", protect), tt.Version(widgetA, uid, "d2", objectBody("a", true, protect)))
+	requireFinding(t, teardown(t, r), "Teardown", 1, releasedFirst, ruleTwo.kind, ruleTwo.detail)
+}
+
 // A write that removes the controller's finalizer from a live CR does not
 // release it: the CR's delete removes it at once, which Clean judges.
 func TestTeardownPassesAFinalizerRemovedBeforeTheDelete(t *testing.T) {
@@ -384,6 +477,17 @@ func TestTeardownReportsAStepsReleasesOfAKindInOneFinding(t *testing.T) {
 	}
 }
 
+// gc resolves no ownerReference of a cluster-scoped object to a namespaced
+// owner.
+func TestTeardownJudgesAClusterScopedChildOfTheCR(t *testing.T) {
+	r, uid := finalized(ruleTwo)
+	class := tt.Ref("storage.k8s.io/storageclasses", "", "a-class")
+	r.Create(ctl, class, tt.OwnedBy(tt.Object(class.Name), uid, true))
+	deleteA(r, uid, own)
+	releaseA(r, uid)
+	requireFinding(t, teardown(t, r), "Teardown", 1, releasedFirst, "kube/storage.k8s.io/storageclasses", "storageclasses.storage.k8s.io a-class (rule 1, slot a)")
+}
+
 // gc deletes neither instance of an ownerReferences cycle.
 func TestTeardownFailsAReleaseWhileAChildsOwnerReferencesFormACycle(t *testing.T) {
 	r, uid := finalized(ruleTwo)
@@ -398,7 +502,9 @@ func TestTeardownFailsAReleaseWhileAChildsOwnerReferencesFormACycle(t *testing.T
 // gc deletes no resource of a fake, whatever its body says.
 func TestTeardownJudgesAFakesResourceWhoseBodyHasOwnerReferences(t *testing.T) {
 	r, uid := finalized(ruleThree)
-	r.Create(ctl, ruleThree.ref, tt.OwnedBy(map[string]any{"id": "a", "state": "READY"}, uid, true))
+	bucket := ruleThree.ref
+	bucket.Namespace = "ns"
+	r.Create(ctl, bucket, tt.OwnedBy(map[string]any{"id": "a", "state": "READY"}, uid, true))
 	deleteA(r, uid, own)
 	releaseA(r, uid)
 	requireFinding(t, teardown(t, r), "Teardown", 1, releasedFirst, ruleThree.kind, "cloud buckets a (rule 1, slot a)")
@@ -435,7 +541,8 @@ func TestTeardownPassesWhatRetainKeeps(t *testing.T) {
 	}
 }
 
-// The namespace controller deletes what a deleting namespace holds.
+// The namespace controller deletes what a deleting namespace holds. Each
+// namespace here is deleting by the trace's end.
 func TestTeardownCountsAChildInADeletingNamespaceAsBeingDeleted(t *testing.T) {
 	namespace := tt.Ref("namespaces", "", "other")
 	for name, row := range map[string]struct {
@@ -455,6 +562,7 @@ func TestTeardownCountsAChildInADeletingNamespaceAsBeingDeleted(t *testing.T) {
 			deleteA(r, uid, own)
 			row.deleteNamespace(r)
 			releaseA(r, uid)
+			r.Add(tt.Version(namespace, r.UID(namespace), "n3", tt.Deleting(tt.Object("other"))))
 			if findings := teardown(t, r); row.failed {
 				requireFinding(t, findings, "Teardown", 1, releasedFirst, ruleTwo.kind, ruleTwo.detail)
 			} else {
@@ -477,5 +585,6 @@ func TestTeardownJudgesAFakesResourceInANamespaceThatKubeDeletes(t *testing.T) {
 	deleteA(r, uid, own)
 	r.Call(ctl, "delete", namespace, 200)
 	releaseA(r, uid)
+	r.Add(tt.Version(namespace, r.UID(namespace), "n2", tt.Deleting(tt.Object("other"))))
 	requireFinding(t, teardown(t, r), "Teardown", 1, releasedFirst, "cloud/buckets", "cloud buckets b1 (rule 2, slot a)")
 }

@@ -26,8 +26,11 @@ func Teardown(ix *trace.Index, s Spec) []Finding {
 			continue
 		}
 		for _, i := range w.Instances(e.At) {
+			if !controllerResource(i) {
+				continue
+			}
 			o := w.Owner(i, e.At)
-			if uid, _ := o.Named(); uid != cr.UID || !controllerResource(i) || w.Collected(i, cr.UID, e.At) || beingDeleted(ix, w, deletes, i, e.At) {
+			if uid, _ := o.Named(); uid != cr.UID || w.Collected(i, cr.UID, e.At) || beingDeleted(ix, w, deletes, i, e.At) {
 				continue
 			}
 			step := stepAt(steps, e.At-e.Call.Latency)
@@ -53,30 +56,52 @@ func releasedBy(ix *trace.Index, e trace.Event, s Spec) (trace.Version, bool) {
 		return trace.Version{}, false
 	}
 	base := replaced(ix, e)
-	own := slices.DeleteFunc(finalizers(base), func(f string) bool {
-		_, foreign := adder(ix, base, f)
-		return foreign
-	})
+	own := ownFinalizers(ix, base)
 	kept := slices.ContainsFunc(own, func(f string) bool { return slices.Contains(*e.Call.ResultFinalizers, f) })
 	return base, deleting(base.Body) && len(own) > 0 && !kept
+}
+
+// ownFinalizers are the finalizers of v that the controller may own. Those
+// that the harness added count only if the controller added none, as when a
+// sample carries the controller's own.
+func ownFinalizers(ix *trace.Index, v trace.Version) []string {
+	var own, harness []string
+	for _, f := range finalizers(v) {
+		switch by, foreign := adder(ix, v, f); {
+		case foreign:
+		case by == trace.Harness:
+			harness = append(harness, f)
+		default:
+			own = append(own, f)
+		}
+	}
+	if len(own) == 0 {
+		return harness
+	}
+	return own
 }
 
 // beingDeleted reports whether, by t, i or the kube namespace that holds it
 // had a deletionTimestamp or a delete of it had answered. The namespace
 // controller deletes what a deleting namespace holds. A delete sent before
 // an instance appeared may have hit an earlier instance of its ref, so it
-// does not count.
+// does not count. A kube delete counts only if the trace shows i deleting
+// or gone, since a dry run or a deletecollection's selector may spare it.
 func beingDeleted(ix *trace.Index, w *owner.World, deletes []trace.Event, i owner.Instance, t time.Duration) bool {
-	if start, found := deletionStart(w.Versions(i)); found && start <= t {
+	start, marked := deletionStart(w.Versions(i))
+	if marked && start <= t {
 		return true
 	}
-	if slices.ContainsFunc(deletes, func(d trace.Event) bool {
+	if (i.Ref.System != "kube" || marked || i.Gone != 0) && slices.ContainsFunc(deletes, func(d trace.Event) bool {
 		return d.At <= t && d.Call.Object().Covers(i.Ref) && d.At-d.Call.Latency >= appeared(ix, i)
 	}) {
 		return true
 	}
+	if i.Ref.System != "kube" {
+		return false
+	}
 	namespace, found := w.Latest(trace.Ref{System: "kube", Resource: "namespaces", Name: i.Ref.Namespace}, t)
-	return i.Ref.System == "kube" && found && beingDeleted(ix, w, deletes, namespace, t)
+	return found && beingDeleted(ix, w, deletes, namespace, t)
 }
 
 // deleteCalls are the delete and deletecollection calls of every caller,
