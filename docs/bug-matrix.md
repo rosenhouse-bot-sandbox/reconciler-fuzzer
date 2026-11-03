@@ -37,7 +37,9 @@
 | B25 | Retries a forbidden Gadget status patch every 10 ms while the Gadget has Ready False. | gadget/b25 | Backoff | 1 |
 | B26 | Gives a Tenant's ClusterRole no owner reference, so it outlives the Tenant. | tenant/b26 | Clean | 1 |
 | B27 | Forgets a Grant's ConfigMap in rf-shared when the finalizer cleans up. | grant/b27 | Clean | 1 |
+| B27 | Forgets a Grant's ConfigMap in rf-shared when the finalizer cleans up. | grant/b27 | Teardown | 1 |
 | B28 | Leaves a Grant's ClusterRole to garbage collection, which ignores its namespaced owner. | grant/b28 | Clean | 1 |
+| B28 | Leaves a Grant's ClusterRole to garbage collection, which ignores its namespaced owner. | grant/b28 | Teardown | 1 |
 | B29 | Never releases a Tenant's children while the Tenant is being deleted, so only a Foreground delete wedges. | tenant/b29 | Converge | 1 |
 | B29 | Never releases a Tenant's children while the Tenant is being deleted, so only a Foreground delete wedges. | tenant/b29-background | none | |
 
@@ -70,7 +72,7 @@ Each Cluster owns Volumes of a third party's kind, which a model sets ready. A D
 
 | Bug | Description | Plan | Check | Step |
 |---|---|---|---|---|
-| B0 | The correct controller. | all 47 plans of config.yaml, database/config.yaml, order/config.yaml, protect/config.yaml, secret/config.yaml, storageclass/config.yaml, upgrade/config.yaml | none | |
+| B0 | The correct controller. | all 48 plans of config.yaml, database/config.yaml, order/config.yaml, protect/config.yaml, secret/config.yaml, storageclass/config.yaml, upgrade/config.yaml | none | |
 | B0 | The correct controller. | uninstall/crd-first-stop | none | |
 | B0 | The correct controller. | uninstall/kill-recreate | none | |
 | B0 | The correct controller. | uninstall/recreate | none | |
@@ -102,11 +104,13 @@ Each Cluster owns Volumes of a third party's kind, which a model sets ready. A D
 | B141 | Under version 2, names its Volumes `<cluster>-data-<i>` and sees only those, so it makes new ones and leaves version 1's. | upgrade/update | Restore | 1 |
 | B142 | Under version 2, leaves a Cluster in the version 1 phase Provisioning. | upgrade/mid-provisioning | Converge | 0 |
 | B150 | Strips its finalizers from deleting CRs when it shuts down. | database/restart-cluster-delete | Converge | 1 |
+| B150 | Strips its finalizers from deleting CRs when it shuts down. | order/restart-slow-delete | Property | 1 |
 | B151 | Puts a finalizer on each Volume, and releases a deleted Cluster before its Volumes, whose finalizers it strips only afterwards. | uninstall/kill-recreate | Converge | 1 |
 | B151 | Puts a finalizer on each Volume, and releases a deleted Cluster before its Volumes, whose finalizers it strips only afterwards. | uninstall/stop-after-delete | Clean | 1 |
 | B152 | Errors when a dependent kind is not served, as after its CRD is deleted, so the parent's deletion never ends. | uninstall/crd-first-stop | Converge | 2 |
 | B160 | Gives Volumes no owner, and releases a deleted Cluster before it deletes them. A kill between the two leaks them. | kill-finalize | Clean | 1 |
 | B160 | Gives Volumes no owner, and releases a deleted Cluster before it deletes them. A kill between the two leaks them. | kill-finalize | Teardown | 1 |
+| B160 | Gives Volumes no owner, and releases a deleted Cluster before it deletes them. A kill between the two leaks them. | slow-delete | Teardown | 1 |
 | B161 | Finalizes only Clusters whose finalization this process began. | foreground-kill | Converge | 1 |
 | B161 | Finalizes only Clusters whose finalization this process began. | restart-deleting | Converge | 1 |
 | B162 | Requeues a Cluster being deleted every 1 ms while its Volumes remain, and deletes them again each time. | slow-delete | Backoff | 1 |

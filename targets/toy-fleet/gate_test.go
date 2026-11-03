@@ -93,6 +93,9 @@ var gate = []gateRow{
 	// Cluster is gone, so this row does not race the two kinds' watches.
 	{plan: "upgrade-and-update", config: upgradePropertiesConfig},
 	{plan: "restart-cluster-delete", bug: 150, finding: "Converge: did not settle (clause 1)", step: 1, detail: "db is not ready", config: databaseConfig},
+	// B150 strips the Cluster's finalizer at the restart, while slowDelete
+	// holds its Volumes.
+	{plan: "restart-slow-delete", bug: 150, finding: "Property: property volumes-go-before-their-cluster does not hold", step: 1, detail: "is false", config: orderConfig},
 	// The kill comes after the update that releases the Cluster, so B151
 	// never strips its Volumes' finalizers.
 	{plan: "kill-recreate", bug: 151, finding: "Converge: did not settle (clause 1)", step: 1, detail: "cluster is not ready", config: uninstallConfig},
@@ -103,6 +106,9 @@ var gate = []gateRow{
 	// Volume deletes.
 	{plan: "kill-finalize", bug: 160, finding: "Clean: left resources behind", step: 1, detail: "/cluster-vol-0 (rule 2, slot a)"},
 	{plan: "kill-finalize", bug: 160, finding: "Teardown: released a CR before deleting its resources", step: 1, detail: "/cluster-vol-0 (rule 2, slot a)"},
+	// Without a kill, B160 deletes the Volumes after the release, so only
+	// Teardown catches it.
+	{plan: "slow-delete", bug: 160, finding: "Teardown: released a CR before deleting its resources", step: 1, detail: "/cluster-vol-0 (rule 2, slot a)"},
 	// The restart or kill comes while slowDelete holds the Volumes.
 	{plan: "restart-deleting", bug: 161, finding: "Converge: did not settle (clause 2)", step: 1, detail: "cluster is being deleted"},
 	{plan: "foreground-kill", bug: 161, finding: "Converge: did not settle (clause 2)", step: 1, detail: "cluster is being deleted"},

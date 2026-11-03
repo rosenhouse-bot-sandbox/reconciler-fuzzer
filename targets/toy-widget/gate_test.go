@@ -87,7 +87,9 @@ var gate = []gateRow{
 	{"b25", 25, "Backoff: retried a failing request in a tight loop", 1, "patch gadgets.toy.reconciler-fuzzer", gadgetConfig},
 	{"b26", 26, "Clean: left resources behind", 1, "clusterroles.rbac.authorization.k8s.io tenant-tenant (rule 3, slot a)", tenantConfig},
 	{"b27", 27, "Clean: left resources behind", 1, ".grant (rule 2, slot a)", grantConfig},
+	{"b27", 27, "Teardown: released a CR before deleting its resources", 1, ".grant (rule 2, slot a)", grantConfig},
 	{"b28", 28, "Clean: left resources behind", 1, "-grant (rule 1, slot a)", grantConfig},
+	{"b28", 28, "Teardown: released a CR before deleting its resources", 1, "-grant (rule 1, slot a)", grantConfig},
 	{"b29", 29, "Converge: did not settle", 1, "is being deleted", tenantConfig},
 	{"b29-background", 29, "", 0, "", tenantConfig},
 }
