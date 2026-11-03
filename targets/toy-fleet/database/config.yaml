@@ -1,6 +1,8 @@
 # Databases as the primary, on a fixture Cluster, with the fixture Secret
-# that each names. Generated plans may delete the Secret and create it again.
-# Paths resolve against this file's directory.
+# that each names. Generated plans may delete the Secret and create it again,
+# and may delete the Cluster in their last step. No reference names the
+# Cluster, since plans would then create it again while its deletion waits
+# for its Databases (#189). Paths resolve against this file's directory.
 launch:
   binary: ../../../bin/toy-fleet
   args:
@@ -34,6 +36,7 @@ references:
 values:
   overlay: {spec.clusterRef: {enum: [cluster]}}
   mutate: [spec.engine]
+  deletable: [../cluster.yaml]
 timeouts:
   settle: 10s
   stable: 2s

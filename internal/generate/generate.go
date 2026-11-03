@@ -48,6 +48,9 @@ type Generator struct {
 	// core Namespaces, which changeFixture deletes and createFixture makes
 	// again.
 	referenced []plan.Target
+	// deletable are the kube fixtures of values.deletable, which a plan's
+	// last step may delete.
+	deletable []plan.Target
 	// watchable are the resources the RBAC lets the controller watch,
 	// which holdWatch faults hold.
 	watchable []gvk.GroupResource
@@ -275,6 +278,9 @@ func (g *Generator) readFixtures(cfg *config.Config) ([]plan.Target, error) {
 			target := kubeFixture(document)
 			targets = append(targets, target)
 			g.addResource(gvk.GroupResource{Group: target.Group, Resource: target.Resource})
+			if slices.Contains(cfg.Deletable, path) {
+				g.deletable = append(g.deletable, target)
+			}
 			if len(paths) == 0 {
 				continue
 			}
@@ -475,8 +481,28 @@ func (g *Generator) plan(t *rapid.T) *plan.Plan {
 	for range 2 + uniform(t, 6, "steps") {
 		p.Steps = append(p.Steps, g.step(t, at))
 	}
+	g.deleteFixture(t, p)
 	g.upgrade(t, p)
 	return p
+}
+
+// deleteFixture appends, half the time, a last step that deletes a
+// deletable fixture. Half of these steps then draw a fault period and a
+// late restart or kill, so the old process may stop while the deletion is
+// under way. Being last, the delete meets no later create or update. These
+// draws come after the steps' draws and before the upgrades', so without
+// upgrades values.deletable only adds this step to a seed's plan.
+func (g *Generator) deleteFixture(t *rapid.T, p *plan.Plan) {
+	if len(g.deletable) == 0 || !rapid.Bool().Draw(t, "delete a fixture") {
+		return
+	}
+	target := sampled(t, g.deletable, "fixture")
+	step := plan.Step{Actions: []plan.Action{{Do: plan.ChangeFixture, Target: &target}}}
+	if rapid.Bool().Draw(t, "then restart or kill") {
+		step.Period = g.period(t)
+		step.Actions = append(step.Actions, lateRestartOrKill(t, step, 0))
+	}
+	p.Steps = append(p.Steps, step)
 }
 
 // upgrade appends one restart per config upgrade, in order. Each ends a step
@@ -546,10 +572,9 @@ func (g *Generator) step(t *rapid.T, at state) plan.Step {
 	return step
 }
 
-// restartMidDelete inserts a restart or kill right after the step's first
-// delete, unless the step already holds maxActions actions. This late
-// action's offset is 300 ms or more past the delete's and before Period ends,
-// so the old process may stop while the fault holds the deletion, and a new
+// restartMidDelete inserts a late restart or kill right after the step's
+// first delete, unless the step already holds maxActions actions. The old
+// process may then stop while the fault holds the deletion, and a new
 // process may have to finish it. Actions run in order, so later actions wait
 // for the late action and cannot delay it. A restart or create before the
 // delete can delay the delete, which shortens the gap.
@@ -558,11 +583,16 @@ func restartMidDelete(t *rapid.T, step plan.Step) []plan.Action {
 	if del < 0 || len(step.Actions) == maxActions {
 		return step.Actions
 	}
+	return slices.Insert(step.Actions, del+1, lateRestartOrKill(t, step, del))
+}
+
+// lateRestartOrKill is a restart or kill whose offset is 300 ms or more past
+// that of the step's action i, and before Period ends.
+func lateRestartOrKill(t *rapid.T, step plan.Step, i int) plan.Action {
 	const after, tick = 300 * time.Millisecond, 100 * time.Millisecond
-	from := time.Duration(step.Actions[del].At) + after
+	from := time.Duration(step.Actions[i].At) + after
 	at := from + time.Duration(uniform(t, int((time.Duration(step.Period)-from)/tick), "at"))*tick
-	late := plan.Action{At: plan.Duration(at), Do: sampled(t, []plan.Do{plan.Restart, plan.Kill}, "restart or kill")}
-	return slices.Insert(step.Actions, del+1, late)
+	return plan.Action{At: plan.Duration(at), Do: sampled(t, []plan.Do{plan.Restart, plan.Kill}, "restart or kill")}
 }
 
 // burst puts a delete then a create of one slot's kind, or two updates,

@@ -305,6 +305,7 @@ func TestValues(t *testing.T) {
   mutate: [spec.count]
   fixtures:
     fixture.yaml: [data.label]
+  deletable: [fixture.yaml]
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -315,8 +316,30 @@ func TestValues(t *testing.T) {
 	if got := c.FixtureValues[c.Fixtures[0]]; len(got) != 1 || got[0] != "data.label" {
 		t.Errorf("fixtures = %v", c.FixtureValues)
 	}
+	if !reflect.DeepEqual(c.Deletable, c.Fixtures) {
+		t.Errorf("deletable = %v, want %v", c.Deletable, c.Fixtures)
+	}
 	if _, err := config.Load(writeConfig(t, minimal(t)+"values: {fixtures: {other.yaml: [data.x]}}\n")); err == nil || !strings.Contains(err.Error(), "other.yaml") {
 		t.Errorf("a fixture the config does not list: err = %v", err)
+	}
+	if _, err := config.Load(writeConfig(t, minimal(t)+"values: {deletable: [other.yaml]}\n")); err == nil || !strings.Contains(err.Error(), "values.deletable other.yaml: the top-level fixtures key does not list this file") {
+		t.Errorf("a deletable file the config does not list: err = %v", err)
+	}
+}
+
+func TestValuesDeletableRefusesANamespaceOrACRD(t *testing.T) {
+	for object, want := range map[string]string{
+		"{apiVersion: v1, kind: Namespace, metadata: {name: other}}":                                                   "deleting Namespace other deletes what it holds",
+		"{apiVersion: apiextensions.k8s.io/v1, kind: CustomResourceDefinition, metadata: {name: gadgets.example.com}}": "deleting CustomResourceDefinition gadgets.example.com deletes its CRs",
+	} {
+		path := writeConfig(t, minimal(t)+"values: {deletable: [fixture.yaml]}\n")
+		objects := "{apiVersion: v1, kind: Secret, metadata: {name: password}}\n---\n" + object + "\n"
+		if err := os.WriteFile(filepath.Join(filepath.Dir(path), "fixture.yaml"), []byte(objects), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := config.Load(path); err == nil || !strings.Contains(err.Error(), "values.deletable fixture.yaml: "+want) {
+			t.Errorf("err = %v, want one that says values.deletable fixture.yaml: %s", err, want)
+		}
 	}
 }
 

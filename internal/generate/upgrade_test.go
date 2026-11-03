@@ -9,6 +9,7 @@ import (
 
 	"pgregory.net/rapid"
 
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 )
 
@@ -152,19 +153,23 @@ func TestSomeUpgradesComeBeforeADelete(t *testing.T) {
 	}
 }
 
-// Upgrades are drawn after the rest of the plan, so a seed's plan only
-// gains the restarts.
+// Upgrades are drawn after the rest of the plan, values.deletable's last
+// step included, so a seed's plan only gains the restarts.
 func TestUpgradesOnlyAddRestarts(t *testing.T) {
-	cfg := loadConfig(t, upgradesConfig)
-	without := *cfg
-	without.Launch.Upgrades = nil
-	upgraded, plain := drawPlans(t, newGenerator(t, cfg), 20), drawPlans(t, newGenerator(t, &without), 20)
-	for i, p := range upgraded {
-		for n := range p.Steps {
-			p.Steps[n].Actions = slices.DeleteFunc(p.Steps[n].Actions, plan.Action.Upgrades)
-		}
-		if !reflect.DeepEqual(p, plain[i]) {
-			t.Errorf("Seed %d's plan without its upgrades differs from the plan of the config without upgrades.", i+1)
+	upgrading := loadConfig(t, upgradesConfig)
+	fixtureDeleting := loadConfig(t, deletableConfig)
+	fixtureDeleting.Launch.Upgrades = upgrading.Launch.Upgrades
+	for name, cfg := range map[string]*config.Config{"upgrades": upgrading, "values.deletable": fixtureDeleting} {
+		without := *cfg
+		without.Launch.Upgrades = nil
+		upgraded, plain := drawPlans(t, newGenerator(t, cfg), 20), drawPlans(t, newGenerator(t, &without), 20)
+		for i, p := range upgraded {
+			for n := range p.Steps {
+				p.Steps[n].Actions = slices.DeleteFunc(p.Steps[n].Actions, plan.Action.Upgrades)
+			}
+			if !reflect.DeepEqual(p, plain[i]) {
+				t.Errorf("With %s, seed %d's plan without its upgrades differs from the plan of the config without upgrades.", name, i+1)
+			}
 		}
 	}
 }
