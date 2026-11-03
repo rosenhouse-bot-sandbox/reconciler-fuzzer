@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/check"
@@ -32,12 +31,15 @@ func TestGate(t *testing.T) {
 		}
 		t.Run(fmt.Sprintf("%s %s B%d", g.name(), verb, g.bug), func(t *testing.T) {
 			t.Parallel()
-			findings, report := runPlan(t, g.configPath(), g.plan, g.bug)
-			if g.finding == "" && findings != 0 {
-				t.Errorf("Found %d, want no findings. report.md:\n%s", findings, report)
+			report, text := run1(t, g.configPath(), run.Options{PlanPath: g.planPath()}, g.bug)
+			if g.finding == "" && len(report.Findings) != 0 {
+				t.Errorf("Found %d, want no findings. report.md:\n%s", len(report.Findings), text)
 			}
-			if g.finding != "" && !hasFinding(report, g.finding, g.step, g.detail) {
-				t.Errorf("Want a finding %q at step %d that says %q. report.md:\n%s", g.finding, g.step, g.detail, report)
+			if g.finding != "" && !hasFinding(text, g.finding, g.step, g.detail) {
+				t.Errorf("Want a finding %q at step %d that says %q. report.md:\n%s", g.finding, g.step, g.detail, text)
+			}
+			if !notesMatch(report.Notes, g.notes) {
+				t.Errorf("Found notes %q, want notes that say %q. report.md:\n%s", report.Notes, g.notes, text)
 			}
 		})
 	}
@@ -49,20 +51,13 @@ func TestGate(t *testing.T) {
 		for _, name := range names {
 			t.Run(filepath.Join(filepath.Dir(config), name)+" passes B0", func(t *testing.T) {
 				t.Parallel()
-				if findings, report := runPlan(t, config, name, 0); findings != 0 || report != "No findings.\n" {
-					t.Errorf("Found %d, want no findings and no notes. report.md:\n%s", findings, report)
+				report, text := run1(t, config, run.Options{PlanPath: planPath(config, name)}, 0)
+				if text != "No findings.\n" {
+					t.Errorf("Found %d, want no findings and no notes. report.md:\n%s", len(report.Findings), text)
 				}
 			})
 		}
 	}
-}
-
-func runPlan(t *testing.T, config, name string, bug int) (int, string) {
-	report, text := run1(t, config, run.Options{PlanPath: planPath(config, name)}, bug)
-	if strings.Contains(text, "# Notes") {
-		t.Errorf("report.md has notes:\n%s", text)
-	}
-	return len(report.Findings), text
 }
 
 // run1 runs o with config under bug into a directory it removes only if

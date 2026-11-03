@@ -35,8 +35,8 @@ func TestGate(t *testing.T) {
 			if g.finding == "" && len(report.Findings) != 0 {
 				t.Errorf("Found %d, want no findings. report.md:\n%s", len(report.Findings), text)
 			}
-			if !notesMatch(report.Notes, g.note) {
-				t.Errorf("Found notes %q, want the one note %q or none. report.md:\n%s", report.Notes, g.note, text)
+			if !notesMatch(report.Notes, g.notes) {
+				t.Errorf("Found notes %q, want notes that say %q. report.md:\n%s", report.Notes, g.notes, text)
 			}
 			want := map[string]bool{}
 			for _, r := range rows {

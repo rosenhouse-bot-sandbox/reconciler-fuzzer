@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -20,6 +21,9 @@ type gateRow struct {
 	// config is the config's path, config.yaml when empty. Its plans are
 	// in plans/ beside it.
 	config string
+	// notes are what the run's notes say, in order. Without them the run
+	// gives no note.
+	notes []string
 }
 
 const (
@@ -56,42 +60,44 @@ func plans(config string) ([]string, error) {
 // report.md must hold: its heading, its step and a detail line. An empty
 // finding means the bug must pass the plan.
 var gate = []gateRow{
-	{"b1", 1, "Converge: did not stay settled", 0, "changed writes", ""},
-	{"b2", 2, "Converge: did not settle", 0, "changed writes", ""},
-	{"b4", 4, "Converge: did not settle", 1, "is not ready", ""},
-	{"b5", 5, "Converge: did not settle", 0, "is not ready", ""},
-	{"b6", 6, "Converge: did not settle", 0, "changed writes", ""},
-	{"b7", 7, "Converge: did not settle", 1, "is not ready", ""},
-	{"b10", 10, "Converge: did not settle", 2, "is not ready", ""},
-	{"b11", 11, "Converge: did not settle", 2, "is not ready", ""},
-	{"b11-fault", 11, "Converge: did not settle", 1, "is not ready", ""},
-	{"b12", 12, "Crash: the controller exited", 1, "exit status 2", ""},
-	{"b12-fault", 12, "Crash: the controller exited", 1, "exit status 2", ""},
-	{"b13", 13, "Converge: did not settle", 1, "is being deleted", ""},
-	{"kill-delete", 13, "Converge: did not settle", 1, "is being deleted", ""},
-	{"b15", 15, "Converge: did not settle", 0, "is not ready", ""},
-	{"b16", 16, "Converge: did not settle", 0, "is not ready", ""},
-	{"b3", 3, "Clean: left resources behind", 1, "widget-0 (rule 4, slot a)", ""},
-	{"b9", 9, "Clean: left resources behind", 1, "widget-1 (rule 4, slot a)", ""},
-	{"b8", 8, "Restore: did not restore damaged resources", 1, "widget-0", ""},
-	{"b14", 14, "Restore: changed resources", 2, "widget-0", ""},
-	{"b17", 17, "Honest: reported ready before seeing its dependency ready", 0, "gadgets.toy.reconciler-fuzzer", gadgetConfig},
-	{"b18", 18, "Converge: did not settle", 1, "is not ready", gadgetConfig},
-	{"b19", 19, "Honest: stayed ready after seeing its dependency not ready", 1, "seen not ready", gadgetConfig},
-	{"b20", 20, "Honest: reported ready with no dependency", 0, "slot a", gadgetConfig},
-	{"b21", 21, "Converge: did not settle", 0, "over the budget", gadgetConfig},
-	{"b22", 22, "Clean: left resources behind", 1, "gadgets.toy.reconciler-fuzzer", gadgetConfig},
-	{"b23", 23, "Converge: did not settle", 1, "is being deleted", gadgetConfig},
-	{"foreground-slow-delete", 23, "Converge: did not settle", 1, "is being deleted", gadgetConfig},
-	{"b24", 24, "Restore: did not restore damaged resources", 1, "gadgets.toy.reconciler-fuzzer", gadgetConfig},
-	{"b25", 25, "Backoff: retried a failing request in a tight loop", 1, "patch gadgets.toy.reconciler-fuzzer", gadgetConfig},
-	{"b26", 26, "Clean: left resources behind", 1, "clusterroles.rbac.authorization.k8s.io tenant-tenant (rule 3, slot a)", tenantConfig},
-	{"b27", 27, "Clean: left resources behind", 1, ".grant (rule 2, slot a)", grantConfig},
-	{"b27", 27, "Teardown: released a CR before deleting its resources", 1, ".grant (rule 2, slot a)", grantConfig},
-	{"b28", 28, "Clean: left resources behind", 1, "-grant (rule 1, slot a)", grantConfig},
-	{"b28", 28, "Teardown: released a CR before deleting its resources", 1, "-grant (rule 1, slot a)", grantConfig},
-	{"b29", 29, "Converge: did not settle", 1, "is being deleted", tenantConfig},
-	{"b29-background", 29, "", 0, "", tenantConfig},
+	{plan: "b1", bug: 1, finding: "Converge: did not stay settled", step: 0, detail: "changed writes"},
+	{plan: "b2", bug: 2, finding: "Converge: did not settle", step: 0, detail: "changed writes"},
+	{plan: "b4", bug: 4, finding: "Converge: did not settle", step: 1, detail: "is not ready"},
+	{plan: "b5", bug: 5, finding: "Converge: did not settle", step: 0, detail: "is not ready", notes: []string{"primary.ready held for no CR version"}},
+	{plan: "b6", bug: 6, finding: "Converge: did not settle", step: 0, detail: "changed writes"},
+	{plan: "b7", bug: 7, finding: "Converge: did not settle", step: 1, detail: "is not ready"},
+	{plan: "b10", bug: 10, finding: "Converge: did not settle", step: 2, detail: "is not ready"},
+	{plan: "b11", bug: 11, finding: "Converge: did not settle", step: 2, detail: "is not ready"},
+	{plan: "b11-fault", bug: 11, finding: "Converge: did not settle", step: 1, detail: "is not ready"},
+	{plan: "b12", bug: 12, finding: "Crash: the controller exited", step: 1, detail: "exit status 2"},
+	{plan: "b12-fault", bug: 12, finding: "Crash: the controller exited", step: 1, detail: "exit status 2"},
+	{plan: "b13", bug: 13, finding: "Converge: did not settle", step: 1, detail: "is being deleted"},
+	{plan: "kill-delete", bug: 13, finding: "Converge: did not settle", step: 1, detail: "is being deleted"},
+	{plan: "b15", bug: 15, finding: "Converge: did not settle", step: 0, detail: "is not ready"},
+	{plan: "b16", bug: 16, finding: "Converge: did not settle", step: 0, detail: "is not ready", notes: []string{"primary.ready held for no CR version",
+		"kube: launch.rbac forbids the controller's update on the status subresource of widgets.toy.reconciler-fuzzer, "}},
+	{plan: "b3", bug: 3, finding: "Clean: left resources behind", step: 1, detail: "widget-0 (rule 4, slot a)"},
+	{plan: "b9", bug: 9, finding: "Clean: left resources behind", step: 1, detail: "widget-1 (rule 4, slot a)", notes: []string{"primary.ready held for no CR version"}},
+	{plan: "b8", bug: 8, finding: "Restore: did not restore damaged resources", step: 1, detail: "widget-0"},
+	{plan: "b14", bug: 14, finding: "Restore: changed resources", step: 2, detail: "widget-0"},
+	{plan: "b17", bug: 17, finding: "Honest: reported ready before seeing its dependency ready", step: 0, detail: "gadgets.toy.reconciler-fuzzer", config: gadgetConfig},
+	{plan: "b18", bug: 18, finding: "Converge: did not settle", step: 1, detail: "is not ready", config: gadgetConfig},
+	{plan: "b19", bug: 19, finding: "Honest: stayed ready after seeing its dependency not ready", step: 1, detail: "seen not ready", config: gadgetConfig},
+	{plan: "b20", bug: 20, finding: "Honest: reported ready with no dependency", step: 0, detail: "slot a", config: gadgetConfig},
+	{plan: "b21", bug: 21, finding: "Converge: did not settle", step: 0, detail: "over the budget", config: gadgetConfig},
+	{plan: "b22", bug: 22, finding: "Clean: left resources behind", step: 1, detail: "gadgets.toy.reconciler-fuzzer", config: gadgetConfig},
+	{plan: "b23", bug: 23, finding: "Converge: did not settle", step: 1, detail: "is being deleted", config: gadgetConfig},
+	{plan: "foreground-slow-delete", bug: 23, finding: "Converge: did not settle", step: 1, detail: "is being deleted", config: gadgetConfig},
+	{plan: "b24", bug: 24, finding: "Restore: did not restore damaged resources", step: 1, detail: "gadgets.toy.reconciler-fuzzer", config: gadgetConfig},
+	{plan: "b25", bug: 25, finding: "Backoff: retried a failing request in a tight loop", step: 1, detail: "patch gadgets.toy.reconciler-fuzzer", config: gadgetConfig,
+		notes: []string{"kube: launch.rbac forbids the controller's patch on the status subresource of gadgets.toy.reconciler-fuzzer, "}},
+	{plan: "b26", bug: 26, finding: "Clean: left resources behind", step: 1, detail: "clusterroles.rbac.authorization.k8s.io tenant-tenant (rule 3, slot a)", config: tenantConfig},
+	{plan: "b27", bug: 27, finding: "Clean: left resources behind", step: 1, detail: ".grant (rule 2, slot a)", config: grantConfig},
+	{plan: "b27", bug: 27, finding: "Teardown: released a CR before deleting its resources", step: 1, detail: ".grant (rule 2, slot a)", config: grantConfig},
+	{plan: "b28", bug: 28, finding: "Clean: left resources behind", step: 1, detail: "-grant (rule 1, slot a)", config: grantConfig},
+	{plan: "b28", bug: 28, finding: "Teardown: released a CR before deleting its resources", step: 1, detail: "-grant (rule 1, slot a)", config: grantConfig},
+	{plan: "b29", bug: 29, finding: "Converge: did not settle", step: 1, detail: "is being deleted", config: tenantConfig},
+	{plan: "b29-background", bug: 29, config: tenantConfig},
 }
 
 // hasFinding says whether report holds a finding whose heading starts with
@@ -106,6 +112,31 @@ func hasFinding(report, heading string, step int, detail string) bool {
 		}
 	}
 	return false
+}
+
+// notesMatch says whether each note says the string at its index in want.
+func notesMatch(notes, want []string) bool {
+	return slices.EqualFunc(notes, want, strings.Contains)
+}
+
+func TestNotesMatch(t *testing.T) {
+	for _, c := range []struct {
+		notes, want []string
+		match       bool
+	}{
+		{nil, nil, true},
+		{[]string{"a note"}, nil, false},
+		{nil, []string{"note"}, false},
+		{[]string{"a note"}, []string{"note"}, true},
+		{[]string{"a note"}, []string{"other"}, false},
+		{[]string{"first", "second"}, []string{"first", "second"}, true},
+		{[]string{"first", "second"}, []string{"second", "first"}, false},
+		{[]string{"first", "second"}, []string{"first"}, false},
+	} {
+		if got := notesMatch(c.notes, c.want); got != c.match {
+			t.Errorf("notesMatch(%q, %q) = %v", c.notes, c.want, got)
+		}
+	}
 }
 
 func TestHasFindingMatchesOnlyTheDetails(t *testing.T) {

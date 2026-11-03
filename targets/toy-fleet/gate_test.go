@@ -36,9 +36,9 @@ type gateRow struct {
 	// config is the config's path, config.yaml when empty. Its plans are
 	// in plans/ beside it.
 	config string
-	// note is what the run's one note must say. Without it the run gives
-	// no note.
-	note string
+	// notes are what the run's notes say, in order. Without them the run
+	// gives no note.
+	notes []string
 }
 
 func (g gateRow) configPath() string { return cmp.Or(g.config, "config.yaml") }
@@ -63,7 +63,7 @@ var gate = []gateRow{
 	// catches B120 there.
 	{plan: "cluster-delete", bug: 120, finding: "Converge: did not settle (clause 1)", step: 1, detail: "/db is not ready", config: databaseConfig},
 	{plan: "delete-database-first", bug: 121, finding: "Ordered: released an object that another names", step: 1, detail: "/db: slot c names it"},
-	{plan: "user-first", bug: 122, finding: "Converge: did not settle (clause 1)", step: 0, detail: "/alice is not ready"},
+	{plan: "user-first", bug: 122, finding: "Converge: did not settle (clause 1)", step: 0, detail: "/alice is not ready", notes: []string{"primaries[2].ready held for no CR version"}},
 	{plan: "create-together", bug: 123, finding: "Honest: reported ready before seeing its dependency ready", step: 0, detail: "slot b: clusters.toy.reconciler-fuzzer "},
 	{plan: "secret-late", bug: 124, finding: "Honest: reported ready with no dependency", step: 0, detail: "slot b: secrets "},
 	{plan: "secret-recreate", bug: 125, finding: "Honest: stayed ready after seeing its dependency not ready", step: 1, detail: "slot b: secrets "},
@@ -87,7 +87,7 @@ var gate = []gateRow{
 	// Each plan under upgrade/ restarts the controller as version 2.
 	{plan: "delete", bug: 140, finding: "Converge: did not settle (clause 2)", step: 2, detail: "cluster is being deleted", config: upgradeConfig},
 	{plan: "update", bug: 141, finding: "Restore: replaced resources", step: 1, detail: "/cluster-data-0 (rule 1, slot a)", config: upgradeConfig},
-	{plan: "mid-provisioning", bug: 142, finding: "Converge: did not settle (clause 1)", step: 0, detail: "cluster is not ready", config: upgradeConfig},
+	{plan: "mid-provisioning", bug: 142, finding: "Converge: did not settle (clause 1)", step: 0, detail: "cluster is not ready", config: upgradeConfig, notes: []string{"primary.ready held for no CR version"}},
 	{plan: "upgrade-and-update", bug: 141, finding: "Property: property volumes-go-first does not hold", step: 2, detail: "is false", config: upgradePropertiesConfig},
 	// The slowDelete keeps each Volume being deleted for 2 s before its
 	// Cluster is gone, so this row does not race the two kinds' watches.
@@ -119,8 +119,8 @@ var gate = []gateRow{
 	// plan ends at its create.
 	{plan: "recreate", config: uninstallConfig},
 	// B0 updates no Volume while it deletes them.
-	{plan: "stop-after-delete", config: uninstallConfig, note: "fault 1 (error(500) on verb=update group=storage.thirdparty resource=volumes) picked no request"},
-	{plan: "stop-first", config: uninstallConfig, note: "cluster is not judged: the stop did not wait for it"},
+	{plan: "stop-after-delete", config: uninstallConfig, notes: []string{"fault 1 (error(500) on verb=update group=storage.thirdparty resource=volumes) picked no request"}},
+	{plan: "stop-first", config: uninstallConfig, notes: []string{"cluster is not judged: the stop did not wait for it"}},
 }
 
 func planPath(config, plan string) string {
@@ -152,13 +152,9 @@ func hasFinding(report, heading string, step int, detail string) bool {
 	return false
 }
 
-// notesMatch says whether notes are one note that says note, or none when
-// note is empty.
-func notesMatch(notes []string, note string) bool {
-	if note == "" {
-		return len(notes) == 0
-	}
-	return len(notes) == 1 && strings.Contains(notes[0], note)
+// notesMatch says whether each note says the string at its index in want.
+func notesMatch(notes, want []string) bool {
+	return slices.EqualFunc(notes, want, strings.Contains)
 }
 
 // byRun groups the gate's rows by config, plan and bug, in order.
@@ -250,21 +246,22 @@ func TestHasFindingMatchesOnlyTheDetails(t *testing.T) {
 	}
 }
 
-func TestNotesMatchWantsTheOneNoteOrNone(t *testing.T) {
+func TestNotesMatch(t *testing.T) {
 	for _, c := range []struct {
-		notes []string
-		note  string
-		want  bool
+		notes, want []string
+		match       bool
 	}{
-		{nil, "", true},
-		{[]string{"x"}, "", false},
-		{[]string{"a CR is not judged"}, "not judged", true},
-		{[]string{"a CR is not judged", "another"}, "not judged", false},
-		{[]string{"another"}, "not judged", false},
-		{nil, "not judged", false},
+		{nil, nil, true},
+		{[]string{"a note"}, nil, false},
+		{nil, []string{"note"}, false},
+		{[]string{"a note"}, []string{"note"}, true},
+		{[]string{"a note"}, []string{"other"}, false},
+		{[]string{"first", "second"}, []string{"first", "second"}, true},
+		{[]string{"first", "second"}, []string{"second", "first"}, false},
+		{[]string{"first", "second"}, []string{"first"}, false},
 	} {
-		if got := notesMatch(c.notes, c.note); got != c.want {
-			t.Errorf("notesMatch(%q, %q) = %v", c.notes, c.note, got)
+		if got := notesMatch(c.notes, c.want); got != c.match {
+			t.Errorf("notesMatch(%q, %q) = %v", c.notes, c.want, got)
 		}
 	}
 }

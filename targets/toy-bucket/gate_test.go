@@ -21,6 +21,9 @@ type gateRow struct {
 	// config is the config's path, config.yaml when empty. Its plans are
 	// in plans/ beside it.
 	config string
+	// notes are what the run's notes say, in order. Without them the run
+	// gives no note.
+	notes []string
 }
 
 const (
@@ -55,21 +58,21 @@ func plans(config string) ([]string, error) {
 // report.md must hold: its heading, its step and a detail line. An empty
 // finding means the bug must pass the plan.
 var gate = []gateRow{
-	{"b30", 30, "Clean: left resources behind", 1, "cloud buckets buckets-1 (rule 2, slot a)", ""},
-	{"b30", 30, "Teardown: released a CR before deleting its resources", 1, "cloud buckets buckets-1 (rule 2, slot a)", ""},
-	{"b31", 31, "Unique: duplicate resources", 0, "cloud buckets buckets-1 (rule 2, slot a), cloud buckets buckets-2", ""},
-	{"b31", 31, "Clean: left resources behind", 2, "cloud buckets buckets-1 (rule 2, slot a)", ""},
-	{"b31", 31, "Teardown: released a CR before deleting its resources", 2, "cloud buckets buckets-1 (rule 2, slot a)", ""},
-	{"b31", 31, "Honest: reported ready before seeing its dependency ready", 0, "slot a: cloud buckets buckets-1 not seen", ""},
-	{"b32", 32, "Unique: duplicate resources", 0, "cloud buckets buckets-1 (rule 2, slot a), cloud buckets buckets-2", ""},
-	{"b32", 32, "Clean: left resources behind", 2, "cloud buckets buckets-1 (rule 2, slot a)", ""},
-	{"b32", 32, "Teardown: released a CR before deleting its resources", 2, "cloud buckets buckets-1 (rule 2, slot a)", ""},
-	{"b32", 32, "Honest: reported ready before seeing its dependency ready", 0, "slot a: cloud buckets buckets-1 not seen", ""},
-	{"b33", 33, "Honest: reported ready before seeing its dependency ready", 0, "cloud buckets buckets-1 seen not ready", ""},
-	{"b34", 34, "Restore: did not restore damaged resources", 1, "cloud buckets buckets-1 (rule 2, slot a)", ""},
-	{"b35", 35, "Backoff: retried a failing request in a tight loop", 0, "create cloud buckets b-", ""},
-	{"halt", 0, "", 0, "", haltedConfig},
-	{"halt", 0, "Converge: did not settle", 0, "is not ready", unhaltedConfig},
+	{plan: "b30", bug: 30, finding: "Clean: left resources behind", step: 1, detail: "cloud buckets buckets-1 (rule 2, slot a)"},
+	{plan: "b30", bug: 30, finding: "Teardown: released a CR before deleting its resources", step: 1, detail: "cloud buckets buckets-1 (rule 2, slot a)"},
+	{plan: "b31", bug: 31, finding: "Unique: duplicate resources", step: 0, detail: "cloud buckets buckets-1 (rule 2, slot a), cloud buckets buckets-2"},
+	{plan: "b31", bug: 31, finding: "Clean: left resources behind", step: 2, detail: "cloud buckets buckets-1 (rule 2, slot a)"},
+	{plan: "b31", bug: 31, finding: "Teardown: released a CR before deleting its resources", step: 2, detail: "cloud buckets buckets-1 (rule 2, slot a)"},
+	{plan: "b31", bug: 31, finding: "Honest: reported ready before seeing its dependency ready", step: 0, detail: "slot a: cloud buckets buckets-1 not seen"},
+	{plan: "b32", bug: 32, finding: "Unique: duplicate resources", step: 0, detail: "cloud buckets buckets-1 (rule 2, slot a), cloud buckets buckets-2"},
+	{plan: "b32", bug: 32, finding: "Clean: left resources behind", step: 2, detail: "cloud buckets buckets-1 (rule 2, slot a)"},
+	{plan: "b32", bug: 32, finding: "Teardown: released a CR before deleting its resources", step: 2, detail: "cloud buckets buckets-1 (rule 2, slot a)"},
+	{plan: "b32", bug: 32, finding: "Honest: reported ready before seeing its dependency ready", step: 0, detail: "slot a: cloud buckets buckets-1 not seen"},
+	{plan: "b33", bug: 33, finding: "Honest: reported ready before seeing its dependency ready", step: 0, detail: "cloud buckets buckets-1 seen not ready"},
+	{plan: "b34", bug: 34, finding: "Restore: did not restore damaged resources", step: 1, detail: "cloud buckets buckets-1 (rule 2, slot a)"},
+	{plan: "b35", bug: 35, finding: "Backoff: retried a failing request in a tight loop", step: 0, detail: "create cloud buckets b-"},
+	{plan: "halt", bug: 0, config: haltedConfig},
+	{plan: "halt", bug: 0, finding: "Converge: did not settle", step: 0, detail: "is not ready", config: unhaltedConfig, notes: []string{"primary.ready held for no CR version"}},
 }
 
 // hasFinding says whether report holds a finding whose heading starts with
@@ -86,6 +89,31 @@ func hasFinding(report, heading string, step int, detail string) bool {
 		}
 	}
 	return false
+}
+
+// notesMatch says whether each note says the string at its index in want.
+func notesMatch(notes, want []string) bool {
+	return slices.EqualFunc(notes, want, strings.Contains)
+}
+
+func TestNotesMatch(t *testing.T) {
+	for _, c := range []struct {
+		notes, want []string
+		match       bool
+	}{
+		{nil, nil, true},
+		{[]string{"a note"}, nil, false},
+		{nil, []string{"note"}, false},
+		{[]string{"a note"}, []string{"note"}, true},
+		{[]string{"a note"}, []string{"other"}, false},
+		{[]string{"first", "second"}, []string{"first", "second"}, true},
+		{[]string{"first", "second"}, []string{"second", "first"}, false},
+		{[]string{"first", "second"}, []string{"first"}, false},
+	} {
+		if got := notesMatch(c.notes, c.want); got != c.match {
+			t.Errorf("notesMatch(%q, %q) = %v", c.notes, c.want, got)
+		}
+	}
 }
 
 // byRun groups the gate's rows by config, plan and bug, in order.
