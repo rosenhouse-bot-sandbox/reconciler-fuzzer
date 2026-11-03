@@ -44,26 +44,41 @@ during startup. The runner appends two steps to every plan without a
 `stop`: `Step N (delete all)` and `Step N+1 (restart)`.
 A `Labels:` line may follow. The block lists the detail lines.
 
-A `# Notes` section follows the findings. A note says what the trace could
-not decide: an action that failed, a fault that picked no request, a
-step the trace ended too early to judge, a CR still being deleted that a
-`stop` did not wait for, or an unmapped request. Notes do
-not fail a run. A fault that picked no request tested nothing, so a plan
-with such notes may need a different fault.
+A `# Notes` section follows the findings. A note says what the checks
+could not judge, or names a config mistake: an action that failed, a fault
+that picked no request, a step the trace ended too early to judge, a CR
+still being deleted that a `stop` did not wait for, an unmapped request, or
+a `role` that failed on every resource of a kind. Notes do not fail a run.
+A fault that picked no request tested nothing, so a plan with such notes
+may need a different fault.
 
 `the slot's name is still taken after the create waited 37s` means that
 a create gave up waiting until its slot's previous CR no longer existed.
+`the name of secrets ns/pw is still taken after the createFixture waited
+37s` says the same of a `createFixture` and the fixture it makes again.
 The step's faults had ended by then (DESIGN.md §9). When the observer last
-recorded a live CR with that name, the rest of the note names its
+recorded a live object with that name, the rest of the note names its
 `deletionTimestamp` and finalizers, or says that it is not being deleted.
 The run then skips to the `delete all` and `restart` steps that the runner
 appends.
+
+`Step 1, action 0 (changeFixture) failed ...: no instance matches` means
+the action's target matched no live object. A `damage` matches only
+objects the controller created, and a `changeFixture` only objects the
+harness created, such as fixtures. Neither matches a CRD that `crds:` or a
+restart installed.
 
 `cloud: unmapped request POST /v2/buckets/b-1/acl` means the system's API
 map could not place a controller request on a resource. No check judges
 that request, so a leak or duplicate it causes goes unseen. The `crud` map
 places only `/<collection>` and `/<collection>/<id>` (DESIGN.md §5). Serve
 the API at those paths, or put it behind another fake service.
+
+`kube/storage.thirdparty/volumes: the role failed on every resource of this
+kind the controller created: evaluating "self.metadata.labels['x']": no such
+key: x` names the first error of the system's `role`. The checks then group
+those resources as if the system had no `role`. One note per kind catches a
+`role` that a kind guard applies to that kind alone. Fix the CEL.
 
 Hunt and shrink match findings by check, summary and kind, so a replay
 need not fail at the same step or on the same names.
@@ -97,12 +112,26 @@ Look at the clause first:
 | 2 | A CR is still being deleted. | Its finalizers, and why the controller did not remove them. |
 | 3 | The controller is down, or restarted within `stable`. | `controller.log`, and any Crash finding. |
 | 4 | The controller made no successful request since it started. | Its startup in `controller.log`, and its RBAC. |
-| 5 | The controller did not look at an object a `damage` or `changeFixture` changed. | Its watches and the kinds it reads. |
+| 5 | The controller did not look at an object a `damage`, `changeFixture` or `createFixture` changed. | Its watches and the kinds it reads. |
 | 6 | A model, such as `gc`, has work pending. | What the model waits on. Churn under clause 7 often keeps it busy. A stage model's `finalizer:` holds each deletion for `finalizer.after`, so lower it, or raise `timeouts.settle`. |
 | 7 | The controller kept changing objects, or went over the `budgets`. | The first changed write the detail names: it shows what the controller fights over. |
 
 `did not stay settled (clause k)` means the condition held once, then
 failed again within `stable`.
+
+Clause 1 skips a CR that a reference holds back, if the named object as it
+is now would hold the CR back too, or that a reference leaves unknown. It
+does so once `stable`, and the time the step's faults lasted, at most
+`timeouts.backoffCap`, have passed since the faults ended.
+
+Clause 1's line says what the controller last saw of each object that the
+CR names, such as `; the controller last saw secrets ns/admin-password
+ready at 7.24s`. If it saw the object ready, the reference's `ready`
+accepts an object that the controller treats as not ready. If it saw the
+object missing under `required: false`, the controller treats the object
+as required. If it saw the object missing or not ready, and the object is
+ready now, the controller missed the change, as when it does not watch the
+named kind. `never saw` means the controller never read the object.
 
 After a `stop`, only clauses 2, 6 and 7 apply, and clause 2 only in the
 stop's step. It names a CR that was still being deleted when the stop's wait
@@ -151,17 +180,23 @@ that removes a child's finalizer only after the CR is gone.
 ### Restore
 
 The step changed no CR or fixture, but the controller's resources differ
-from the previous step's end.
+from the previous step's end. A restart changes no CR, even one that
+upgrades the controller. See [README Upgrading](../README.md#upgrading) for
+the findings an upgrade can cause.
 
 - `did not restore damaged resources`: a damaged resource was not
   recreated, or every resource of some kind under the damaged resource's
   root (DESIGN.md §11) is gone. Once a damaged resource's owner is gone, a
   CR that the controller made in the step must own a resource of the
-  damaged one's kind and role under that root.
-- `replaced resources`: an undamaged resource was replaced, or a new one
-  appeared.
-- `changed resources`: an undamaged resource's body changed. Each line
-  names the fields that differ.
+  damaged one's kind and role under that root. A resource recreated under
+  another name counts when its system's `role` gives it the damaged one's
+  role. A resource may stay gone while each of its CRs is not ready at the
+  step's end, but halted or held back by a reference.
+- `replaced resources`: an undamaged resource disappeared or changed owner,
+  or a new one appeared.
+- `changed resources`: an undamaged resource's body changed in a step
+  whose restart did not upgrade the controller. Each line names the fields
+  that differ.
 
 Each line names its resource's owner as Clean does. `rule 1, unlisted
 owner` names the live object, such as a fixture, that owns the resource
@@ -170,7 +205,13 @@ instead of a CR.
 ### Unique: duplicate resources
 
 Two live controller resources share a kind, namespace, owning CR or
-unlisted owner, and role (DESIGN.md §11).
+unlisted owner, and role (DESIGN.md §11). A kube resource's role is its
+system's `role`, or else its `generateName` or name. A fake's resource
+without a `role` has an empty role. Each line starts with the role:
+
+```
+role "cluster-vol-0": volumes.storage.thirdparty rf-ba88ef99/cluster-vol-0-bhltd (rule 1, slot a), volumes.storage.thirdparty rf-ba88ef99/cluster-vol-0-iomkw (rule 1, slot a)
+```
 
 ### Honest
 
@@ -187,7 +228,23 @@ dependency:
 - `reported ready with no dependency`: under `dependency.required`, the
   CR owned none that counts.
 - `stayed ready after seeing its dependency not ready`: the CR stayed
-  ready longer than `track`.
+  ready longer than `track`, not counting time in which the controller
+  stalled (README.md, References).
+
+A `references` entry's findings take the same summaries. Each line names
+the CR and the object that its field names. The finding takes the object's
+kind:
+
+- `reported ready with no dependency`: the object was missing and
+  `required`. `seen missing` means the controller's last look showed it
+  missing; `not seen` means the controller never looked.
+- `reported ready before seeing its dependency ready`: `seen not ready`
+  means the controller's last look showed the object not ready; `not seen`
+  means the controller never looked at the live object.
+- `stayed ready after seeing its dependency not ready`: the CR stayed
+  ready, naming the object, for `track` after the look at the time the
+  line gives, not counting time in which the controller stalled, and each
+  later look by then held it back.
 
 ### Backoff: retried a failing request in a tight loop
 
@@ -195,6 +252,15 @@ The controller repeated a failing request with gaps under 100 ms. The line
 names the verb, the object, the status and the calls. Retry through a rate
 limiter, such as controller-runtime's default, rather than a short
 `RequeueAfter`.
+
+### Backoff: repeated a no-op write in a tight loop
+
+The controller repeated a write that changed nothing, with gaps under 100 ms.
+The line names the verb, the object, the status and the calls. A delete of an
+object that is already being deleted is such a write. So is a
+`deletecollection` sent again before anything in the cluster changed. Skip a
+write that the cached object already shows, and wait for a watch event rather
+than a short `RequeueAfter`.
 
 ### Finalizers: removed another caller's finalizer
 
@@ -220,7 +286,12 @@ names its cause. A run that started leaves its partial trace in `--out`. Common 
 | `starting <binary>: ... no such file or directory` | Build the controller to `launch.binary`. |
 | `the controller never started: ...` | No request got a 2xx answer within `timeouts.settle`. Requests that no check judges, such as discovery, Leases and Events, do not count. Read the output tail and `controller.log`. Fix `launch.args`, `launch.env` or `launch.rbac`. Raise `timeouts.settle` for a controller that starts slowly. |
 | `creating fixture ...` | Fix the fixture, or install the CRD it needs under `crds`. |
-| `launch args: ...` or `launch env <name>: ...` | Use only `${systems.kube.kubeconfig}`, `namespace` and `url`, and a fake's `${systems.<name>.url}`. |
+| `creating fixture CustomResourceDefinition ...: ... already exists` | List the CRD under `crds` or under `fixtures`, not both. |
+| `mapping <group>/<version>, Kind=<kind>: no matches for kind ...` | Install the listed kind's CRD under `crds`. |
+| `steps[i].actions[j]: ...` or `launch.upgrades[i]: ...` that names a `binary` or `crds` path | Point `binary` at an executable file and `crds` at valid CRD files. A plan file's paths resolve against its directory, and `launch.upgrades` paths against the config's. |
+| `installing CRDs: the <resource> CRD stops serving <version>, which the harness watches` | Keep that version served in the restart's `crds`. |
+| `installing CRDs: ...` | Fix the CRDs that a restart's `crds` names. |
+| `launch args[i]: ...`, `launch env <name>: ...`, `launch.upgrades[i].args[k]: ...` or `steps[i].actions[j].args[k]: ...` | Use only `${systems.kube.kubeconfig}`, `namespace` and `url`, and a fake's `${systems.<name>.url}`. Close each `${` with `}`. |
 | `fake <name> exited ...` | Read `<out>/<name>.log`. Fix the `systems[].process` command or the fake's own config. |
 | `create of slot "<s>" makes a <kind>, which primaries does not list` | List the kind under `primaries`, or make the object a fixture. |
 | `create of slot "<s>" makes an object without apiVersion or kind` | Give the create's `object` both. |

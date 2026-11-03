@@ -3,6 +3,7 @@ package generate
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -62,6 +63,17 @@ func drawPlans(t *testing.T, g *Generator, n int) []*plan.Plan {
 	return drawn
 }
 
+// holding is a state whose slots hold slots and that deleted no fixture.
+func holding(slots map[string]map[string]any) state {
+	at := newState()
+	maps.Copy(at.slots, slots)
+	return at
+}
+
+func (s state) clone() state {
+	return state{slots: maps.Clone(s.slots), deleted: maps.Clone(s.deleted)}
+}
+
 // example is draw's value for seed. rapid's Example, and so Plan, hides a
 // draw that panics by drawing again. example fails the test on any panic
 // but rapid's invalidData, which asks for another draw.
@@ -110,7 +122,7 @@ func decode(t *testing.T, raw json.RawMessage) map[string]any {
 }
 
 func TestPlansHaveTheShapeOfSection14(t *testing.T) {
-	for _, path := range []string{toyConfig, fleetConfig, rulesConfig} {
+	for _, path := range []string{toyConfig, fleetConfig, rulesConfig, modelsConfig} {
 		for _, p := range plans(t, path, 200) {
 			if err := p.Validate(); err != nil {
 				t.Fatalf("%s seed %d: %v", path, p.Seed, err)
@@ -439,7 +451,7 @@ func TestDamageNamesALiveSlot(t *testing.T) {
 	t.Error("No damage names a slot.")
 }
 
-func TestFaultsFavorThePrimaryAndTheCoreKindsTheControllerCreates(t *testing.T) {
+func TestFaultsFavorThePrimaryAndTheOwnedKinds(t *testing.T) {
 	counts := map[string]int{}
 	for _, f := range faults(plans(t, "../../examples/cert-manager/config.yaml", 200)) {
 		if !f.HoldWatch {

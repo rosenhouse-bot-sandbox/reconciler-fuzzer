@@ -1,0 +1,23 @@
+# This config lists toy-fleet's Clusters and Databases and a Database's
+# references. Nothing launches this target.
+launch:
+  binary: none
+  rbac: [../../../../targets/toy-fleet/rbac/role.yaml]
+crds: [../../../../targets/toy-fleet/crds/]
+primaries:
+  - kind: toy.reconciler-fuzzer/v1/Cluster
+    sample: ../../../../targets/toy-fleet/cluster.yaml
+    ready: "true"
+    values: {mutate: [spec.volumes]}
+  - kind: toy.reconciler-fuzzer/v1/Database
+    sample: ../../../../targets/toy-fleet/database/database.yaml
+    ready: "true"
+    values: {mutate: [spec.engine, spec.clusterRef, spec.passwordSecretRef]}
+fixtures: [admin-password.yaml]
+references:
+  - {from: toy.reconciler-fuzzer/v1/Database, to: toy.reconciler-fuzzer/v1/Cluster, name: spec.clusterRef}
+  - from: toy.reconciler-fuzzer/v1/Database
+    to: v1/Secret
+    name: spec.passwordSecretRef.name
+    ready: has(self.data.password)
+    required: false

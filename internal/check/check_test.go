@@ -2,6 +2,7 @@ package check_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -607,6 +608,54 @@ func TestJudgeNotesAHoldWatchOnlyWithoutAWatchOfItsKind(t *testing.T) {
 		}
 		if slices.ContainsFunc(notes, func(n string) bool { return strings.Contains(n, "picked no request") }) {
 			t.Errorf("%s: notes = %q, want no picked-no-request note", name, notes)
+		}
+	}
+}
+
+// A role that fails on every resource of a kind the controller created gets
+// a note, which names the first error. A Secret whose role works does not
+// excuse the ConfigMaps. The harness's objects and ignored kinds, such as
+// Events, do not count.
+func TestJudgeNotesARoleThatFailedOnEveryResourceOfAKind(t *testing.T) {
+	const noLabels, noRole, hasRole = 0, 1, 2
+	body := func(name string, labels int) map[string]any {
+		metadata := map[string]any{"name": name}
+		switch labels {
+		case noRole:
+			metadata["labels"] = map[string]any{"other": name}
+		case hasRole:
+			metadata["labels"] = map[string]any{"role": name}
+		}
+		return map[string]any{"metadata": metadata}
+	}
+	// The first ConfigMap that fails has no labels at all.
+	const note = `kube/configmaps: the role failed on every resource of this kind the controller created: evaluating "self.metadata.labels['role']": no such key: labels`
+	for name, c := range map[string]struct {
+		configMaps []int
+		notes      []string
+	}{
+		"fails on every configmap": {[]int{noLabels, noRole}, []string{note}},
+		"works on one configmap":   {[]int{noLabels, hasRole}, nil},
+	} {
+		r := newRun(1)
+		r.Spec.Systems = []trace.System{{Name: "kube", Role: "self.metadata.labels['role']"}}
+		r.Begin()
+		r.Create(trace.Harness, widgetA, body("a", noLabels))
+		r.Act("create", "a", &widgetA)
+		r.Create(ctl, tt.Ref("events", "ns", "a.1"), body("a.1", noLabels))
+		r.Create(ctl, tt.Ref("secrets", "ns", "a-tls"), tt.OwnedBy(body("a-tls", hasRole), r.UID(widgetA), true))
+		for n, labels := range c.configMaps {
+			child := fmt.Sprintf("a-%d", n)
+			r.Create(ctl, tt.Ref("configmaps", "ns", child), tt.OwnedBy(body(child, labels), r.UID(widgetA), true))
+		}
+		r.Ready(widgetA).EndFaults().Settle()
+		ix := r.Index()
+		spec, err := check.SpecFor(nil, ix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if notes := check.Judge(ix, spec).Notes; !slices.Equal(notes, c.notes) {
+			t.Errorf("%s: notes = %q, want %q", name, notes, c.notes)
 		}
 	}
 }

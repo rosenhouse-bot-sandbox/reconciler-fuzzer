@@ -52,7 +52,7 @@ func TestAHoldWatchComesWithARecreateOfALiveCRAsItWas(t *testing.T) {
 	g := newGenerator(t, loadConfig(t, toyConfig))
 	cr := g.kinds[0].base("a").Object
 	actions := example(t, 0, func(rt *rapid.T) []plan.Action {
-		return g.holdTraffic(rt, state{"a": cr}, holdWidgets)
+		return g.holdTraffic(rt, holding(map[string]map[string]any{"a": cr}), holdWidgets)
 	})
 	if len(actions) != 2 || actions[0].Do != plan.Delete || actions[1].Do != plan.Create ||
 		actions[0].Slot != "a" || actions[1].Slot != "a" || !reflect.DeepEqual(decode(t, actions[1].Object), decode(t, marshal(cr))) {
@@ -66,14 +66,14 @@ func TestAHoldWatchComesWithARecreateOfALiveCRAsItWas(t *testing.T) {
 func TestAHoldWatchWithoutALiveCRComesWithACreate(t *testing.T) {
 	g := newGenerator(t, loadConfig(t, toyConfig))
 	actions := example(t, 0, func(rt *rapid.T) []plan.Action {
-		return g.holdTraffic(rt, state{}, holdWidgets)
+		return g.holdTraffic(rt, newState(), holdWidgets)
 	})
 	if len(actions) != 1 || actions[0].Do != plan.Create {
 		t.Errorf("A holdWatch with no live CR comes with %+v, want a create.", actions)
 	}
 }
 
-func TestHoldWatchesFavorThePrimaryAndTheCoreKindsTheControllerCreates(t *testing.T) {
+func TestHoldWatchesFavorThePrimaryAndTheOwnedKinds(t *testing.T) {
 	counts := map[string]int{}
 	for _, f := range faults(plans(t, "../../examples/cert-manager/config.yaml", 400)) {
 		if f.HoldWatch {
@@ -155,18 +155,6 @@ func TestEveryHoldWatchComesWithARecreateOrACreate(t *testing.T) {
 	}
 }
 
-func TestHoldWatchesFavorThePrimaryAndTheOwnedKinds(t *testing.T) {
-	cfg := loadConfig(t, "../../examples/cert-manager/config.yaml")
-	g := newGenerator(t, cfg)
-	counts := map[string]int{}
-	for _, gr := range g.watchable {
-		counts[gr.Resource]++
-	}
-	if counts["secrets"] != favored || counts["certificates"] != favored || counts["orders"] != 1 {
-		t.Errorf("watchable = %v, want secrets and certificates %d times and orders once", counts, favored)
-	}
-}
-
 func TestAWildcardVerbLetsTheControllerWatch(t *testing.T) {
 	for _, f := range faults(plans(t, "testdata/systems/star.yaml", 100)) {
 		if f.HoldWatch && f.Match == (plan.Match{Resource: "secrets"}) {
@@ -174,6 +162,32 @@ func TestAWildcardVerbLetsTheControllerWatch(t *testing.T) {
 		}
 	}
 	t.Error("No fault holds the watch of secrets, which the RBAC grants with *.")
+}
+
+func TestAWildcardVerbLetsTheControllerCreate(t *testing.T) {
+	for _, a := range actions(plans(t, "testdata/systems/star.yaml", 100)) {
+		if a.Do == plan.Damage && a.Target.Resource == "secrets" {
+			return
+		}
+	}
+	t.Error("No damage targets secrets, which the RBAC grants with *.")
+}
+
+func TestWithoutAKindTheControllerMayCreateEachDamageNamesAFake(t *testing.T) {
+	cfg := loadConfig(t, systemsConfig)
+	cfg.Launch.RBAC = []string{"testdata/systems/read-role.yaml"}
+	damages := 0
+	for _, a := range actions(drawPlans(t, newGenerator(t, cfg), 100)) {
+		if a.Do == plan.Damage {
+			damages++
+			if a.Target.System != "vault" {
+				t.Errorf("A damage targets %+v, want vault.", *a.Target)
+			}
+		}
+	}
+	if damages == 0 {
+		t.Error("No plan draws a damage.")
+	}
 }
 
 func TestAReadOnlyFakeTakesNoDamageAndOnlyReadFaults(t *testing.T) {
@@ -216,10 +230,10 @@ func TestAReadOnlyFakesFaultComesWithACreateOrAnUpdate(t *testing.T) {
 		}
 		action := example(t, 0, func(rt *rapid.T) plan.Action {
 			rapid.Bool().Draw(rt, "rapid needs a draw")
-			at := state{}
+			at := newState()
 			if c.live {
 				for _, slot := range slots {
-					at[slot] = g.kinds[0].base(slot).Object
+					at.slots[slot] = g.kinds[0].base(slot).Object
 				}
 			}
 			return g.traffic(rt, at, read)

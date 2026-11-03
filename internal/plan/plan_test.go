@@ -105,6 +105,8 @@ func TestValidate(t *testing.T) {
 		want  string
 	}{
 		"unknown do":           {[]Step{{Actions: []Action{{Do: "explode"}}}}, "steps[0].actions[0]: unknown do"},
+		"unknown do with args": {[]Step{{Actions: []Action{{Do: "upgrade", Upgrade: Upgrade{Args: []string{"--v2"}}}}}}, "steps[0].actions[0]: unknown do \"upgrade\""},
+		"unknown do target":    {[]Step{{Actions: []Action{{Do: "Damage", Target: cms}}}}, "steps[0].actions[0]: unknown do \"Damage\""},
 		"create without slot":  {[]Step{{Actions: []Action{{Do: Create}}}}, "steps[0].actions[0]: create needs a slot"},
 		"update before create": {[]Step{{Actions: []Action{{Do: Update, Slot: "a", Patch: json.RawMessage(`{}`)}}}}, "steps[0].actions[0]: update names slot \"a\""},
 		"update without patch": {[]Step{{Actions: []Action{create}}, {Actions: []Action{{Do: Update, Slot: "a"}}}}, "steps[1].actions[0]: update needs a JSON object patch"},

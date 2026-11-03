@@ -18,31 +18,36 @@ import (
 	fleetv1 "github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/targets/toy-fleet/api/v1"
 )
 
-// DatabaseReconciler readies a Database on its Cluster, and holds its
-// deletion while a User names it.
+// DatabaseReconciler readies a Database on its Cluster and on the Secret it
+// may name, and holds its deletion while a User names it.
 type DatabaseReconciler struct{ reconciler }
 
 func (r *DatabaseReconciler) SetupWithManager(m ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(m).
 		For(&fleetv1.Database{}).
 		Owns(&corev1.ConfigMap{}).
-		Watches(&fleetv1.Cluster{}, handler.EnqueueRequestsFromMapFunc(r.databasesOf)).
+		Watches(&fleetv1.Cluster{}, handler.EnqueueRequestsFromMapFunc(r.databasesNaming(clusterRefField))).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.databasesNaming(passwordSecretRefField))).
 		Watches(&fleetv1.User{}, handler.EnqueueRequestsFromMapFunc(func(_ context.Context, o client.Object) []reconcile.Request {
 			return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: o.GetNamespace(), Name: o.(*fleetv1.User).Spec.DatabaseRef}}}
 		})).
 		Complete(r)
 }
 
-func (r *DatabaseReconciler) databasesOf(ctx context.Context, cluster client.Object) []reconcile.Request {
-	list := &fleetv1.DatabaseList{}
-	if err := r.List(ctx, list, client.InNamespace(cluster.GetNamespace()), client.MatchingFields{clusterRefField: cluster.GetName()}); err != nil {
-		return nil
+// databasesNaming maps an object to the Databases in its namespace whose
+// indexed field names it.
+func (r *DatabaseReconciler) databasesNaming(field string) handler.MapFunc {
+	return func(ctx context.Context, o client.Object) []reconcile.Request {
+		list := &fleetv1.DatabaseList{}
+		if err := r.List(ctx, list, client.InNamespace(o.GetNamespace()), client.MatchingFields{field: o.GetName()}); err != nil {
+			return nil
+		}
+		requests := make([]reconcile.Request, 0, len(list.Items))
+		for _, db := range list.Items {
+			requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&db)})
+		}
+		return requests
 	}
-	requests := make([]reconcile.Request, 0, len(list.Items))
-	for _, db := range list.Items {
-		requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&db)})
-	}
-	return requests
 }
 
 func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -59,13 +64,22 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	old := db.Status
 	db.Status = fleetv1.CommonStatus{Phase: fleetv1.Pending, ObservedGeneration: db.Generation}
 	cluster := &fleetv1.Cluster{}
-	err := r.Get(ctx, types.NamespacedName{Namespace: db.Namespace, Name: db.Spec.ClusterRef}, cluster)
-	switch {
-	case apierrors.IsNotFound(err):
-		db.Status.Message = fmt.Sprintf("waiting for Cluster %s", db.Spec.ClusterRef)
-	case err != nil:
+	clusterErr := r.Get(ctx, types.NamespacedName{Namespace: db.Namespace, Name: db.Spec.ClusterRef}, cluster)
+	if client.IgnoreNotFound(clusterErr) != nil {
+		return ctrl.Result{}, clusterErr
+	}
+	secretWait, err := r.secretWait(ctx, db)
+	if err != nil {
 		return ctrl.Result{}, err
-	case !hosts(cluster, old.Phase):
+	}
+	switch {
+	case clusterErr != nil:
+		db.Status.Message = fmt.Sprintf("waiting for Cluster %s", db.Spec.ClusterRef)
+	case secretWait != "" && r.Bug != B124 && (r.Bug != B125 || old.Phase != fleetv1.Ready):
+		db.Status.Message = secretWait
+	case !cluster.DeletionTimestamp.IsZero() && old.Phase == fleetv1.Ready:
+		db.Status = old // A deleting Cluster keeps its Ready Databases as they are.
+	case !cluster.Status.ReadyAt(cluster.Generation) && r.Bug != B123:
 		db.Status.Message = fmt.Sprintf("waiting for Cluster %s to be Ready", cluster.Name)
 	default:
 		if err := r.syncConfigMap(ctx, db); err != nil {
@@ -76,16 +90,24 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	return ctrl.Result{}, r.writeStatus(ctx, db, old, db.Status)
 }
 
-// hosts says whether cluster serves a Database in phase: a Ready Cluster
-// serves any, and a Deleting one only those already Ready.
-func hosts(cluster *fleetv1.Cluster, phase fleetv1.Phase) bool {
-	switch cluster.Status.Phase {
-	case fleetv1.Ready:
-		return true
-	case fleetv1.Deleting:
-		return phase == fleetv1.Ready
+// secretWait says what the Database waits for in the Secret it names, or ""
+// when it names none or the Secret holds a password.
+func (r *DatabaseReconciler) secretWait(ctx context.Context, db *fleetv1.Database) (string, error) {
+	ref := db.Spec.PasswordSecretRef
+	if ref == nil || ref.Name == "" {
+		return "", nil
 	}
-	return false
+	secret := &corev1.Secret{}
+	err := r.Get(ctx, types.NamespacedName{Namespace: db.Namespace, Name: ref.Name}, secret)
+	switch _, hasPassword := secret.Data["password"]; {
+	case apierrors.IsNotFound(err):
+		return fmt.Sprintf("waiting for Secret %s", ref.Name), nil
+	case err != nil:
+		return "", err
+	case !hasPassword:
+		return fmt.Sprintf("waiting for Secret %s to hold a password", ref.Name), nil
+	}
+	return "", nil
 }
 
 func (r *DatabaseReconciler) syncConfigMap(ctx context.Context, db *fleetv1.Database) error {
