@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -109,9 +110,9 @@ func readKinds(paths []string) (servedKinds, error) {
 }
 
 // serving finds how the API server serves kind. It refuses a kind that no
-// CRD under crds and no built-in kind serves, and suggests the served kinds
-// whose kind or resource is kind's kind in any case. Without one, it lists
-// what the CRDs serve.
+// CRD under crds and no built-in kind serves, and lists what the CRDs serve.
+// It suggests each served kind whose kind or plural equals kind.Kind,
+// ignoring case.
 func (k servedKinds) serving(kind schema.GroupVersionKind) (servedKind, error) {
 	if served, found := k[kind]; found {
 		return served, nil
@@ -128,12 +129,12 @@ func (k servedKinds) serving(kind schema.GroupVersionKind) (servedKind, error) {
 	}
 	slices.Sort(near)
 	slices.Sort(fromCRDs)
-	const unserved = "no CRD under crds and no built-in kind serves it"
-	switch {
-	case len(near) > 0:
-		return servedKind{}, fmt.Errorf("%s; did you mean %s?", unserved, suggest.List(near, "or"))
-	case len(fromCRDs) > 0:
-		return servedKind{}, fmt.Errorf("%s; the CRDs serve %s", unserved, suggest.List(fromCRDs, "and"))
+	message := "no CRD under crds and no built-in kind serves it; crds holds no CRD"
+	if len(fromCRDs) > 0 {
+		message = "no CRD under crds and no built-in kind serves it; the CRDs serve " + suggest.List(fromCRDs, "and")
 	}
-	return servedKind{}, fmt.Errorf("%s; crds holds no CRD", unserved)
+	if len(near) > 0 {
+		message += "; did you mean " + suggest.List(near, "or") + "?"
+	}
+	return servedKind{}, errors.New(message)
 }

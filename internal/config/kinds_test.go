@@ -29,21 +29,24 @@ func entries(kind string) string {
 
 func TestLoadRefusesAKindNoCRDServes(t *testing.T) {
 	const unserved = ": no CRD under crds and no built-in kind serves it; "
+	const crds = "the CRDs serve toy/v1/Cluster, toy/v1/Database and toy/v2/Cluster"
 	for name, c := range map[string]struct{ config, want string }{
-		"another version":        {kindsHead + entries("toy/v3/Database"), "primaries[1].kind toy/v3/Database" + unserved + "did you mean toy/v1/Database?"},
-		"an unserved version":    {kindsHead + entries("toy/v1beta1/Database"), "primaries[1].kind toy/v1beta1/Database" + unserved + "did you mean toy/v1/Database?"},
-		"another group":          {kindsHead + entries("other/v1/Database"), "primaries[1].kind other/v1/Database" + unserved + "did you mean toy/v1/Database?"},
-		"a plural":               {kindsHead + entries("toy/v1/databases"), "did you mean toy/v1/Database?"},
-		"a missing CRD":          {kindsHead + entries("toy/v1/Gizmo"), "primaries[1].kind toy/v1/Gizmo" + unserved + "the CRDs serve toy/v1/Cluster, toy/v1/Database and toy/v2/Cluster"},
-		"a built-in kind's case": {kindsHead + entries("v1/Configmap"), "did you mean v1/ConfigMap?"},
-		"a built-in plural":      {kindsHead + entries("apps/v1/deployments"), "did you mean apps/v1/Deployment?"},
-		"a model":                {kindsHead + entries("toy/v1/Database") + "models: [{kind: toy/v1/Gizmo, after: 1s}]\n", "models[0].kind toy/v1/Gizmo" + unserved},
+		"another version":        {kindsHead + entries("toy/v3/Database"), "primaries[1].kind toy/v3/Database" + unserved + crds + "; did you mean toy/v1/Database?"},
+		"an unserved version":    {kindsHead + entries("toy/v1beta1/Database"), "primaries[1].kind toy/v1beta1/Database" + unserved + crds + "; did you mean toy/v1/Database?"},
+		"another group":          {kindsHead + entries("other/v1/Database"), "primaries[1].kind other/v1/Database" + unserved + crds + "; did you mean toy/v1/Database?"},
+		"a plural":               {kindsHead + entries("toy/v1/databases"), crds + "; did you mean toy/v1/Database?"},
+		"a missing CRD":          {kindsHead + entries("toy/v1/Gizmo"), "primaries[1].kind toy/v1/Gizmo" + unserved + crds},
+		"a built-in kind's case": {kindsHead + entries("v1/Configmap"), crds + "; did you mean v1/ConfigMap?"},
+		"a built-in plural":      {kindsHead + entries("apps/v1/deployments"), crds + "; did you mean apps/v1/Deployment?"},
+		"a model":                {kindsHead + entries("toy/v1/Database") + "models: [{kind: toy/v1/Gizmo, after: 1s}]\n", "models[0].kind toy/v1/Gizmo" + unserved + crds},
 		"an owned kind": {kindsHead + "primary: {kind: toy/v1/Cluster, sample: sample.yaml, ready: \"true\", owns: [{kind: v1/Secrets, name: self.metadata.name}]}\n",
-			"primary.owns[0].kind v1/Secrets" + unserved + "did you mean v1/Secret?"},
+			"primary.owns[0].kind v1/Secrets" + unserved + crds + "; did you mean v1/Secret?"},
 		"no CRD": {"launch: {binary: bin/controller}\nprimary: {kind: toy/v1/Cluster, sample: sample.yaml, ready: \"true\"}\n", "primary.kind toy/v1/Cluster" + unserved + "crds holds no CRD"},
+		"no CRD and a built-in kind's case": {"launch: {binary: bin/controller}\nprimary: {kind: v1/Configmap, sample: sample.yaml, ready: \"true\"}\n",
+			"primary.kind v1/Configmap" + unserved + "crds holds no CRD; did you mean v1/ConfigMap?"},
 	} {
-		if _, err := config.Load(writeKinds(t, c.config)); err == nil || !strings.Contains(err.Error(), c.want) {
-			t.Errorf("%s: Load = %v, want an error containing %q", name, err, c.want)
+		if _, err := config.Load(writeKinds(t, c.config)); err == nil || !strings.HasSuffix(err.Error(), c.want) {
+			t.Errorf("%s: Load = %v, want an error that ends %q", name, err, c.want)
 		}
 	}
 }

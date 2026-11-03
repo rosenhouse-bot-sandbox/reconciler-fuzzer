@@ -121,15 +121,22 @@ func TestCheckFaultsRefusesAFaultNothingTakes(t *testing.T) {
 }
 
 func TestCheckFaultsTakesEveryGeneratedFault(t *testing.T) {
-	paths, err := filepath.Glob("../../targets/*/config.yaml")
-	if err != nil {
-		t.Fatal(err)
+	var paths []string
+	for _, root := range []string{"../../targets", "../../examples"} {
+		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err == nil && d.Name() == "config.yaml" {
+				paths = append(paths, path)
+			}
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
-	nested, err := filepath.Glob("../../targets/*/*/config.yaml")
-	if err != nil {
-		t.Fatal(err)
+	if len(paths) == 0 {
+		t.Fatal("found no config.yaml under targets or examples")
 	}
-	for _, path := range append(paths, nested...) {
+	for _, path := range paths {
 		cfg, err := config.Load(path)
 		if err != nil {
 			t.Fatal(err)
