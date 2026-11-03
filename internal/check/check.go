@@ -61,6 +61,8 @@ type Reference struct {
 
 // Primary is one listed kind as the checks judge its CRs.
 type Primary struct {
+	// Key names the entry in the config, as "primary" or "primaries[1]".
+	Key   string
 	Kind  trace.Kind
 	Ready func(cr map[string]any) (bool, error)
 	// Retain says whether Clean and Teardown allow a deleted CR's resources
@@ -82,25 +84,25 @@ func (s Spec) primary(ref trace.Ref) (Primary, bool) {
 	return s.Primaries[i], true
 }
 
-// entryKey names the config entry of kind k, as "primary" or "primaries[1]".
-func (s Spec) entryKey(k trace.Kind) string {
-	if len(s.Primaries) == 1 {
-		return "primary"
-	}
-	return fmt.Sprintf("primaries[%d]", slices.IndexFunc(s.Primaries, func(p Primary) bool { return p.Kind == k }))
-}
-
 // listed reports whether ref names a CR.
 func (s Spec) listed(ref trace.Ref) bool {
 	_, listed := s.primary(ref)
 	return listed
 }
 
-// compilePrimaries compiles each entry's CEL.
+// compilePrimaries compiles each entry's CEL. An entry that names no key
+// is "primary" if it is the only one, and else "primaries[i]".
 func compilePrimaries(entries []trace.Primary) ([]Primary, error) {
 	var compiled []Primary
-	for _, e := range entries {
-		p := Primary{Kind: e.Kind, Periodic: e.Periodic}
+	for i, e := range entries {
+		p := Primary{Key: e.Key, Kind: e.Kind, Periodic: e.Periodic}
+		switch {
+		case p.Key != "":
+		case len(entries) == 1:
+			p.Key = "primary"
+		default:
+			p.Key = fmt.Sprintf("primaries[%d]", i)
+		}
 		name := groupResource(e.Kind)
 		var err error
 		if p.Ready, err = config.CompileReady(e.Ready, e.Schema); err != nil {
@@ -526,14 +528,29 @@ func forbidden(ix *trace.Index) []string {
 }
 
 // createsInTerminating reports whether call e is a create in a namespace
-// that the trace shows being deleted by e's answer. The API server forbids
-// such a create whatever the caller's role.
+// whose deletion started by e's answer. The deletion starts at the first
+// version with a deletionTimestamp, or at the first answer that carried it
+// if that came sooner. The API server forbids such a create whatever the
+// caller's role.
 func createsInTerminating(ix *trace.Index, e trace.Event) bool {
 	if e.Call.Verb != "create" || e.Call.Ref.Namespace == "" {
 		return false
 	}
-	namespace, found := ix.LatestAt(trace.Ref{System: "kube", Resource: "namespaces", Name: e.Call.Ref.Namespace}, e.At)
-	return found && deleting(namespace.Body)
+	ref := trace.Ref{System: "kube", Resource: "namespaces", Name: e.Call.Ref.Namespace}
+	namespace, found := ix.LatestAt(ref, e.At)
+	if !found {
+		return false
+	}
+	versions := ix.Versions(ref, namespace.UID)
+	n := firstDeleting(versions)
+	if n < 0 {
+		return false
+	}
+	start := versions[n].At
+	if answer, answered := ix.WriteCall(ref, versions[n].Version.RV); answered {
+		start = min(start, answer.At)
+	}
+	return start <= e.At
 }
 
 // times says n times, as "1 time" or "2 times".

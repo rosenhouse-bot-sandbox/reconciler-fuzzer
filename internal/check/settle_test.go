@@ -28,7 +28,7 @@ var (
 )
 
 var spec = check.Spec{
-	Primaries: []check.Primary{{Kind: widgets, Ready: func(obj map[string]any) (bool, error) {
+	Primaries: []check.Primary{{Key: "primary", Kind: widgets, Ready: func(obj map[string]any) (bool, error) {
 		status, _ := obj["status"].(map[string]any)
 		ready, isBool := status["ready"].(bool)
 		if !isBool {

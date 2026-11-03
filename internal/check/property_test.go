@@ -307,6 +307,10 @@ func TestAPropertyFindingSaysWhatTurnedItFalse(t *testing.T) {
 			r.Update(ctl, a0, named("a-0", map[string]any{"data": map[string]any{"k": "v"}}))
 		}, "controller updated configmaps ns/a-0"},
 		"a delete": {"size(world.kube.configmaps) == 1", func(r *tt.Script) { r.Delete(trace.GC, a0) }, "gc deleted configmaps ns/a-0"},
+		// The property cannot be evaluated while a-0 has no data.
+		"an update after an error": {"world.kube.configmaps.all(m, m.data.k == 'v')", func(r *tt.Script) {
+			r.Update(ctl, a0, named("a-0", map[string]any{"data": map[string]any{"k": "x"}}))
+		}, "controller updated configmaps ns/a-0"},
 	} {
 		r := newRun(0)
 		r.Spec.Properties = []trace.Property{{Name: "p", Expr: c.expr, When: "step"}}

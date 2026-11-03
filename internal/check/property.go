@@ -58,7 +58,8 @@ func Property(ix *trace.Index, s Spec) []Finding {
 
 // turned says when a property that eval judges false at t last turned
 // false, and which writes the trace recorded then. The world changes only at
-// version events, so it judges the world at each earlier one in turn.
+// version events, so it judges the world at each earlier one in turn, back
+// to one where the property holds or cannot be evaluated.
 func (p *properties) turned(eval func([]any, map[string]map[string][]any) (bool, error), t time.Duration) (string, bool) {
 	defer func(t time.Duration, origins []string) { p.t, p.origins = t, origins }(p.t, p.origins)
 	var times []time.Duration
@@ -71,7 +72,7 @@ func (p *properties) turned(eval func([]any, map[string]map[string][]any) (bool,
 	turn := len(times)
 	for ; turn > 0; turn-- {
 		p.t = times[turn-1]
-		if holds, err := eval(p.world(p.t)); err == nil && holds {
+		if holds, err := eval(p.world(p.t)); err != nil || holds {
 			break
 		}
 	}

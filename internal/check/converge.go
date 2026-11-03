@@ -71,11 +71,14 @@ func neverReady(ix *trace.Index, s Spec, unmets []unmet) []string {
 		ready := false
 		for _, e := range ix.Events() {
 			if v := e.Version; v != nil && v.Ref.OfKind(p.Kind) {
-				last, ready = v, ready || p.ready(decode(v.Body))
+				if ready = p.ready(decode(v.Body)); ready {
+					break
+				}
+				last = v
 			}
 		}
 		if last != nil && !ready {
-			notes = append(notes, fmt.Sprintf("%s.ready held for no CR version; the last of %s %s", s.entryKey(p.Kind), describe(last.Ref), quoteStatus(decode(last.Body))))
+			notes = append(notes, fmt.Sprintf("%s.ready held for no CR version; the last of %s %s", p.Key, describe(last.Ref), quoteStatus(decode(last.Body))))
 		}
 	}
 	return notes

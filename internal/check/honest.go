@@ -139,7 +139,7 @@ func (h *honesty) noDependency(t0 time.Duration, uid string, p Primary, k string
 		if i.Ref.System == "kube" {
 			lacks = "has no ownerReference to it"
 		}
-		h.add(t0, noDependency, k, fmt.Sprintf("%s: %s %s; declare %s.owns or a %s owner", crName(h.w, uid), describe(i.Ref), lacks, h.s.entryKey(p.Kind), i.Ref.System))
+		h.add(t0, noDependency, k, fmt.Sprintf("%s: %s %s; declare %s.owns or a %s owner", crName(h.w, uid), describe(i.Ref), lacks, p.Key, i.Ref.System))
 	}
 }
 

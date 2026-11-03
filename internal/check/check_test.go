@@ -393,6 +393,22 @@ func TestJudgeNotesOnlyTheControllersRealDenials(t *testing.T) {
 	}
 }
 
+// A namespace's deletion starts by the first answer that shows it, though
+// the observer may record it after a create's 403. Only the create before
+// the deletion counts.
+func TestJudgeDatesANamespaceDeletionByItsAnswer(t *testing.T) {
+	b := cleanRun()
+	ns := tt.Ref("namespaces", "", "ns")
+	b.At(1*s).Add(tt.Version(ns, "ns-uid", "8", objectBody("ns", false))).
+		At(1500*ms).Add(call("create", cm, 403, "")).
+		At(2*s).Add(tt.Call(trace.Harness, "delete", ns, 200, "9"), call("create", cm, 403, "")).
+		At(2100 * ms).Add(tt.Version(ns, "ns-uid", "9", objectBody("ns", true)))
+	notes := slices.DeleteFunc(check.Judge(b.Index(), spec).Notes, func(n string) bool { return !strings.HasPrefix(n, "kube: launch.rbac") })
+	if want := []string{"kube: launch.rbac forbids the controller's create on configmaps, 1 time"}; !slices.Equal(notes, want) {
+		t.Fatalf("notes = %q, want %q", notes, want)
+	}
+}
+
 func TestJudgeNotesAStopThatSentSIGKILL(t *testing.T) {
 	const sentSIGKILL = "the controller did not exit within launch.gracePeriod of SIGTERM, so the harness sent SIGKILL."
 	killed := trace.Event{Proc: &trace.Proc{Event: trace.Exit, Exit: "signal: killed", HarnessCaused: true, GracePeriodPassed: true}}

@@ -128,6 +128,8 @@ func (r Reference) ToRef() Ref {
 // Halted are CEL over self, a CR of Kind; Retain and Halted are empty when
 // unset. Owns are its owning-CR rule 3, and Periodic is nil when unset.
 type Primary struct {
+	// Key names the entry in the config, as "primary" or "primaries[1]".
+	Key      string    `json:"key,omitempty"`
 	Kind     Kind      `json:"kind"`
 	Ready    string    `json:"ready"`
 	Retain   string    `json:"retain,omitempty"`

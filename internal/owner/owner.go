@@ -158,7 +158,7 @@ func source(p config.Primary, resource func(schema.GroupVersionKind) (string, bo
 	if err != nil {
 		return trace.Primary{}, err
 	}
-	entry := trace.Primary{Kind: trace.Kind{Group: p.Kind.Group, Version: p.Kind.Version, Kind: p.Kind.Kind, Resource: r},
+	entry := trace.Primary{Key: p.Key, Kind: trace.Kind{Group: p.Kind.Group, Version: p.Kind.Version, Kind: p.Kind.Kind, Resource: r},
 		Ready: p.Ready, Retain: p.Retain, Halted: p.Halted}
 	if p.Periodic != nil {
 		entry.Periodic = &trace.Periodic{Every: p.Periodic.Every, Paths: p.Periodic.Paths}
