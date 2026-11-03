@@ -48,6 +48,9 @@ type Generator struct {
 	// core Namespaces, which changeFixture deletes and createFixture makes
 	// again.
 	referenced []plan.Target
+	// deletable are the kube fixtures of values.deletable, which a plan's
+	// last step may delete.
+	deletable []plan.Target
 	// watchable are the resources the RBAC lets the controller watch,
 	// which holdWatch faults hold.
 	watchable []gvk.GroupResource
@@ -275,6 +278,9 @@ func (g *Generator) readFixtures(cfg *config.Config) ([]plan.Target, error) {
 			target := kubeFixture(document)
 			targets = append(targets, target)
 			g.addResource(gvk.GroupResource{Group: target.Group, Resource: target.Resource})
+			if slices.Contains(cfg.Deletable, path) {
+				g.deletable = append(g.deletable, target)
+			}
 			if len(paths) == 0 {
 				continue
 			}
@@ -475,8 +481,29 @@ func (g *Generator) plan(t *rapid.T) *plan.Plan {
 	for range 2 + uniform(t, 6, "steps") {
 		p.Steps = append(p.Steps, g.step(t, at))
 	}
+	g.deleteFixture(t, at, p)
 	g.upgrade(t, p)
 	return p
+}
+
+// deleteFixture appends, half the time, a last step that deletes a live
+// deletable fixture, then restarts, kills or does neither. Being last, the
+// delete meets no later create or update. These draws come after the steps'
+// draws and before the upgrades', so without upgrades values.deletable only
+// adds this step to a seed's plan.
+func (g *Generator) deleteFixture(t *rapid.T, at state, p *plan.Plan) {
+	live := slices.DeleteFunc(slices.Clone(g.deletable), func(target plan.Target) bool { return at.deleted[target] })
+	if len(live) == 0 || !rapid.Bool().Draw(t, "delete a fixture") {
+		return
+	}
+	step := plan.Step{Actions: []plan.Action{changeFixture(t, at, fixture{target: sampled(t, live, "fixture")})}}
+	if then := sampled(t, []plan.Do{plan.Restart, plan.Kill, ""}, "then"); then != "" {
+		step.Actions = append(step.Actions, plan.Action{Do: then})
+		if then == plan.Kill {
+			step.Period = g.period(t)
+		}
+	}
+	p.Steps = append(p.Steps, step)
 }
 
 // upgrade appends one restart per config upgrade, in order. Each ends a step

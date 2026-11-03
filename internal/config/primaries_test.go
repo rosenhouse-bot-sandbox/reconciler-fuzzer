@@ -97,7 +97,7 @@ func TestReadyOfSeveralPrimariesTakesTheCRsKind(t *testing.T) {
 }
 
 func TestPrimaryIsOneEntryWithTheTopLevelValues(t *testing.T) {
-	values := "values: {overlay: {spec.size: {maximum: 3}}, mutate: [spec.size], fixtures: {fixture.yaml: [data.label]}}\n"
+	values := "values: {overlay: {spec.size: {maximum: 3}}, mutate: [spec.size], fixtures: {fixture.yaml: [data.label]}, deletable: [fixture.yaml]}\n"
 	short, err := config.Load(writeConfig(t, minimal(t)+values))
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +112,7 @@ primaries:
     ready: "true"
     values: {overlay: {spec.size: {maximum: 3}}, mutate: [spec.size]}
 fixtures: [fixture.yaml]
-values: {fixtures: {fixture.yaml: [data.label]}}
+values: {fixtures: {fixture.yaml: [data.label]}, deletable: [fixture.yaml]}
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -127,6 +127,9 @@ values: {fixtures: {fixture.yaml: [data.label]}}
 	for _, c := range []*config.Config{short, long} {
 		if got := c.FixtureValues[c.Fixtures[0]]; !slices.Equal(got, []string{"data.label"}) {
 			t.Errorf("FixtureValues = %v, want fixture.yaml's data.label.", c.FixtureValues)
+		}
+		if !slices.Equal(c.Deletable, c.Fixtures) {
+			t.Errorf("Deletable = %v, want fixture.yaml.", c.Deletable)
 		}
 	}
 }

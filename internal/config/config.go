@@ -38,12 +38,15 @@ type Config struct {
 	// paths changeFixture may set. The file is a fixtures entry or a
 	// system's.
 	FixtureValues map[string][]string
-	Models        []Model
-	Systems       []System
-	Budgets       Budgets
-	Timeouts      Timeouts
-	Properties    []Property
-	References    []Reference
+	// Deletable are the files of Fixtures whose objects generated plans may
+	// delete in their last step.
+	Deletable  []string
+	Models     []Model
+	Systems    []System
+	Budgets    Budgets
+	Timeouts   Timeouts
+	Properties []Property
+	References []Reference
 }
 
 // Values say how the generator draws CRs of one kind. Paths are dotted,
@@ -293,10 +296,12 @@ type declaration struct {
 		Finalizer   *declaredFinalizer  `json:"finalizer"`
 		Dependency  *declaredDependency `json:"dependency"`
 	} `json:"models"`
-	// Values holds primary's overlay, distinct and mutate beside fixtures.
+	// Values holds primary's overlay, distinct and mutate beside fixtures
+	// and deletable.
 	Values struct {
 		declaredValues
-		Fixtures map[string][]string `json:"fixtures"`
+		Fixtures  map[string][]string `json:"fixtures"`
+		Deletable []string            `json:"deletable"`
 	} `json:"values"`
 	Systems []struct {
 		Name    string `json:"name"`
@@ -506,6 +511,13 @@ func load(path string) (*Config, error) {
 			return nil, fmt.Errorf("values.fixtures %s: no fixtures key lists this file", file)
 		}
 		c.FixtureValues[path] = paths
+	}
+	for _, file := range d.Values.Deletable {
+		path := resolve(dir, file)
+		if !slices.Contains(c.Fixtures, path) {
+			return nil, fmt.Errorf("values.deletable %s: the fixtures key does not list this file", file)
+		}
+		c.Deletable = append(c.Deletable, path)
 	}
 	if c.Properties, err = properties(d); err != nil {
 		return nil, err

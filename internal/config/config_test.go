@@ -305,6 +305,7 @@ func TestValues(t *testing.T) {
   mutate: [spec.count]
   fixtures:
     fixture.yaml: [data.label]
+  deletable: [fixture.yaml]
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -315,8 +316,14 @@ func TestValues(t *testing.T) {
 	if got := c.FixtureValues[c.Fixtures[0]]; len(got) != 1 || got[0] != "data.label" {
 		t.Errorf("fixtures = %v", c.FixtureValues)
 	}
+	if !reflect.DeepEqual(c.Deletable, c.Fixtures) {
+		t.Errorf("deletable = %v, want %v", c.Deletable, c.Fixtures)
+	}
 	if _, err := config.Load(writeConfig(t, minimal(t)+"values: {fixtures: {other.yaml: [data.x]}}\n")); err == nil || !strings.Contains(err.Error(), "other.yaml") {
 		t.Errorf("a fixture the config does not list: err = %v", err)
+	}
+	if _, err := config.Load(writeConfig(t, minimal(t)+"values: {deletable: [other.yaml]}\n")); err == nil || !strings.Contains(err.Error(), "values.deletable other.yaml") {
+		t.Errorf("a deletable file the config does not list: err = %v", err)
 	}
 }
 
