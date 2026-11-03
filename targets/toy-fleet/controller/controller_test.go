@@ -790,9 +790,16 @@ func TestASecretGoneBeforeItsReleaseIsDone(t *testing.T) {
 }
 
 func TestOnlyAReleaseListsDatabasesPastTheCache(t *testing.T) {
-	f := newFleet(t, passwordSecret(nil), databaseNaming("another"))
-	f.secrets.APIReader = unserved{f.c, &fleetv1.DatabaseList{}, apierrors.NewInternalError(errors.New("injected"))}
-	f.reconcileOnce(f.secrets, "admin-password")
+	for name, objects := range map[string][]client.Object{
+		"an unheld Secret that no Database names": {passwordSecret(nil), databaseNaming("another")},
+		"a held Secret that a Database names":     {heldSecret(), databaseNaming("admin-password")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFleet(t, objects...)
+			f.secrets.APIReader = unserved{f.c, &fleetv1.DatabaseList{}, apierrors.NewInternalError(errors.New("injected"))}
+			f.reconcileOnce(f.secrets, "admin-password")
+		})
+	}
 }
 
 func TestUserWaitsForItsDatabase(t *testing.T) {
