@@ -40,7 +40,7 @@ type Config struct {
 	FixtureValues map[string][]string
 	// Deletable are the files of Fixtures whose objects generated plans may
 	// delete in their last step. They hold no Namespace and no object of a
-	// references to kind.
+	// reference's to kind.
 	Deletable  []string
 	Models     []Model
 	Systems    []System
@@ -672,8 +672,9 @@ func refuseListedFixtures(declared, paths []string, listed []schema.GroupKind) e
 	return nil
 }
 
-// refuseDeletable refuses a values.deletable file that holds a Namespace,
-// or an object of a references to kind, which plans delete already.
+// refuseDeletable refuses a values.deletable file that holds a Namespace or
+// an object of a reference's to kind. Deleting a Namespace deletes what it
+// holds, and plans delete an object of a to kind already.
 func (c *Config) refuseDeletable(path string) error {
 	headers, err := readFixtureHeaders(path)
 	if err != nil {

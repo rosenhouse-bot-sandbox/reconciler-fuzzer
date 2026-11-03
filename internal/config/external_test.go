@@ -81,7 +81,7 @@ func TestSystemFixtures(t *testing.T) {
 	}
 }
 
-// A plan deletes only kube fixtures.
+// values.deletable takes only kube fixtures.
 func TestValuesDeletableRefusesASystemFixture(t *testing.T) {
 	path := writeConfig(t, minimal(t)+"systems: ["+with("fixtures: [secrets.yaml]")+"]\nvalues: {deletable: [secrets.yaml]}\n")
 	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "secrets.yaml"), []byte("- {resource: secret, name: app/db, body: {}}\n"), 0o644); err != nil {
