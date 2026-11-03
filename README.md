@@ -131,13 +131,20 @@ timeouts: {settle: 30s, stable: 3s}
 - `values` steers generated CRs: `overlay` narrows the CRD schema, `distinct` fields differ
   across a plan's CRs, `mutate` names the fields updates change, and `fixtures` names the
   fixture strings `changeFixture` sets.
+- `values.deletable` lists `fixtures` files whose objects plans may delete. Half the generated
+  plans then end with a step that deletes one such object, and maybe restarts or kills the
+  controller. Converge fails a CR that is not ready after that step. So list a file only if the
+  controller keeps every CR ready while such an object is being deleted and once it is gone.
+  The files may hold no Namespace or CRD. They may hold no object of a kind that a `references`
+  entry names in `to` ([References](#references)), since plans already delete such objects.
 
 ### Several kinds
 
 A controller that serves several CRD kinds lists each under `primaries`. `primary` is shorthand
 for a list of one. An entry takes `primary`'s keys, and its own `overlay`, `distinct` and
-`mutate` under `values`. The top-level `values` then takes only `fixtures`. The toy controller
-in [targets/toy-fleet](targets/toy-fleet/config.yaml) serves Clusters, Databases and Users:
+`mutate` under `values`. The top-level `values` then takes only `fixtures` and `deletable`. The
+toy controller in [targets/toy-fleet](targets/toy-fleet/config.yaml) serves Clusters, Databases
+and Users:
 
 ```yaml
 primaries:

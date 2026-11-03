@@ -84,7 +84,9 @@ A config lists every CRD kind the controller serves, one `primaries` entry each.
 an object that it does not own, such as a Database's Cluster or the Secret that holds its
 password. Declare each field that names another object in `references` (step 4). If the
 controller holds a named object's deletion until the CRs that name it are deleted, as with an
-in-use finalizer, give that entry `onDelete: block`.
+in-use finalizer, give that entry `onDelete: block`. Generated plans delete `fixtures` objects
+of `to` kinds other than Namespace. To let them delete one of another kind, such as a ConfigMap
+that the controller reads by a fixed name, list its file in `values.deletable` (step 4).
 
 ## 3. Choose a directory
 
@@ -155,6 +157,10 @@ Fill each key from the project:
   `{enum: [<sample's value>]}`.
   `distinct` names fields that must differ between CRs, such as a Secret's name. `mutate`
   names the fields updates change. `values.fixtures` names fixture strings to change.
+  `values.deletable` lists `fixtures` files whose objects a plan's last step may delete. List a
+  file only if the controller keeps every CR ready while such an object is being deleted and
+  once it is gone. The files may hold no Namespace, no CRD and no object of a kind that a
+  `references` entry names as `to`.
 - `fixtures`: objects the controller reads and does not create, of kinds the config does not
   list. Drop `metadata.namespace` unless the controller reads the object in another namespace;
   the harness creates that namespace.
@@ -351,10 +357,12 @@ controller:
 | Honest, `reported ready with no dependency` | The CR can be ready without that kind, or does not own it. | Set `required: false` in the first case. In the second, add `owns` or `owner`, or drop `dependency`. |
 | Honest, on an object that a `references` entry names | The CR may be ready while the object is missing or, by `ready`, not ready. | Set the entry's `required: false`, or fix its `ready`. |
 | Honest, `reported ready before seeing its dependency ready`, on a named object whose spec just changed | The default `ready` waits for the object's `observedGeneration`, but the controller checks only its condition or phase. | Set the entry's `ready` to the controller's check. |
+| Converge, clause 1, at a last step that deletes a `values.deletable` fixture, also in a run of the plan without that step's restarts and kills | If the controller marks CRs not ready by design while the fixture is being deleted or once it is gone, the file does not belong in `values.deletable`. | Ask the user whether CRs should stay ready while the fixture is being deleted and once it is gone. If they should not, drop the file from `values.deletable`. Otherwise, report the bug (step 11). |
+| Converge, clause 1, at a last step that deletes a `values.deletable` fixture and restarts or kills the controller, while a few runs of the plan without that restart or kill pass | Nothing: a restart or kill must not change the outcome. | Report the bug (step 11). |
 | Converge, clause 2, on an object that a CR names | The controller holds the object's deletion while a CR names it. | Set the reference's `onDelete: block`. |
 | Ordered | The controller does not hold the named object's deletion by design. | Drop the reference's `onDelete`. |
-| Converge, clause 1, `the controller last saw … ready` | The entry's `ready` accepts an object that the controller treats as not ready. | Fix the entry's `ready`. |
-| Converge, clause 1, `the controller last saw … missing` or `not ready`, on an object that is ready now | Nothing, if the controller does not watch the named kind: it missed the change. | Report the bug (step 11). The controller should watch that kind and requeue the CRs that name the object. |
+| Converge, clause 1, `the controller last saw … ready`, at a step that deletes no `values.deletable` fixture | The entry's `ready` accepts an object that the controller treats as not ready. | Fix the entry's `ready`. |
+| Converge, clause 1, `the controller last saw … missing` or `not ready`, on an object that is ready now, at a step that deletes no `values.deletable` fixture | Nothing, if the controller does not watch the named kind: it missed the change. | Report the bug (step 11). The controller should watch that kind and requeue the CRs that name the object. |
 | Clean or Teardown | The controller keeps resources by design. | Set the entry's `retain`. |
 | Unique | The CR owns several resources of one kind and role by design, such as several with one `generateName`, or several in one collection of a fake. | Set the system's `role`. |
 | Restore, `did not restore damaged resources` | The controller recreates a damaged resource under a new name by design. | Set the system's `role` to CEL that gives both names one role. |

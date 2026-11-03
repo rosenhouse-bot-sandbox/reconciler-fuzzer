@@ -154,6 +154,36 @@ func TestReferencesRefusals(t *testing.T) {
 	}
 }
 
+// values.deletable covers only fixtures that no reference names, since plans
+// delete the others already.
+func TestValuesDeletableRefusesAFixtureOfAToKind(t *testing.T) {
+	path := writeReferences(t, `references: [{from: toy/v1/Database, to: v1/Secret, name: spec.passwordSecretRef.name, ready: "true"}]
+values: {deletable: [fixture.yaml]}
+`)
+	objects := "{apiVersion: v1, kind: ConfigMap, metadata: {name: settings}}\n---\n{apiVersion: v1, kind: Secret, metadata: {name: password}}\n"
+	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "fixture.yaml"), []byte(objects), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err == nil || !strings.Contains(err.Error(), "values.deletable fixture.yaml: plans delete Secret password already, since a reference names its kind") {
+		t.Errorf("err = %v, want one naming values.deletable fixture.yaml and Secret password", err)
+	}
+}
+
+// A fake's collection has no kube kind, not even the empty kind of a
+// comment-only document.
+func TestValuesDeletableTakesAFixtureBesideAReferenceToAFake(t *testing.T) {
+	path := writeReferences(t, `references: [{from: toy/v1/User, to: "cloud:buckets", name: spec.bucket}]
+values: {deletable: [fixture.yaml]}
+`)
+	objects := "# A license header.\n---\n{apiVersion: v1, kind: Secret, metadata: {name: password}}\n"
+	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "fixture.yaml"), []byte(objects), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err != nil {
+		t.Errorf("Load = %v, want no error", err)
+	}
+}
+
 func TestOnDeleteBlockLoads(t *testing.T) {
 	c, err := config.Load(writeReferences(t, "references: [{from: toy/v1/Database, to: toy/v1/Cluster, name: spec.clusterRef, onDelete: block}]\n"))
 	if err != nil {
