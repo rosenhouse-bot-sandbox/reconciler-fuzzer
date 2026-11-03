@@ -3,8 +3,8 @@
 reconciler-fuzzer finds bugs in Kubernetes controllers. It runs your controller on your machine
 against envtest's kube-apiserver and etcd. It follows a plan of steps: CR changes, faults on the
 controller's API requests, restarts, and damage to objects the controller created. It records
-every request and object version in a trace, including requests to fake HTTP services. Then it judges the trace with eight checks: Converge,
-Crash, Clean, Restore, Unique, Honest, Backoff and Finalizers ([DESIGN.md §12](DESIGN.md#12-checks)).
+every request and object version in a trace, including requests to fake HTTP services. Then it judges the trace with nine checks: Converge,
+Crash, Clean, Restore, Unique, Honest, Ordered, Backoff and Finalizers ([DESIGN.md §12](DESIGN.md#12-checks)).
 
 You write no test code. One YAML config describes your controller.
 
@@ -130,19 +130,21 @@ timeouts: {settle: 30s, stable: 3s}
 
 A controller that serves several CRD kinds lists each under `primaries`. `primary` is shorthand
 for a list of one. An entry takes `primary`'s keys, and its own `overlay`, `distinct` and
-`mutate` under `values`:
+`mutate` under `values`. The top-level `values` then takes only `fixtures`. The toy controller
+in [targets/toy-fleet](targets/toy-fleet/config.yaml) serves Clusters, Databases and Users:
 
 ```yaml
 primaries:
-  - kind: example.com/v1/Cluster
+  - kind: toy.reconciler-fuzzer/v1/Cluster
     sample: cluster.yaml
     ready: &ready >-
       has(self.status) && has(self.status.observedGeneration)
       && self.status.observedGeneration == self.metadata.generation
-    values: {mutate: [spec.size]}
-  - {kind: example.com/v1/Database, sample: database.yaml, ready: *ready}
-fixtures: [settings.yaml]
-values: {fixtures: {settings.yaml: [data.theme]}}   # with primaries, only fixtures
+      && has(self.status.phase) && self.status.phase == 'Ready'
+    values: {mutate: [spec.volumes, spec.volumeSize]}
+  - {kind: toy.reconciler-fuzzer/v1/Database, sample: database/database.yaml, ready: *ready}
+  - {kind: toy.reconciler-fuzzer/v1/User, sample: user.yaml, ready: *ready}
+fixtures: [admin-password.yaml]                     # a Secret that a Database names
 ```
 
 - Every check judges the CRs of each listed kind by their own entry, and the settle condition
@@ -162,18 +164,23 @@ values: {fixtures: {settings.yaml: [data.theme]}}   # with primaries, only fixtu
 
 ### References
 
-A `references` entry declares a field by which a CR names an object that it does not own, such as
-the Cluster that a Database runs on or the Secret that holds its password:
+A `references` entry declares a field by which a CR names an object that it does not own. In
+toy-fleet, a Database names the Cluster that it runs on and the Secret that holds its password,
+and a User names a Database:
 
 ```yaml
 references:
-  - {from: example.com/v1/Database, to: example.com/v1/Cluster, name: spec.clusterRef}
-  - from: example.com/v1/Database
+  - from: toy.reconciler-fuzzer/v1/Database
+    to: toy.reconciler-fuzzer/v1/Cluster
+    name: spec.clusterRef
+    onDelete: block                                   # the Cluster's deletion waits for its Databases
+  - from: toy.reconciler-fuzzer/v1/Database
     to: v1/Secret
     name: spec.passwordSecretRef.name
     ready: has(self.data) && has(self.data.password)   # CEL over the Secret
     required: true                                    # the default
     track: 1s
+  - {from: toy.reconciler-fuzzer/v1/User, to: toy.reconciler-fuzzer/v1/Database, name: spec.databaseRef, onDelete: block}
 ```
 
 - `from` is a listed kind. `to` is a kube kind, or a fake's collection written as
@@ -223,9 +230,24 @@ references:
   and `createFixture` makes it again:
   `{"do": "createFixture", "target": {"resource": "secrets", "name": "admin-password"}}`.
 - The step that deletes every CR deletes those of each `from` kind before those of its `to` kind.
+- `onDelete: block` says that the object's deletion waits for the CRs that name it, as
+  `kubernetes.io/pvc-protection` holds a claim that a Pod uses. The controller holds the
+  object, usually with a finalizer that it removes once no CR names the object. A fake's
+  collection cannot take it. Without `onDelete`, a reference sets no deletion order.
+- Under `block`, Ordered fails an object that is deleted while a CR names it: `released an
+  object that another names`. A CR names the object until the CR is gone, even while the CR is
+  being deleted. A CR that moves its reference releases the old object. Ordered counts only a CR
+  that the controller saw naming the object, and an object that it saw, `stable` before the
+  object's deletion started. A controller cannot hold an object that is deleted before it
+  reacts, and only admission control can refuse a CR that names the object later.
+- Under `block`, the settle condition counts a CR that waits in deletion while a live CR names it
+  as settled, from `stable` after its deletion started. One that stays after its last naming CR
+  is gone still fails clause 2. Honest judges a look at an object that waits in deletion by the
+  object's last version before its deletion started.
 
-[targets/toy-fleet](targets/toy-fleet/config.yaml) declares that a Database names a Cluster and a
-Secret, and a User a Database.
+[targets/toy-fleet/secret](targets/toy-fleet/secret/config.yaml) runs toy-fleet with
+`--protect-secrets`, which holds each Secret while a Database names it, and blocks on the Secret
+reference.
 
 ### Other namespaces and cluster scope
 

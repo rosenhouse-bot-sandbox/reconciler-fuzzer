@@ -5,7 +5,7 @@ description: Sets up reconciler-fuzzer for a Kubernetes controller. Writes confi
 # Adopt reconciler-fuzzer
 
 reconciler-fuzzer runs a controller against envtest, follows a plan of CR changes, faults,
-restarts and damage, and judges the trace with eight checks. This skill writes the config for
+restarts and damage, and judges the trace with nine checks. This skill writes the config for
 one controller and runs it until reconciler-fuzzer tests the controller.
 
 Never edit the controller's source without the user's consent.
@@ -82,11 +82,9 @@ plain HTTP to it. If it cannot, tell the user.
 
 A config lists every CRD kind the controller serves, one `primaries` entry each. A CR may name
 an object that it does not own, such as a Database's Cluster or the Secret that holds its
-password. Declare each such field in `references` (step 4). If the controller holds a named
-object's deletion until the CRs that name it are deleted, a generated plan that deletes the
-object fails Converge clause 2. Hunt seeds (step 9) for such a controller with configs that list
-one side alone and make each object it names a fixture. Hand-written plans can use the config
-that lists every kind.
+password. Declare each field that names another object in `references` (step 4). If the
+controller holds a named object's deletion until the CRs that name it are deleted, as with an
+in-use finalizer, give that entry `onDelete: block`.
 
 ## 3. Choose a directory
 
@@ -160,7 +158,7 @@ Fill each key from the project:
 - `fixtures`: objects the controller reads and does not create, of kinds the config does not
   list. Drop `metadata.namespace` unless the controller reads the object in another namespace;
   the harness creates that namespace.
-- `references: [{from, to, name, namespace, ready, required, track}]`: one entry for each field
+- `references: [{from, to, name, namespace, ready, required, track, onDelete}]`: one entry for each field
   by which a CR names an object that it does not own, such as an issuer, a store or a Secret.
   `to` is the named kind, or `<system>:<collection>` for a fake's. Put the `to` kind's CRD in
   `crds` unless Kubernetes serves the kind without one, such as `v1/Secret` or
@@ -172,7 +170,8 @@ Fill each key from the project:
   `metadata.generation`, as an entry's should; when the controller checks only the object's
   condition or phase, write `ready` without that comparison. `required: false` allows a CR to be
   ready while the object is missing. Set `track` when the controller should notice the object
-  turning not ready.
+  turning not ready. Set `onDelete: block` when the controller holds the object's deletion while
+  a CR names it. A fake's collection cannot take it.
 - An entry's `owns`, and `systems`: a child without an ownerReference to its CR, such as one in
   another namespace, or a cluster-scoped child of a namespaced CR, needs one. Otherwise Clean
   judges it only by the CRs alive at its creation that the controller did not create.
@@ -351,6 +350,8 @@ controller:
 | Honest, `reported ready with no dependency` | The CR can be ready without that kind, or does not own it. | Set `required: false` in the first case. In the second, add `owns` or `owner`, or drop `dependency`. |
 | Honest, on an object that a `references` entry names | The CR may be ready while the object is missing or, by `ready`, not ready. | Set the entry's `required: false`, or fix its `ready`. |
 | Honest, `reported ready before seeing its dependency ready`, on a named object whose spec just changed | The default `ready` waits for the object's `observedGeneration`, but the controller checks only its condition or phase. | Set the entry's `ready` to the controller's check. |
+| Converge, clause 2, on an object that a CR names | The controller holds the object's deletion while a CR names it. | Set the reference's `onDelete: block`. |
+| Ordered | The controller does not hold the named object's deletion by design. | Drop the reference's `onDelete`. |
 | Converge, clause 1, `the controller last saw … ready` | The entry's `ready` accepts an object that the controller treats as not ready. | Fix the entry's `ready`. |
 | Converge, clause 1, `the controller last saw … missing` or `not ready`, on an object that is ready now | Nothing, if the controller does not watch the named kind: it missed the change. | Report the bug (step 11). The controller should watch that kind and requeue the CRs that name the object. |
 | Clean | The controller keeps resources by design. | Set the entry's `retain`. |

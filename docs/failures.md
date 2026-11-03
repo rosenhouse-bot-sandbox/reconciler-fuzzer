@@ -123,6 +123,12 @@ Look at the clause first:
 `did not stay settled (clause k)` means the condition held once, then
 failed again within `stable`.
 
+Clauses 1 and 2 skip a CR that waits in deletion while a live CR names it
+under `onDelete: block`, from `stable` after its deletion started. Until
+then, clause 2's line says `got its deletionTimestamp at <t>, less than
+stable ago`. If the controller holds a named CR's deletion by design, and
+clause 2 names that CR, set the reference's `onDelete: block`.
+
 Clause 1 skips a CR that a reference holds back, if the named object as it
 is now would hold the CR back too, or that a reference leaves unknown. It
 does so once `stable`, and the time the step's faults lasted, at most
@@ -249,6 +255,25 @@ kind:
   ready, naming the object, for `track` after the look at the time the
   line gives, not counting time in which the controller stalled, and each
   later look by then held it back.
+
+Under `onDelete: block`, Honest judges a look at an object that waits in
+deletion by the object's last version before its deletion started.
+
+### Ordered: released an object that another names
+
+An object that a `references` entry with `onDelete: block` names was
+deleted while a CR named it. Each line names the object and the CR, by its
+slot or else by its kind and name:
+
+```
+secrets rf-1b0b8a35/admin-password: slot a names it
+```
+
+The controller saw both `stable` before the object's deletion started, so
+it had time to hold the object. Check that it adds its finalizer to each
+object that a CR names. Before it removes the finalizer, it should list the
+CRs live, since its cache can miss a new one. If the controller does not
+hold such objects by design, drop the entry's `onDelete`.
 
 ### Backoff: retried a failing request in a tight loop
 

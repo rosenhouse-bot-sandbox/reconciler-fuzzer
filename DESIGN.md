@@ -452,11 +452,10 @@ timeouts: {settle: 30s, stable: 3s, backoffCap: 60s}    # defaults
 `distinct` and `mutate` sit in the top-level `values`. An entry also takes
 `retain` and `halted`. No kind appears twice among `primaries` and `models`,
 and no kube fixture is a CR. A model's stage is `readyCondition`.
-`dependency.required` defaults to true, and `stuckStatus` to `status`. A fake's
-name matches `[a-z][a-z0-9-]*`. A `command[0]` with a slash resolves against
-the file's directory. `vault` needs a `token`. `access: read` says the
-controller only reads the fake. `values.fixtures` may name a system's fixtures
-file, whose entries' body paths `changeFixture` sets.
+`dependency.required` defaults to true, and `stuckStatus` to `status`. `vault`
+needs a `token`. `access: read` says the controller only reads the fake.
+`values.fixtures` may name a system's fixtures file, whose entries' body paths
+`changeFixture` sets.
 
 A reference's `to` is a kube kind or `<system>:<collection>`, and its `ready`
 defaults to that of a listed kind, a model or a fake. `name` and `namespace` are
@@ -467,6 +466,9 @@ CRD's schema must describe each path as a string. A `name` that an `owns` entry
 of the `from` entry reads is refused, since the CR owns that object. Under
 `onDelete: block`, the `to` object's deletion waits for its `from` CRs, as
 `kubernetes.io/pvc-protection` does. `references.go` holds the other refusals.
+In toy-fleet's `config.yaml`, a Database names a Cluster (`spec.clusterRef`,
+`onDelete: block`) and a Secret (`spec.passwordSecretRef.name`), and a User a
+Database (`spec.databaseRef`, `onDelete: block`).
 
 ## 14. Generation, replay and shrinking
 
@@ -481,12 +483,11 @@ entry 20), holds a kind it lets the controller watch, with the traffic
 `holdTraffic` documents, or is a model fault (§7). `restartMidDelete` adds a
 restart or kill mid-delete to model-fault steps that delete and have room. A
 kube `damage` deletes an object of an unlisted kind `launch.rbac` lets the
-controller create. Faults favor the listed kinds. Faults and `damage` favor the
-kinds the CRs own: kube `owns` kinds and model kinds with a `dependency`.
-Without owned kinds, the core kinds the controller may create stand in. With
-fakes, half of the fault draws name a fake. So do half of the `damage` draws, or
-all when no unlisted kind is creatable. A read-only fake takes no damage and
-only read faults. `generate.go` documents the weights, bursts and fault periods.
+controller create. Faults favor the listed kinds, and faults and `damage` the
+kinds the CRs own. With fakes, half of the fault draws name a fake. So do half
+of the `damage` draws, or all when no unlisted kind is creatable. A read-only
+fake takes no damage and only read faults. `generate.go` documents the weights,
+bursts and fault periods.
 
 A create, or an update that draws a `mutate` path at or above a reference's
 `name`, writes a **candidate** at the `name` under each parent the drawn value
@@ -528,8 +529,7 @@ owns one bucket in the `crudfake` system `cloud`; its bugs start at B30, and
 `halted/` runs `--halt` under `primary.halted`. In `targets/toy-fleet`, a
 Cluster owns modelled third-party Volumes, a Database names a Cluster and maybe
 a Secret, and a User a Database. Its bugs start at B100. `config.yaml` lists all
-three kinds and their references, and blocks a Cluster's deletion on its
-Databases and a Database's on its Users. The generated test fuzzes `cluster/`,
+three kinds and their references (§13). The generated test fuzzes `cluster/`,
 which lists Clusters alone, `database/`, which lists Databases on a fixture
 Cluster, `protect/`, whose Volume model holds each Volume's deletion with its
 finalizer, and `upgrade/`, `cluster/` with an upgrade to `--version=2`. Only
