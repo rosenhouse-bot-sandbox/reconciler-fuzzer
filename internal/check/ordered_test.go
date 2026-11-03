@@ -73,6 +73,107 @@ func TestOrderedFailsAReleaseWhileASeenCRNamesIt(t *testing.T) {
 			before(seeBoth(r))
 			r.Delete(ctl, pw)
 			requireFinding(t, ordered(t, r), "Ordered", 0, released, "kube/secrets", "secrets ns/pw: slot b names it")
+			ix := r.Index()
+			spec, err := check.SpecFor(nil, ix)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.ContainsFunc(check.Judge(ix, spec).Findings, func(f check.Finding) bool { return f.Check == "Ordered" }) {
+				t.Error("Judge gives no Ordered finding.")
+			}
+		})
+	}
+}
+
+// The controller can hold the object once it saw both the object and the CR
+// that names it.
+func TestOrderedFailsAReleaseStableAfterTheLaterSight(t *testing.T) {
+	for name, order := range map[string][]trace.Ref{"of the object": {databaseB, pw}, "of the CR": {pw, databaseB}} {
+		t.Run(name, func(t *testing.T) {
+			r := secretRun(blockRef(), secret(true))
+			r.See(ctl, order[0]).See(ctl, order[1]).Tick(r.Spec.Stable-tt.Tick).Delete(ctl, pw)
+			requireFinding(t, ordered(t, r), "Ordered", 0, released, "kube/secrets", "secrets ns/pw: slot b names it")
+		})
+	}
+}
+
+// A controller cannot hold an object while it is down.
+func TestOrderedDoesNotCountTimeTheControllerIsDown(t *testing.T) {
+	for name, late := range map[string]time.Duration{"before it was up for stable": -tt.Tick, "once it was": 0} {
+		t.Run(name, func(t *testing.T) {
+			r := secretRun(blockRef(), secret(true))
+			sight := r.See(ctl, pw).See(ctl, databaseB).Now - tt.Tick
+			exit := r.Tick(500 * ms).Now
+			r.Add(tt.Exit("exit status 2", false, "panic: nil map"))
+			start := r.Tick(2 * s).Now
+			r.Add(tt.Start(2))
+			findings := ordered(t, r.Tick(sight+r.Spec.Stable+start-exit+late-r.Now).Delete(trace.Harness, pw))
+			if late < 0 {
+				requireNone(t, findings)
+				return
+			}
+			requireFinding(t, findings, "Ordered", 0, released, "kube/secrets", "secrets ns/pw: slot b names it")
+		})
+	}
+}
+
+// secretsFail is a step's fault that fails the controller's requests on
+// Secrets.
+const secretsFail = "error(500) on resource=secrets"
+
+// A fault failed the controller's update of the Secret, so it retries after
+// a backoff that the step's allowance bounds. A sight once the faults ended,
+// or stable before they began, gives it only stable.
+func TestOrderedGivesAControllerInRetryBackoffTheStepsAllowance(t *testing.T) {
+	// faults runs the step's faults from now for 500ms, failing the
+	// controller's update of the Secret if fail is set, and returns when the
+	// step's settle excuse starts.
+	faults := func(r *tt.Script, fail bool) time.Duration {
+		r.Add(tt.Fault(r.Step, 0, false, secretsFail))
+		if fail {
+			r.Add(injected("update", pw, 500, "error(500)"))
+		}
+		r.Tick(500 * ms).Add(tt.Fault(r.Step, 0, true, secretsFail))
+		return endFaults(r, 2*s)
+	}
+	for name, c := range map[string]struct {
+		// release runs the step and returns when the Secret's release comes.
+		release func(r *tt.Script) time.Duration
+		finding bool
+	}{
+		"before the excuse starts": {func(r *tt.Script) time.Duration {
+			return faults(r.See(ctl, pw).See(ctl, databaseB), true) - tt.Tick
+		}, false},
+		"as the excuse starts": {func(r *tt.Script) time.Duration {
+			return faults(r.See(ctl, pw).See(ctl, databaseB), true)
+		}, true},
+		"stable after a sight once the faults ended": {func(r *tt.Script) time.Duration {
+			faults(r.See(ctl, pw).See(ctl, databaseB), true)
+			return r.See(ctl, pw).See(ctl, databaseB).Now - tt.Tick + r.Spec.Stable
+		}, true},
+		"stable after a sight, in faults that altered no request": {func(r *tt.Script) time.Duration {
+			sight := r.See(ctl, pw).See(ctl, databaseB).Now - tt.Tick
+			faults(r, false)
+			return sight + r.Spec.Stable
+		}, true},
+		"in faults that began as stable passed": {func(r *tt.Script) time.Duration {
+			r.See(ctl, pw).See(ctl, databaseB).Tick(r.Spec.Stable - tt.Tick)
+			return faults(r, true) - tt.Tick
+		}, false},
+		"in faults that began once stable passed": {func(r *tt.Script) time.Duration {
+			r.See(ctl, pw).See(ctl, databaseB).Tick(r.Spec.Stable)
+			return faults(r, true) - tt.Tick
+		}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := secretRun(blockRef(), secret(true))
+			release := c.release(r)
+			findings := judgeWith(t, r.Tick(release-r.Now).Delete(trace.Harness, pw).Settle(), check.Ordered)
+			if !c.finding {
+				requireNone(t, findings)
+				return
+			}
+			requireFinding(t, findings, "Ordered", 0, released, "kube/secrets", "secrets ns/pw: slot b names it")
 		})
 	}
 }
@@ -391,7 +492,7 @@ func TestACRWaitingInDeletionSettlesStableAfterItsDeletionStarted(t *testing.T) 
 				if stop {
 					r.Stop(r.UID(clusterA))
 				}
-				want := []string{fmt.Sprintf("clusters.toy ns/a got its deletionTimestamp at %v, less than stable ago", start)}
+				want := []string{fmt.Sprintf("clusters.toy ns/a waits in deletion, which counts as settled only from %v", start+r.Spec.Stable)}
 				if unmet := settledAt(t, r, start+r.Spec.Stable-tt.Tick); !slices.Equal(unmet, want) {
 					t.Errorf("Just before stable: unmet = %q, want %q.", unmet, want)
 				}
@@ -400,6 +501,34 @@ func TestACRWaitingInDeletionSettlesStableAfterItsDeletionStarted(t *testing.T) 
 				}
 			})
 		}
+	}
+}
+
+// clustersStatusFail is a step's fault that fails the controller's writes of
+// Cluster status.
+const clustersStatusFail = "error(500) on group=toy.reconciler-fuzzer resource=clusters subresource=status"
+
+// A fault failed the controller's write of the Cluster as it started to wait,
+// so it writes the Cluster again after a backoff, which clause 7 must see.
+func TestACRWaitingInDeletionSettlesOnceTheStepsExcuseStarts(t *testing.T) {
+	r := fleetRun(1, clusters, databases)
+	r.Spec.References = []trace.Reference{clusterRef(r, true)}
+	r.Begin()
+	r.CreateCR("a", clusterA)
+	r.Ready(clusterA)
+	r.Create(trace.Harness, databaseB, databaseOn(true, "a"))
+	r.Act("create", "b", &databaseB)
+	r.Add(tt.Fault(r.Step, 0, false, clustersStatusFail))
+	r.Update(trace.Harness, clusterA, tt.Deleting(tt.CR("a", true))).Act("delete", "a", &clusterA)
+	r.Add(onStatus(injected("update", clusterA, 500, "error(500)")))
+	r.Tick(r.Spec.Stable).Add(tt.Fault(r.Step, 0, true, clustersStatusFail))
+	excuse := endFaults(r, 2*s)
+	want := []string{fmt.Sprintf("clusters.toy ns/a waits in deletion, which counts as settled only from %v", excuse)}
+	if unmet := settledAt(t, r, excuse-tt.Tick); !slices.Equal(unmet, want) {
+		t.Errorf("Just before the excuse: unmet = %q, want %q.", unmet, want)
+	}
+	if unmet := settledAt(t, r, excuse); len(unmet) != 0 {
+		t.Errorf("At the excuse: unmet = %q, want none.", unmet)
 	}
 }
 
@@ -456,14 +585,16 @@ func TestAStepThatEndsBeforeItsCRInUseWaitedStableDidNotSettleByClause2(t *testi
 	r.Now = deadline
 	r.Add(tt.Phase(r.Step, trace.TimedOut))
 	findings, _ := convergeOf(t, r)
-	requireFinding(t, findings, "Converge", 1, "did not settle (clause 2)", "kube/toy/clusters", "less than stable ago")
+	requireFinding(t, findings, "Converge", 1, "did not settle (clause 2)", "kube/toy/clusters", "waits in deletion, which counts as settled only from")
 }
 
-func TestHonestJudgesAnObjectWaitingInDeletionByItsVersionBefore(t *testing.T) {
-	for name, c := range map[string]struct{ block, wasReady, finding bool }{
-		"under block, once ready":   {true, true, false},
-		"under block, never ready":  {true, false, true},
-		"without block, once ready": {false, true, true},
+func TestHonestJudgesAnObjectWaitingInDeletionByItsLookOrItsVersionBefore(t *testing.T) {
+	for name, c := range map[string]struct{ block, wasReady, readyInDeletion, finding bool }{
+		"under block, once ready":               {true, true, false, false},
+		"under block, never ready":              {true, false, false, true},
+		"without block, once ready":             {false, true, false, true},
+		"under block, ready only in deletion":   {true, false, true, false},
+		"without block, ready only in deletion": {false, false, true, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := fleetRun(1, clusters, databases)
@@ -476,7 +607,7 @@ func TestHonestJudgesAnObjectWaitingInDeletionByItsVersionBefore(t *testing.T) {
 			r.Create(trace.Harness, databaseB, databaseOn(false, "a"))
 			r.Act("create", "b", &databaseB)
 			// The look shows the second of two versions that wait in deletion.
-			r.Update(ctl, clusterA, tt.Deleting(tt.CR("a", false))).Update(ctl, clusterA, tt.Deleting(tt.CR("a", false))).See(ctl, clusterA)
+			r.Update(ctl, clusterA, tt.Deleting(tt.CR("a", false))).Update(ctl, clusterA, tt.Deleting(tt.CR("a", c.readyInDeletion))).See(ctl, clusterA)
 			r.Update(ctl, databaseB, databaseOn(true, "a"))
 			findings := honest(t, r)
 			if !c.finding {
@@ -485,6 +616,21 @@ func TestHonestJudgesAnObjectWaitingInDeletionByItsVersionBefore(t *testing.T) {
 			}
 			requireFinding(t, findings, "Honest", 0, beforeSeeing, "kube/toy/clusters", "slot b: clusters.toy ns/a seen not ready")
 		})
+	}
+}
+
+// Converge counts the same look ready, so it waits for the CR that names
+// the object.
+func TestSettleWaitsForACRWhileWhatItNamesWaitsInDeletionReady(t *testing.T) {
+	r := fleetRun(1, clusters, databases)
+	r.Spec.References = []trace.Reference{clusterRef(r, true)}
+	r.Begin()
+	r.CreateCR("a", clusterA)
+	r.Create(trace.Harness, databaseB, databaseOn(false, "a"))
+	r.Act("create", "b", &databaseB)
+	r.Update(ctl, clusterA, tt.Deleting(tt.CR("a", true))).See(ctl, clusterA).EndFaults()
+	if unmet := settledAt(t, r, r.Now+5*s); !waitsForB(unmet) {
+		t.Errorf("unmet = %q, want the Database not ready.", unmet)
 	}
 }
 

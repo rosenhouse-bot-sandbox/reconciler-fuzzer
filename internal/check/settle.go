@@ -59,8 +59,8 @@ func unmetClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 	return append(unmets, quietClauses(ix, t, s, max(1, crs))...)
 }
 
-// unfinalized holds the CRs of live being deleted at t that the stop waited
-// for to clause 2.
+// unfinalized judges by deletionClauses each CR of live that is being
+// deleted at t and that the stop waited for.
 func unfinalized(ix *trace.Index, live []trace.Version, t time.Duration, s Spec, inUse func(trace.Ref) bool) []unmet {
 	var unmets []unmet
 	for _, cr := range live {
@@ -171,10 +171,9 @@ func looksAt(c trace.Call, ref trace.Ref) bool {
 	return (succeeded(c) || c.Status == 404) && !c.Unknown() && c.Ref.Covers(ref)
 }
 
-// crClauses says whether cr, a CR of p's kind, is done at t, and not being
-// deleted: ready, halted, or held back by a reference. A CR in use waits in
-// deletion, and is done from stable after the deletion started, so that
-// clause 7 sees the controller's reaction.
+// crClauses holds cr, a CR of p's kind, to clauses 1 and 2 at t. A CR being
+// deleted meets them only as deletionClauses says. Any other must be ready,
+// halted, or held back by a reference.
 func crClauses(ix *trace.Index, p Primary, cr trace.Version, t time.Duration, s Spec, inUse func(trace.Ref) bool) []unmet {
 	name, k := describe(cr.Ref), kind(cr.Ref)
 	var body map[string]any
@@ -192,15 +191,19 @@ func crClauses(ix *trace.Index, p Primary, cr trace.Version, t time.Duration, s 
 	return nil
 }
 
-// deletionClauses holds cr, being deleted at t, to clause 2, unless a CR
-// that names it has held its deletion for stable since the deletion started.
+// deletionClauses holds cr, being deleted at t, to clause 2. It excuses a CR
+// that inUse says a CR names, from stable after its deletion started but not
+// before the latest step's excuseStart, so that clause 7 sees the controller
+// react to the deletion, even from retry backoff.
 func deletionClauses(ix *trace.Index, cr trace.Version, t time.Duration, s Spec, inUse func(trace.Ref) bool) []unmet {
 	name, k := describe(cr.Ref), kind(cr.Ref)
 	if !inUse(cr.Ref) {
 		return []unmet{{2, k, name + " is being deleted"}}
 	}
-	if start, _ := deletionStart(ix.Versions(cr.Ref, cr.UID)); t < start+s.Stable {
-		return []unmet{{2, k, fmt.Sprintf("%s got its deletionTimestamp at %v, less than stable ago", name, start)}}
+	start, _ := deletionStart(ix.Versions(cr.Ref, cr.UID))
+	step, _ := latestStep(ix, t)
+	if from := max(start+s.Stable, s.excuseStart(step)); t < from {
+		return []unmet{{2, k, fmt.Sprintf("%s waits in deletion, which counts as settled only from %v", name, from)}}
 	}
 	return nil
 }

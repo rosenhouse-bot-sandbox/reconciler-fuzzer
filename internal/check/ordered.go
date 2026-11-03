@@ -28,15 +28,20 @@ func Ordered(ix *trace.Index, s Spec) []Finding {
 			claims[i.UID] = s.claims(w.Versions(i))
 		}
 	}
-	steps := ix.Steps()
+	steps, faulted := ix.Steps(), faultStalls(ix)
+	all := stalls(ix, faulted)
 	details, at := map[int]map[string][]string{}, map[int]time.Duration{}
 	for _, object := range w.All() {
 		r, found := releaseOf(w, object)
-		if seens := ix.Seen(trace.Controller, object.UID); !found || len(seens) == 0 || seens[0].At > r.start-s.Stable {
+		if !found {
+			continue
+		}
+		inTime := func(e trace.Event) bool { return s.holdDue(e.At, steps, faulted, all) <= r.start }
+		if !slices.ContainsFunc(ix.Seen(trace.Controller, object.UID), inTime) {
 			continue
 		}
 		for _, cr := range crs {
-			if !kept(ix.Seen(trace.Controller, cr.UID), claims[cr.UID], object.Ref, r, r.start-s.Stable) || breaksCycle(crs, claims, r.rv, object.Ref, cr.Ref) {
+			if !kept(ix.Seen(trace.Controller, cr.UID), claims[cr.UID], object.Ref, r, inTime) || breaksCycle(crs, claims, r.rv, object.Ref, cr.Ref) {
 				continue
 			}
 			step := stepAt(steps, r.at)
@@ -53,6 +58,21 @@ func Ordered(ix *trace.Index, s Spec) []Finding {
 		findings = append(findings, byKind("Ordered", step, at[step], released, details[step])...)
 	}
 	return findings
+}
+
+// holdDue is when a controller that saw an object, or a CR that names it,
+// at sight must hold the object: stable later, stalls aside, or once the
+// excuse of a step whose faults stalled it by then starts, since it may wait
+// in retry backoff until then. faulted holds the steps' stalls, and all
+// every stall.
+func (s Spec) holdDue(sight time.Duration, steps []trace.StepSpan, faulted map[int]stall, all []stall) time.Duration {
+	due := until(sight, s.Stable, all)
+	for _, step := range steps {
+		if f, found := faulted[step.Step]; found && f.end > sight && f.start <= due {
+			due = max(due, s.excuseStart(step))
+		}
+	}
+	return due
 }
 
 // A release is an instance's deleted version, at at with resourceVersion
@@ -105,11 +125,11 @@ func (s Spec) claims(versions []trace.Event) []claim {
 }
 
 // kept reports whether a CR, whose versions make claims in order, kept
-// object until r: by bound, one of seens, the controller's seens of the CR,
-// showed a version that names object, and each later version before r names
-// it too. If the controller saw a version before r that the observer missed,
-// the trace may lack a move off object, and kept reports false.
-func kept(seens []trace.Event, claims []claim, object trace.Ref, r release, bound time.Duration) bool {
+// object until r: one of seens, the controller's seens of the CR, that is in
+// time showed a version that names object, and each later version before r
+// names it too. If the controller saw a version before r that the observer
+// missed, the trace may lack a move off object, and kept reports false.
+func kept(seens []trace.Event, claims []claim, object trace.Ref, r release, inTime func(trace.Event) bool) bool {
 	if slices.ContainsFunc(seens, func(e trace.Event) bool {
 		rv := revision(e.Seen.RV)
 		return rv < r.rv && !slices.ContainsFunc(claims, func(c claim) bool { return c.rv == rv })
@@ -122,7 +142,7 @@ func kept(seens []trace.Event, claims []claim, object trace.Ref, r release, boun
 			break
 		}
 		held = slices.Contains(c.objects, object) && (held || slices.ContainsFunc(seens, func(e trace.Event) bool {
-			return e.At <= bound && revision(e.Seen.RV) == c.rv
+			return revision(e.Seen.RV) == c.rv && inTime(e)
 		}))
 	}
 	return held

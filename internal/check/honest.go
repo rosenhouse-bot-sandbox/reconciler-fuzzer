@@ -29,7 +29,7 @@ func Honest(ix *trace.Index, s Spec) []Finding {
 		return nil
 	}
 	h := &honesty{ix: ix, s: s, w: owner.New(ix, s.Owners), steps: ix.Steps(), deletes: controllerDeletes(ix), found: map[findingKey]*Finding{}}
-	h.stalls = stalls(ix)
+	h.stalls = stalls(ix, faultStalls(ix))
 	order, crs := crVersions(ix, s)
 	for _, uid := range order {
 		versions := crs[uid]
@@ -149,11 +149,13 @@ func (h *honesty) sight(n named, t time.Duration) sight {
 }
 
 // shown is what look, one of the controller's looks at n, showed. Under
-// block, a version that waits in deletion shows as the last version before
-// its deletion started, which the controller may still use (DESIGN.md §12).
+// block, a version that waits in deletion and is not ready shows as the last
+// version before its deletion started, which the controller may still use
+// (DESIGN.md §12).
 func (h *honesty) shown(n named, look trace.Event) state {
-	if !h.s.References[n.ref].Block || look.Seen == nil || look.Seen.Deleted {
-		return h.s.shown(h.ix, n, look)
+	st := h.s.shown(h.ix, n, look)
+	if !h.s.References[n.ref].Block || st.missing || st.ready {
+		return st
 	}
 	v, _ := h.ix.VersionOf(look.Seen.Ref, look.Seen.RV)
 	return h.s.showing(n, decode(beforeDeletion(h.ix, v).Body))
@@ -239,10 +241,10 @@ func unconfirmed(c trace.Call) bool { return !succeeded(c) || c.Unknown() }
 // A stall is a time in which the controller cannot act on what it saw.
 type stall struct{ start, end time.Duration }
 
-// stalls returns the run's stalls, merged and in order of start. A step's
-// fault events stall the controller from the first until the last, if a
-// fault altered one of its requests. An exit stalls it until the next start.
-func stalls(ix *trace.Index) []stall {
+// faultStalls are the steps' stalls, by step. A step's fault events stall
+// the controller from the first until the last, if a fault altered one of
+// its requests.
+func faultStalls(ix *trace.Index) map[int]stall {
 	byStep := map[int]stall{}
 	for _, e := range ix.Events() {
 		if f := e.Fault; f != nil && f.Model == "" && f.Hold == nil {
@@ -254,12 +256,14 @@ func stalls(ix *trace.Index) []stall {
 			byStep[f.Step] = s
 		}
 	}
-	var all []stall
-	for _, s := range byStep {
-		if altered(ix, s) {
-			all = append(all, s)
-		}
-	}
+	maps.DeleteFunc(byStep, func(_ int, s stall) bool { return !altered(ix, s) })
+	return byStep
+}
+
+// stalls returns the run's stalls, merged and in order of start: faulted,
+// the steps' stalls, and each time from an exit until the next start.
+func stalls(ix *trace.Index, faulted map[int]stall) []stall {
+	all := slices.Collect(maps.Values(faulted))
 	procs := ix.Procs()
 	for i := 1; i < len(procs); i++ {
 		if procs[i-1].Proc.Event == trace.Exit {
