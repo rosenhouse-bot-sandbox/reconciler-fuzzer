@@ -30,7 +30,10 @@ defines each one. Follow these steps in order.
    steps (§17, entry 15): `newView` in `clean.go` gives them, and the groups
    of DESIGN.md §11. A check of behaviour, like Honest and Backoff, judges
    every event, fault periods included. It gives a finding the step of
-   `stepAt` at the finding's time.
+   `stepAt` at the finding's time. Name the check in the README's list and
+   table of checks, in `Judge`'s order, and give it a `### <Name>` section
+   in `docs/failures.md`. `TestReadmeNamesEveryCheck` and
+   `TestFailuresHasASectionForEveryCheck` fail until you do.
 
 4. **Guard against false positives.** For each false positive a real
    target showed, add `internal/check/testdata/corpus/<name>.jsonl` and a

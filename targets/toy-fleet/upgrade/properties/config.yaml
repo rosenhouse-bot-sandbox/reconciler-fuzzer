@@ -1,6 +1,6 @@
-# This is cluster/config.yaml with a property that every Volume's Cluster
-# lives until the Volume is being deleted. Paths resolve against this file's
-# directory.
+# This is cluster/config.yaml with another property in place of its own:
+# every Volume's Cluster lives until the Volume is being deleted. Paths
+# resolve against this file's directory.
 launch:
   binary: ../../../../bin/toy-fleet
   args:

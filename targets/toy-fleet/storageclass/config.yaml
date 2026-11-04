@@ -1,7 +1,7 @@
-# This is cluster/config.yaml with --storage-classes, which gives each
-# Cluster a StorageClass. gc resolves no ownerReference of a cluster-scoped
-# object to a namespaced Cluster, so an owns entry names it. Paths resolve
-# against this file's directory.
+# This is cluster/config.yaml without its properties and with
+# --storage-classes, which gives each Cluster a StorageClass. gc resolves no
+# ownerReference of a cluster-scoped object to a namespaced Cluster, so an
+# owns entry names it. Paths resolve against this file's directory.
 launch:
   binary: ../../../bin/toy-fleet
   args:

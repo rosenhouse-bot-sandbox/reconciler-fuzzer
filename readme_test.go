@@ -1,12 +1,129 @@
 package reconcilerfuzzer_test
 
 import (
+	"cmp"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"regexp"
 	"slices"
 	"strings"
 	"testing"
+
+	"sigs.k8s.io/yaml"
+
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
 )
+
+func TestReadmeNamesEveryCheck(t *testing.T) {
+	readme, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := judgeChecks(t)
+	_, body, _ := strings.Cut(string(readme), "\n\n")
+	firstParagraph, _, _ := strings.Cut(body, "\n\n")
+	var listed []string
+	if m := checkList.FindStringSubmatch(spaced(firstParagraph)); m != nil {
+		listed = strings.Split(strings.Replace(m[1], " and ", ", ", 1), ", ")
+	}
+	if !slices.Equal(listed, want) {
+		t.Errorf("The README's first paragraph lists the checks %q, want those that check.Judge runs, in order: %q.", listed, want)
+	}
+	if tabled := firstColumn(string(readme), "| Check | It fails when |"); !slices.Equal(tabled, want) {
+		t.Errorf("The README's table of checks has rows %q, want one for each check that check.Judge runs, in order: %q.", tabled, want)
+	}
+}
+
+var checkList = regexp.MustCompile(`judges the trace with these checks: (\w+(?:, \w+)* and \w+)`)
+
+// firstColumn reads the first cell of each row of the table under header.
+func firstColumn(doc, header string) []string {
+	_, table, found := strings.Cut(doc, header+"\n| --- | --- |\n")
+	if !found {
+		return nil
+	}
+	table, _, _ = strings.Cut(table, "\n\n")
+	var cells []string
+	for row := range strings.SplitSeq(table, "\n") {
+		cell, _, _ := strings.Cut(strings.TrimPrefix(row, "| "), " |")
+		cells = append(cells, cell)
+	}
+	return cells
+}
+
+// judgeChecks names the checks that check.Judge calls, in order.
+func judgeChecks(t *testing.T) []string {
+	file, err := parser.ParseFile(token.NewFileSet(), "internal/check/check.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var checks []string
+	for _, decl := range file.Decls {
+		if judge, ok := decl.(*ast.FuncDecl); ok && judge.Name.Name == "Judge" {
+			ast.Inspect(judge.Body, func(n ast.Node) bool {
+				if call, ok := n.(*ast.CallExpr); ok {
+					if check, ok := call.Fun.(*ast.Ident); ok && check.IsExported() {
+						checks = append(checks, check.Name)
+					}
+				}
+				return true
+			})
+		}
+	}
+	if len(checks) == 0 {
+		t.Fatal("internal/check/check.go has no Judge that calls a check.")
+	}
+	return checks
+}
+
+// The README quotes the properties of these toy-fleet configs, which tests
+// run.
+func TestReadmeQuotesToyFleetProperties(t *testing.T) {
+	readme, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	quoted := map[string]config.Property{}
+	for _, block := range yamlBlock.FindAllStringSubmatch(string(readme), -1) {
+		var doc struct{ Properties []config.Property }
+		if yaml.Unmarshal([]byte(block[1]), &doc) == nil {
+			for _, p := range doc.Properties {
+				quoted[p.Name] = p
+			}
+		}
+	}
+	for _, path := range []string{"targets/toy-fleet/cluster/config.yaml", "targets/toy-fleet/order/config.yaml"} {
+		c, err := config.Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(c.Properties) == 0 {
+			t.Errorf("%s has no properties.", path)
+		}
+		for _, p := range c.Properties {
+			q, found := quoted[p.Name]
+			if !found {
+				t.Errorf("The README quotes no property %s of %s.", p.Name, path)
+				continue
+			}
+			q.When = cmp.Or(q.When, config.StepEnd)
+			q.Expr, p.Expr = spaced(q.Expr), spaced(p.Expr)
+			if q != p {
+				t.Errorf("The README quotes %s's property %s as %+v, want %+v.", path, p.Name, q, p)
+			}
+		}
+	}
+}
+
+// spaced joins the words of s with single spaces. Markdown prose and CEL
+// outside string literals mean the same either way.
+func spaced(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
+var yamlBlock = regexp.MustCompile("(?s)```yaml\n(.*?)```")
 
 func TestReadmeCommandsAndPathsExist(t *testing.T) {
 	readme, err := os.ReadFile("README.md")

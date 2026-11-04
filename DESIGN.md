@@ -397,7 +397,7 @@ held kind's 409s and no-op writes pass during the hold and `stable / 4` after.
 
 **Finalizers.** A controller `update` or `patch` of an object, or of a built-in
 kind's `status`, fails when its answer drops a finalizer that a model or the gc
-added (entry 85): `removed another caller's finalizer`.
+owns (entry 85): `removed another caller's finalizer`.
 
 **Property.** A `step` property is judged at each settled step's end, and an
 `always` one at each `version` event. Its CEL sees `crs`, the live CRs' bodies,

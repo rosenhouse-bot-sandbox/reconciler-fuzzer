@@ -5,8 +5,8 @@ description: Sets up reconciler-fuzzer for a Kubernetes controller. Writes confi
 # Adopt reconciler-fuzzer
 
 reconciler-fuzzer runs a controller against envtest, follows a plan of CR changes, faults,
-restarts and damage, and judges the trace with ten checks. This skill writes the config for
-one controller and runs it until reconciler-fuzzer tests the controller.
+restarts and damage, and judges the trace. This skill writes the config for one controller and
+runs it until reconciler-fuzzer tests the controller.
 
 Never edit the controller's source without the user's consent.
 
@@ -271,8 +271,10 @@ systems:
 
 - `properties: [{name, expr, when}]` holds CEL that must hold at each settled step's end, or at
   every version with `when: always`. It sees `crs` and `world.<system>.<key>`, such as
-  `world.kube.secrets`. Write one when the user names an invariant the checks cannot know, such
-  as "the Secret holds Vault's current value". Ask the user before adding one. A property needs
+  `world.kube.secrets`, or `world.kube['volumes.storage.thirdparty']` outside the core group.
+  Write one when the user names an invariant the checks cannot know, such as "the Secret holds
+  Vault's current value". Ask the user before adding one. Guard with `has()` each field that the
+  controller may not have written yet, such as `status`. A property needs
   no `'k' in world.<system>` guard for a kind that always has a key. An installed CRD always
   has one, as does each listed kind and each kind that `models` or a fixture names. A kind that
   a `launch.rbac` rule names without `*`, other than Events and Leases, has one if the server
@@ -347,11 +349,13 @@ KUBEBUILDER_ASSETS=<path> reconciler-fuzzer run --config config.yaml --plan plan
 `<module>/docs/failures.md` lists the usual ones. `controller.log` in `--out` holds the
 controller's output. Fix the config or the sample.
 
-**Exit 1**: read `report.md` in `--out`. First decide whether the config misdescribes the
-controller:
+**Exit 1**: read `report.md` in `--out`, and each finding's section in
+`<module>/docs/failures.md`. First decide whether the config misdescribes the controller:
 
 | Finding | What the config got wrong | Fix |
 | --- | --- | --- |
+| Crash, `Before step 0`, or at or after a step whose actions name `restart (upgrade)` | The controller may lack what it needs to start: a free port, a certificate, an env var, a CRD or a permission. A restart's `args`, from the plan or `launch.upgrades`, replace `launch.args` for every later start, so they may lack a flag it needs, such as `--kubeconfig=${systems.kube.kubeconfig}`. | If the output tail in the details names such a need, fix `launch`, `crds`, or the restart's `args` or `crds`. If the restart's `args` lack a flag that the controller needs, add it. Otherwise report the bug (step 11). |
+| Converge, clause 4 | A restart's `args`, from the plan or `launch.upgrades`, replace `launch.args`. They may lack the `--kubeconfig=${systems.kube.kubeconfig}` that a controller needs if it does not read `KUBECONFIG`. `launch.rbac` may also forbid the controller's requests. | Add the flag to those `args`. Add the rules that a `launch.rbac forbids` note names. Otherwise report the bug (step 11). |
 | Converge, with a line `whose status nothing models` | Another controller sets that kind's status. | Add the `models:` entry it suggests. |
 | Converge, clause 1, with a note that `ready` held for no CR version | `ready` may read a field or value that the controller never writes. | Compare the status that the note quotes with `ready`. Fix `ready` if it misreads the status. Otherwise report the bug (step 11). |
 | Converge, clause 7, on CR writes each refresh period | The controller refreshes on a timer. | Set the entry's `periodic`, and raise `budgets.reads` if each refresh reads more than twice. |
@@ -371,6 +375,7 @@ controller:
 | Converge or Restore, with a CR that halted after a create of unknown outcome | The controller stops on purpose and waits for a person. | Set the entry's `halted` to CEL over its halted condition. |
 | Converge after an upgrade, with a note that `launch.rbac` forbids a request | `launch.rbac` lacks a rule the new version needs. | Add the rule to `launch.rbac`. |
 | Restore after an upgrade, on a resource the new version adds, deletes, renames or gives another owner, or on a field the new CRDs default | Nothing: `<module>/README.md` lists this limit under Upgrading. | Ask the user whether the change is intended. If so, report the finding as that limit, not as a bug. |
+| Property, `could not be evaluated`, with `no such key` | The property reads a field that an object lacks, such as `status` before the controller writes it, or an `omitempty` field at its zero value. Or it reads a `world.<system>` key that the run lacks. | Guard a field with `has()`, and a `world.<system>` key with `'<key>' in world.<system>`. |
 
 Every other finding is a bug in the controller. Never hide one to make a check pass, and ask
 the user when in doubt. On a finding, stop and report it (step 11).
