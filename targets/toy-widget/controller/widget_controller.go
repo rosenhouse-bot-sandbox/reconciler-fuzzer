@@ -140,11 +140,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, r.cleanUp(ctx, widget)
 	}
 
-	// Patches throughout, so a cached Widget that predates the last write cannot conflict.
 	if !controllerutil.ContainsFinalizer(widget, Finalizer) {
-		base := widget.DeepCopy()
-		controllerutil.AddFinalizer(widget, Finalizer)
-		if err := r.Patch(ctx, widget, client.MergeFrom(base)); err != nil {
+		if err := addFinalizer(ctx, r.Client, widget, Finalizer); err != nil {
 			return ctrl.Result{}, fmt.Errorf("adding the finalizer: %w", err)
 		}
 	}
@@ -481,10 +478,8 @@ func (r *Reconciler) releaseWidget(ctx context.Context, widget *toyv1.Widget) er
 	if !controllerutil.ContainsFinalizer(widget, Finalizer) {
 		return nil
 	}
-	base := widget.DeepCopy()
-	controllerutil.RemoveFinalizer(widget, Finalizer)
 	// NotFound: an earlier reconcile already released the Widget.
-	if err := r.Patch(ctx, widget, client.MergeFrom(base)); client.IgnoreNotFound(err) != nil {
+	if err := removeFinalizer(ctx, r.Client, widget, Finalizer); client.IgnoreNotFound(err) != nil {
 		return fmt.Errorf("removing the finalizer: %w", err)
 	}
 	return nil
