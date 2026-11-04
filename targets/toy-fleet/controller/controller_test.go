@@ -591,6 +591,44 @@ func TestB132MakesASecondSetOfVolumesAfterARestart(t *testing.T) {
 	}
 }
 
+// The cache can miss a Volume that a scale-up just made, while a scale-down
+// follows. A later reconcile deletes that Volume, under B132 too.
+func TestAScaleDownDeletesAVolumeTheCacheMissed(t *testing.T) {
+	for _, bug := range []Bug{0, B132} {
+		f := newBuggyFleet(t, bug, clusterObj())
+		scale := func(volumes int32) {
+			c := f.cluster()
+			c.Spec.Volumes = volumes
+			if err := f.c.Update(t.Context(), c); err != nil {
+				t.Fatal(err)
+			}
+		}
+		f.settle(f.clusters, "cluster")
+		var cached []string
+		for _, v := range f.listVolumes() {
+			cached = append(cached, v.Name)
+		}
+		scale(3)
+		f.reconcileOnce(f.clusters, "cluster")
+		scale(1)
+		f.clusters.Client = interceptor.NewClient(f.c, interceptor.Funcs{
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				err := c.List(ctx, list, opts...)
+				if volumes, ok := list.(*storagev1.VolumeList); ok {
+					volumes.Items = slices.DeleteFunc(volumes.Items, func(v storagev1.Volume) bool { return !slices.Contains(cached, v.Name) })
+				}
+				return err
+			},
+		})
+		f.reconcileOnce(f.clusters, "cluster")
+		f.clusters.Client = f.c
+		f.settle(f.clusters, "cluster")
+		if got := f.volumes(); len(cached) != 2 || len(got) != 1 || got[0] != cached[0]+" small" {
+			t.Errorf("B%d: the cache held Volumes %q. After a change to 3 Volumes, then to 1 while the cache missed the third, the Volumes are %q, want only the first.", bug, cached, got)
+		}
+	}
+}
+
 // After one failed Volume create, B133 gives up on the Cluster for good. B0
 // returns the error and tries again.
 func TestB133GivesUpForGoodAfterAFailedVolumeCreate(t *testing.T) {

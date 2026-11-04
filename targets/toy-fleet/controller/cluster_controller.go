@@ -204,10 +204,11 @@ func (r *ClusterReconciler) syncVolumes(ctx context.Context, cluster *fleetv1.Cl
 			if err := r.deleteVolume(ctx, v); err != nil {
 				return 0, err
 			}
+			if r.Bug == B132 {
+				// B132 forgets the name of each Volume it deletes.
+				r.generated[cluster.UID] = slices.DeleteFunc(r.generated[cluster.UID], func(name string) bool { return name == v.Name })
+			}
 		}
-	}
-	if names := r.generated[cluster.UID]; len(names) > int(cluster.Spec.Volumes) {
-		r.generated[cluster.UID] = names[:cluster.Spec.Volumes] // B132 forgets the Volumes it deleted.
 	}
 	return ready, nil
 }
