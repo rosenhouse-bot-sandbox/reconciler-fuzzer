@@ -427,12 +427,12 @@ func (f Finding) Signature() string {
 }
 
 // Report holds the findings and the notes on what the trace could not
-// decide. FailedActions holds the notes of failed actions, which Notes
-// starts with.
+// decide. EndedPlan holds the notes of the actions whose error skipped the
+// plan's later steps.
 type Report struct {
-	Findings      []Finding
-	Notes         []string
-	FailedActions []string
+	Findings  []Finding
+	Notes     []string
+	EndedPlan []string
 }
 
 // Judge runs every check.
@@ -448,9 +448,9 @@ func Judge(ix *trace.Index, s Spec) Report {
 	findings = append(findings, Backoff(ix, s)...)
 	findings = append(findings, Finalizers(ix, s)...)
 	findings = append(findings, Property(ix, s)...)
-	failed := actionErrors(ix)
+	failed, ended := actionErrors(ix)
 	notes = slices.Concat(failed, killedStops(ix), unpicked(ix, s), notes, unmapped(ix), forbidden(ix), failedRoles(ix, s))
-	return Report{Findings: findings, Notes: notes, FailedActions: failed}
+	return Report{Findings: findings, Notes: notes, EndedPlan: ended}
 }
 
 // failedRoles notes each kind whose role CEL failed on every resource the
@@ -663,16 +663,23 @@ func held(ix *trace.Index, f trace.Fault, from, to time.Duration) bool {
 	})
 }
 
-func actionErrors(ix *trace.Index) []string {
-	var notes []string
+// actionErrors notes each failed action, and returns the notes of those
+// that ended the plan as well.
+func actionErrors(ix *trace.Index) (notes, ended []string) {
 	for _, step := range ix.Steps() {
 		for _, e := range ix.Actions(step.Step) {
-			if a := e.Action; a.Error != "" {
-				notes = append(notes, fmt.Sprintf("%s, action %d (%s) failed at %v: %s", stepName(ix, a.Step), a.Index, a.Do, e.At, a.Error))
+			a := e.Action
+			if a.Error == "" {
+				continue
+			}
+			note := fmt.Sprintf("%s, action %d (%s) failed at %v: %s", stepName(ix, a.Step), a.Index, a.Do, e.At, a.Error)
+			notes = append(notes, note)
+			if a.EndedPlan {
+				ended = append(ended, note)
 			}
 		}
 	}
-	return notes
+	return notes, ended
 }
 
 // killedStops notes each stop of the controller that SIGKILL ended once

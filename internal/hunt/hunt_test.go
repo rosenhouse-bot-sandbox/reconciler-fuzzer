@@ -26,12 +26,12 @@ var (
 )
 
 // fakeRun records each run's directory, relative to out, and returns the
-// findings that finds gives for it, and the failed actions that fails gives,
-// if set. log holds the hunt's log.
+// findings that finds gives for it, and the notes of actions that ended the
+// plan that ends gives, if set. log holds the hunt's log.
 type fakeRun struct {
 	out   string
 	finds func(dir string, p *plan.Plan) []check.Finding
-	fails func(dir string) []string
+	ends  func(dir string) []string
 	mu    sync.Mutex
 	dirs  []string
 	log   strings.Builder
@@ -49,8 +49,8 @@ func (f *fakeRun) run(_ context.Context, p *plan.Plan, out string) (check.Report
 		return check.Report{}, err
 	}
 	r := check.Report{Findings: f.finds(dir, p)}
-	if f.fails != nil {
-		r.FailedActions = f.fails(dir)
+	if f.ends != nil {
+		r.EndedPlan = f.ends(dir)
 	}
 	return r, os.WriteFile(filepath.Join(out, "trace.jsonl"), nil, 0o644)
 }
@@ -561,7 +561,7 @@ func TestHuntRemovesAStaleSummaryWhenItFailsBeforeItsFirstSeed(t *testing.T) {
 
 const stillTaken = "Step 4, action 0 (createFixture) failed at 39.7s: the name of secrets ns/pw is still taken after the createFixture waited 12s"
 
-func failsOn(seed string, notes ...string) func(string) []string {
+func endsOn(seed string, notes ...string) func(string) []string {
 	return func(dir string) []string {
 		if dir == seed {
 			return notes
@@ -570,8 +570,8 @@ func failsOn(seed string, notes ...string) func(string) []string {
 	}
 }
 
-func TestHuntKeepsAndListsASeedWithAFailedAction(t *testing.T) {
-	fake := &fakeRun{out: t.TempDir(), finds: always(), fails: failsOn("seed-2", stillTaken, "second line\nmore")}
+func TestHuntKeepsAndListsASeedWhosePlanAFailedActionEnded(t *testing.T) {
+	fake := &fakeRun{out: t.TempDir(), finds: always(), ends: endsOn("seed-2", stillTaken, "second line\nmore")}
 	if _, err := Hunt(context.Background(), Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1, 2}), Out: fake.out, Run: fake.run, Log: &fake.log,
 		Replays: DefaultReplays, Candidates: DefaultCandidates}); err != nil {
 		t.Fatal(err)
@@ -581,17 +581,17 @@ func TestHuntKeepsAndListsASeedWithAFailedAction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "No findings over 2 seeds.\n\nRuns with a failed action, whose later steps may not have run:\n\n- seed 2: " + stillTaken + "\n- seed 2: second line\n"
+	want := "No findings over 2 seeds.\n\nPlans that a failed action ended early:\n\n- seed 2: " + stillTaken + "\n- seed 2: second line\n"
 	if string(summary) != want {
 		t.Errorf("summary.md is %q, want %q.", summary, want)
 	}
-	if want := "seed 2: 0 new findings, 2 failed actions\n"; !strings.Contains(fake.log.String(), want) {
+	if want := "seed 2: 0 new findings, and a failed action ended its plan early\n"; !strings.Contains(fake.log.String(), want) {
 		t.Errorf("The log lacks %q:\n%s", want, fake.log.String())
 	}
 }
 
-func TestHuntListsOnlyTheFailedActionsOfTheRunOfTheSeedsPlan(t *testing.T) {
-	fake := &fakeRun{out: t.TempDir(), finds: always(clean), fails: func(dir string) []string {
+func TestHuntListsOnlyTheEndedPlanOfTheRunOfTheSeedsPlan(t *testing.T) {
+	fake := &fakeRun{out: t.TempDir(), finds: always(clean), ends: func(dir string) []string {
 		if dir == "seed-1" {
 			return nil
 		}
@@ -605,18 +605,18 @@ func TestHuntListsOnlyTheFailedActionsOfTheRunOfTheSeedsPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(summary), "failed action") {
-		t.Errorf("summary.md lists a replay's or candidate's failed action:\n%s", summary)
+	if strings.Contains(string(summary), "ended early") {
+		t.Errorf("summary.md lists the plan of a replay or candidate:\n%s", summary)
 	}
 }
 
-func TestShrinkPlanListsAFailedActionOfItsPlan(t *testing.T) {
+func TestShrinkPlanSaysWhenAFailedActionEndedItsPlan(t *testing.T) {
 	out := t.TempDir()
 	path := filepath.Join(t.TempDir(), "plan.json")
 	if err := plan.Save(path, parsePlan(t, `{"steps":[{"actions":[`+create+`]}]}`)); err != nil {
 		t.Fatal(err)
 	}
-	fake := &fakeRun{out: out, finds: always(clean), fails: failsOn(".", stillTaken)}
+	fake := &fakeRun{out: out, finds: always(clean), ends: endsOn(".", stillTaken)}
 	if _, err := ShrinkPlan(context.Background(), ShrinkOptions{ConfigPath: toyConfig, PlanPath: path, Out: out, Run: fake.run}); err != nil {
 		t.Fatal(err)
 	}
@@ -625,6 +625,21 @@ func TestShrinkPlanListsAFailedActionOfItsPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	if want := "- plan: " + stillTaken + "\n"; !strings.Contains(string(summary), want) {
+		t.Errorf("summary.md lacks %q:\n%s", want, summary)
+	}
+}
+
+func TestACancelKeepsTheEndedPlansInTheSummary(t *testing.T) {
+	fake := &fakeRun{out: t.TempDir(), finds: always(), ends: endsOn("seed-1", stillTaken)}
+	ctx, run := cancelAt(t, fake, "seed-2")
+	if _, err := Hunt(ctx, Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1, 2}), Out: fake.out, Run: run}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Hunt = %v, want the cancel", err)
+	}
+	summary, err := os.ReadFile(filepath.Join(fake.out, "summary.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "- seed 1: " + stillTaken + "\n"; !strings.Contains(string(summary), want) {
 		t.Errorf("summary.md lacks %q:\n%s", want, summary)
 	}
 }

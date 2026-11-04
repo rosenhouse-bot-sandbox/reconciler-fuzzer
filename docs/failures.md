@@ -17,22 +17,22 @@ define the clauses and checks.
 | `harness.log` | client-go's errors from the harness's watches, such as a failed watch of a CRD the plan deleted. |
 | `kubeconfig` | The envtest API server's kubeconfig. The server is gone after the run. |
 
-`hunt --out <out>` writes one `seed-<n>` directory per seed that found
-something new, whose run failed, or whose run had a failed action, and
-`summary.md`. Each seed directory
+`hunt --out <out>` removes `summary.md`, then writes one `seed-<n>`
+directory per seed that found something new, whose run failed, or whose
+plan a failed action ended early, and `summary.md`. Each seed directory
 holds a run's files, `replay-<i>` runs, and `shrunk.json`, or
 `shrunk-<f>.json` for finding f past the first. A shrink that keeps no
 candidate saves the plan unchanged. `shrink-<f>-<c>-<r>` is run r of
 candidate c in the shrink of finding f, and stays only when it gave the
 finding. `summary.md` has one row per distinct finding: seed, check,
 summary, replays that reproduced it, and the shrunk plan. It also lists
-seeds whose run failed, and each failed action of a seed's run. A failed
-action may skip the plan's later steps. `hunt` rewrites it while it runs, and a cell says
-`pending` until its replays or shrink end. When an interrupt cuts a
-finding's replays or shrink short, or a harness error cuts its shrink
-short, its row says `(cut short)`. The row names the smallest failing plan
-so far, if the hunt saved one. Run `shrink` on that plan, or on the seed's
-`plan.json`, to finish.
+seeds whose run failed, and each plan that a failed action ended early,
+such as a create into a name still taken. `hunt` rewrites it while it
+runs, and a cell says `pending` until its replays or shrink end. When an
+interrupt cuts a finding's replays or shrink short, or a harness error
+cuts its shrink short, its row says `(cut short)`. The row names the
+smallest failing plan so far, if the hunt saved one. Run `shrink` on that
+plan, or on the seed's `plan.json`, to finish.
 
 ## report.md
 
