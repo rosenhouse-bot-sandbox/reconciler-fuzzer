@@ -524,11 +524,11 @@ and watch in the named group. The `run` event of `trace.jsonl` lists these kinds
 fake collection that an entry's `owns` names also maps to an empty list. Any other kind or
 collection has a key only if the trace holds an object of it.
 
-Write a property for a bug that no check can see. No check fails a CR that drops out of ready
-and back with no cause, since a controller may drop ready without a spec change by design, as
-after a failed health probe or an expired credential. No check fails a controller that raises
+Write a property for a bug that no check can see. No check fails a controller that raises
 `observedGeneration` for a spec it ignored, since Honest cannot know which spec field maps to
-which dependency. For toy-fleet's Clusters, as in
+which dependency. No check fails a CR that drops out of ready and back with no cause, since a
+controller may drop ready without a spec change by design, as after a failed health probe or an
+expired credential. For toy-fleet's Clusters, as in
 [cluster/config.yaml](targets/toy-fleet/cluster/config.yaml), the first property below fails a
 Ready Cluster whose Volumes do not match its spec. The second fails a Cluster whose status says
 Provisioning and counts every Volume ready:
@@ -538,8 +538,8 @@ properties:
   - name: volumes-match-spec
     expr: >-
       crs.all(c, !has(c.status) || !has(c.status.phase) || c.status.phase != 'Ready'
-        || world.kube['volumes.storage.thirdparty'].filter(v,
-             v.metadata.labels['fleet.toy/cluster'] == c.metadata.name
+        || world.kube['volumes.storage.thirdparty'].filter(v, has(v.metadata.ownerReferences)
+             && v.metadata.ownerReferences.exists(o, o.uid == c.metadata.uid)
              && v.spec.size == c.spec.volumeSize).size() == c.spec.volumes)
   - name: provisioning-means-volumes-not-ready
     when: always
@@ -724,24 +724,25 @@ findings, and a negative control, where one exists, must fail.
 
 Each finding's heading names its check:
 
-| Check | It fails |
+| Check | It fails when |
 | --- | --- |
-| Converge | A step that does not settle by its deadline, or does not stay settled. |
-| Crash | A controller exit that the harness did not cause. |
-| Clean | A resource that the controller made for a CR and that outlives the CR. |
-| Restore | A step that changes no CR or fixture, after which the controller's resources differ from the previous step's end, as when a damaged one stays gone. |
-| Unique | Two live controller resources with one owner, kind, namespace and role. |
-| Honest | A CR reported ready before the controller saw its dependencies and named objects ready, or kept ready after it saw one not ready. |
-| Ordered | An object that a CR names under `onDelete: block`, gone while the CR names it. |
-| Teardown | A CR released while one of its resources that the garbage collector does not delete is not yet being deleted. |
-| Backoff | A failing request, or a write that changes nothing, repeated with gaps under 100 ms. |
-| Finalizers | A controller write that drops a finalizer that a model added. |
-| Property | A [property](#properties) that does not hold, or could not be evaluated. |
+| Converge | A step does not settle by its deadline, or does not stay settled. |
+| Crash | The controller exits, and the harness did not cause the exit. |
+| Clean | A resource that the controller made for a CR outlives the CR. |
+| Restore | After a step that changes no CR or fixture, the controller's resources differ from the previous step's end, as when a damaged one stays gone. |
+| Unique | Two live controller resources share an owner, kind, namespace and role. |
+| Honest | The controller reports a CR ready before it sees the CR's dependencies and named objects ready, or keeps it ready after it sees one not ready. |
+| Ordered | An object that a CR names under `onDelete: block` is gone while the CR names it. |
+| Teardown | The controller releases a CR while one of the CR's resources that the garbage collector does not delete is not yet being deleted. |
+| Backoff | The controller repeats a failing request, or a write that changes nothing, with gaps under 100 ms. |
+| Finalizers | A controller write drops a finalizer that a model added. |
+| Property | A [property](#properties) does not hold, or cannot be evaluated. |
 
 [docs/failures.md](docs/failures.md) explains each finding and what to change when a run exits 2.
-[DESIGN.md §12](DESIGN.md#12-checks) defines the checks. The `--out` directory holds `report.md`, the `plan.json` that ran, `trace.jsonl`,
-`controller.log` and `harness.log`, where client-go logs the errors of the harness's watches.
-`judge` rejudges a stored trace, and `shrink` shrinks a failing plan to `shrunk.json`:
+[DESIGN.md §12](DESIGN.md#12-checks) defines the checks. The `--out` directory holds `report.md`,
+the `plan.json` that ran, `trace.jsonl`, `controller.log` and `harness.log`, where client-go logs
+the errors of the harness's watches. `judge` rejudges a stored trace, and `shrink` shrinks a
+failing plan to `shrunk.json`:
 
 ```sh
 reconciler-fuzzer judge --trace reconciler-fuzzer-out/b3

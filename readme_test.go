@@ -24,7 +24,7 @@ func TestReadmeNamesEveryCheck(t *testing.T) {
 	if !slices.Equal(listed, want) {
 		t.Errorf("The README's first paragraph lists the checks %q, want those that check.Judge runs, in order: %q.", listed, want)
 	}
-	if tabled := firstColumn(string(readme), "| Check | It fails |"); !slices.Equal(tabled, want) {
+	if tabled := firstColumn(string(readme), "| Check | It fails when |"); !slices.Equal(tabled, want) {
 		t.Errorf("The README's table of checks has rows %q, want one for each check that check.Judge runs, in order: %q.", tabled, want)
 	}
 }

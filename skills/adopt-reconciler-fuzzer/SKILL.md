@@ -354,8 +354,8 @@ controller's output. Fix the config or the sample.
 
 | Finding | What the config got wrong | Fix |
 | --- | --- | --- |
-| Crash, `Before step 0` | `launch` or `crds` may lack a flag, env var, CRD or permission that the controller needs to start. | Fix what the output tail in the details names. If it names nothing the config lacks, report the bug (step 11). |
-| Converge, clause 4 | The controller's requests may not reach the harness, as when it does not read `KUBECONFIG`, or `launch.rbac` may forbid them. | Pass `--kubeconfig=${systems.kube.kubeconfig}` in `args`, and in each restart's `args`, which replace `launch.args`. Add the rules that a `launch.rbac forbids` note names. Otherwise report the bug (step 11). |
+| Crash, `Before step 0` | The controller may lack what it needs to start: a free port, a certificate, an env var, a CRD or a permission. | If the output tail in the details names such a need, fix `launch` or `crds`. Otherwise report the bug (step 11). |
+| Converge, clause 4 | A restart's `args`, from the plan or `launch.upgrades`, replace `launch.args`. They may lack the `--kubeconfig=${systems.kube.kubeconfig}` that a controller needs if it does not read `KUBECONFIG`. `launch.rbac` may also forbid the controller's requests. | Add the flag to those `args`. Add the rules that a `launch.rbac forbids` note names. Otherwise report the bug (step 11). |
 | Converge, with a line `whose status nothing models` | Another controller sets that kind's status. | Add the `models:` entry it suggests. |
 | Converge, clause 1, with a note that `ready` held for no CR version | `ready` may read a field or value that the controller never writes. | Compare the status that the note quotes with `ready`. Fix `ready` if it misreads the status. Otherwise report the bug (step 11). |
 | Converge, clause 7, on CR writes each refresh period | The controller refreshes on a timer. | Set the entry's `periodic`, and raise `budgets.reads` if each refresh reads more than twice. |
