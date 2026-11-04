@@ -88,9 +88,7 @@ func (r *GrantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, r.cleanUp(ctx, grant)
 	}
 	if !controllerutil.ContainsFinalizer(grant, GrantFinalizer) {
-		base := grant.DeepCopy()
-		controllerutil.AddFinalizer(grant, GrantFinalizer)
-		if err := r.Patch(ctx, grant, client.MergeFrom(base)); err != nil {
+		if err := addFinalizer(ctx, r.Client, grant, GrantFinalizer); err != nil {
 			return ctrl.Result{}, fmt.Errorf("adding the finalizer: %w", err)
 		}
 	}
@@ -158,9 +156,7 @@ func (r *GrantReconciler) cleanUp(ctx context.Context, grant *toyv1.Grant) error
 	if !controllerutil.ContainsFinalizer(grant, GrantFinalizer) {
 		return nil
 	}
-	base := grant.DeepCopy()
-	controllerutil.RemoveFinalizer(grant, GrantFinalizer)
-	if err := r.Patch(ctx, grant, client.MergeFrom(base)); client.IgnoreNotFound(err) != nil {
+	if err := removeFinalizer(ctx, r.Client, grant, GrantFinalizer); client.IgnoreNotFound(err) != nil {
 		return fmt.Errorf("removing the finalizer: %w", err)
 	}
 	return nil
