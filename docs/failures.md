@@ -164,7 +164,7 @@ Look at the clause first:
 | 1 | A CR is not `ready`. | The status that the line quotes, and `ready` in the config. |
 | 2 | A CR is still being deleted. | The finalizers that the line names. The controller should remove its own once its cleanup is done. |
 | 3 | The controller is down, or restarted within `stable`. | `controller.log`, and any Crash finding. |
-| 4 | The controller made no successful request since it started. | Its startup in `controller.log`, and its RBAC. |
+| 4 | The controller made no successful request since it started. | Its startup in `controller.log`, and its RBAC. A controller that does not read `KUBECONFIG` needs `--kubeconfig=${systems.kube.kubeconfig}` in `args`, and in a restart's `args`, which replace `launch.args`. |
 | 5 | The controller did not look at an object a `damage`, `changeFixture` or `createFixture` changed. | Its watches and the kinds it reads. |
 | 6 | A model, such as `gc`, has work pending. | What the model waits on. Churn under clause 7 often keeps it busy. A stage model's `finalizer:` holds each deletion for `finalizer.after`, so lower it, or raise `timeouts.settle`. |
 | 7 | The controller kept changing objects, or went over the `budgets`. | The first changed write the detail names: it shows what the controller fights over. |
@@ -223,7 +223,9 @@ exceeds the cap fails there. Raise the cap if that backoff is intended.
 
 The controller exited without the harness stopping it. The summary counts
 the exits in the step. The details hold the first exit status and the tail
-of its output, often a panic.
+of its output, often a panic. `Before step 0` means the controller exited
+during startup. If the tail names a flag, env var, CRD or permission that it
+lacks, fix `launch` or `crds`. Otherwise the controller has a bug.
 
 ### Clean: left resources behind
 
@@ -402,6 +404,28 @@ the whole list, so it drops a finalizer added after your read. Write with
 `Update`, or patch with
 `client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})`.
 
+### Property
+
+A [property](../README.md#properties) failed at a settled step's end, or
+with `when: always` at a recorded version. A property gives at most one
+finding per step.
+
+- `property <name> does not hold`: the CEL was false. The details quote it
+  and say when it turned false and which writes the trace recorded then. A
+  write names its caller, or `cluster` if no recorded response carried it.
+  Other lines say which instance and CR a value that `firstWrittenUnder`
+  found came from. Either the controller or the property is wrong.
+- `property <name> could not be evaluated`: the CEL failed, as on a field
+  that an object lacks:
+
+  ```
+  evaluating "crs.all(c, c.status.phase != 'Provisioning' || c.status.readyVolumes < c.spec.volumes)": no such key: status
+  ```
+
+  A CR has no `status` until the controller writes one, and a Go controller
+  leaves out an `omitempty` field at its zero value. Guard such fields with
+  `has()`.
+
 ## When a run exits 2
 
 Exit 2 means a usage or harness error: the run judged nothing. The error
@@ -409,9 +433,9 @@ names its cause. A run that started leaves its partial trace in `--out`. Common 
 
 | Error | Fix |
 | --- | --- |
-| `starting envtest: ... etcd: no such file or directory; set KUBEBUILDER_ASSETS ...` | Set `KUBEBUILDER_ASSETS` as the README's Install section shows, or to `$(make -s assets-path)` in a checkout. |
+| `starting envtest: ... etcd: no such file or directory; set KUBEBUILDER_ASSETS ...` | Set `KUBEBUILDER_ASSETS` to the path that `setup-envtest` prints, as [README Install](../README.md#install) shows. In a checkout, `make -s assets-path` prints it. |
 | `launch.binary: ... no such file or directory` | Build the controller to `launch.binary`. |
-| `the controller never started: ...` | No request got a 2xx answer within `timeouts.settle`. Requests that no check judges, such as discovery, Leases and Events, do not count. Read the output tail and `controller.log`. Fix `launch.args`, `launch.env` or `launch.rbac`. Raise `timeouts.settle` for a controller that starts slowly. |
+| `the controller never started: ...` | No request got a 2xx answer within `timeouts.settle`. Requests that no check judges, such as discovery, Leases and Events, do not count. Read the output tail and `controller.log`. A controller that does not read `KUBECONFIG` needs `--kubeconfig=${systems.kube.kubeconfig}` in `launch.args`. Fix `launch.args`, `launch.env` or `launch.rbac`. Raise `timeouts.settle` for a controller that starts slowly. |
 | `creating fixture ...` | Fix the fixture, or install the CRD it needs under `crds`. |
 | `creating fixture CustomResourceDefinition ...: ... already exists` | List the CRD under `crds` or under `fixtures`, not both. |
 | `... <kind>: no CRD under crds and no built-in kind serves it; ...` | Fix the kind's group, version or name as the error suggests, or add its CRD under `crds`. |

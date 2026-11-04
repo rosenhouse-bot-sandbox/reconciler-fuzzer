@@ -3,8 +3,9 @@
 reconciler-fuzzer finds bugs in Kubernetes controllers. It runs your controller on your machine
 against envtest's kube-apiserver and etcd. It follows a plan of steps: CR changes, faults on the
 controller's API requests, restarts, and damage to objects the controller created. It records
-every request and object version in a trace, including requests to fake HTTP services. Then it judges the trace with ten checks: Converge,
-Crash, Clean, Restore, Unique, Honest, Ordered, Teardown, Backoff and Finalizers ([DESIGN.md §12](DESIGN.md#12-checks)).
+every request and object version in a trace, including requests to fake HTTP services. Then it
+judges the trace with these checks: Converge, Crash, Clean, Restore, Unique, Honest, Ordered,
+Teardown, Backoff, Finalizers and Property ([Reading a failure](#reading-a-failure)).
 
 You write no test code. One YAML config describes your controller.
 
@@ -501,7 +502,9 @@ systems:
 
 A property is CEL that must hold at each settled step's end, or with `when: always` at every
 recorded version. It sees `crs`, the live CRs, and `world.<system>.<key>`, the live objects of
-each system, such as `world.kube.secrets` or `world.vault.secret`:
+each system. A kube key is the kind's resource, followed by `.<group>` outside the core group,
+as in `world.kube.secrets` or `world.kube['volumes.storage.thirdparty']`. A fake's key is its
+collection, as in `world.vault.secret`:
 
 ```yaml
 properties:
@@ -520,6 +523,36 @@ and the other kinds the checks ignore. The harness skips a kind that the server 
 and watch in the named group. The `run` event of `trace.jsonl` lists these kinds in `kinds`. A
 fake collection that an entry's `owns` names also maps to an empty list. Any other kind or
 collection has a key only if the trace holds an object of it.
+
+Write a property for a bug that no check can see. No check fails a CR that drops out of ready
+and back with no cause, since a controller may drop ready without a spec change by design, as
+after a failed health probe or an expired credential. No check fails a controller that raises
+`observedGeneration` for a spec it ignored, since Honest cannot know which spec field maps to
+which dependency. For toy-fleet's Clusters, as in
+[cluster/config.yaml](targets/toy-fleet/cluster/config.yaml), the first property below fails a
+Ready Cluster whose Volumes do not match its spec. The second fails a Cluster whose status says
+Provisioning and counts every Volume ready:
+
+```yaml
+properties:
+  - name: volumes-match-spec
+    expr: >-
+      crs.all(c, !has(c.status) || !has(c.status.phase) || c.status.phase != 'Ready'
+        || world.kube['volumes.storage.thirdparty'].filter(v,
+             v.metadata.labels['fleet.toy/cluster'] == c.metadata.name
+             && v.spec.size == c.spec.volumeSize).size() == c.spec.volumes)
+  - name: provisioning-means-volumes-not-ready
+    when: always
+    expr: >-
+      crs.all(c, !has(c.status) || !has(c.status.phase) || c.status.phase != 'Provisioning'
+        || !has(c.status.observedGeneration) || c.status.observedGeneration != c.metadata.generation
+        || (has(c.status.readyVolumes) ? c.status.readyVolumes : 0) < c.spec.volumes)
+```
+
+A CR has no `status` until the controller writes one, and a Go controller leaves out an
+`omitempty` field at its zero value, such as `readyVolumes: 0`. CEL fails on a missing field, so
+the property `could not be evaluated`, and its details say `no such key: status`. Guard such
+fields with `has()`, as above.
 
 Teardown skips a child that the garbage collector deletes through its ownerReference chain, since
 the garbage collector deletes it after the CR whatever the controller's order. A `when: always`
@@ -689,8 +722,24 @@ findings, and a negative control, where one exists, must fail.
 
 ## Reading a failure
 
+Each finding's heading names its check:
+
+| Check | It fails |
+| --- | --- |
+| Converge | A step that does not settle by its deadline, or does not stay settled. |
+| Crash | A controller exit that the harness did not cause. |
+| Clean | A resource that the controller made for a CR and that outlives the CR. |
+| Restore | A step that changes no CR or fixture, after which the controller's resources differ from the previous step's end, as when a damaged one stays gone. |
+| Unique | Two live controller resources with one owner, kind, namespace and role. |
+| Honest | A CR reported ready before the controller saw its dependencies and named objects ready, or kept ready after it saw one not ready. |
+| Ordered | An object that a CR names under `onDelete: block`, gone while the CR names it. |
+| Teardown | A CR released while one of its resources that the garbage collector does not delete is not yet being deleted. |
+| Backoff | A failing request, or a write that changes nothing, repeated with gaps under 100 ms. |
+| Finalizers | A controller write that drops a finalizer that a model added. |
+| Property | A [property](#properties) that does not hold, or could not be evaluated. |
+
 [docs/failures.md](docs/failures.md) explains each finding and what to change when a run exits 2.
-The `--out` directory holds `report.md`, the `plan.json` that ran, `trace.jsonl`,
+[DESIGN.md §12](DESIGN.md#12-checks) defines the checks. The `--out` directory holds `report.md`, the `plan.json` that ran, `trace.jsonl`,
 `controller.log` and `harness.log`, where client-go logs the errors of the harness's watches.
 `judge` rejudges a stored trace, and `shrink` shrinks a failing plan to `shrunk.json`:
 
