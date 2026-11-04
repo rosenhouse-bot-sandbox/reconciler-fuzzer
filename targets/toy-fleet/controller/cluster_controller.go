@@ -44,7 +44,7 @@ const gaveUp = "gave up: "
 type ClusterReconciler struct {
 	reconciler
 	// generated holds, under B132, the names of the Volumes this process made
-	// for each Cluster, by index.
+	// for each Cluster.
 	generated map[types.UID][]string
 	// suffix ends the name of each Volume this process makes under B135.
 	suffix string
@@ -121,11 +121,11 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 	ready, err := r.syncVolumes(ctx, cluster)
-	if err != nil && r.Bug == B133 {
-		cluster.Status.Phase, cluster.Status.Message = r.provisioning(), gaveUp+err.Error()
-		return ctrl.Result{}, r.writeStatus(ctx, cluster, old, cluster.Status)
-	}
 	if err != nil {
+		if r.Bug == B133 {
+			cluster.Status.Phase, cluster.Status.Message = r.provisioning(), gaveUp+err.Error()
+			return ctrl.Result{}, r.writeStatus(ctx, cluster, old, cluster.Status)
+		}
 		return ctrl.Result{}, err
 	}
 	status := fleetv1.ClusterStatus{ReadyVolumes: ready}
@@ -205,7 +205,6 @@ func (r *ClusterReconciler) syncVolumes(ctx context.Context, cluster *fleetv1.Cl
 				return 0, err
 			}
 			if r.Bug == B132 {
-				// B132 forgets the name of each Volume it deletes.
 				r.generated[cluster.UID] = slices.DeleteFunc(r.generated[cluster.UID], func(name string) bool { return name == v.Name })
 			}
 		}
@@ -238,7 +237,7 @@ func (r *ClusterReconciler) ensureVolume(ctx context.Context, cluster *fleetv1.C
 	if name == "" {
 		volume.GenerateName = r.baseName(cluster, i) + "-"
 		if err := mutate(); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("creating Volume %s: %w", volume.GenerateName, err)
 		}
 		if err := r.Create(ctx, volume); err != nil {
 			return nil, fmt.Errorf("creating Volume %s: %w", volume.GenerateName, err)
@@ -310,8 +309,10 @@ func (r *ClusterReconciler) baseName(cluster *fleetv1.Cluster, i int32) string {
 func (r *ClusterReconciler) volumeName(cluster *fleetv1.Cluster, i int32) string {
 	switch r.Bug {
 	case B132:
-		if names := r.generated[cluster.UID]; int(i) < len(names) {
-			return names[i]
+		for _, name := range r.generated[cluster.UID] {
+			if strings.HasPrefix(name, r.baseName(cluster, i)+"-") {
+				return name
+			}
 		}
 		return ""
 	case B135:

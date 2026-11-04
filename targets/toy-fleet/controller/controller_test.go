@@ -591,8 +591,9 @@ func TestB132MakesASecondSetOfVolumesAfterARestart(t *testing.T) {
 	}
 }
 
-// A scale-down can come while the cache misses a Volume that a scale-up just
-// made. A later reconcile deletes that Volume, under B132 too.
+// A scale from 3 Volumes to 1 can come while the cache misses the third. After
+// a scale back to 2, the Cluster has its first Volume and a new second one,
+// under B132 too.
 func TestAScaleDownDeletesAVolumeTheCacheMissed(t *testing.T) {
 	for _, bug := range []Bug{0, B132} {
 		f := newBuggyFleet(t, bug, clusterObj())
@@ -622,9 +623,10 @@ func TestAScaleDownDeletesAVolumeTheCacheMissed(t *testing.T) {
 		})
 		f.reconcileOnce(f.clusters, "cluster")
 		f.clusters.Client = f.c
+		scale(2)
 		f.settle(f.clusters, "cluster")
-		if got := f.volumes(); len(cached) != 2 || len(got) != 1 || got[0] != cached[0]+" small" {
-			t.Errorf("B%d: the cache held Volumes %q. After a change to 3 Volumes, then to 1 while the cache missed the third, the Volumes are %q, want only the first.", bug, cached, got)
+		if got := f.volumes(); len(cached) != 2 || len(got) != 2 || got[0] != cached[0]+" small" || !strings.HasPrefix(got[1], "cluster-vol-1") {
+			t.Errorf("B%d: the cache held Volumes %q. After a change to 3 Volumes, to 1 while the cache missed the third, and to 2, the Volumes are %q, want the first and a cluster-vol-1.", bug, cached, got)
 		}
 	}
 }
