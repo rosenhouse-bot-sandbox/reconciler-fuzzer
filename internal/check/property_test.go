@@ -354,6 +354,13 @@ func TestAPropertyFindingSaysWhatTurnedItFalse(t *testing.T) {
 			t.Errorf("%s: detail = %q, want %q", name, got, want)
 		}
 	}
+
+	none := newRun(0)
+	none.Spec.Properties = []trace.Property{{Name: "p", Expr: "size(crs) == 1", When: "step"}}
+	none.Begin().Call(ctl, "list", tt.Ref("toy/widgets", "ns", ""), 200)
+	if got := turnDetail(t, none.EndFaults().Settle()); got != "" {
+		t.Errorf("no version event: detail = %q, want none", got)
+	}
 }
 
 // turnDetail is the detail of r's one finding that says when its property
