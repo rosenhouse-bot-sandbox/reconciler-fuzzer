@@ -103,7 +103,11 @@ func TestReadmeQuotesToyFleetProperties(t *testing.T) {
 			t.Errorf("%s has no properties.", path)
 		}
 		for _, p := range c.Properties {
-			q := quoted[p.Name]
+			q, found := quoted[p.Name]
+			if !found {
+				t.Errorf("The README quotes no property %s of %s.", p.Name, path)
+				continue
+			}
 			q.When = cmp.Or(q.When, config.StepEnd)
 			q.Expr, p.Expr = spaced(q.Expr), spaced(p.Expr)
 			if q != p {

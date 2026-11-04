@@ -734,7 +734,7 @@ Each finding's heading names its check:
 | Restore | After a step that changes no CR or fixture, the controller's resources differ from the previous step's end, as when a damaged one stays gone. |
 | Unique | Two live controller resources share an owner, kind, namespace and role. |
 | Honest | The controller reports a CR ready before it sees the CR's dependencies and named objects ready, or, with `track`, keeps it ready longer than `track` after it sees one not ready. |
-| Ordered | An object that a CR names under `onDelete: block` is gone while the CR names it. |
+| Ordered | An object that a CR names under `onDelete: block` is gone while the CR names it, and the controller saw both in time to hold it. |
 | Teardown | The controller releases a CR while one of the CR's resources that the garbage collector does not delete is not yet being deleted. |
 | Backoff | The controller repeats a failing request more than 10 times per live CR, with gaps under 100 ms. For a write that changes nothing, the limit is 20. |
 | Finalizers | A controller write drops a finalizer that a model added. |
