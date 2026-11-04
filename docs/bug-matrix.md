@@ -72,7 +72,7 @@ Each Cluster owns Volumes of a third party's kind, which a model sets ready. A D
 
 | Bug | Description | Plan | Check | Step |
 |---|---|---|---|---|
-| B0 | The correct controller. | all 48 plans of config.yaml, database/config.yaml, order/config.yaml, protect/config.yaml, secret/config.yaml, storageclass/config.yaml, upgrade/config.yaml | none | |
+| B0 | The correct controller. | all 52 plans of config.yaml, database/config.yaml, order/config.yaml, protect/config.yaml, secret/config.yaml, storageclass/config.yaml, upgrade/config.yaml | none | |
 | B0 | The correct controller. | uninstall/crd-first-stop | none | |
 | B0 | The correct controller. | uninstall/kill-recreate | none | |
 | B0 | The correct controller. | uninstall/recreate | none | |
@@ -95,6 +95,11 @@ Each Cluster owns Volumes of a third party's kind, which a model sets ready. A D
 | B125 | Keeps a Ready Database ready after its Secret is deleted. | secret-deleted-while-down | Honest | 1 |
 | B125 | Keeps a Ready Database ready after its Secret is deleted. | secret-recreate | Honest | 1 |
 | B126 | Under --protect-secrets, never puts the in-use finalizer on the Secret a Database names. | secret/secret-first | Ordered | 1 |
+| B131 | Counts every Volume as ready. | b131 | Honest | 0 |
+| B131 | Counts every Volume as ready. | b131 | Honest | 1 |
+| B132 | Names Volumes with generateName and remembers them only in memory, so a restart makes a second set. | b132 | Unique | 0 |
+| B132 | Names Volumes with generateName and remembers them only in memory, so a restart makes a second set. | b132 | Unique | 1 |
+| B133 | Gives up for good when a Volume write fails. | b133 | Converge | 0 |
 | B135 | Ends each Volume's name with a suffix that each process picks, and deletes only Volumes with its own suffix, so a restart makes a second set. | b135 | Unique | 0 |
 | B135 | Ends each Volume's name with a suffix that each process picks, and deletes only Volumes with its own suffix, so a restart makes a second set. | b135 | Unique | 1 |
 | B135 | Ends each Volume's name with a suffix that each process picks, and deletes only Volumes with its own suffix, so a restart makes a second set. | b135-restart | Restore | 1 |
@@ -114,3 +119,4 @@ Each Cluster owns Volumes of a third party's kind, which a model sets ready. A D
 | B161 | Finalizes only Clusters whose finalization this process began. | foreground-kill | Converge | 1 |
 | B161 | Finalizes only Clusters whose finalization this process began. | restart-deleting | Converge | 1 |
 | B162 | Requeues a Cluster being deleted every 1 ms while its Volumes remain, and deletes them again each time. | slow-delete | Backoff | 1 |
+| B172 | Counts a Volume ready on a Ready condition of an older generation. | resize | Honest | 1 |
