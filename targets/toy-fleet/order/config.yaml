@@ -1,6 +1,7 @@
-# This is cluster/config.yaml with a property that no Volume outlives an
-# owner. gc deletes Volumes, which carry ownerReferences, so Teardown does
-# not judge their order. Paths resolve against this file's directory.
+# This is cluster/config.yaml with another property in place of its own: no
+# Volume outlives an owner. gc deletes Volumes, which carry ownerReferences,
+# so Teardown does not judge their order. Paths resolve against this file's
+# directory.
 launch:
   binary: ../../../bin/toy-fleet
   args:
