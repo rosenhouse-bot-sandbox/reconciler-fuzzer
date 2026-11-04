@@ -223,9 +223,9 @@ exceeds the cap fails there. Raise the cap if that backoff is intended.
 
 The controller exited without the harness stopping it. The summary counts
 the exits in the step. The details hold the first exit status and the tail
-of its output, often a panic. `Before step 0` means the controller exited
-during startup. If the tail names a flag, env var, CRD or permission that it
-lacks, fix `launch` or `crds`. Otherwise the controller has a bug.
+of its output, often a panic. A crash `Before step 0` happened during
+startup. If the tail names a flag, env var, CRD or permission that the
+controller lacks, fix `launch` or `crds`. Otherwise the controller has a bug.
 
 ### Clean: left resources behind
 
