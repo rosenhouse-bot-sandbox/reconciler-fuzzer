@@ -40,6 +40,8 @@ type evaluator func(crs []any, world map[string]map[string][]any) (bool, error)
 func (p *properties) judgeEach(property PropertySpec, eval evaluator) []Finding {
 	var findings []Finding
 	judged := map[int]bool{}
+	// run ends at the version event of the property's last judgment. It is
+	// empty if the property held there or could not be evaluated.
 	run := falseRun{end: -1}
 	for _, at := range p.times(property) {
 		if judged[at.step] {
@@ -48,13 +50,15 @@ func (p *properties) judgeEach(property PropertySpec, eval evaluator) []Finding 
 		holds, origins, err := p.judge(eval, at.t)
 		if holds || err != nil {
 			run = falseRun{at.version + 1, at.version}
+		} else {
+			run = p.falseRunTo(eval, at.version, run)
 		}
 		switch {
 		case err != nil:
 			findings = append(findings, propertyFinding(property, at.step, at.t, "could not be evaluated", err.Error()))
 		case !holds:
 			f := propertyFinding(property, at.step, at.t, "does not hold", property.Expr+" is false")
-			if turn := p.turned(eval, at.version, &run); turn != "" {
+			if turn := p.turned(run); turn != "" {
 				f.Details = append(f.Details, turn)
 			}
 			f.Details = append(f.Details, origins...)
@@ -82,38 +86,43 @@ func (p *properties) holdsAt(eval evaluator, t time.Duration) bool {
 }
 
 // falseRun is a run of version events, from versionTimes[start] to
-// versionTimes[end], at each of which a property is false. It ends at the
-// version event of the property's last judgment. It is empty, with start
-// end+1, if the property holds or cannot be evaluated there.
+// versionTimes[end], at each of which a property is false. An empty run's
+// start is end+1.
 type falseRun struct{ start, end int }
 
-// turned says when a property that is false at versionTimes[end] last turned
-// false, and which writes the trace recorded then. It judges each earlier
-// version event in turn, back to one where the property holds or cannot be
-// evaluated, or to the end of run, whose start it then takes.
-func (p *properties) turned(eval evaluator, end int, run *falseRun) string {
-	if end < 0 {
-		return ""
-	}
-	times := p.versionTimes
+// falseRunTo returns the false run that ends at versionTimes[end], where a
+// property is false. It judges each earlier version event in turn, back to
+// one where the property holds or cannot be evaluated, or to the end of
+// prev, the run at the property's previous judgment, whose start it then
+// takes.
+func (p *properties) falseRunTo(eval evaluator, end int, prev falseRun) falseRun {
 	start := end
-	for start > run.end+1 && !p.holdsAt(eval, times[start-1]) {
+	for start > prev.end+1 && !p.holdsAt(eval, p.versionTimes[start-1]) {
 		start--
 	}
-	if start <= run.end+1 {
-		start = run.start
+	if start <= prev.end+1 {
+		start = prev.start
 	}
-	*run = falseRun{start, end}
-	if start == 0 {
+	return falseRun{start, end}
+}
+
+// turned says when the false run started, and which writes the trace
+// recorded then.
+func (p *properties) turned(run falseRun) string {
+	if run.end < 0 {
+		return ""
+	}
+	if run.start == 0 {
 		return "it was false at each version event"
 	}
+	at := p.versionTimes[run.start]
 	var writes []string
-	for _, e := range p.ix.EventsIn(times[start]-1, times[start]) {
+	for _, e := range p.ix.EventsIn(at-1, at) {
 		if v := e.Version; v != nil {
 			writes = append(writes, fmt.Sprintf("%s %s %s", p.ix.Writer(*v), p.change(e), describe(v.Ref)))
 		}
 	}
-	return fmt.Sprintf("it turned false at %v: %s", times[start], strings.Join(slices.Compact(writes), ", "))
+	return fmt.Sprintf("it turned false at %v: %s", at, strings.Join(slices.Compact(writes), ", "))
 }
 
 // change says how version event e changed its instance.

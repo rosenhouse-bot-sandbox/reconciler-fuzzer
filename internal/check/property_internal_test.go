@@ -12,8 +12,9 @@ import (
 	tt "github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace/tracetest"
 )
 
-// In a run whose every step writes, a property is judged at most once
-// between two version events, though each finding says when it turned false.
+// A property is judged at most once between two version events, though each
+// finding says when it turned false. Each step writes, since a step property
+// is judged at each step's end.
 func TestAPropertyIsJudgedOnceBetweenVersionEvents(t *testing.T) {
 	// Each step writes the child's data.v twice. A write of "" leaves no
 	// data, so the property cannot be evaluated.
