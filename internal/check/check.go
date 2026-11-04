@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -495,62 +495,55 @@ func unmapped(ix *trace.Index) []string {
 	return notes
 }
 
-// forbidden notes how many times the API server answered the controller
-// with 403 for each verb and kind. An injected error does not count, nor
-// does a create in a namespace being deleted.
-func forbidden(ix *trace.Index) []string {
-	type request struct{ verb, on string }
-	var order []request
-	counts := map[request]int{}
-	for _, e := range ix.Calls(trace.Controller, -1, math.MaxInt64) {
-		c := e.Call
-		if c.Ref.System != "kube" || c.Status != http.StatusForbidden || strings.HasPrefix(c.Injected, "error") || createsInTerminating(ix, e) {
-			continue
+// deniedResource and deniedPath match the authorizer's words in a 403's
+// message. Admission, such as a namespace being deleted, a quota or a
+// webhook, says something else.
+var (
+	deniedResource = regexp.MustCompile(`cannot (\S+) resource "([^"/]*)(?:/([^"]*))?" in API group "([^"]*)" (?:in the namespace "([^"]*)"|at the cluster scope)`)
+	deniedPath     = regexp.MustCompile(`cannot (\S+) path "([^"]*)"`)
+)
+
+// denial says what an authorizer's 403 message forbids, such as "watch on
+// volumes.storage.thirdparty in namespace ns", or "" for another message.
+func denial(message string) string {
+	if m := deniedResource.FindStringSubmatch(message); m != nil {
+		verb, resource, subresource, group, namespace := m[1], m[2], m[3], m[4], m[5]
+		on := schema.GroupResource{Group: group, Resource: resource}.String()
+		if subresource != "" {
+			on = "the " + subresource + " subresource of " + on
 		}
-		on := c.Path
-		if c.Ref.Resource != "" {
-			on = schema.GroupResource{Group: c.Ref.Group, Resource: c.Ref.Resource}.String()
+		scope := "at the cluster scope"
+		if namespace != "" {
+			scope = "in namespace " + namespace
 		}
-		if c.Subresource != "" {
-			on = "the " + c.Subresource + " subresource of " + on
-		}
-		r := request{c.Verb, on}
-		if counts[r] == 0 {
-			order = append(order, r)
-		}
-		counts[r]++
+		return fmt.Sprintf("%s on %s %s", verb, on, scope)
 	}
-	notes := make([]string, len(order))
-	for i, r := range order {
-		notes[i] = fmt.Sprintf("kube: launch.rbac forbids the controller's %s on %s, %s", r.verb, r.on, times(counts[r]))
+	if m := deniedPath.FindStringSubmatch(message); m != nil {
+		return fmt.Sprintf("%s on path %s", m[1], m[2])
 	}
-	return notes
+	return ""
 }
 
-// createsInTerminating reports whether call e is a create in a namespace
-// whose deletion started by e's answer. The deletion starts at the first
-// version with a deletionTimestamp, or at the first answer that carried it
-// if that came sooner. The API server forbids such a create whatever the
-// caller's role.
-func createsInTerminating(ix *trace.Index, e trace.Event) bool {
-	if e.Call.Verb != "create" || e.Call.Ref.Namespace == "" {
-		return false
+// forbidden notes how many times the authorizer denied the controller each
+// request it names.
+func forbidden(ix *trace.Index) []string {
+	var order []string
+	counts := map[string]int{}
+	for _, e := range ix.Calls(trace.Controller, -1, math.MaxInt64) {
+		what := denial(e.Call.Forbidden)
+		if what == "" {
+			continue
+		}
+		if counts[what] == 0 {
+			order = append(order, what)
+		}
+		counts[what]++
 	}
-	ref := trace.Ref{System: "kube", Resource: "namespaces", Name: e.Call.Ref.Namespace}
-	namespace, found := ix.LatestAt(ref, e.At)
-	if !found {
-		return false
+	notes := make([]string, len(order))
+	for i, what := range order {
+		notes[i] = fmt.Sprintf("kube: launch.rbac forbids the controller's %s, %s", what, times(counts[what]))
 	}
-	versions := ix.Versions(ref, namespace.UID)
-	n := firstDeleting(versions)
-	if n < 0 {
-		return false
-	}
-	start := versions[n].At
-	if answer, answered := ix.WriteCall(ref, versions[n].Version.RV); answered {
-		start = min(start, answer.At)
-	}
-	return start <= e.At
+	return notes
 }
 
 // times says n times, as "1 time" or "2 times".

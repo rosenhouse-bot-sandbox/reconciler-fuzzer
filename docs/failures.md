@@ -91,10 +91,12 @@ objects the harness created, such as fixtures. Neither matches a CRD that
 CRDs says so.
 
 `kube: launch.rbac forbids the controller's watch on
-volumes.storage.thirdparty, 14 times` counts the API server's 403 answers to
-the controller's requests of one verb and kind. An injected `error(403)`
-does not count, nor does a create in a namespace being deleted. Add the
-rule to `launch.rbac` if the controller needs it.
+volumes.storage.thirdparty in namespace rf-1, 14 times` counts the 403s that
+the API server's authorizer gave the controller, by the verb, resource or
+subresource, and scope in its message. A server-side apply that creates
+needs `create`. Other 403s do not count, such as an injected `error(403)`,
+or one for a namespace being deleted, a quota or a webhook. Add the rule to
+`launch.rbac` if the controller needs it.
 
 `primary.ready held for no CR version; the last of widgets.toy ns/a has
 status {...}` follows a clause 1 finding when no version of that kind's CRs

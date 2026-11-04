@@ -379,8 +379,9 @@ A note `unmapped request` means the API map could not read a request to a fake, 
 judged it. Tell the user which paths the controller uses.
 A note that a `role` failed on every resource of a kind names the CEL's first error. Fix the
 `role`, or guard it by kind.
-A note `launch.rbac forbids the controller's <verb> on <kind>` counts the API server's 403
-answers to the controller. Add the rule to `launch.rbac` if the controller needs it.
+A note `launch.rbac forbids the controller's <verb> on <resource> <scope>` counts the
+authorizer's 403 answers to the controller. Add the rule to `launch.rbac` if the controller
+needs it.
 
 A note that the harness sent SIGKILL means the controller did not exit within
 `launch.gracePeriod` of SIGTERM. Set it above the controller's shutdown time, or tell the user

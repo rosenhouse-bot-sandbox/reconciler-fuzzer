@@ -223,20 +223,16 @@ func TestRecordedB0RunHasNoFindings(t *testing.T) {
 }
 
 // Under B16, launch.rbac lacks widgets/status, so the widget never gets a
-// status.
+// status. The trace predates recorded 403 messages, so it has no RBAC note.
 func TestRecordedB16RunDidNotSettle(t *testing.T) {
 	r := judgeRecorded(t, "testdata/b16.jsonl")
 	if f := only(t, r.Findings); f.Summary != "did not settle (clause 1)" || f.Step != 0 ||
 		!slices.ContainsFunc(f.Details, func(d string) bool { return strings.HasSuffix(d, "/widget is not ready; it has no status") }) {
 		t.Fatalf("finding = %+v", f)
 	}
-	for _, want := range []string{
-		"primary.ready held for no CR version; the last of widgets.toy.reconciler-fuzzer rf-d1ebbd7f/widget has no status",
-		"kube: launch.rbac forbids the controller's update on the status subresource of widgets.toy.reconciler-fuzzer, 10 times",
-	} {
-		if !slices.Contains(r.Notes, want) {
-			t.Errorf("notes = %q, want %q", r.Notes, want)
-		}
+	want := []string{"primary.ready held for no CR version; the last of widgets.toy.reconciler-fuzzer rf-d1ebbd7f/widget has no status"}
+	if !slices.Equal(r.Notes, want) {
+		t.Errorf("notes = %q, want %q", r.Notes, want)
 	}
 }
 
@@ -355,56 +351,58 @@ func TestJudgeNotesNoReadyThatHeldOrNoCRWaitedFor(t *testing.T) {
 	}
 }
 
+// forbiddenBy returns a call that the API server answered with 403 and
+// message.
+func forbiddenBy(caller trace.Caller, verb string, ref trace.Ref, message string) trace.Event {
+	e := tt.Call(caller, verb, ref, 403, "")
+	e.Call.Forbidden = message
+	return e
+}
+
+func rbacNotes(r check.Report) []string {
+	return slices.DeleteFunc(r.Notes, func(n string) bool { return !strings.HasPrefix(n, "kube: launch.rbac") })
+}
+
 func TestJudgeNotesARequestLaunchRBACForbids(t *testing.T) {
 	b := cleanRun()
 	gadgets := tt.Ref("toy/gadgets", "ns", "")
 	for _, at := range []time.Duration{2 * s, 4 * s} {
-		watch := tt.Call(ctl, "watch", gadgets, 403, "")
+		watch := forbiddenBy(ctl, "watch", gadgets, `gadgets.toy is forbidden: User "u" cannot watch resource "gadgets" in API group "toy" in the namespace "ns"`)
 		watch.Call.Watch = true
 		b.At(at).Add(watch)
 	}
-	notes := check.Judge(b.Index(), spec).Notes
-	want := "kube: launch.rbac forbids the controller's watch on gadgets.toy, 2 times"
-	if !slices.Contains(notes, want) {
+	want := []string{"kube: launch.rbac forbids the controller's watch on gadgets.toy in namespace ns, 2 times"}
+	if notes := rbacNotes(check.Judge(b.Index(), spec)); !slices.Equal(notes, want) {
 		t.Fatalf("notes = %q, want %q", notes, want)
 	}
 }
 
-// A 403 counts only when the API server gave it to the controller for want
-// of a role. A delay fault passes the request on. A create in a namespace
-// being deleted gets a 403 whatever the role.
-func TestJudgeNotesOnlyTheControllersRealDenials(t *testing.T) {
+// Only the authorizer's 403s to the controller count, in its words: a
+// server-side apply needs create. An injected fault, a namespace being
+// deleted, a quota or a webhook give other messages.
+func TestJudgeNotesOnlyTheAuthorizersDenialsOfTheController(t *testing.T) {
+	const user = `User "system:serviceaccount:ns:ctl"`
 	b := cleanRun()
-	status := call("update", widgetA, 403, "delay(1s)")
-	status.Call.Subresource = "status"
-	harness := tt.Call(trace.Harness, "get", cm, 403, "")
-	bucket := tt.Call(ctl, "get", trace.Ref{System: "cloud", Resource: "buckets", Name: "b1"}, 403, "")
-	terminating := tt.Version(tt.Ref("namespaces", "", "ns"), "ns-uid", "9", objectBody("ns", true))
-	live := tt.Version(tt.Ref("namespaces", "", "other"), "other-uid", "10", objectBody("other", false))
-	b.At(2*s).Add(call("get", widgetA, 403, "error(403)"), status, harness, bucket, terminating, live,
-		call("create", cm, 403, ""), call("create", tt.Ref("configmaps", "other", "c"), 403, ""))
-	notes := slices.DeleteFunc(check.Judge(b.Index(), spec).Notes, func(n string) bool { return !strings.HasPrefix(n, "kube: launch.rbac") })
+	status := forbiddenBy(ctl, "update", widgetA, `widgets.toy "a" is forbidden: `+user+` cannot update resource "widgets/status" in API group "toy" in the namespace "ns"`)
+	status.Call.Subresource, status.Call.Injected = "status", "delay(1s)"
+	injected := forbiddenBy(ctl, "get", widgetA, "reconciler-fuzzer fault: get /apis/toy/v1/namespaces/ns/widgets/a")
+	injected.Call.Injected = "error(403)"
+	b.At(2*s).Add(injected, status,
+		forbiddenBy(trace.Harness, "get", cm, `configmaps "c" is forbidden: User "harness" cannot get resource "configmaps" in API group "" in the namespace "ns"`),
+		forbiddenBy(ctl, "create", cm, `configmaps "c" is forbidden: unable to create new content in namespace ns because it is being terminated`),
+		forbiddenBy(ctl, "create", cm, `configmaps "c" is forbidden: exceeded quota: q, requested: count/configmaps=1, used: count/configmaps=1, limited: count/configmaps=1`),
+		forbiddenBy(ctl, "create", cm, `admission webhook "deny.example.com" denied the request: no`),
+		forbiddenBy(ctl, "patch", cm, `configmaps "c" is forbidden: `+user+` cannot create resource "configmaps" in API group "" in the namespace "ns"`),
+		forbiddenBy(ctl, "list", tt.Ref("toy/widgets", "", ""), `widgets.toy is forbidden: `+user+` cannot list resource "widgets" in API group "toy" at the cluster scope: RBAC: clusterrole.rbac.authorization.k8s.io "ctl" not found`),
+		forbiddenBy(ctl, "get", trace.Ref{System: "kube"}, `forbidden: `+user+` cannot get path "/livez"`),
+		forbiddenBy(ctl, "update", widgetA, `widgets.toy "a" is forbidden: `+user+` cannot update resource "widgets/status" in API group "toy" in the namespace "ns"`))
 	want := []string{
-		"kube: launch.rbac forbids the controller's update on the status subresource of widgets.toy, 1 time",
-		"kube: launch.rbac forbids the controller's create on configmaps, 1 time",
+		"kube: launch.rbac forbids the controller's update on the status subresource of widgets.toy in namespace ns, 2 times",
+		"kube: launch.rbac forbids the controller's create on configmaps in namespace ns, 1 time",
+		"kube: launch.rbac forbids the controller's list on widgets.toy at the cluster scope, 1 time",
+		"kube: launch.rbac forbids the controller's get on path /livez, 1 time",
 	}
-	if !slices.Equal(notes, want) {
-		t.Fatalf("notes = %q, want %q", notes, want)
-	}
-}
-
-// A namespace's deletion starts by the first answer that shows it, though
-// the observer may record it after a create's 403. Only the create before
-// the deletion counts.
-func TestJudgeDatesANamespaceDeletionByItsAnswer(t *testing.T) {
-	b := cleanRun()
-	ns := tt.Ref("namespaces", "", "ns")
-	b.At(1*s).Add(tt.Version(ns, "ns-uid", "8", objectBody("ns", false))).
-		At(1500*ms).Add(call("create", cm, 403, "")).
-		At(2*s).Add(tt.Call(trace.Harness, "delete", ns, 200, "9"), call("create", cm, 403, "")).
-		At(2100 * ms).Add(tt.Version(ns, "ns-uid", "9", objectBody("ns", true)))
-	notes := slices.DeleteFunc(check.Judge(b.Index(), spec).Notes, func(n string) bool { return !strings.HasPrefix(n, "kube: launch.rbac") })
-	if want := []string{"kube: launch.rbac forbids the controller's create on configmaps, 1 time"}; !slices.Equal(notes, want) {
+	if notes := rbacNotes(check.Judge(b.Index(), spec)); !slices.Equal(notes, want) {
 		t.Fatalf("notes = %q, want %q", notes, want)
 	}
 }
