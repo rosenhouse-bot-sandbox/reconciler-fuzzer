@@ -375,7 +375,7 @@ controller's output. Fix the config or the sample.
 | Converge or Restore, with a CR that halted after a create of unknown outcome | The controller stops on purpose and waits for a person. | Set the entry's `halted` to CEL over its halted condition. |
 | Converge after an upgrade, with a note that `launch.rbac` forbids a request | `launch.rbac` lacks a rule the new version needs. | Add the rule to `launch.rbac`. |
 | Restore after an upgrade, on a resource the new version adds, deletes, renames or gives another owner, or on a field the new CRDs default | Nothing: `<module>/README.md` lists this limit under Upgrading. | Ask the user whether the change is intended. If so, report the finding as that limit, not as a bug. |
-| Property, `could not be evaluated`, with `no such key` | The property reads a field that an object lacks, such as `status` before the controller writes it, or an `omitempty` field at its zero value. | Guard the field with `has()`. |
+| Property, `could not be evaluated`, with `no such key` | The property reads a field that an object lacks, such as `status` before the controller writes it, or an `omitempty` field at its zero value. Or it reads a `world.<system>` key that the run lacks. | Guard a field with `has()`, and a `world.<system>` key with `'<key>' in world.<system>`. |
 
 Every other finding is a bug in the controller. Never hide one to make a check pass, and ask
 the user when in doubt. On a finding, stop and report it (step 11).
