@@ -206,6 +206,9 @@ func (r *ClusterReconciler) syncVolumes(ctx context.Context, cluster *fleetv1.Cl
 			}
 		}
 	}
+	if names := r.generated[cluster.UID]; len(names) > int(cluster.Spec.Volumes) {
+		r.generated[cluster.UID] = names[:cluster.Spec.Volumes] // B132 forgets the Volumes it deleted.
+	}
 	return ready, nil
 }
 
@@ -232,7 +235,7 @@ func (r *ClusterReconciler) ensureVolume(ctx context.Context, cluster *fleetv1.C
 		return controllerutil.SetControllerReference(cluster, volume, r.Scheme)
 	}
 	if name == "" {
-		volume.GenerateName = fmt.Sprintf("%s%d-", r.volumePrefix(cluster), i)
+		volume.GenerateName = r.baseName(cluster, i) + "-"
 		if err := mutate(); err != nil {
 			return nil, err
 		}
@@ -296,10 +299,14 @@ func (r *ClusterReconciler) deleteStorageClass(ctx context.Context, cluster *fle
 	return nil
 }
 
+// baseName is the name of the Cluster's ith Volume before any suffix.
+func (r *ClusterReconciler) baseName(cluster *fleetv1.Cluster, i int32) string {
+	return fmt.Sprintf("%s%d", r.volumePrefix(cluster), i)
+}
+
 // volumeName names the Cluster's ith Volume. B132 knows only the names of
 // the Volumes this process made, and gives "" for any other.
 func (r *ClusterReconciler) volumeName(cluster *fleetv1.Cluster, i int32) string {
-	name := fmt.Sprintf("%s%d", r.volumePrefix(cluster), i)
 	switch r.Bug {
 	case B132:
 		if names := r.generated[cluster.UID]; int(i) < len(names) {
@@ -307,9 +314,9 @@ func (r *ClusterReconciler) volumeName(cluster *fleetv1.Cluster, i int32) string
 		}
 		return ""
 	case B135:
-		return name + "-" + r.suffix
+		return r.baseName(cluster, i) + "-" + r.suffix
 	}
-	return name
+	return r.baseName(cluster, i)
 }
 
 // mine says whether this process counts the Cluster's Volume as its own.
@@ -454,21 +461,14 @@ func volumeFailed(v storagev1.Volume) bool {
 	return meta.IsStatusConditionFalse(v.Status.Conditions, "Ready")
 }
 
-// countsReady says whether the Cluster counts the Volume ready. B131 counts
-// every Volume, and B172 ignores the generation of the Ready condition.
+// countsReady says whether the Cluster counts the Volume ready: live, with a
+// Ready condition True for its current generation. B131 counts every Volume,
+// and B172 a Ready condition of any generation.
 func (r *ClusterReconciler) countsReady(v *storagev1.Volume) bool {
-	switch r.Bug {
-	case B131:
+	if r.Bug == B131 {
 		return true
-	case B172:
-		return v.DeletionTimestamp.IsZero() && meta.IsStatusConditionTrue(v.Status.Conditions, "Ready")
 	}
-	return volumeReady(v)
-}
-
-// volumeReady says whether the Volume's Ready condition is True for its
-// current generation.
-func volumeReady(v *storagev1.Volume) bool {
 	c := meta.FindStatusCondition(v.Status.Conditions, "Ready")
-	return v.DeletionTimestamp.IsZero() && c != nil && c.Status == metav1.ConditionTrue && c.ObservedGeneration == v.Generation
+	return v.DeletionTimestamp.IsZero() && c != nil && c.Status == metav1.ConditionTrue &&
+		(c.ObservedGeneration == v.Generation || r.Bug == B172)
 }

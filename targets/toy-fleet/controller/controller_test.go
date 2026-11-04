@@ -259,31 +259,39 @@ func TestClusterLeavesTheVolumesOfAnEarlierClusterOfItsName(t *testing.T) {
 	}
 }
 
-// volumeWithReady is a generation 2 Volume whose Ready condition has status
-// and observed.
-func volumeWithReady(status metav1.ConditionStatus, observed int64) *storagev1.Volume {
-	v := &storagev1.Volume{ObjectMeta: metav1.ObjectMeta{Generation: 2}}
-	meta.SetStatusCondition(&v.Status.Conditions, metav1.Condition{Type: "Ready", Status: status, Reason: "Test", ObservedGeneration: observed})
-	return v
-}
-
-// unreadyVolumes are Volumes that are not ready, by what makes them so.
-func unreadyVolumes() map[string]*storagev1.Volume {
-	return map[string]*storagev1.Volume{
+// B0 counts a Volume ready while it is live with Ready True for its
+// generation. B131 counts every Volume, and B172 also Ready True of an older
+// generation.
+func TestCountsReadyNeedsReadyTrueForItsGenerationWhileLive(t *testing.T) {
+	volume := func(status metav1.ConditionStatus, observed int64) *storagev1.Volume {
+		v := &storagev1.Volume{ObjectMeta: metav1.ObjectMeta{Generation: 2}}
+		meta.SetStatusCondition(&v.Status.Conditions, metav1.Condition{Type: "Ready", Status: status, Reason: "Test", ObservedGeneration: observed})
+		return v
+	}
+	unready := map[string]*storagev1.Volume{
 		"no condition":        {},
-		"Ready False":         volumeWithReady(metav1.ConditionFalse, 2),
-		"an older generation": volumeWithReady(metav1.ConditionTrue, 1),
-		"deleting":            deleting(volumeWithReady(metav1.ConditionTrue, 2), "storage.thirdparty/protect"),
+		"Ready False":         volume(metav1.ConditionFalse, 2),
+		"an older generation": volume(metav1.ConditionTrue, 1),
+		"deleting":            deleting(volume(metav1.ConditionTrue, 2), "storage.thirdparty/protect"),
 	}
-}
-
-func TestVolumeReadyNeedsReadyTrueForItsGenerationWhileLive(t *testing.T) {
-	if !volumeReady(volumeWithReady(metav1.ConditionTrue, 2)) {
-		t.Error("A Volume with Ready True for its generation is not ready.")
-	}
-	for name, v := range unreadyVolumes() {
-		if volumeReady(v) {
-			t.Errorf("A Volume with %s is ready.", name)
+	for bug, want := range map[Bug][]string{
+		0:    nil,
+		B131: {"Ready False", "an older generation", "deleting", "no condition"},
+		B172: {"an older generation"},
+	} {
+		r := &ClusterReconciler{reconciler: reconciler{Bug: bug}}
+		if !r.countsReady(volume(metav1.ConditionTrue, 2)) {
+			t.Errorf("B%d does not count ready a Volume with Ready True for its generation.", bug)
+		}
+		var counted []string
+		for name, v := range unready {
+			if r.countsReady(v) {
+				counted = append(counted, name)
+			}
+		}
+		slices.Sort(counted)
+		if !slices.Equal(counted, want) {
+			t.Errorf("B%d counts ready the Volumes with %q, want %q.", bug, counted, want)
 		}
 	}
 }
@@ -518,25 +526,47 @@ func TestB131ReportsAClusterReadyBeforeItsVolumes(t *testing.T) {
 	}
 }
 
-// B131 counts every Volume ready, and B172 also a live one whose Ready
-// condition is True for an older generation.
-func TestB131AndB172CountUnreadyVolumes(t *testing.T) {
-	for bug, want := range map[Bug][]string{
-		0:    nil,
-		B131: {"Ready False", "an older generation", "deleting", "no condition"},
-		B172: {"an older generation"},
-	} {
-		r := &ClusterReconciler{reconciler: reconciler{Bug: bug}}
-		var counted []string
-		for name, v := range unreadyVolumes() {
-			if r.countsReady(v) {
-				counted = append(counted, name)
-			}
+// Each Volume has the Cluster's label and controller reference from its
+// create, as the next sync's update would hide their lack.
+func TestEachVolumeHasTheClusterLabelAndOwnerFromItsCreate(t *testing.T) {
+	for _, bug := range []Bug{0, B132} {
+		f := newBuggyFleet(t, bug, clusterObj())
+		var created []storagev1.Volume
+		f.clusters.Client = interceptor.NewClient(f.c, interceptor.Funcs{
+			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				if v, ok := obj.(*storagev1.Volume); ok {
+					created = append(created, *v.DeepCopy())
+				}
+				return c.Create(ctx, obj, opts...)
+			},
+		})
+		f.settle(f.clusters, "cluster")
+		cluster := f.cluster()
+		if len(created) != 2 || slices.ContainsFunc(created, func(v storagev1.Volume) bool {
+			return v.Labels[ClusterLabel] != cluster.Name || !metav1.IsControlledBy(&v, cluster)
+		}) {
+			t.Errorf("B%d creates Volumes %+v, want 2 with the Cluster's label and controller reference.", bug, created)
 		}
-		slices.Sort(counted)
-		if !slices.Equal(counted, want) {
-			t.Errorf("B%d counts ready the Volumes with %q, want %q.", bug, counted, want)
+	}
+}
+
+// B132 forgets the name of each Volume it deletes, so a later Volume of that
+// index gets a generated name too.
+func TestB132NamesEachNewVolumeAfresh(t *testing.T) {
+	f := newBuggyFleet(t, B132, clusterObj())
+	f.settle(f.clusters, "cluster")
+	first := f.volumes()
+	for _, volumes := range []int32{1, 2} {
+		c := f.cluster()
+		c.Spec.Volumes = volumes
+		if err := f.c.Update(t.Context(), c); err != nil {
+			t.Fatal(err)
 		}
+		f.settle(f.clusters, "cluster")
+	}
+	got := f.volumes()
+	if len(first) != 2 || len(got) != 2 || got[0] != first[0] || got[1] == first[1] || !strings.HasPrefix(got[1], "cluster-vol-1-") {
+		t.Errorf("Under B132, the Volumes were %q. After a change to 1 Volume and back to 2, they are %q, want the first and a new cluster-vol-1.", first, got)
 	}
 }
 
@@ -562,9 +592,9 @@ func TestB132MakesASecondSetOfVolumesAfterARestart(t *testing.T) {
 }
 
 // After one failed Volume create, B133 gives up on the Cluster for good. B0
-// tries again.
+// returns the error and tries again.
 func TestB133GivesUpForGoodAfterAFailedVolumeCreate(t *testing.T) {
-	for bug, want := range map[Bug]int{0: 2, B133: 0} {
+	for bug, want := range map[Bug]struct{ errors, volumes int }{0: {1, 2}, B133: {0, 0}} {
 		f := newBuggyFleet(t, bug, clusterObj())
 		failed := false
 		f.clusters.Client = interceptor.NewClient(f.c, interceptor.Funcs{
@@ -576,12 +606,15 @@ func TestB133GivesUpForGoodAfterAFailedVolumeCreate(t *testing.T) {
 				return c.Create(ctx, obj, opts...)
 			},
 		})
+		errs := 0
 		for range 10 {
-			// B0 returns the injected error once.
-			_, _ = f.clusters.Reconcile(t.Context(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "cluster"}})
+			if _, err := f.clusters.Reconcile(t.Context(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "cluster"}}); err != nil {
+				errs++
+			}
 		}
-		if c, n := f.cluster(), len(f.listVolumes()); n != want || strings.HasPrefix(c.Status.Message, gaveUp) != (bug == B133) {
-			t.Errorf("B%d: after a failed Volume create and 10 reconciles, the Cluster has %d Volumes and is %+v; want %d Volumes.", bug, n, c.Status, want)
+		c, n := f.cluster(), len(f.listVolumes())
+		if errs != want.errors || n != want.volumes || c.Status.Phase != fleetv1.Provisioning || strings.HasPrefix(c.Status.Message, gaveUp) != (bug == B133) {
+			t.Errorf("B%d: after a failed Volume create, 10 reconciles give %d errors, %d Volumes and status %+v; want %d errors, %d Volumes and phase Provisioning.", bug, errs, n, c.Status, want.errors, want.volumes)
 		}
 	}
 }
