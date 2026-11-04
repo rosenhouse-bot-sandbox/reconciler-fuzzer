@@ -737,7 +737,7 @@ Each finding's heading names its check:
 | Ordered | An object that a CR names under `onDelete: block` is gone while the CR names it, and the controller saw both in time to hold it. |
 | Teardown | The controller releases a CR while one of the CR's resources that the garbage collector does not delete is not yet being deleted. |
 | Backoff | The controller repeats a failing request more than 10 times per live CR, with gaps under 100 ms. For a write that changes nothing, the limit is 20. |
-| Finalizers | A controller write drops a finalizer that a model or the garbage collector added. |
+| Finalizers | A controller write drops a finalizer that a model or the garbage collector owns. |
 | Property | A [property](#properties) does not hold, or cannot be evaluated. |
 
 [docs/failures.md](docs/failures.md) explains each finding and what to change when a run exits 2.

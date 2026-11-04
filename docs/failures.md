@@ -227,9 +227,10 @@ of its output, often a panic. If the tail shows a port in use, or a missing
 certificate, env var, CRD or permission, fix `launch` or `crds`. A restart's
 `args`, from the plan or `launch.upgrades`, replace `launch.args` for every
 later start. So at or after a step whose actions name `restart (upgrade)`,
-check whether those `args` lack a flag from `launch.args`, such as
-`--kubeconfig=${systems.kube.kubeconfig}`. The tail shows only the error
-that the missing flag causes. Otherwise the controller has a bug.
+those `args` may lack a flag that the controller needs, such as
+`--kubeconfig=${systems.kube.kubeconfig}`. The tail may then show an error
+without naming the flag. If those `args` lack such a flag, add it. Otherwise
+the controller has a bug.
 
 ### Clean: left resources behind
 
@@ -397,7 +398,7 @@ than a short `RequeueAfter`.
 
 ### Finalizers: removed another caller's finalizer
 
-A controller update or patch dropped a finalizer that a model added. Each
+A controller update or patch dropped a finalizer that a model owns. Each
 line names the object, the finalizer, the model and the removing write. A
 stage model adds its `finalizer:` and, during `slowDelete`,
 `reconciler-fuzzer.dev/slow-delete`. The API server adds

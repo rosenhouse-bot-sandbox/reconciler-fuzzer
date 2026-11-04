@@ -127,9 +127,9 @@ func decoded(t *testing.T, s string) any {
 	return o
 }
 
-// A Cluster that drops out of Ready and back within a step is Ready at the
-// step's end. Only a property judged at every version fails it.
-func TestProvisioningMeansVolumesNotReadyFailsADropOutOfReadyWithinAStep(t *testing.T) {
+// The Cluster reports Provisioning with its one Volume ready only between
+// two Ready versions of one step, so a step-end property cannot see it.
+func TestProvisioningMeansVolumesNotReadyFailsWithinAStep(t *testing.T) {
 	c, err := config.Load(clusterConfig)
 	if err != nil {
 		t.Fatal(err)
