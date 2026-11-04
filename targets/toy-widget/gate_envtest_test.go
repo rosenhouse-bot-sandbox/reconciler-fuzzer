@@ -38,7 +38,7 @@ func TestGate(t *testing.T) {
 			if g.finding != "" && !hasFinding(text, g.finding, g.step, g.detail) {
 				t.Errorf("Want a finding %q at step %d that says %q. report.md:\n%s", g.finding, g.step, g.detail, text)
 			}
-			if !notesMatch(report.Notes, g.notes) {
+			if !g.notesMatch(report.Notes) {
 				t.Errorf("Found notes %q, want notes that say %q. report.md:\n%s", report.Notes, g.notes, text)
 			}
 		})

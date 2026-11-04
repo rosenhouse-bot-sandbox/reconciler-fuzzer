@@ -24,6 +24,9 @@ type gateRow struct {
 	// notes are what the run's notes say, in order. Without them the run
 	// gives no note.
 	notes []string
+	// mayNote is what a note says that the run may give besides notes. A
+	// race in the toy decides whether it does.
+	mayNote string
 }
 
 const (
@@ -61,7 +64,9 @@ func plans(config string) ([]string, error) {
 // finding means the bug must pass the plan.
 var gate = []gateRow{
 	{plan: "b1", bug: 1, finding: "Converge: did not stay settled", step: 0, detail: "changed writes"},
-	{plan: "b2", bug: 2, finding: "Converge: did not settle", step: 0, detail: "changed writes"},
+	// B2's status counts every child the cache shows, and each reconcile
+	// adds one. A race decides whether some status counts exactly one.
+	{plan: "b2", bug: 2, finding: "Converge: did not settle", step: 0, detail: "changed writes", mayNote: "primary.ready held for no CR version"},
 	{plan: "b4", bug: 4, finding: "Converge: did not settle", step: 1, detail: "is not ready"},
 	{plan: "b5", bug: 5, finding: "Converge: did not settle", step: 0, detail: "is not ready", notes: []string{"primary.ready held for no CR version"}},
 	{plan: "b6", bug: 6, finding: "Converge: did not settle", step: 0, detail: "changed writes"},
@@ -114,27 +119,35 @@ func hasFinding(report, heading string, step int, detail string) bool {
 	return false
 }
 
-// notesMatch says whether each note says the string at its index in want.
-func notesMatch(notes, want []string) bool {
-	return slices.EqualFunc(notes, want, strings.Contains)
+// notesMatch drops the notes that say g.mayNote, and says whether each
+// other note says the string at its index in g.notes.
+func (g gateRow) notesMatch(notes []string) bool {
+	if g.mayNote != "" {
+		notes = slices.DeleteFunc(slices.Clone(notes), func(note string) bool { return strings.Contains(note, g.mayNote) })
+	}
+	return slices.EqualFunc(notes, g.notes, strings.Contains)
 }
 
 func TestNotesMatch(t *testing.T) {
 	for _, c := range []struct {
 		notes, want []string
+		may         string
 		match       bool
 	}{
-		{nil, nil, true},
-		{[]string{"a note"}, nil, false},
-		{nil, []string{"note"}, false},
-		{[]string{"a note"}, []string{"note"}, true},
-		{[]string{"a note"}, []string{"other"}, false},
-		{[]string{"first", "second"}, []string{"first", "second"}, true},
-		{[]string{"first", "second"}, []string{"second", "first"}, false},
-		{[]string{"first", "second"}, []string{"first"}, false},
+		{nil, nil, "", true},
+		{[]string{"a note"}, nil, "", false},
+		{nil, []string{"note"}, "", false},
+		{[]string{"a note"}, []string{"note"}, "", true},
+		{[]string{"a note"}, []string{"other"}, "", false},
+		{[]string{"first", "second"}, []string{"first", "second"}, "", true},
+		{[]string{"first", "second"}, []string{"second", "first"}, "", false},
+		{[]string{"first", "second"}, []string{"first"}, "", false},
+		{nil, nil, "race", true},
+		{[]string{"first", "a race", "second"}, []string{"first", "second"}, "race", true},
+		{[]string{"a note"}, nil, "race", false},
 	} {
-		if got := notesMatch(c.notes, c.want); got != c.match {
-			t.Errorf("notesMatch(%q, %q) = %v", c.notes, c.want, got)
+		if got := (gateRow{notes: c.want, mayNote: c.may}).notesMatch(c.notes); got != c.match {
+			t.Errorf("notesMatch(%q) with notes %q and mayNote %q = %v", c.notes, c.want, c.may, got)
 		}
 	}
 }
