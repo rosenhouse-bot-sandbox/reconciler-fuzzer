@@ -3,8 +3,13 @@ package main_test
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/check"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/owner"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
+	tt "github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace/tracetest"
 )
 
 func TestReadyNeedsTheCurrentGenerationInPhaseReady(t *testing.T) {
@@ -120,6 +125,44 @@ func decoded(t *testing.T, s string) any {
 		t.Fatal(err)
 	}
 	return o
+}
+
+// A Cluster that drops out of Ready and back within a step is Ready at the
+// step's end. Only a property judged at every version fails it.
+func TestProvisioningMeansVolumesNotReadyFailsADropOutOfReadyWithinAStep(t *testing.T) {
+	c, err := config.Load(clusterConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster := trace.Ref{System: "kube", Group: "toy.reconciler-fuzzer", Resource: "clusters", Namespace: "ns", Name: "cluster"}
+	volume := trace.Ref{System: "kube", Group: "storage.thirdparty", Resource: "volumes", Namespace: "ns", Name: "cluster-vol-0"}
+	// The Cluster wants one small Volume.
+	withPhase := func(phase string) map[string]any {
+		body := map[string]any{"kind": "Cluster", "metadata": map[string]any{"name": cluster.Name, "generation": 1},
+			"spec": map[string]any{"volumes": 1, "volumeSize": "small"}}
+		if phase != "" {
+			body["status"] = map[string]any{"phase": phase, "observedGeneration": 1, "readyVolumes": 1}
+		}
+		return body
+	}
+	r := tt.NewScript(trace.Kind{Group: cluster.Group, Resource: cluster.Resource}, 1, time.Second)
+	r.BodyUIDs, r.Spec.Properties = true, owner.Properties(c)
+	r.Begin()
+	uid := r.Create(trace.Harness, cluster, withPhase(""))
+	r.Act("create", "a", &cluster)
+	r.Create(trace.Controller, volume, tt.OwnedBy(map[string]any{"metadata": map[string]any{"name": volume.Name}, "spec": map[string]any{"size": "small"}}, uid, true))
+	r.Update(trace.Controller, cluster, withPhase("Ready"))
+	r.Update(trace.Controller, cluster, withPhase("Provisioning"))
+	r.Update(trace.Controller, cluster, withPhase("Ready")).EndFaults().Settle()
+	ix := r.Index()
+	spec, err := check.SpecFor(nil, ix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "property provisioning-means-volumes-not-ready does not hold"
+	if findings := check.Property(ix, spec); len(findings) != 1 || findings[0].Summary != want {
+		t.Errorf("findings = %+v, want one that says %s.", findings, want)
+	}
 }
 
 // The kube role drops a suffix after a Volume's index, so that Unique finds

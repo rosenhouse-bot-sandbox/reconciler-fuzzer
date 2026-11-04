@@ -227,8 +227,9 @@ of its output, often a panic. If the tail shows a port in use, or a missing
 certificate, env var, CRD or permission, fix `launch` or `crds`. A restart's
 `args`, from the plan or `launch.upgrades`, replace `launch.args` for every
 later start. So at or after a step whose actions name `restart (upgrade)`,
-the tail may show that those `args` lack a flag from `launch.args`, such as
-`--kubeconfig=${systems.kube.kubeconfig}`. Otherwise the controller has a bug.
+check whether those `args` lack a flag from `launch.args`, such as
+`--kubeconfig=${systems.kube.kubeconfig}`. The tail shows only the error
+that the missing flag causes. Otherwise the controller has a bug.
 
 ### Clean: left resources behind
 
