@@ -526,8 +526,8 @@ func TestB131ReportsAClusterReadyBeforeItsVolumes(t *testing.T) {
 	}
 }
 
-// Each Volume has the Cluster's label and controller reference from its
-// create, as the next sync's update would hide their lack.
+// Each Volume gets the Cluster's label and controller reference in its
+// create, not only in a later update.
 func TestEachVolumeHasTheClusterLabelAndOwnerFromItsCreate(t *testing.T) {
 	for _, bug := range []Bug{0, B132} {
 		f := newBuggyFleet(t, bug, clusterObj())
@@ -550,8 +550,8 @@ func TestEachVolumeHasTheClusterLabelAndOwnerFromItsCreate(t *testing.T) {
 	}
 }
 
-// B132 forgets the name of each Volume it deletes, so a later Volume of that
-// index gets a generated name too.
+// B132 forgets the name of each Volume it deletes, so a later Volume at that
+// index gets a new generated name.
 func TestB132NamesEachNewVolumeAfresh(t *testing.T) {
 	f := newBuggyFleet(t, B132, clusterObj())
 	f.settle(f.clusters, "cluster")
