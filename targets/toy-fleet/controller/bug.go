@@ -36,6 +36,13 @@ const (
 	// B126, under --protect-secrets, never puts SecretInUseFinalizer on the
 	// Secret a Database names.
 	B126 Bug = 126
+	// B131 counts every Volume as ready.
+	B131 Bug = 131
+	// B132 names Volumes with generateName and remembers them only in memory,
+	// so a restart makes a second set.
+	B132 Bug = 132
+	// B133 gives up for good when a Volume write fails.
+	B133 Bug = 133
 	// B135 ends each Volume's name with a suffix that each process picks, and
 	// deletes only Volumes with its own suffix. So a restart makes a second
 	// set.
@@ -61,6 +68,8 @@ const (
 	B170 Bug = 170
 	// B171 ignores KUBECONFIG and dials localhost:8080.
 	B171 Bug = 171
+	// B172 counts a Volume ready on a Ready condition of an older generation.
+	B172 Bug = 172
 )
 
 // B140 to B142 are bugs of version 2 that show only on a Cluster that
@@ -79,8 +88,9 @@ const (
 // bugs holds every seeded bug ID.
 var bugs = map[Bug]bool{
 	B115: true, B116: true, B117: true, B118: true, B119: true, B120: true, B121: true, B122: true, B123: true,
-	B124: true, B125: true, B126: true, B135: true, B140: true, B141: true, B142: true, B150: true, B151: true,
-	B152: true, B160: true, B161: true, B162: true, B170: true, B171: true,
+	B124: true, B125: true, B126: true, B131: true, B132: true, B133: true, B135: true, B140: true, B141: true,
+	B142: true, B150: true, B151: true, B152: true, B160: true, B161: true, B162: true, B170: true, B171: true,
+	B172: true,
 }
 
 // ParseBug converts a --bug value into a Bug.

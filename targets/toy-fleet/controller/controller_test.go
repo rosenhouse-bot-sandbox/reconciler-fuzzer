@@ -7,6 +7,7 @@ import (
 	"maps"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -258,21 +259,29 @@ func TestClusterLeavesTheVolumesOfAnEarlierClusterOfItsName(t *testing.T) {
 	}
 }
 
-func TestVolumeReadyNeedsReadyTrueForItsGenerationWhileLive(t *testing.T) {
-	volume := func(status metav1.ConditionStatus, observed int64) *storagev1.Volume {
-		v := &storagev1.Volume{ObjectMeta: metav1.ObjectMeta{Generation: 2}}
-		meta.SetStatusCondition(&v.Status.Conditions, metav1.Condition{Type: "Ready", Status: status, Reason: "Test", ObservedGeneration: observed})
-		return v
+// volumeWithReady is a generation 2 Volume whose Ready condition has status
+// and observed.
+func volumeWithReady(status metav1.ConditionStatus, observed int64) *storagev1.Volume {
+	v := &storagev1.Volume{ObjectMeta: metav1.ObjectMeta{Generation: 2}}
+	meta.SetStatusCondition(&v.Status.Conditions, metav1.Condition{Type: "Ready", Status: status, Reason: "Test", ObservedGeneration: observed})
+	return v
+}
+
+// unreadyVolumes are Volumes that are not ready, by what makes them so.
+func unreadyVolumes() map[string]*storagev1.Volume {
+	return map[string]*storagev1.Volume{
+		"no condition":        {},
+		"Ready False":         volumeWithReady(metav1.ConditionFalse, 2),
+		"an older generation": volumeWithReady(metav1.ConditionTrue, 1),
+		"deleting":            deleting(volumeWithReady(metav1.ConditionTrue, 2), "storage.thirdparty/protect"),
 	}
-	if !volumeReady(volume(metav1.ConditionTrue, 2)) {
+}
+
+func TestVolumeReadyNeedsReadyTrueForItsGenerationWhileLive(t *testing.T) {
+	if !volumeReady(volumeWithReady(metav1.ConditionTrue, 2)) {
 		t.Error("A Volume with Ready True for its generation is not ready.")
 	}
-	for name, v := range map[string]*storagev1.Volume{
-		"no condition":        {},
-		"Ready False":         volume(metav1.ConditionFalse, 2),
-		"an older generation": volume(metav1.ConditionTrue, 1),
-		"deleting":            deleting(volume(metav1.ConditionTrue, 2), "storage.thirdparty/protect"),
-	} {
+	for name, v := range unreadyVolumes() {
 		if volumeReady(v) {
 			t.Errorf("A Volume with %s is ready.", name)
 		}
@@ -498,6 +507,82 @@ func TestAClusterWithoutStorageClassesHasNone(t *testing.T) {
 	list := &k8sstoragev1.StorageClassList{}
 	if err := f.c.List(t.Context(), list); err != nil || len(list.Items) != 0 {
 		t.Errorf("Without storage classes, the StorageClasses are %+v, %v.", list.Items, err)
+	}
+}
+
+func TestB131ReportsAClusterReadyBeforeItsVolumes(t *testing.T) {
+	f := newBuggyFleet(t, B131, clusterObj())
+	f.settle(f.clusters, "cluster")
+	if c := f.cluster(); c.Status.Phase != fleetv1.Ready {
+		t.Errorf("Under B131, before its Volumes are ready, the Cluster is %+v.", c.Status)
+	}
+}
+
+// B131 counts every Volume ready, and B172 also a live one whose Ready
+// condition is True for an older generation.
+func TestB131AndB172CountUnreadyVolumes(t *testing.T) {
+	for bug, want := range map[Bug][]string{
+		0:    nil,
+		B131: {"Ready False", "an older generation", "deleting", "no condition"},
+		B172: {"an older generation"},
+	} {
+		r := &ClusterReconciler{reconciler: reconciler{Bug: bug}}
+		var counted []string
+		for name, v := range unreadyVolumes() {
+			if r.countsReady(v) {
+				counted = append(counted, name)
+			}
+		}
+		slices.Sort(counted)
+		if !slices.Equal(counted, want) {
+			t.Errorf("B%d counts ready the Volumes with %q, want %q.", bug, counted, want)
+		}
+	}
+}
+
+// A restarted B132 has lost the generated names of its Volumes, so it makes
+// a second set and deletes only its own surplus ones.
+func TestB132MakesASecondSetOfVolumesAfterARestart(t *testing.T) {
+	f := newBuggyFleet(t, B132, clusterObj())
+	f.settle(f.clusters, "cluster")
+	first := f.volumes()
+	restarted := &ClusterReconciler{reconciler: f.clusters.reconciler}
+	f.settle(restarted, "cluster")
+	c := f.cluster()
+	c.Spec.Volumes = 1
+	if err := f.c.Update(t.Context(), c); err != nil {
+		t.Fatal(err)
+	}
+	f.settle(restarted, "cluster")
+	got := f.volumes()
+	added := slices.DeleteFunc(slices.Clone(got), func(v string) bool { return slices.Contains(first, v) })
+	if len(first) != 2 || len(got) != 3 || len(added) != 1 || !strings.HasPrefix(added[0], "cluster-vol-0-") {
+		t.Errorf("Under B132, the first process made Volumes %q. After a restart and a change to 1 Volume, the Volumes are %q, want those and one more cluster-vol-0.", first, got)
+	}
+}
+
+// After one failed Volume create, B133 gives up on the Cluster for good. B0
+// tries again.
+func TestB133GivesUpForGoodAfterAFailedVolumeCreate(t *testing.T) {
+	for bug, want := range map[Bug]int{0: 2, B133: 0} {
+		f := newBuggyFleet(t, bug, clusterObj())
+		failed := false
+		f.clusters.Client = interceptor.NewClient(f.c, interceptor.Funcs{
+			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				if _, ok := obj.(*storagev1.Volume); ok && !failed {
+					failed = true
+					return apierrors.NewInternalError(errors.New("injected"))
+				}
+				return c.Create(ctx, obj, opts...)
+			},
+		})
+		for range 10 {
+			// B0 returns the injected error once.
+			_, _ = f.clusters.Reconcile(t.Context(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "cluster"}})
+		}
+		if c, n := f.cluster(), len(f.listVolumes()); n != want || strings.HasPrefix(c.Status.Message, gaveUp) != (bug == B133) {
+			t.Errorf("B%d: after a failed Volume create and 10 reconciles, the Cluster has %d Volumes and is %+v; want %d Volumes.", bug, n, c.Status, want)
+		}
 	}
 }
 
@@ -1070,7 +1155,7 @@ func TestReconcileOfAMissingCRSucceeds(t *testing.T) {
 }
 
 func TestParseBugAcceptsOnlyKnownBugs(t *testing.T) {
-	for _, id := range []int{0, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 135, 140, 141, 142, 150, 151, 152, 160, 161, 162, 170, 171} {
+	for _, id := range []int{0, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 131, 132, 133, 135, 140, 141, 142, 150, 151, 152, 160, 161, 162, 170, 171, 172} {
 		if b, err := ParseBug(id); int(b) != id || err != nil {
 			t.Errorf("ParseBug(%d) = %v, %v", id, b, err)
 		}
