@@ -1,12 +1,75 @@
 package reconcilerfuzzer_test
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"regexp"
 	"slices"
 	"strings"
 	"testing"
 )
+
+func TestReadmeNamesEveryCheck(t *testing.T) {
+	readme, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := judgeChecks(t)
+	var listed []string
+	if m := checkList.FindStringSubmatch(strings.Join(strings.Fields(string(readme)), " ")); m != nil {
+		listed = strings.Split(strings.Replace(m[1], " and ", ", ", 1), ", ")
+	}
+	if !slices.Equal(listed, want) {
+		t.Errorf("The README's first paragraph lists the checks %q, want those that check.Judge runs, in order: %q.", listed, want)
+	}
+	if tabled := firstColumn(string(readme), "| Check | It fails |"); !slices.Equal(tabled, want) {
+		t.Errorf("The README's table of checks has rows %q, want one for each check that check.Judge runs, in order: %q.", tabled, want)
+	}
+}
+
+var checkList = regexp.MustCompile(`judges the trace with \w+ checks: (\w+(?:, \w+)* and \w+)`)
+
+// firstColumn reads the first cell of each row of the table under header.
+func firstColumn(doc, header string) []string {
+	_, table, found := strings.Cut(doc, header+"\n| --- | --- |\n")
+	if !found {
+		return nil
+	}
+	table, _, _ = strings.Cut(table, "\n\n")
+	var cells []string
+	for row := range strings.SplitSeq(table, "\n") {
+		cell, _, _ := strings.Cut(strings.TrimPrefix(row, "| "), " |")
+		cells = append(cells, cell)
+	}
+	return cells
+}
+
+// judgeChecks names the checks that check.Judge calls, in order.
+func judgeChecks(t *testing.T) []string {
+	file, err := parser.ParseFile(token.NewFileSet(), "internal/check/check.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var checks []string
+	for _, decl := range file.Decls {
+		if judge, ok := decl.(*ast.FuncDecl); ok && judge.Name.Name == "Judge" {
+			ast.Inspect(judge.Body, func(n ast.Node) bool {
+				if call, ok := n.(*ast.CallExpr); ok {
+					if check, ok := call.Fun.(*ast.Ident); ok && check.IsExported() {
+						checks = append(checks, check.Name)
+					}
+				}
+				return true
+			})
+		}
+	}
+	if len(checks) == 0 {
+		t.Fatal("internal/check/check.go has no Judge that calls a check.")
+	}
+	return checks
+}
 
 func TestReadmeCommandsAndPathsExist(t *testing.T) {
 	readme, err := os.ReadFile("README.md")
