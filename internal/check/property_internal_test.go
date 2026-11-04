@@ -15,8 +15,8 @@ import (
 // In a run whose every step writes, a property is judged at most once
 // between two version events, though each finding says when it turned false.
 func TestAPropertyIsJudgedOnceBetweenVersionEvents(t *testing.T) {
-	// Each step writes the child's data.v twice. The property cannot be
-	// evaluated while the child has no data, written as "".
+	// Each step writes the child's data.v twice. A write of "" leaves no
+	// data, so the property cannot be evaluated.
 	writes := [][2]string{{"x", "x"}, {"x", "y"}, {"y", "y"}, {"x", "x"}, {"y", "y"}, {"x", ""}, {"y", "y"}}
 	r := tt.NewScript(trace.Kind{Group: "toy", Version: "v1", Kind: "Widget", Resource: "widgets"}, len(writes), time.Second)
 	const noY = "world.kube.configmaps.all(m, m.data.v != 'y')"

@@ -81,10 +81,10 @@ func (p *properties) holdsAt(eval evaluator, t time.Duration) bool {
 	return err != nil || holds
 }
 
-// falseRun is the run of version events, from versionTimes[start] to
-// versionTimes[end], at each of which a property is false, that ends at the
-// version event of its last judgment. The run is empty, with start end+1, if
-// the property holds or cannot be evaluated there.
+// falseRun is a run of version events, from versionTimes[start] to
+// versionTimes[end], at each of which a property is false. It ends at the
+// version event of the property's last judgment. It is empty, with start
+// end+1, if the property holds or cannot be evaluated there.
 type falseRun struct{ start, end int }
 
 // turned says when a property that is false at versionTimes[end] last turned
