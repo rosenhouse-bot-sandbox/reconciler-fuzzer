@@ -45,12 +45,16 @@ func (p *properties) judgeEach(property PropertySpec, eval evaluator) []Finding 
 		if judged[at.step] {
 			continue
 		}
-		switch holds, origins, err := p.judge(eval, at.t); {
+		holds, origins, err := p.judge(eval, at.t)
+		if holds || err != nil {
+			run = falseRun{at.version + 1, at.version}
+		}
+		switch {
 		case err != nil:
 			findings = append(findings, propertyFinding(property, at.step, at.t, "could not be evaluated", err.Error()))
 		case !holds:
 			f := propertyFinding(property, at.step, at.t, "does not hold", property.Expr+" is false")
-			if turn := p.turned(eval, at.t, &run); turn != "" {
+			if turn := p.turned(eval, at.version, &run); turn != "" {
 				f.Details = append(f.Details, turn)
 			}
 			f.Details = append(f.Details, origins...)
@@ -77,25 +81,21 @@ func (p *properties) holdsAt(eval evaluator, t time.Duration) bool {
 	return err != nil || holds
 }
 
-// falseRun is a run of version events, from versionTimes[start] to
-// versionTimes[end], at each of which a property is false.
+// falseRun is the run of version events, from versionTimes[start] to
+// versionTimes[end], at each of which a property is false, that ends at the
+// version event of its last judgment. The run is empty, with start end+1, if
+// the property holds or cannot be evaluated there.
 type falseRun struct{ start, end int }
 
-// turned says when a property that is false at t last turned false, and
-// which writes the trace recorded then. The world changes only at version
-// events, so the property is false at the last one by t. turned judges each
-// earlier one in turn, back to one where the property holds or cannot be
-// evaluated, or to the end of run, the false run it found last for the
-// property, whose start it then takes.
-func (p *properties) turned(eval evaluator, t time.Duration, run *falseRun) string {
-	times := p.versionTimes
-	end, found := slices.BinarySearch(times, t)
-	if !found {
-		end--
-	}
+// turned says when a property that is false at versionTimes[end] last turned
+// false, and which writes the trace recorded then. It judges each earlier
+// version event in turn, back to one where the property holds or cannot be
+// evaluated, or to the end of run, whose start it then takes.
+func (p *properties) turned(eval evaluator, end int, run *falseRun) string {
 	if end < 0 {
 		return ""
 	}
+	times := p.versionTimes
 	start := end
 	for start > run.end+1 && !p.holdsAt(eval, times[start-1]) {
 		start--
@@ -162,6 +162,10 @@ func newProperties(ix *trace.Index, s Spec) *properties {
 type judgeTime struct {
 	t    time.Duration
 	step int
+	// version is the index in versionTimes of the last version event by t,
+	// or -1. The world changes only at version events, so a property judged
+	// at t is judged at that event.
+	version int
 }
 
 // times are when p is judged: each settled step's end, or for an always
@@ -171,16 +175,20 @@ func (p *properties) times(property PropertySpec) []judgeTime {
 	var times []judgeTime
 	if !property.Always {
 		for _, step := range p.steps {
-			times = append(times, judgeTime{step.ConfirmEnd, step.Step})
+			version, found := slices.BinarySearch(p.versionTimes, step.ConfirmEnd)
+			if !found {
+				version--
+			}
+			times = append(times, judgeTime{step.ConfirmEnd, step.Step, version})
 		}
 		return times
 	}
-	for _, t := range p.versionTimes {
+	for version, t := range p.versionTimes {
 		step := -1
 		if latest, found := latestStep(p.ix, t); found {
 			step = latest.Step
 		}
-		times = append(times, judgeTime{t, step})
+		times = append(times, judgeTime{t, step, version})
 	}
 	return times
 }
