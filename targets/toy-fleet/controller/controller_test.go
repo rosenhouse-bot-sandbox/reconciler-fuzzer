@@ -259,9 +259,6 @@ func TestClusterLeavesTheVolumesOfAnEarlierClusterOfItsName(t *testing.T) {
 	}
 }
 
-// B0 counts a Volume ready while it is live with Ready True for its
-// generation. B131 counts every Volume, and B172 also Ready True of an older
-// generation.
 func TestCountsReadyNeedsReadyTrueForItsGenerationWhileLive(t *testing.T) {
 	volume := func(status metav1.ConditionStatus, observed int64) *storagev1.Volume {
 		v := &storagev1.Volume{ObjectMeta: metav1.ObjectMeta{Generation: 2}}
@@ -654,7 +651,7 @@ func TestB133GivesUpForGoodAfterAFailedVolumeCreate(t *testing.T) {
 		}
 		c, n := f.cluster(), len(f.listVolumes())
 		if errs != want.errors || n != want.volumes || c.Status.Phase != fleetv1.Provisioning || strings.HasPrefix(c.Status.Message, gaveUp) != (bug == B133) {
-			t.Errorf("B%d: after a failed Volume create, 10 reconciles give %d errors, %d Volumes and status %+v; want %d errors, %d Volumes and phase Provisioning.", bug, errs, n, c.Status, want.errors, want.volumes)
+			t.Errorf("B%d: after a failed Volume create, 10 reconciles give %d errors, %d Volumes and status %+v; want %d errors, %d Volumes, phase Provisioning and a message that starts %q only under B133.", bug, errs, n, c.Status, want.errors, want.volumes, gaveUp)
 		}
 	}
 }

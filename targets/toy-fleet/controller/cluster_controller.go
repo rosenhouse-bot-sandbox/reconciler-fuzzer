@@ -309,8 +309,9 @@ func (r *ClusterReconciler) baseName(cluster *fleetv1.Cluster, i int32) string {
 func (r *ClusterReconciler) volumeName(cluster *fleetv1.Cluster, i int32) string {
 	switch r.Bug {
 	case B132:
+		prefix := r.baseName(cluster, i) + "-"
 		for _, name := range r.generated[cluster.UID] {
-			if strings.HasPrefix(name, r.baseName(cluster, i)+"-") {
+			if strings.HasPrefix(name, prefix) {
 				return name
 			}
 		}
