@@ -591,8 +591,8 @@ func TestB132MakesASecondSetOfVolumesAfterARestart(t *testing.T) {
 	}
 }
 
-// The cache can miss a Volume that a scale-up just made, while a scale-down
-// follows. A later reconcile deletes that Volume, under B132 too.
+// A scale-down can come while the cache misses a Volume that a scale-up just
+// made. A later reconcile deletes that Volume, under B132 too.
 func TestAScaleDownDeletesAVolumeTheCacheMissed(t *testing.T) {
 	for _, bug := range []Bug{0, B132} {
 		f := newBuggyFleet(t, bug, clusterObj())

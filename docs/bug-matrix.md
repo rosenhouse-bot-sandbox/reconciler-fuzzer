@@ -99,7 +99,7 @@ Each Cluster owns Volumes of a third party's kind, which a model sets ready. A D
 | B131 | Counts every Volume as ready. | b131 | Honest | 1 |
 | B132 | Names Volumes with generateName and remembers them only in memory, so a restart makes a second set. | b132 | Unique | 0 |
 | B132 | Names Volumes with generateName and remembers them only in memory, so a restart makes a second set. | b132 | Unique | 1 |
-| B133 | Gives up for good when a Volume write fails. | b133 | Converge | 0 |
+| B133 | Gives up on a Cluster for good once a sync of its Volumes fails. | b133 | Converge | 0 |
 | B135 | Ends each Volume's name with a suffix that each process picks, and deletes only Volumes with its own suffix, so a restart makes a second set. | b135 | Unique | 0 |
 | B135 | Ends each Volume's name with a suffix that each process picks, and deletes only Volumes with its own suffix, so a restart makes a second set. | b135 | Unique | 1 |
 | B135 | Ends each Volume's name with a suffix that each process picks, and deletes only Volumes with its own suffix, so a restart makes a second set. | b135-restart | Restore | 1 |

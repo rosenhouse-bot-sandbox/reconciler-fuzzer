@@ -41,7 +41,7 @@ const (
 	// B132 names Volumes with generateName and remembers them only in memory,
 	// so a restart makes a second set.
 	B132 Bug = 132
-	// B133 gives up for good when a Volume write fails.
+	// B133 gives up on a Cluster for good once a sync of its Volumes fails.
 	B133 Bug = 133
 	// B135 ends each Volume's name with a suffix that each process picks, and
 	// deletes only Volumes with its own suffix. So a restart makes a second
