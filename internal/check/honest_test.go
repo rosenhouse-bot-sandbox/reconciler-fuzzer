@@ -147,17 +147,27 @@ func TestHonestRequiresADependency(t *testing.T) {
 }
 
 // A Gadget the controller made without an ownerReference is no dependency.
-// The finding names it and how to declare its owner.
+// The finding names it and how to declare its owner. Owner rule 4 gives the
+// CR an object that another caller made too, but that one needs no
+// ownerReference.
 func TestHonestNamesAnUnownedDependency(t *testing.T) {
-	r := newRun(1)
-	r.Spec.Models = []trace.Model{{Kind: trace.Kind{Group: "toy", Version: "v1", Kind: "Gadget", Resource: "gadgets"},
-		Ready: config.ReadyConditionCEL, Dependency: &trace.Dependency{Required: true}}}
-	r.Begin().CreateCR("a", widgetA)
-	r.Create(ctl, gadgetA, tt.ReadyCondition("a", 1, false))
-	r.Update(gadgetModel, gadgetA, tt.ReadyCondition("a", 1, true))
-	r.See(ctl, gadgetA).Ready(widgetA)
-	requireFinding(t, honest(t, r), "Honest", 0, noDependency, "kube/toy/widgets",
-		"slot a: gadgets.toy ns/a has no ownerReference to it; declare primary.owns or a kube owner")
+	for creator, want := range map[trace.Caller][]string{
+		ctl:           {"slot a: gadgets.toy ns/a has no ownerReference to it; declare primary.owns or a kube owner"},
+		trace.Harness: {"slot a"},
+		gadgetModel:   {"slot a"},
+	} {
+		r := newRun(1)
+		r.Spec.Models = []trace.Model{{Kind: trace.Kind{Group: "toy", Version: "v1", Kind: "Gadget", Resource: "gadgets"},
+			Ready: config.ReadyConditionCEL, Dependency: &trace.Dependency{Required: true}}}
+		r.Begin().CreateCR("a", widgetA)
+		r.Create(creator, gadgetA, tt.ReadyCondition("a", 1, false))
+		r.Update(gadgetModel, gadgetA, tt.ReadyCondition("a", 1, true))
+		r.See(ctl, gadgetA).Ready(widgetA)
+		f := only(t, honest(t, r))
+		if f.Summary != noDependency || f.Kind != "kube/toy/widgets" || !slices.Equal(f.Details, want) {
+			t.Errorf("Gadget by %s: finding = %+v, want details %q", creator, f, want)
+		}
+	}
 }
 
 // The finding names only what the controller made while the CR lived.

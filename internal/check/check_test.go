@@ -227,10 +227,10 @@ func TestRecordedB0RunHasNoFindings(t *testing.T) {
 func TestRecordedB16RunDidNotSettle(t *testing.T) {
 	r := judgeRecorded(t, "testdata/b16.jsonl")
 	if f := only(t, r.Findings); f.Summary != "did not settle (clause 1)" || f.Step != 0 ||
-		!slices.ContainsFunc(f.Details, func(d string) bool { return strings.HasSuffix(d, "/widget is not ready; it has no status") }) {
+		!slices.ContainsFunc(f.Details, func(d string) bool { return strings.HasSuffix(d, "/widget is not ready; it has generation 1 and no status") }) {
 		t.Fatalf("finding = %+v", f)
 	}
-	want := []string{"primary.ready held for no CR version; the last of widgets.toy.reconciler-fuzzer rf-d1ebbd7f/widget has no status"}
+	want := []string{"primary.ready held for no CR version; the last of widgets.toy.reconciler-fuzzer rf-d1ebbd7f/widget has generation 1 and no status"}
 	if !slices.Equal(r.Notes, want) {
 		t.Errorf("notes = %q, want %q", r.Notes, want)
 	}
@@ -305,25 +305,63 @@ func TestJudgeNotesAFailedAction(t *testing.T) {
 }
 
 // A ready that no CR ever meets more likely names the wrong field or value
-// than finds a bug, so the report says so.
+// than finds a bug, so the report says so. The note quotes the last version
+// not being deleted, as clause 1 does.
 func TestJudgeNotesAReadyNoCRVersionMet(t *testing.T) {
-	var b tt.Builder
-	b.Add(tt.Run("toy", "widgets"), tt.Start(1)).
+	unready := func() *tt.Builder {
+		var b tt.Builder
+		b.Add(tt.Run("toy", "widgets"), tt.Start(1)).
+			At(0).Add(tt.Phase(0, trace.FaultPeriod)).
+			At(100*ms).Add(tt.Call(trace.Harness, "create", widgetA, 201, "1"), tt.Version(widgetA, "ua", "1", ready(false))).
+			At(1*s).Add(tt.EndFaults(0, 10*s, false)).
+			At(1500*ms).Add(tt.Call(ctl, "update", widgetA, 200, "2"), tt.Version(widgetA, "ua", "2", ready("Ready")))
+		return &b
+	}
+	timedOut := unready()
+	timedOut.At(10 * s).Add(tt.Phase(0, trace.TimedOut))
+	finalized := unready()
+	finalizing := objectBody("a", true, "toy/cleanup")
+	finalizing["status"] = map[string]any{"phase": "Deleting"}
+	finalized.At(10*s).Add(tt.Phase(0, trace.TimedOut)).
+		At(12*s).Add(tt.Call(trace.Harness, "delete", widgetA, 200, "3"), tt.Version(widgetA, "ua", "3", finalizing))
+	// The CR appears after the step settled, so the step did not stay
+	// settled.
+	var late tt.Builder
+	late.Add(tt.Run("toy", "widgets"), tt.Start(1)).
 		At(0).Add(tt.Phase(0, trace.FaultPeriod)).
-		At(100*ms).Add(tt.Call(trace.Harness, "create", widgetA, 201, "1"), tt.Version(widgetA, "ua", "1", ready(false))).
+		At(500*ms).Add(tt.Call(ctl, "list", widgetA, 200, "")).
 		At(1*s).Add(tt.EndFaults(0, 10*s, false)).
-		At(1500*ms).Add(tt.Call(ctl, "update", widgetA, 200, "2"), tt.Version(widgetA, "ua", "2", ready("Ready"))).
-		At(10 * s).Add(tt.Phase(0, trace.TimedOut))
-	notes := check.Judge(b.Index(), spec).Notes
-	want := "primary.ready held for no CR version; the last of widgets.toy ns/a has status {\"ready\":\"Ready\"}"
-	if !slices.Contains(notes, want) {
-		t.Fatalf("notes = %q, want %q", notes, want)
+		At(3*s).Add(tt.Phase(0, trace.Settled)).
+		At(4*s).Add(tt.Call(trace.Harness, "create", widgetA, 201, "1"), tt.Version(widgetA, "ua", "1", ready(false))).
+		At(5 * s).Add(tt.Phase(0, trace.Confirmed))
+	for _, c := range []struct {
+		name    string
+		b       *tt.Builder
+		summary string
+		status  string
+	}{
+		{"timed out", timedOut, "did not settle (clause 1)", `{"ready":"Ready"}`},
+		{"finalized after the deadline", finalized, "did not settle (clause 1)", `{"ready":"Ready"}`},
+		{"created after the settle", &late, "did not stay settled (clause 1)", `{"ready":false}`},
+	} {
+		r := check.Judge(c.b.Index(), spec)
+		if !slices.ContainsFunc(r.Findings, func(f check.Finding) bool { return f.Summary == c.summary }) {
+			t.Errorf("%s: findings = %+v, want %q", c.name, r.Findings, c.summary)
+		}
+		want := []string{"primary.ready held for no CR version; the last of widgets.toy ns/a has status " + c.status}
+		if notes := neverReadyNotes(r); !slices.Equal(notes, want) {
+			t.Errorf("%s: notes = %q, want %q", c.name, notes, want)
+		}
 	}
 }
 
-// The note explains a CR that is not ready, so a run without such a CR gets
-// none, nor does one in which a CR was ready once.
-func TestJudgeNotesNoReadyThatHeldOrNoCRWaitedFor(t *testing.T) {
+func neverReadyNotes(r check.Report) []string {
+	return slices.DeleteFunc(r.Notes, func(n string) bool { return !strings.Contains(n, "held for no CR version") })
+}
+
+// The note explains an unmet clause 1, so a run without one gets none, nor
+// does one in which a CR was ready once.
+func TestNoNeverReadyNoteOnceReadyHeldOrWithoutAnUnreadyCR(t *testing.T) {
 	once := createStep()
 	once.At(3500*ms).Add(tt.Phase(0, trace.Settled)).
 		At(5500*ms).Add(tt.Phase(0, trace.Confirmed)).
@@ -340,13 +378,28 @@ func TestJudgeNotesNoReadyThatHeldOrNoCRWaitedFor(t *testing.T) {
 		At(1 * s).Add(tt.EndFaults(0, 10*s, false)).
 		At(3500 * ms).Add(tt.Phase(0, trace.Settled)).
 		At(5500 * ms).Add(tt.Phase(0, trace.Confirmed))
-	for name, b := range map[string]*tt.Builder{"ready once": once, "deleted unready": &gone} {
-		r := check.Judge(b.Index(), spec)
-		if name == "ready once" && !slices.ContainsFunc(r.Findings, func(f check.Finding) bool { return strings.HasSuffix(f.Summary, "(clause 1)") }) {
-			t.Errorf("%s: findings = %+v, want clause 1", name, r.Findings)
+	var held tt.Builder
+	held.Add(tt.Run("toy", "widgets"), tt.Start(1)).
+		At(0).Add(tt.Phase(0, trace.FaultPeriod)).
+		At(100*ms).Add(tt.Call(trace.Harness, "create", widgetA, 201, "1"), tt.Version(widgetA, "ua", "1", ready(false))).
+		At(1*s).Add(tt.EndFaults(0, 10*s, false)).
+		At(2*s).Add(tt.Call(trace.Harness, "delete", widgetA, 200, "2"), tt.Version(widgetA, "ua", "2", objectBody("a", true, "toy/cleanup"))).
+		At(10 * s).Add(tt.Phase(0, trace.TimedOut))
+	for _, c := range []struct {
+		name    string
+		b       *tt.Builder
+		summary string
+	}{
+		{"ready once", once, "did not stay settled (clause 1)"},
+		{"deleted unready", &gone, ""},
+		{"held in deletion", &held, "did not settle (clause 2)"},
+	} {
+		r := check.Judge(c.b.Index(), spec)
+		if c.summary != "" && !slices.ContainsFunc(r.Findings, func(f check.Finding) bool { return f.Summary == c.summary }) {
+			t.Errorf("%s: findings = %+v, want %q", c.name, r.Findings, c.summary)
 		}
-		if slices.ContainsFunc(r.Notes, func(n string) bool { return strings.Contains(n, "held for no CR version") }) {
-			t.Errorf("%s: notes = %q", name, r.Notes)
+		if notes := neverReadyNotes(r); len(notes) != 0 {
+			t.Errorf("%s: notes = %q, want no never-ready note", c.name, notes)
 		}
 	}
 }

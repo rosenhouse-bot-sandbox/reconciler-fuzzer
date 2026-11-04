@@ -75,6 +75,24 @@ func TestJudgeNotesTheEntryWhoseReadyNoCRMet(t *testing.T) {
 	}
 }
 
+// Clusters never met ready either, but no unmet clause 1 is about them.
+func TestJudgeNotesOnlyAKindThatClause1Names(t *testing.T) {
+	r := fleetRun(1, clusters, databases)
+	r.Begin()
+	r.CreateCR("a", clusterA)
+	r.CreateCR("b", databaseB)
+	r.DeleteCR("a", clusterA).EndFaults().TimeOut()
+	ix := r.Index()
+	spec, err := check.SpecFor(nil, ix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes := slices.DeleteFunc(check.Judge(ix, spec).Notes, func(n string) bool { return !strings.Contains(n, "held for no CR version") })
+	if want := []string{`primaries[1].ready held for no CR version; the last of databases.toy ns/b has status {"ready":false}`}; !slices.Equal(notes, want) {
+		t.Errorf("notes = %q, want %q", notes, want)
+	}
+}
+
 func TestJudgeNotesTheKeyThatTheRunRecords(t *testing.T) {
 	r := fleetRun(1, clusters)
 	r.Spec.Primaries[0].Key = "primaries[0]"

@@ -59,7 +59,8 @@ func Converge(ix *trace.Index, s Spec) (findings []Finding, notes []string) {
 
 // neverReady notes each listed kind that an unmet clause 1 is about and whose
 // ready held for no version of its CRs. Either the ready or the controller
-// can be at fault, so the note gives only what the trace shows.
+// can be at fault, so the note gives only what the trace shows: the last
+// version not being deleted, as clause 1 judges only such CRs.
 func neverReady(ix *trace.Index, s Spec, unmets []unmet) []string {
 	var notes []string
 	for _, p := range s.Primaries {
@@ -74,7 +75,9 @@ func neverReady(ix *trace.Index, s Spec, unmets []unmet) []string {
 				if ready = p.ready(decode(v.Body)); ready {
 					break
 				}
-				last = v
+				if !deleting(v.Body) {
+					last = v
+				}
 			}
 		}
 		if last != nil && !ready {

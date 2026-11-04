@@ -93,11 +93,13 @@ func TestOrderedDetailSaysHowTheObjectWasReleased(t *testing.T) {
 	r.Delete(ctl, pw)
 	requireFinding(t, ordered(t, r), "Ordered", 0, released, "kube/secrets", fmt.Sprintf("secrets ns/pw: slot b names it; it was deleted at %v with no finalizers", gone))
 
+	// The finalizer's owner removes it before the API server deletes the
+	// object, so only the version at the deletion's start shows it.
 	r = secretRun(blockRef(), secret(true))
-	body := tt.Deleting(secret(true))
-	body["metadata"].(map[string]any)["finalizers"] = []any{"toy/in-use"}
+	held := tt.Deleting(secret(true))
+	held["metadata"].(map[string]any)["finalizers"] = []any{"toy/in-use"}
 	start := seeBoth(r).Now
-	gone = r.Update(trace.Harness, pw, body).Now
+	gone = r.Update(trace.Harness, pw, held).Update(trace.Harness, pw, tt.Deleting(secret(true))).Now
 	r.Delete(ctl, pw)
 	requireFinding(t, ordered(t, r), "Ordered", 0, released, "kube/secrets",
 		fmt.Sprintf("secrets ns/pw: slot b names it; its deletion started at %v with finalizer toy/in-use, and it was gone at %v", start, gone))

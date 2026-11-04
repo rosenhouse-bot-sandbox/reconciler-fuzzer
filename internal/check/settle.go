@@ -204,18 +204,26 @@ func crClauses(ix *trace.Index, p Primary, cr trace.Version, t time.Duration, s 
 	return nil
 }
 
-// quoteStatus quotes body's status as stored, as "has status {...}", or
-// says "has no status".
+// quoteStatus quotes body's generation and status as stored, as "has
+// generation 2 and status {...}", or says "has no status".
 func quoteStatus(body map[string]any) string {
-	status := body["status"]
-	if m, isMap := status.(map[string]any); status == nil || isMap && len(m) == 0 {
-		return "has no status"
+	status := "no status"
+	if m, isMap := body["status"].(map[string]any); body["status"] != nil && !(isMap && len(m) == 0) {
+		status = "status " + quoteJSON(body["status"])
 	}
+	if metadata, _ := body["metadata"].(map[string]any); metadata["generation"] != nil {
+		return "has generation " + quoteJSON(metadata["generation"]) + " and " + status
+	}
+	return "has " + status
+}
+
+// quoteJSON encodes v as JSON without HTML escapes.
+func quoteJSON(v any) string {
 	var quoted strings.Builder
 	e := json.NewEncoder(&quoted)
 	e.SetEscapeHTML(false)
-	e.Encode(status)
-	return "has status " + strings.TrimSuffix(quoted.String(), "\n")
+	e.Encode(v)
+	return strings.TrimSuffix(quoted.String(), "\n")
 }
 
 // deletionClauses holds cr, being deleted at t, to clause 2. It excuses a CR
