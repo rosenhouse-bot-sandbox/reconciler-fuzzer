@@ -269,7 +269,8 @@ type Fault struct {
 }
 
 // Call is one request on one listener, recorded when its response ends. A
-// watch is recorded when its stream opens, or once a 403's message is read.
+// watch is recorded when its stream opens, unless it answers 403 in JSON or
+// protobuf.
 type Call struct {
 	Caller Caller `json:"caller"`
 	Method string `json:"method"`

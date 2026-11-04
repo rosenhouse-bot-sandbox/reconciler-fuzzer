@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -90,7 +89,10 @@ type falseRun struct{ start, end int }
 // property, whose start it then takes.
 func (p *properties) turned(eval evaluator, t time.Duration, run *falseRun) string {
 	times := p.versionTimes
-	end := sort.Search(len(times), func(i int) bool { return times[i] > t }) - 1
+	end, found := slices.BinarySearch(times, t)
+	if !found {
+		end--
+	}
 	if end < 0 {
 		return ""
 	}

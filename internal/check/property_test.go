@@ -367,23 +367,28 @@ func turnDetail(t *testing.T, r *tt.Script) string {
 }
 
 // At the second of two steps whose ends a property is false at, the
-// finding names the turn of the first.
+// finding names the turn of the first, whether or not the second wrote.
 func TestAPropertyFalseAtTwoStepsNamesTheFirstStepsTurn(t *testing.T) {
-	r := newRun(2)
-	r.Spec.Properties = []trace.Property{{Name: "one-configmap", Expr: "size(world.kube.configmaps) <= 1", When: "step"}}
-	r.Begin()
-	a0 := withChild(r, "a", true)
-	turned := r.Now
-	r.Create(ctl, tt.Ref("configmaps", "ns", "a-extra"), tt.Object("a-extra"))
-	r.EndFaults().Settle()
-	r.Begin()
-	r.Update(ctl, a0, named("a-0", map[string]any{"data": map[string]any{"k": "v"}}))
-	findings := judgeWith(t, r.EndFaults().Settle(), check.Property)
-	requireSummaries(t, findings, "0 property one-configmap does not hold", "1 property one-configmap does not hold")
-	want := fmt.Sprintf("it turned false at %v: controller created configmaps ns/a-extra", turned)
-	for _, f := range findings {
-		if len(f.Details) != 2 || f.Details[1] != want {
-			t.Errorf("step %d: details = %q, want %q", f.Step, f.Details, want)
+	for name, write := range map[string]bool{"a write in step 1": true, "no write in step 1": false} {
+		r := newRun(2)
+		r.Spec.Properties = []trace.Property{{Name: "one-configmap", Expr: "size(world.kube.configmaps) <= 1", When: "step"}}
+		r.Begin()
+		a0 := withChild(r, "a", true)
+		turned := r.Now
+		r.Create(ctl, tt.Ref("configmaps", "ns", "a-extra"), tt.Object("a-extra"))
+		r.Update(ctl, a0, named("a-0", map[string]any{"data": map[string]any{"k": "v"}}))
+		r.EndFaults().Settle()
+		r.Begin()
+		if write {
+			r.Update(ctl, a0, named("a-0", map[string]any{"data": map[string]any{"k": "w"}}))
+		}
+		findings := judgeWith(t, r.EndFaults().Settle(), check.Property)
+		requireSummaries(t, findings, "0 property one-configmap does not hold", "1 property one-configmap does not hold")
+		want := fmt.Sprintf("it turned false at %v: controller created configmaps ns/a-extra", turned)
+		for _, f := range findings {
+			if len(f.Details) != 2 || f.Details[1] != want {
+				t.Errorf("%s: step %d: details = %q, want %q", name, f.Step, f.Details, want)
+			}
 		}
 	}
 }

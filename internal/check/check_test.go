@@ -308,7 +308,7 @@ func TestJudgeNotesAFailedAction(t *testing.T) {
 
 // A ready that no CR ever meets more likely names the wrong field or value
 // than finds a bug, so the report says so. The note quotes the last version
-// not being deleted, as clause 1 does.
+// that is neither deleted nor being deleted, as clause 1 does.
 func TestJudgeNotesAReadyNoCRVersionMet(t *testing.T) {
 	unready := func() *tt.Builder {
 		var b tt.Builder
@@ -326,6 +326,9 @@ func TestJudgeNotesAReadyNoCRVersionMet(t *testing.T) {
 	finalizing["status"] = map[string]any{"phase": "Deleting"}
 	finalized.At(10*s).Add(tt.Phase(0, trace.TimedOut)).
 		At(12*s).Add(tt.Call(trace.Harness, "delete", widgetA, 200, "3"), tt.Version(widgetA, "ua", "3", finalizing))
+	deleted := unready()
+	deleted.At(10*s).Add(tt.Phase(0, trace.TimedOut)).
+		At(12*s).Add(tt.Call(trace.Harness, "delete", widgetA, 200, "3"), tt.Deleted(widgetA, "ua", "3", ready("Gone")))
 	// The CR appears after the step settled, so the step did not stay
 	// settled.
 	var late tt.Builder
@@ -344,6 +347,7 @@ func TestJudgeNotesAReadyNoCRVersionMet(t *testing.T) {
 	}{
 		{"timed out", timedOut, "did not settle (clause 1)", `{"ready":"Ready"}`},
 		{"finalized after the deadline", finalized, "did not settle (clause 1)", `{"ready":"Ready"}`},
+		{"deleted after the deadline", deleted, "did not settle (clause 1)", `{"ready":"Ready"}`},
 		{"created after the settle", &late, "did not stay settled (clause 1)", `{"ready":false}`},
 	} {
 		r := check.Judge(c.b.Index(), spec)
@@ -432,11 +436,13 @@ func TestJudgeNotesARequestLaunchRBACForbids(t *testing.T) {
 	}
 }
 
-// Only the authorizer's 403s to the controller count, in its words: a
-// server-side apply needs create. An injected fault, a namespace being
+// Only RBAC's 403s to the controller count: the authorizer's, in its words,
+// where a server-side apply needs create, and a refused grant of
+// permissions the controller lacks. An injected fault, a namespace being
 // deleted, a quota or a webhook give other messages.
-func TestJudgeNotesOnlyTheAuthorizersDenialsOfTheController(t *testing.T) {
+func TestJudgeNotesOnlyRBACDenialsOfTheController(t *testing.T) {
 	const user = `User "system:serviceaccount:ns:ctl"`
+	const grant = ` is forbidden: user "system:serviceaccount:ns:ctl" (groups=["system:serviceaccounts" "system:authenticated"]) is attempting to grant RBAC permissions not currently held:` + "\n" + `{APIGroups:["toy"], Resources:["widgets"], Verbs:["get"]}`
 	b := cleanRun()
 	status := forbiddenBy(ctl, "update", widgetA, `widgets.toy "a" is forbidden: `+user+` cannot update resource "widgets/status" in API group "toy" in the namespace "ns"`)
 	status.Call.Subresource, status.Call.Injected = "status", "delay(1s)"
@@ -450,12 +456,17 @@ func TestJudgeNotesOnlyTheAuthorizersDenialsOfTheController(t *testing.T) {
 		forbiddenBy(ctl, "patch", cm, `configmaps "c" is forbidden: `+user+` cannot create resource "configmaps" in API group "" in the namespace "ns"`),
 		forbiddenBy(ctl, "list", tt.Ref("toy/widgets", "", ""), `widgets.toy is forbidden: `+user+` cannot list resource "widgets" in API group "toy" at the cluster scope: RBAC: clusterrole.rbac.authorization.k8s.io "ctl" not found`),
 		forbiddenBy(ctl, "get", trace.Ref{System: "kube"}, `forbidden: `+user+` cannot get path "/livez"`),
-		forbiddenBy(ctl, "update", widgetA, `widgets.toy "a" is forbidden: `+user+` cannot update resource "widgets/status" in API group "toy" in the namespace "ns"`))
+		forbiddenBy(ctl, "update", widgetA, `widgets.toy "a" is forbidden: `+user+` cannot update resource "widgets/status" in API group "toy" in the namespace "ns"`),
+		forbiddenBy(ctl, "create", tt.Ref("rbac.authorization.k8s.io/clusterroles", "", "r"), `clusterroles.rbac.authorization.k8s.io "r"`+grant),
+		forbiddenBy(ctl, "patch", tt.Ref("rbac.authorization.k8s.io/rolebindings", "ns", "rb"), `rolebindings.rbac.authorization.k8s.io "rb"`+grant),
+		forbiddenBy(trace.Harness, "create", tt.Ref("rbac.authorization.k8s.io/roles", "ns", "r"), `roles.rbac.authorization.k8s.io "r"`+grant))
 	want := []string{
 		"kube: launch.rbac forbids the controller's update on the status subresource of widgets.toy in namespace ns, 2 times",
 		"kube: launch.rbac forbids the controller's create on configmaps in namespace ns, 1 time",
 		"kube: launch.rbac forbids the controller's list on widgets.toy at the cluster scope, 1 time",
 		"kube: launch.rbac forbids the controller's get on path /livez, 1 time",
+		"kube: launch.rbac forbids the controller's create on clusterroles.rbac.authorization.k8s.io at the cluster scope, which grants permissions the controller lacks, 1 time",
+		"kube: launch.rbac forbids the controller's patch on rolebindings.rbac.authorization.k8s.io in namespace ns, which grants permissions the controller lacks, 1 time",
 	}
 	if notes := rbacNotes(check.Judge(b.Index(), spec)); !slices.Equal(notes, want) {
 		t.Fatalf("notes = %q, want %q", notes, want)

@@ -503,34 +503,46 @@ var (
 	deniedPath     = regexp.MustCompile(`cannot (\S+) path "([^"]*)"`)
 )
 
-// denial says what an authorizer's 403 message forbids, such as "watch on
-// volumes.storage.thirdparty in namespace ns", or "" for another message.
-func denial(message string) string {
-	if m := deniedResource.FindStringSubmatch(message); m != nil {
-		verb, resource, subresource, group, namespace := m[1], m[2], m[3], m[4], m[5]
-		on := schema.GroupResource{Group: group, Resource: resource}.String()
-		if subresource != "" {
-			on = "the " + subresource + " subresource of " + on
-		}
-		scope := "at the cluster scope"
-		if namespace != "" {
-			scope = "in namespace " + namespace
-		}
-		return fmt.Sprintf("%s on %s %s", verb, on, scope)
+// deniedGrant is the RBAC API's refusal of a role or binding that grants
+// permissions its writer lacks.
+const deniedGrant = "is attempting to grant RBAC permissions not currently held"
+
+// denial says what RBAC forbids in a 403 answer to c, such as "watch on
+// volumes.storage.thirdparty in namespace ns", or "" for another 403.
+func denial(c trace.Call) string {
+	if m := deniedResource.FindStringSubmatch(c.Forbidden); m != nil {
+		return describeRequest(m[1], m[4], m[2], m[3], m[5])
 	}
-	if m := deniedPath.FindStringSubmatch(message); m != nil {
+	if m := deniedPath.FindStringSubmatch(c.Forbidden); m != nil {
 		return fmt.Sprintf("%s on path %s", m[1], m[2])
+	}
+	if strings.Contains(c.Forbidden, deniedGrant) {
+		return describeRequest(c.Verb, c.Ref.Group, c.Ref.Resource, "", c.Ref.Namespace) + ", which grants permissions the controller lacks"
 	}
 	return ""
 }
 
-// forbidden notes how many times the authorizer denied the controller each
-// request it names.
+// describeRequest names a request by its verb, resource or subresource,
+// and scope.
+func describeRequest(verb, group, resource, subresource, namespace string) string {
+	on := schema.GroupResource{Group: group, Resource: resource}.String()
+	if subresource != "" {
+		on = "the " + subresource + " subresource of " + on
+	}
+	scope := "at the cluster scope"
+	if namespace != "" {
+		scope = "in namespace " + namespace
+	}
+	return fmt.Sprintf("%s on %s %s", verb, on, scope)
+}
+
+// forbidden notes how many times RBAC denied the controller each request it
+// names.
 func forbidden(ix *trace.Index) []string {
 	var order []string
 	counts := map[string]int{}
 	for _, e := range ix.Calls(trace.Controller, -1, math.MaxInt64) {
-		what := denial(e.Call.Forbidden)
+		what := denial(*e.Call)
 		if what == "" {
 			continue
 		}
@@ -709,12 +721,13 @@ func Markdown(ix *trace.Index, r Report, replay string) string {
 	} else {
 		b.WriteString("# Findings\n")
 	}
+	stepFaults := faults(ix)
 	for _, f := range r.Findings {
 		fmt.Fprintf(&b, "\n## %s: %s\n\n%s, at %v.\n", f.Check, f.Summary, stepName(ix, f.Step), f.At.Round(time.Millisecond))
 		if done := actions(ix, f.Step); len(done) > 0 {
 			fmt.Fprintf(&b, "Actions: %s.\n", strings.Join(done, ", "))
 		}
-		if on := faults(ix, f.Step); len(on) > 0 {
+		if on := stepFaults[f.Step]; len(on) > 0 {
 			fmt.Fprintf(&b, "Faults: %s.\n", strings.Join(on, ", "))
 		}
 		if len(f.Labels) > 0 {
@@ -740,16 +753,18 @@ func Markdown(ix *trace.Index, r Report, replay string) string {
 	return b.String()
 }
 
-// faults describes the faults of step, and its period when it has one.
-func faults(ix *trace.Index, step int) []string {
-	var on []string
+// faults describes each step's faults, and its period when it has one.
+func faults(ix *trace.Index) map[int][]string {
+	on := map[int][]string{}
 	for _, e := range ix.Events() {
-		if f := e.Fault; f != nil && f.Step == step && !f.Ended {
-			on = append(on, f.What)
+		if f := e.Fault; f != nil && !f.Ended {
+			on[f.Step] = append(on[f.Step], f.What)
 		}
 	}
-	if span, _ := ix.Step(step); len(on) > 0 && span.Period != nil && *span.Period > 0 {
-		on = append(on, "period "+span.Period.String())
+	for step := range on {
+		if span, _ := ix.Step(step); span.Period != nil && *span.Period > 0 {
+			on[step] = append(on[step], "period "+span.Period.String())
+		}
 	}
 	return on
 }

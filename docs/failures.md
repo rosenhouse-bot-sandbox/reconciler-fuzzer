@@ -93,16 +93,19 @@ CRDs says so.
 
 `kube: launch.rbac forbids the controller's watch on
 volumes.storage.thirdparty in namespace rf-1, 14 times` counts the 403s that
-the API server's authorizer gave the controller, by the verb, resource or
-subresource, and scope in its message. A server-side apply that creates
-needs `create`. Other 403s do not count, such as an injected `error(403)`,
-or one for a namespace being deleted, a quota or a webhook. Add the rule to
-`launch.rbac` if the controller needs it.
+RBAC gave the controller, by the verb, resource or subresource, and scope.
+A server-side apply that creates needs `create`. A role or binding that
+grants permissions the controller lacks gets a 403 too, and its note ends
+`which grants permissions the controller lacks`. Other 403s do not count,
+such as an injected `error(403)`, or one for a namespace being deleted, a
+quota or a webhook. Add the rule to `launch.rbac` if the controller needs
+it. For a grant, add the permissions it grants, or the `escalate` or `bind`
+verb on its role.
 
 `primary.ready held for no CR version; the last of widgets.toy ns/a has
 generation 1 and status {...}` follows a clause 1 finding when no version
-of that kind's CRs met `ready`. It quotes the last version that is not
-being deleted, as clause 1 judges only those. `primaries[1]` names the
+of that kind's CRs met `ready`. It quotes the last version that is neither
+deleted nor being deleted, as clause 1 judges only those. `primaries[1]` names the
 second entry. Either `ready` or the controller is wrong. Compare the quoted
 status with `ready`.
 
