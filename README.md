@@ -528,31 +528,33 @@ Write a property for a bug that no check can see. No check fails a controller th
 `observedGeneration` for a spec it ignored, since Honest cannot know which spec field maps to
 which dependency. No check fails a CR that drops out of ready and back with no cause, since a
 controller may drop ready without a spec change by design, as after a failed health probe or an
-expired credential. For toy-fleet's Clusters, as in
-[cluster/config.yaml](targets/toy-fleet/cluster/config.yaml), the first property below fails a
-Ready Cluster whose Volumes do not match its spec. The second fails a Cluster whose status says
-Provisioning and counts every Volume ready:
+expired credential. [targets/toy-fleet/cluster](targets/toy-fleet/cluster/config.yaml) has a
+property for each of these bugs. The first fails a Ready Cluster whose Volumes do not match its
+spec. The second fails a Cluster whose status says Provisioning and counts every Volume ready.
+`crs` holds the live CRs of every listed kind, so each property skips CRs of other kinds:
 
 ```yaml
 properties:
   - name: volumes-match-spec
     expr: >-
-      crs.all(c, !has(c.status) || !has(c.status.phase) || c.status.phase != 'Ready'
+      crs.all(c, c.kind != 'Cluster' || !has(c.status) || !has(c.status.phase)
+        || c.status.phase != 'Ready'
         || world.kube['volumes.storage.thirdparty'].filter(v, has(v.metadata.ownerReferences)
              && v.metadata.ownerReferences.exists(o, o.uid == c.metadata.uid)
              && v.spec.size == c.spec.volumeSize).size() == c.spec.volumes)
   - name: provisioning-means-volumes-not-ready
     when: always
     expr: >-
-      crs.all(c, !has(c.status) || !has(c.status.phase) || c.status.phase != 'Provisioning'
+      crs.all(c, c.kind != 'Cluster' || !has(c.status) || !has(c.status.phase)
+        || c.status.phase != 'Provisioning'
         || !has(c.status.observedGeneration) || c.status.observedGeneration != c.metadata.generation
         || (has(c.status.readyVolumes) ? c.status.readyVolumes : 0) < c.spec.volumes)
 ```
 
 A CR has no `status` until the controller writes one, and a Go controller leaves out an
 `omitempty` field at its zero value, such as `readyVolumes: 0`. CEL fails on a missing field, so
-the property `could not be evaluated`, and its details say `no such key: status`. Guard such
-fields with `has()`, as above.
+the property `could not be evaluated`, and its details name the missing key, as in
+`no such key: status`. Guard such fields with `has()`, as above.
 
 Teardown skips a child that the garbage collector deletes through its ownerReference chain, since
 the garbage collector deletes it after the CR whatever the controller's order. A `when: always`
@@ -731,10 +733,10 @@ Each finding's heading names its check:
 | Clean | A resource that the controller made for a CR outlives the CR. |
 | Restore | After a step that changes no CR or fixture, the controller's resources differ from the previous step's end, as when a damaged one stays gone. |
 | Unique | Two live controller resources share an owner, kind, namespace and role. |
-| Honest | The controller reports a CR ready before it sees the CR's dependencies and named objects ready, or keeps it ready after it sees one not ready. |
+| Honest | The controller reports a CR ready before it sees the CR's dependencies and named objects ready, or, with `track`, keeps it ready longer than `track` after it sees one not ready. |
 | Ordered | An object that a CR names under `onDelete: block` is gone while the CR names it. |
 | Teardown | The controller releases a CR while one of the CR's resources that the garbage collector does not delete is not yet being deleted. |
-| Backoff | The controller repeats a failing request, or a write that changes nothing, with gaps under 100 ms. |
+| Backoff | The controller repeats a failing request more than 10 times per live CR, with gaps under 100 ms. For a write that changes nothing, the limit is 20. |
 | Finalizers | A controller write drops a finalizer that a model added. |
 | Property | A [property](#properties) does not hold, or cannot be evaluated. |
 

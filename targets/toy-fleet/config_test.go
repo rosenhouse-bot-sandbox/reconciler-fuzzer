@@ -1,6 +1,7 @@
 package main_test
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
@@ -37,6 +38,88 @@ func TestReadyNeedsTheCurrentGenerationInPhaseReady(t *testing.T) {
 			}
 		}
 	}
+}
+
+// The README shows cluster/config.yaml's properties. Each fails only where
+// the README says, and skips CRs of other kinds.
+func TestClusterPropertiesFailWhereTheReadmeSays(t *testing.T) {
+	c, err := config.Load(clusterConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	holds := map[string]func([]any, map[string]map[string][]any) (bool, error){}
+	for _, p := range c.Properties {
+		program, err := config.CompileProperty(p.Expr)
+		if err == nil {
+			holds[p.Name], err = program.Bind(nil)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The Cluster wants two small Volumes. A Volume names its owner's UID.
+	cluster := func(status string) string {
+		if status != "" {
+			status = `,"status":` + status
+		}
+		return `{"kind":"Cluster","metadata":{"uid":"c","generation":2},"spec":{"volumes":2,"volumeSize":"small"}` + status + `}`
+	}
+	volume := func(owner, size string) string {
+		if owner != "" {
+			owner = `"ownerReferences":[{"uid":"` + owner + `"}]`
+		}
+		return `{"kind":"Volume","metadata":{` + owner + `},"spec":{"size":"` + size + `"}}`
+	}
+	const ready = `{"phase":"Ready","observedGeneration":2,"readyVolumes":2}`
+	small := volume("c", "small")
+	for _, tc := range []struct {
+		name, cr                                           string
+		volumes                                            []string
+		volumesMatchSpec, provisioningMeansVolumesNotReady bool
+	}{
+		{"a Cluster with no status", cluster(""), nil, true, true},
+		{"a status with no phase", cluster(`{"observedGeneration":2,"readyVolumes":2}`), nil, true, true},
+		{"Provisioning with no Volume ready", cluster(`{"phase":"Provisioning","observedGeneration":2}`), nil, true, true},
+		{"Provisioning with one Volume ready", cluster(`{"phase":"Provisioning","observedGeneration":2,"readyVolumes":1}`), []string{small, small}, true, true},
+		{"Provisioning with every Volume ready", cluster(`{"phase":"Provisioning","observedGeneration":2,"readyVolumes":2}`), []string{small, small}, true, false},
+		{"Provisioning an older generation", cluster(`{"phase":"Provisioning","observedGeneration":1,"readyVolumes":2}`), []string{small, small}, true, true},
+		{"Provisioning with no observedGeneration", cluster(`{"phase":"Provisioning","readyVolumes":2}`), []string{small, small}, true, true},
+		{"Ready with the Volumes of its spec", cluster(ready), []string{small, small}, true, true},
+		{"Ready with a Volume missing", cluster(ready), []string{small}, false, true},
+		{"Ready with a large Volume", cluster(ready), []string{small, volume("c", "large")}, false, true},
+		{"Ready with a third Volume", cluster(ready), []string{small, small, small}, false, true},
+		{"Ready with another Cluster's Volume", cluster(ready), []string{small, volume("d", "small")}, false, true},
+		{"Ready with an unowned Volume too", cluster(ready), []string{small, small, volume("", "small")}, true, true},
+		{"a Ready Database", `{"kind":"Database","metadata":{"uid":"d","generation":2},"status":{"phase":"Ready","observedGeneration":2}}`, nil, true, true},
+		{"a Provisioning Database", `{"kind":"Database","metadata":{"uid":"d","generation":2},"status":{"phase":"Provisioning","observedGeneration":2}}`, nil, true, true},
+	} {
+		volumes := []any{}
+		for _, v := range tc.volumes {
+			volumes = append(volumes, decoded(t, v))
+		}
+		world := map[string]map[string][]any{"kube": {"volumes.storage.thirdparty": volumes}}
+		for property, want := range map[string]bool{
+			"volumes-match-spec":                   tc.volumesMatchSpec,
+			"provisioning-means-volumes-not-ready": tc.provisioningMeansVolumesNotReady,
+		} {
+			if holds[property] == nil {
+				t.Fatalf("%s has no property %s.", clusterConfig, property)
+			}
+			if got, err := holds[property]([]any{decoded(t, tc.cr)}, world); got != want || err != nil {
+				t.Errorf("%s: %s = %v, %v; want %v.", tc.name, property, got, err, want)
+			}
+		}
+	}
+}
+
+// decoded is JSON as a property sees it, with float64 numbers.
+func decoded(t *testing.T, s string) any {
+	t.Helper()
+	var o any
+	if err := json.Unmarshal([]byte(s), &o); err != nil {
+		t.Fatal(err)
+	}
+	return o
 }
 
 // The kube role drops a suffix after a Volume's index, so that Unique finds

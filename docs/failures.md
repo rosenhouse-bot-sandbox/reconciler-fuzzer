@@ -163,7 +163,7 @@ Look at the clause first:
 | --- | --- | --- |
 | 1 | A CR is not `ready`. | The status that the line quotes, and `ready` in the config. |
 | 2 | A CR is still being deleted. | The finalizers that the line names. The controller should remove its own once its cleanup is done. |
-| 3 | The controller is down, or restarted within `stable`. | `controller.log`, and any Crash finding. |
+| 3 | The controller is down, or restarted within `stable`. | `controller.log`, and any [Crash](#crash-the-controller-exited) finding. |
 | 4 | The controller made no successful request since it started. | Its startup in `controller.log`, and its RBAC. A restart's `args`, from the plan or `launch.upgrades`, replace `launch.args`. If the controller does not read `KUBECONFIG`, pass `--kubeconfig=${systems.kube.kubeconfig}` in those `args` too. |
 | 5 | The controller did not look at an object a `damage`, `changeFixture` or `createFixture` changed. | Its watches and the kinds it reads. |
 | 6 | A model, such as `gc`, has work pending. | What the model waits on. Churn under clause 7 often keeps it busy. A stage model's `finalizer:` holds each deletion for `finalizer.after`, so lower it, or raise `timeouts.settle`. |
@@ -224,8 +224,11 @@ exceeds the cap fails there. Raise the cap if that backoff is intended.
 The controller exited without the harness stopping it. The summary counts
 the exits in the step. The details hold the first exit status and the tail
 of its output, often a panic. If the tail shows a port in use, or a missing
-certificate, env var, CRD or permission, fix `launch` or `crds`. Otherwise
-the controller has a bug.
+certificate, env var, CRD or permission, fix `launch` or `crds`. A restart's
+`args`, from the plan or `launch.upgrades`, replace `launch.args`. So at a
+step whose actions name `restart (upgrade)`, the tail may show that those
+`args` lack a flag from `launch.args`, such as
+`--kubeconfig=${systems.kube.kubeconfig}`. Otherwise the controller has a bug.
 
 ### Clean: left resources behind
 

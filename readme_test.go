@@ -1,6 +1,7 @@
 package reconcilerfuzzer_test
 
 import (
+	"cmp"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -9,6 +10,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"sigs.k8s.io/yaml"
+
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/config"
 )
 
 func TestReadmeNamesEveryCheck(t *testing.T) {
@@ -17,8 +22,10 @@ func TestReadmeNamesEveryCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := judgeChecks(t)
+	_, body, _ := strings.Cut(string(readme), "\n\n")
+	firstParagraph, _, _ := strings.Cut(body, "\n\n")
 	var listed []string
-	if m := checkList.FindStringSubmatch(strings.Join(strings.Fields(string(readme)), " ")); m != nil {
+	if m := checkList.FindStringSubmatch(spaced(firstParagraph)); m != nil {
 		listed = strings.Split(strings.Replace(m[1], " and ", ", ", 1), ", ")
 	}
 	if !slices.Equal(listed, want) {
@@ -29,7 +36,7 @@ func TestReadmeNamesEveryCheck(t *testing.T) {
 	}
 }
 
-var checkList = regexp.MustCompile(`judges the trace with \w+ checks: (\w+(?:, \w+)* and \w+)`)
+var checkList = regexp.MustCompile(`judges the trace with these checks: (\w+(?:, \w+)* and \w+)`)
 
 // firstColumn reads the first cell of each row of the table under header.
 func firstColumn(doc, header string) []string {
@@ -70,6 +77,49 @@ func judgeChecks(t *testing.T) []string {
 	}
 	return checks
 }
+
+// The README quotes the properties of these toy-fleet configs, which tests
+// run.
+func TestReadmeQuotesToyFleetProperties(t *testing.T) {
+	readme, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	quoted := map[string]config.Property{}
+	for _, block := range yamlBlock.FindAllStringSubmatch(string(readme), -1) {
+		var doc struct{ Properties []config.Property }
+		if yaml.Unmarshal([]byte(block[1]), &doc) == nil {
+			for _, p := range doc.Properties {
+				quoted[p.Name] = p
+			}
+		}
+	}
+	for _, path := range []string{"targets/toy-fleet/cluster/config.yaml", "targets/toy-fleet/order/config.yaml"} {
+		c, err := config.Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(c.Properties) == 0 {
+			t.Errorf("%s has no properties.", path)
+		}
+		for _, p := range c.Properties {
+			q := quoted[p.Name]
+			q.When = cmp.Or(q.When, config.StepEnd)
+			q.Expr, p.Expr = spaced(q.Expr), spaced(p.Expr)
+			if q != p {
+				t.Errorf("The README quotes %s's property %s as %+v, want %+v.", path, p.Name, q, p)
+			}
+		}
+	}
+}
+
+// spaced joins the words of s with single spaces. Markdown prose and CEL
+// outside string literals mean the same either way.
+func spaced(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
+var yamlBlock = regexp.MustCompile("(?s)```yaml\n(.*?)```")
 
 func TestReadmeCommandsAndPathsExist(t *testing.T) {
 	readme, err := os.ReadFile("README.md")

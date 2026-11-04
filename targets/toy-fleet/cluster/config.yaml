@@ -24,6 +24,22 @@ models:
     dependency: {track: 1s}
 values:
   mutate: [spec.volumes, spec.volumeSize]
+# The README quotes these properties.
+properties:
+  - name: volumes-match-spec
+    expr: >-
+      crs.all(c, c.kind != 'Cluster' || !has(c.status) || !has(c.status.phase)
+        || c.status.phase != 'Ready'
+        || world.kube['volumes.storage.thirdparty'].filter(v, has(v.metadata.ownerReferences)
+             && v.metadata.ownerReferences.exists(o, o.uid == c.metadata.uid)
+             && v.spec.size == c.spec.volumeSize).size() == c.spec.volumes)
+  - name: provisioning-means-volumes-not-ready
+    when: always
+    expr: >-
+      crs.all(c, c.kind != 'Cluster' || !has(c.status) || !has(c.status.phase)
+        || c.status.phase != 'Provisioning'
+        || !has(c.status.observedGeneration) || c.status.observedGeneration != c.metadata.generation
+        || (has(c.status.readyVolumes) ? c.status.readyVolumes : 0) < c.spec.volumes)
 timeouts:
   settle: 10s
   stable: 2s
