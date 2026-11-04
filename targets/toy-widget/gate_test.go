@@ -2,10 +2,8 @@ package main_test
 
 import (
 	"cmp"
-	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -24,9 +22,9 @@ type gateRow struct {
 	// notes are what the run's notes say, in order. Without them the run
 	// gives no note.
 	notes []string
-	// mayNote is what a note says that the run may give besides notes. A
+	// mayNotes are what notes say that the run may give besides notes. A
 	// race in the toy decides whether it does.
-	mayNote string
+	mayNotes []string
 }
 
 const (
@@ -66,7 +64,7 @@ var gate = []gateRow{
 	{plan: "b1", bug: 1, finding: "Converge: did not stay settled", step: 0, detail: "changed writes"},
 	// B2's status counts every child the cache shows, and each reconcile
 	// adds one. A race decides whether some status counts exactly one.
-	{plan: "b2", bug: 2, finding: "Converge: did not settle", step: 0, detail: "changed writes", mayNote: "primary.ready held for no CR version"},
+	{plan: "b2", bug: 2, finding: "Converge: did not settle", step: 0, detail: "changed writes", mayNotes: []string{"primary.ready held for no CR version"}},
 	{plan: "b4", bug: 4, finding: "Converge: did not settle", step: 1, detail: "is not ready"},
 	{plan: "b5", bug: 5, finding: "Converge: did not settle", step: 0, detail: "is not ready", notes: []string{"primary.ready held for no CR version"}},
 	{plan: "b6", bug: 6, finding: "Converge: did not settle", step: 0, detail: "changed writes"},
@@ -103,65 +101,6 @@ var gate = []gateRow{
 	{plan: "b28", bug: 28, finding: "Teardown: released a CR before deleting its resources", step: 1, detail: "-grant (rule 1, slot a)", config: grantConfig},
 	{plan: "b29", bug: 29, finding: "Converge: did not settle", step: 1, detail: "is being deleted", config: tenantConfig},
 	{plan: "b29-background", bug: 29, config: tenantConfig},
-}
-
-// hasFinding says whether report holds a finding whose heading starts with
-// heading, at step, whose details say detail.
-func hasFinding(report, heading string, step int, detail string) bool {
-	for _, section := range strings.Split(report, "\n## ")[1:] {
-		title, body, _ := strings.Cut(section, "\n\n")
-		header, details, _ := strings.Cut(body, "\n\n")
-		details, _, _ = strings.Cut(details, "\n# ")
-		if strings.HasPrefix(title, heading) && strings.HasPrefix(header, fmt.Sprintf("Step %d,", step)) && strings.Contains(details, detail) {
-			return true
-		}
-	}
-	return false
-}
-
-// notesMatch drops the notes that say g.mayNote, and says whether each
-// other note says the string at its index in g.notes.
-func (g gateRow) notesMatch(notes []string) bool {
-	if g.mayNote != "" {
-		notes = slices.DeleteFunc(slices.Clone(notes), func(note string) bool { return strings.Contains(note, g.mayNote) })
-	}
-	return slices.EqualFunc(notes, g.notes, strings.Contains)
-}
-
-func TestNotesMatch(t *testing.T) {
-	for _, c := range []struct {
-		notes, want []string
-		may         string
-		match       bool
-	}{
-		{nil, nil, "", true},
-		{[]string{"a note"}, nil, "", false},
-		{nil, []string{"note"}, "", false},
-		{[]string{"a note"}, []string{"note"}, "", true},
-		{[]string{"a note"}, []string{"other"}, "", false},
-		{[]string{"first", "second"}, []string{"first", "second"}, "", true},
-		{[]string{"first", "second"}, []string{"second", "first"}, "", false},
-		{[]string{"first", "second"}, []string{"first"}, "", false},
-		{nil, nil, "race", true},
-		{[]string{"first", "a race", "second"}, []string{"first", "second"}, "race", true},
-		{[]string{"a note"}, nil, "race", false},
-	} {
-		if got := (gateRow{notes: c.want, mayNote: c.may}).notesMatch(c.notes); got != c.match {
-			t.Errorf("notesMatch(%q) with notes %q and mayNote %q = %v", c.notes, c.want, c.may, got)
-		}
-	}
-}
-
-func TestHasFindingMatchesOnlyTheDetails(t *testing.T) {
-	const report = "# Findings\n\n## Restore: did not restore damaged resources\n\nStep 1, at 1s.\nActions: damage configmaps ns/widget-0.\n\n```\nconfigmaps ns/widget-1\n```\n\n# Next steps\n\nReplay widget-2.\n"
-	if !hasFinding(report, "Restore", 1, "widget-1") {
-		t.Error("missed the detail line")
-	}
-	for _, elsewhere := range []string{"widget-0", "widget-2"} {
-		if hasFinding(report, "Restore", 1, elsewhere) {
-			t.Errorf("matched %q outside the details", elsewhere)
-		}
-	}
 }
 
 func TestEveryPlanLoads(t *testing.T) {

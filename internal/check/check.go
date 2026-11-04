@@ -714,6 +714,9 @@ func Markdown(ix *trace.Index, r Report, replay string) string {
 		if done := actions(ix, f.Step); len(done) > 0 {
 			fmt.Fprintf(&b, "Actions: %s.\n", strings.Join(done, ", "))
 		}
+		if on := faults(ix, f.Step); len(on) > 0 {
+			fmt.Fprintf(&b, "Faults: %s.\n", strings.Join(on, ", "))
+		}
 		if len(f.Labels) > 0 {
 			fmt.Fprintf(&b, "Labels: %s.\n", strings.Join(f.Labels, ", "))
 		}
@@ -735,6 +738,20 @@ func Markdown(ix *trace.Index, r Report, replay string) string {
 		b.WriteString("[docs/failures.md](https://github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/blob/main/docs/failures.md) says what each finding means.\n")
 	}
 	return b.String()
+}
+
+// faults describes the faults of step, and its period when it has one.
+func faults(ix *trace.Index, step int) []string {
+	var on []string
+	for _, e := range ix.Events() {
+		if f := e.Fault; f != nil && f.Step == step && !f.Ended {
+			on = append(on, f.What)
+		}
+	}
+	if span, _ := ix.Step(step); len(on) > 0 && span.Period != nil && *span.Period > 0 {
+		on = append(on, "period "+span.Period.String())
+	}
+	return on
 }
 
 // actions describes the harness's actions in step, such as "create slot a",

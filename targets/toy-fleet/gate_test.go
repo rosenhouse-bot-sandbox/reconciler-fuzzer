@@ -2,7 +2,6 @@ package main_test
 
 import (
 	"cmp"
-	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -136,27 +135,6 @@ func plans(config string) ([]string, error) {
 	return paths, err
 }
 
-// hasFinding says whether report holds a finding whose heading starts with
-// heading, at step, whose details say detail. The delete-all step's header
-// names it, as in "Step 2 (delete all),".
-func hasFinding(report, heading string, step int, detail string) bool {
-	for _, section := range strings.Split(report, "\n## ")[1:] {
-		title, body, _ := strings.Cut(section, "\n\n")
-		header, details, _ := strings.Cut(body, "\n\n")
-		details, _, _ = strings.Cut(details, "\n# ")
-		at := fmt.Sprintf("Step %d", step)
-		if strings.HasPrefix(title, heading) && (strings.HasPrefix(header, at+",") || strings.HasPrefix(header, at+" (")) && strings.Contains(details, detail) {
-			return true
-		}
-	}
-	return false
-}
-
-// notesMatch says whether each note says the string at its index in want.
-func notesMatch(notes, want []string) bool {
-	return slices.EqualFunc(notes, want, strings.Contains)
-}
-
 // byRun groups the gate's rows by config, plan and bug, in order.
 func byRun(rows []gateRow) [][]gateRow {
 	var runs [][]gateRow
@@ -171,21 +149,6 @@ func byRun(rows []gateRow) [][]gateRow {
 		runs[n] = append(runs[n], g)
 	}
 	return runs
-}
-
-// checkOf is the check a finding heading names.
-func checkOf(heading string) string {
-	check, _, _ := strings.Cut(heading, ":")
-	return check
-}
-
-// checksOf lists the check of each finding in report.
-func checksOf(report string) []string {
-	var checks []string
-	for _, section := range strings.Split(report, "\n## ")[1:] {
-		checks = append(checks, checkOf(section))
-	}
-	return checks
 }
 
 // A config outside configs has no run of every plan under B0, so each of
@@ -212,57 +175,6 @@ func TestByRunGroupsRowsOfOneRun(t *testing.T) {
 	rows := []gateRow{{plan: "a", bug: 1}, {plan: "b", bug: 1}, {plan: "a", bug: 1, step: 2}, {plan: "a", bug: 0}, {plan: "a", bug: 1, config: "x.yaml"}}
 	if got := byRun(rows); len(got) != 4 || len(got[0]) != 2 || got[0][1].step != 2 {
 		t.Errorf("byRun = %+v", got)
-	}
-}
-
-func TestChecksOfListsEachFindingsCheck(t *testing.T) {
-	const report = "# Findings\n\n## Clean: left resources behind\n\nStep 2.\n\n## Converge: did not settle (clause 2)\n\nStep 0.\n"
-	if got := checksOf(report); !slices.Equal(got, []string{"Clean", "Converge"}) {
-		t.Errorf("checksOf = %q", got)
-	}
-}
-
-func TestHasFindingMatchesTheStep(t *testing.T) {
-	const report = "# Findings\n\n## Clean: left resources behind\n\nStep 2 (delete all), at 1s.\n\n```\nvolumes v\n```\n"
-	if !hasFinding(report, "Clean", 2, "volumes v") {
-		t.Error("missed step 2 (delete all)")
-	}
-	for _, step := range []int{1, 3, 12} {
-		if hasFinding(report, "Clean", step, "volumes v") {
-			t.Errorf("matched step %d", step)
-		}
-	}
-}
-
-func TestHasFindingMatchesOnlyTheDetails(t *testing.T) {
-	const report = "# Findings\n\n## Clean: left resources behind\n\nStep 1, at 1s.\nActions: damage volumes v-0.\n\n```\nvolumes v-1\n```\n\n# Next steps\n\nReplay volumes v-2.\n"
-	if !hasFinding(report, "Clean", 1, "volumes v-1") {
-		t.Error("missed the detail line")
-	}
-	for _, elsewhere := range []string{"volumes v-0", "volumes v-2"} {
-		if hasFinding(report, "Clean", 1, elsewhere) {
-			t.Errorf("matched %q outside the details", elsewhere)
-		}
-	}
-}
-
-func TestNotesMatch(t *testing.T) {
-	for _, c := range []struct {
-		notes, want []string
-		match       bool
-	}{
-		{nil, nil, true},
-		{[]string{"a note"}, nil, false},
-		{nil, []string{"note"}, false},
-		{[]string{"a note"}, []string{"note"}, true},
-		{[]string{"a note"}, []string{"other"}, false},
-		{[]string{"first", "second"}, []string{"first", "second"}, true},
-		{[]string{"first", "second"}, []string{"second", "first"}, false},
-		{[]string{"first", "second"}, []string{"first"}, false},
-	} {
-		if got := notesMatch(c.notes, c.want); got != c.match {
-			t.Errorf("notesMatch(%q, %q) = %v", c.notes, c.want, got)
-		}
 	}
 }
 

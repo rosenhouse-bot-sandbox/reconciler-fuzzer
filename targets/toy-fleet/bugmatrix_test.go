@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/check/checktest"
 )
 
 var update = flag.Bool("update", false, "write this toy's section of ../../docs/bug-matrix.md")
@@ -67,7 +69,7 @@ func renderBugMatrix(plans []string) string {
 		"| Bug | Description | Plan | Check | Step |\n|---|---|---|---|---|\n")
 	fmt.Fprintf(&b, "| B0 | %s | all %d plans of %s | none | |\n", bugs[0], len(plans), strings.Join(configs, ", "))
 	for _, g := range rows {
-		check, step := checkOf(g.finding), " "+strconv.Itoa(g.step)+" "
+		check, step := checktest.CheckOf(g.finding), " "+strconv.Itoa(g.step)+" "
 		if check == "" {
 			check, step = "none", " "
 		}

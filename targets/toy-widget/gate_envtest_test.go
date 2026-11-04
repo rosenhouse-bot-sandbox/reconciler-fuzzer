@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/check"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/check/checktest"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/plan"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/run"
 )
@@ -35,10 +36,10 @@ func TestGate(t *testing.T) {
 			if g.finding == "" && len(report.Findings) != 0 {
 				t.Errorf("Found %d, want no findings. report.md:\n%s", len(report.Findings), text)
 			}
-			if g.finding != "" && !hasFinding(text, g.finding, g.step, g.detail) {
+			if g.finding != "" && !checktest.HasFinding(text, g.finding, g.step, g.detail) {
 				t.Errorf("Want a finding %q at step %d that says %q. report.md:\n%s", g.finding, g.step, g.detail, text)
 			}
-			if !g.notesMatch(report.Notes) {
+			if !checktest.NotesMatch(report.Notes, g.notes, g.mayNotes...) {
 				t.Errorf("Found notes %q, want notes that say %q. report.md:\n%s", report.Notes, g.notes, text)
 			}
 		})
@@ -92,7 +93,7 @@ func TestConvergeSuggestsModellingAnUnmodelledGadget(t *testing.T) {
 	p := &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{{Do: plan.Create, Slot: "a"}}}}}
 	_, report := run1(t, "gadget/unmodelled/config.yaml", run.Options{Plan: p}, 0)
 	want := "add to models: - {kind: toy.reconciler-fuzzer/v1/Gadget, stages: readyCondition, after: 200ms}"
-	if !hasFinding(report, "Converge: did not settle", 0, want) {
+	if !checktest.HasFinding(report, "Converge: did not settle", 0, want) {
 		t.Errorf("Want a Converge finding at step 0 that says %q. report.md:\n%s", want, report)
 	}
 }

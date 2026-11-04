@@ -614,9 +614,13 @@ func TestMarkdown(t *testing.T) {
 	upgrade := trace.Event{Action: &trace.Action{Step: 1, Index: 2, Do: "restart", Upgrade: true}}
 	kill := trace.Event{Action: &trace.Action{Step: 1, Index: 3, Do: "kill"}}
 	failed := trace.Event{Action: &trace.Action{Step: 1, Index: 4, Do: "changeFixture", Error: "no instance matches"}}
-	ix := b.Add(run).
-		At(1*s).Add(tt.SlotAction(1, "create", "a", widgetA), tt.SlotAction(1, "damage", "a", cm)).
-		At(2*s).Add(upgrade, kill, failed).
+	const stuck = "stuck on group=toy resource=gadgets"
+	held := tt.HoldFault(1, 1, false, trace.Ref{System: "kube", Group: "toy", Resource: "widgets"})
+	unrecordedPeriod := trace.Event{Phase: &trace.Phase{Step: 0, Name: trace.FaultPeriod}}
+	ix := b.Add(run, unrecordedPeriod, tt.Fault(0, 0, false, "error(409)")).
+		At(1*s).Add(tt.FaultPeriod(1, 2*s), tt.Fault(1, 0, false, stuck), held, tt.SlotAction(1, "create", "a", widgetA), tt.SlotAction(1, "damage", "a", cm)).
+		At(2*s).Add(upgrade, kill, failed, tt.Fault(1, 0, true, stuck)).
+		At(3*s).Add(tt.FaultPeriod(2, 0), tt.Fault(2, 0, false, "error(500)"), tt.FaultPeriod(3, 2*s)).
 		Index()
 	const replay = "reconciler-fuzzer run --config c.yaml --plan out/plan.json --out out/replay"
 	if got := check.Markdown(ix, check.Report{}, replay); got != "No findings.\n" {
@@ -628,13 +632,15 @@ func TestMarkdown(t *testing.T) {
 			{Check: "Converge", Step: 2, At: 16907430335, Summary: "did not settle"},
 			{Check: "Crash", Step: 3, Summary: "the controller exited 1 time"},
 			{Check: "Crash", Step: -1, Summary: "the controller exited 2 times"},
+			{Check: "Crash", Step: 0, Summary: "the controller exited 3 times"},
 		},
 		Notes: []string{"Step 0 is not judged."},
 	}, replay)
 	for _, want := range []string{"# Findings",
-		"## Converge: did not settle\n\nStep 1, at 1.5s.\nActions: create slot a, damage configmaps ns/c, restart (upgrade), kill, changeFixture (failed).\nLabels: backoff-bound.\n",
-		"ns/a is not ready", "Step 2 (delete all), at 16.907s.\n\n## Crash: the controller exited 1 time\n\nStep 3 (restart)",
-		"## Crash: the controller exited 2 times\n\nBefore step 0, at 0s.", "# Notes\n\n- Step 0 is not judged.\n"} {
+		"## Converge: did not settle\n\nStep 1, at 1.5s.\nActions: create slot a, damage configmaps ns/c, restart (upgrade), kill, changeFixture (failed).\n" +
+			"Faults: stuck on group=toy resource=gadgets, holdWatch, period 2s.\nLabels: backoff-bound.\n",
+		"ns/a is not ready", "Step 2 (delete all), at 16.907s.\nFaults: error(500).\n\n## Crash: the controller exited 1 time\n\nStep 3 (restart), at 0s.\n\n## Crash",
+		"## Crash: the controller exited 2 times\n\nBefore step 0, at 0s.\n\n## Crash: the controller exited 3 times\n\nStep 0, at 0s.\nFaults: error(409).\n\n# Notes\n\n- Step 0 is not judged.\n"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Markdown lacks %q:\n%s", want, got)
 		}

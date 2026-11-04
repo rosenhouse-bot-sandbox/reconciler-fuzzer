@@ -53,7 +53,8 @@ during startup. The runner appends two steps to every plan without a
 `stop`: `Step N (delete all)` and `Step N+1 (restart)`.
 The `Actions:` line lists the step's actions. A `damage`, `changeFixture` or
 `createFixture` names its object, and any other action its slot. A failed
-action says `(failed)`. A `Labels:` line may follow. The block lists the
+action says `(failed)`. The `Faults:` line lists the step's faults and its
+period, if it has one. A `Labels:` line may follow. The block lists the
 detail lines.
 
 A `# Notes` section follows the findings. A note says what the checks
@@ -99,9 +100,11 @@ or one for a namespace being deleted, a quota or a webhook. Add the rule to
 `launch.rbac` if the controller needs it.
 
 `primary.ready held for no CR version; the last of widgets.toy ns/a has
-status {...}` follows a clause 1 finding when no version of that kind's CRs
-met `ready`. `primaries[1]` names the second entry. Either `ready` or the
-controller is wrong. Compare the quoted status with `ready`.
+generation 1 and status {...}` follows a clause 1 finding when no version
+of that kind's CRs met `ready`. It quotes the last version that is not
+being deleted, as clause 1 judges only those. `primaries[1]` names the
+second entry. Either `ready` or the controller is wrong. Compare the quoted
+status with `ready`.
 
 `cloud: unmapped request POST /v2/buckets/b-1/acl` means the system's API
 map could not place a controller request on a resource. No check judges
@@ -144,7 +147,7 @@ Step 0, at 14.008s.
 Actions: create slot a.
 
 ```
-widgets.toy.reconciler-fuzzer rf-f232d025/widget is not ready; it has status {"observedGeneration":1,"ready":440}
+widgets.toy.reconciler-fuzzer rf-f232d025/widget is not ready; it has generation 1 and status {"observedGeneration":1,"ready":440}
 model gc has work pending
 the controller made 290 changed writes in (12.007871362s, 14.007871362s]; first it changed widgets.toy.reconciler-fuzzer rf-f232d025/widget with patch at 12.00893056s
 the controller made 305 writes in (12.007871362s, 14.007871362s], over the budget of 4
@@ -185,8 +188,9 @@ is now would hold the CR back too, or that a reference leaves unknown. It
 does so once `stable`, and the time the step's faults lasted, at most
 `timeouts.backoffCap`, have passed since the faults ended.
 
-Clause 1's line quotes the CR's status as stored, such as `it has status
-{"ready":false}`, or says `it has no status`. It then says what the
+Clause 1's line quotes the CR's generation and status as stored, such as
+`it has generation 2 and status {"observedGeneration":1,"ready":false}`,
+or says `it has generation 2 and no status`. It then says what the
 controller last saw of each object that the CR names, such as `; the
 controller last saw secrets ns/admin-password ready at 7.24s`. If it saw
 the object ready, the reference's `ready` accepts an object that the

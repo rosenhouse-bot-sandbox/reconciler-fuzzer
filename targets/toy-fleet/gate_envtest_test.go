@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/check"
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/check/checktest"
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/run"
 )
 
@@ -35,17 +36,17 @@ func TestGate(t *testing.T) {
 			if g.finding == "" && len(report.Findings) != 0 {
 				t.Errorf("Found %d, want no findings. report.md:\n%s", len(report.Findings), text)
 			}
-			if !notesMatch(report.Notes, g.notes) {
+			if !checktest.NotesMatch(report.Notes, g.notes) {
 				t.Errorf("Found notes %q, want notes that say %q. report.md:\n%s", report.Notes, g.notes, text)
 			}
 			want := map[string]bool{}
 			for _, r := range rows {
-				if r.finding != "" && !hasFinding(text, r.finding, r.step, r.detail) {
+				if r.finding != "" && !checktest.HasFinding(text, r.finding, r.step, r.detail) {
 					t.Errorf("Want a finding %q at step %d that says %q. report.md:\n%s", r.finding, r.step, r.detail, text)
 				}
-				want[checkOf(r.finding)] = r.finding != ""
+				want[checktest.CheckOf(r.finding)] = r.finding != ""
 			}
-			for _, got := range checksOf(text) {
+			for _, got := range checktest.ChecksOf(text) {
 				if !want[got] {
 					t.Errorf("Found an unexpected %s finding. report.md:\n%s", got, text)
 				}
