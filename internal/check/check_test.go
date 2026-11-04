@@ -227,7 +227,9 @@ func TestRecordedB0RunHasNoFindings(t *testing.T) {
 func TestRecordedB16RunDidNotSettle(t *testing.T) {
 	r := judgeRecorded(t, "testdata/b16.jsonl")
 	if f := only(t, r.Findings); f.Summary != "did not settle (clause 1)" || f.Step != 0 ||
-		!slices.ContainsFunc(f.Details, func(d string) bool { return strings.HasSuffix(d, "/widget is not ready; it has generation 1 and no status") }) {
+		!slices.ContainsFunc(f.Details, func(d string) bool {
+			return strings.HasSuffix(d, "/widget is not ready; it has generation 1 and no status")
+		}) {
 		t.Fatalf("finding = %+v", f)
 	}
 	want := []string{"primary.ready held for no CR version; the last of widgets.toy.reconciler-fuzzer rf-d1ebbd7f/widget has generation 1 and no status"}

@@ -311,6 +311,10 @@ func TestAPropertyFindingSaysWhatTurnedItFalse(t *testing.T) {
 		"an update after an error": {"world.kube.configmaps.all(m, m.data.k == 'v')", func(r *tt.Script) {
 			r.Update(ctl, a0, named("a-0", map[string]any{"data": map[string]any{"k": "x"}}))
 		}, "controller updated configmaps ns/a-0"},
+		"two updates at one time": {"world.kube.configmaps.all(m, !has(m.data))", func(r *tt.Script) {
+			r.Update(ctl, a0, named("a-0", map[string]any{"data": map[string]any{"k": "v"}}))
+			r.Tick(-tt.Tick).Update(ctl, a0, named("a-0", map[string]any{"data": map[string]any{"k": "w"}}))
+		}, "controller updated configmaps ns/a-0"},
 	} {
 		r := newRun(0)
 		r.Spec.Properties = []trace.Property{{Name: "p", Expr: c.expr, When: "step"}}
@@ -319,13 +323,67 @@ func TestAPropertyFindingSaysWhatTurnedItFalse(t *testing.T) {
 		turned := r.Now
 		c.turn(r)
 		r.Update(trace.Harness, widgetA, tt.CR("a", true))
-		f := only(t, judgeWith(t, r.EndFaults().Settle(), check.Property))
-		if want := fmt.Sprintf("it turned false at %v: %s", turned, c.writes); len(f.Details) != 2 || f.Details[1] != want {
-			t.Errorf("%s: details = %q, want %q", name, f.Details, want)
+		if got, want := turnDetail(t, r.EndFaults().Settle()), fmt.Sprintf("it turned false at %v: %s", turned, c.writes); got != want {
+			t.Errorf("%s: detail = %q, want %q", name, got, want)
 		}
 	}
 	f := only(t, judgeWith(t, transient("always"), check.Property))
 	if want := fmt.Sprintf("it turned false at %v: controller created configmaps ns/a-extra", f.At); len(f.Details) != 2 || f.Details[1] != want {
 		t.Errorf("always: details = %q, want %q", f.Details, want)
+	}
+
+	// The CR's create is the first version event.
+	r := newRun(0)
+	r.Spec.Properties = []trace.Property{{Name: "p", Expr: "size(world.kube.configmaps) == 0", When: "step"}}
+	r.Begin()
+	uid := r.CreateCR("a", widgetA)
+	turned := r.Now
+	r.Create(ctl, a0, tt.OwnedBy(tt.Object("a-0"), uid, true))
+	if got, want := turnDetail(t, r.Ready(widgetA).EndFaults().Settle()), fmt.Sprintf("it turned false at %v: controller created configmaps ns/a-0", turned); got != want {
+		t.Errorf("second version event: detail = %q, want %q", got, want)
+	}
+
+	one := newRun(0)
+	one.Spec.Properties = []trace.Property{{Name: "p", When: "step"}}
+	one.Begin()
+	one.Create(trace.Harness, widgetA, tt.CR("a", true))
+	one.Act("create", "a", &widgetA).Call(ctl, "get", widgetA, 200).EndFaults().Settle()
+	for name, r := range map[string]*tt.Script{"one version event": one, "many": transient("step")} {
+		r.Spec.Properties[0].Expr = "size(crs) == 2"
+		if got, want := turnDetail(t, r), "it was false at each version event"; got != want {
+			t.Errorf("%s: detail = %q, want %q", name, got, want)
+		}
+	}
+}
+
+// turnDetail is the detail of r's one finding that says when its property
+// turned false.
+func turnDetail(t *testing.T, r *tt.Script) string {
+	t.Helper()
+	if f := only(t, judgeWith(t, r, check.Property)); len(f.Details) > 1 {
+		return f.Details[1]
+	}
+	return ""
+}
+
+// At the second of two steps whose ends a property is false at, the
+// finding names the turn of the first.
+func TestAPropertyFalseAtTwoStepsNamesTheFirstStepsTurn(t *testing.T) {
+	r := newRun(2)
+	r.Spec.Properties = []trace.Property{{Name: "one-configmap", Expr: "size(world.kube.configmaps) <= 1", When: "step"}}
+	r.Begin()
+	a0 := withChild(r, "a", true)
+	turned := r.Now
+	r.Create(ctl, tt.Ref("configmaps", "ns", "a-extra"), tt.Object("a-extra"))
+	r.EndFaults().Settle()
+	r.Begin()
+	r.Update(ctl, a0, named("a-0", map[string]any{"data": map[string]any{"k": "v"}}))
+	findings := judgeWith(t, r.EndFaults().Settle(), check.Property)
+	requireSummaries(t, findings, "0 property one-configmap does not hold", "1 property one-configmap does not hold")
+	want := fmt.Sprintf("it turned false at %v: controller created configmaps ns/a-extra", turned)
+	for _, f := range findings {
+		if len(f.Details) != 2 || f.Details[1] != want {
+			t.Errorf("step %d: details = %q, want %q", f.Step, f.Details, want)
+		}
 	}
 }

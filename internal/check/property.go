@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,8 +21,7 @@ func Property(ix *trace.Index, s Spec) []Finding {
 	if len(s.Properties) == 0 {
 		return nil
 	}
-	v := newView(ix, s)
-	p := &properties{view: v, keys: worldKeys(ix, v.w), decoded: map[uint64]map[string]any{}}
+	p := newProperties(ix, s)
 	var findings []Finding
 	for _, property := range s.Properties {
 		eval, err := property.Program.Bind(p.firstWrittenUnder)
@@ -29,66 +29,89 @@ func Property(ix *trace.Index, s Spec) []Finding {
 			findings = append(findings, propertyFinding(property, -1, 0, "could not be evaluated", err.Error()))
 			continue
 		}
-		judged := map[int]bool{}
-		for _, at := range p.times(property) {
-			if judged[at.step] {
-				continue
-			}
-			p.t, p.origins = at.t, nil
-			crs, world := p.world(at.t)
-			switch holds, err := eval(crs, world); {
-			case err != nil:
-				findings = append(findings, propertyFinding(property, at.step, at.t, "could not be evaluated", err.Error()))
-			case !holds:
-				f := propertyFinding(property, at.step, at.t, "does not hold", property.Expr+" is false")
-				origins := p.origins
-				if turn, found := p.turned(eval, at.t); found {
-					f.Details = append(f.Details, turn)
-				}
-				f.Details = append(f.Details, origins...)
-				findings = append(findings, f)
-			default:
-				continue
-			}
-			judged[at.step] = true
-		}
+		findings = append(findings, p.judgeEach(property, eval)...)
 	}
 	return findings
 }
 
-// turned says when a property that eval judges false at t last turned
-// false, and which writes the trace recorded then. The world changes only at
-// version events, so it judges the world at each earlier one in turn, back
-// to one where the property holds or cannot be evaluated.
-func (p *properties) turned(eval func([]any, map[string]map[string][]any) (bool, error), t time.Duration) (string, bool) {
-	defer func(t time.Duration, origins []string) { p.t, p.origins = t, origins }(p.t, p.origins)
-	var times []time.Duration
-	for _, e := range p.ix.EventsIn(-1, t) {
-		if e.Version != nil && (len(times) == 0 || times[len(times)-1] != e.At) {
-			times = append(times, e.At)
+// evaluator judges a property on the live CRs and the world.
+type evaluator func(crs []any, world map[string]map[string][]any) (bool, error)
+
+// judgeEach judges property at each of its times, until it fails in a step.
+func (p *properties) judgeEach(property PropertySpec, eval evaluator) []Finding {
+	var findings []Finding
+	judged := map[int]bool{}
+	run := falseRun{end: -1}
+	for _, at := range p.times(property) {
+		if judged[at.step] {
+			continue
 		}
-	}
-	// times[turn] is the first of the false run that ends at t.
-	turn := len(times)
-	for ; turn > 0; turn-- {
-		p.t = times[turn-1]
-		if holds, err := eval(p.world(p.t)); err != nil || holds {
-			break
+		switch holds, origins, err := p.judge(eval, at.t); {
+		case err != nil:
+			findings = append(findings, propertyFinding(property, at.step, at.t, "could not be evaluated", err.Error()))
+		case !holds:
+			f := propertyFinding(property, at.step, at.t, "does not hold", property.Expr+" is false")
+			if turn := p.turned(eval, at.t, &run); turn != "" {
+				f.Details = append(f.Details, turn)
+			}
+			f.Details = append(f.Details, origins...)
+			findings = append(findings, f)
+		default:
+			continue
 		}
+		judged[at.step] = true
 	}
-	switch turn {
-	case len(times):
-		return "", false
-	case 0:
-		return "it was false at each version event", true
+	return findings
+}
+
+// judge evaluates a property at t, and says where the values that
+// firstWrittenUnder found came from.
+func (p *properties) judge(eval evaluator, t time.Duration) (bool, []string, error) {
+	p.t, p.origins = t, nil
+	holds, err := eval(p.world(t))
+	return holds, p.origins, err
+}
+
+// holdsAt reports whether a property holds, or cannot be evaluated, at t.
+func (p *properties) holdsAt(eval evaluator, t time.Duration) bool {
+	holds, _, err := p.judge(eval, t)
+	return err != nil || holds
+}
+
+// falseRun is a run of version events, from versionTimes[start] to
+// versionTimes[end], at each of which a property is false.
+type falseRun struct{ start, end int }
+
+// turned says when a property that is false at t last turned false, and
+// which writes the trace recorded then. The world changes only at version
+// events, so the property is false at the last one by t. turned judges each
+// earlier one in turn, back to one where the property holds or cannot be
+// evaluated, or to the end of run, the false run it found last for the
+// property, whose start it then takes.
+func (p *properties) turned(eval evaluator, t time.Duration, run *falseRun) string {
+	times := p.versionTimes
+	end := sort.Search(len(times), func(i int) bool { return times[i] > t }) - 1
+	if end < 0 {
+		return ""
+	}
+	start := end
+	for start > run.end+1 && !p.holdsAt(eval, times[start-1]) {
+		start--
+	}
+	if start <= run.end+1 {
+		start = run.start
+	}
+	*run = falseRun{start, end}
+	if start == 0 {
+		return "it was false at each version event"
 	}
 	var writes []string
-	for _, e := range p.ix.EventsIn(times[turn]-1, times[turn]) {
+	for _, e := range p.ix.EventsIn(times[start]-1, times[start]) {
 		if v := e.Version; v != nil {
 			writes = append(writes, fmt.Sprintf("%s %s %s", p.ix.Writer(*v), p.change(e), describe(v.Ref)))
 		}
 	}
-	return fmt.Sprintf("it turned false at %v: %s", times[turn], strings.Join(slices.Compact(writes), ", ")), true
+	return fmt.Sprintf("it turned false at %v: %s", times[start], strings.Join(slices.Compact(writes), ", "))
 }
 
 // change says how version event e changed its instance.
@@ -114,10 +137,24 @@ type properties struct {
 	// the run declares or the trace holds.
 	keys    map[string]map[string]bool
 	decoded map[uint64]map[string]any
+	// versionTimes are the times of the trace's version events, each once,
+	// in order.
+	versionTimes []time.Duration
 	// origins says, for each firstWrittenUnder call of an evaluation, where
 	// a value came from when it did not come from the object's instance
 	// under its owning CR.
 	origins []string
+}
+
+func newProperties(ix *trace.Index, s Spec) *properties {
+	v := newView(ix, s)
+	p := &properties{view: v, keys: worldKeys(ix, v.w), decoded: map[uint64]map[string]any{}}
+	for _, e := range ix.Events() {
+		if e.Version != nil && (len(p.versionTimes) == 0 || p.versionTimes[len(p.versionTimes)-1] != e.At) {
+			p.versionTimes = append(p.versionTimes, e.At)
+		}
+	}
+	return p
 }
 
 type judgeTime struct {
@@ -136,15 +173,12 @@ func (p *properties) times(property PropertySpec) []judgeTime {
 		}
 		return times
 	}
-	for _, e := range p.ix.Events() {
-		if e.Version == nil || len(times) > 0 && times[len(times)-1].t == e.At {
-			continue
-		}
+	for _, t := range p.versionTimes {
 		step := -1
-		if latest, found := latestStep(p.ix, e.At); found {
+		if latest, found := latestStep(p.ix, t); found {
 			step = latest.Step
 		}
-		times = append(times, judgeTime{e.At, step})
+		times = append(times, judgeTime{t, step})
 	}
 	return times
 }
