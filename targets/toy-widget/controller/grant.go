@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -50,7 +52,9 @@ func (r *GrantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // grantsFor names the Grant whose UID object's label holds, or every Grant
-// for grant-config.
+// for grant-config. For a labelled ConfigMap whose Grant is gone, it names
+// the Grant that the ConfigMap's name holds, whose reconcile deletes the
+// children.
 func (r *GrantReconciler) grantsFor(ctx context.Context, object client.Object) []ctrl.Request {
 	uid := object.GetLabels()[GrantUIDLabel]
 	isConfig := object.GetNamespace() == r.MirrorNamespace && object.GetName() == GrantConfig
@@ -64,15 +68,23 @@ func (r *GrantReconciler) grantsFor(ctx context.Context, object client.Object) [
 			requests = append(requests, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(&grants.Items[i])})
 		}
 	}
+	namespace, name, named := strings.Cut(object.GetName(), ".")
+	if named && uid != "" && len(requests) == 0 && object.GetNamespace() == r.MirrorNamespace {
+		requests = append(requests, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: namespace, Name: name}})
+	}
 	return requests
 }
 
 func (r *GrantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	grant := &toyv1.Grant{}
-	if err := r.Get(ctx, req.NamespacedName, grant); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
-	}
-	if !grant.DeletionTimestamp.IsZero() {
+	err := r.Get(ctx, req.NamespacedName, grant)
+	switch {
+	case apierrors.IsNotFound(err):
+		// A delete that read the Grant before its finalizer skips cleanUp.
+		return ctrl.Result{}, r.deleteChildren(ctx, req.NamespacedName)
+	case err != nil:
+		return ctrl.Result{}, err
+	case !grant.DeletionTimestamp.IsZero():
 		return ctrl.Result{}, r.cleanUp(ctx, grant)
 	}
 	if !controllerutil.ContainsFinalizer(grant, GrantFinalizer) {
@@ -84,7 +96,8 @@ func (r *GrantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	labels := map[string]string{GrantUIDLabel: string(grant.UID)}
-	clusterRole := r.clusterRoleOf(grant)
+	key := client.ObjectKeyFromObject(grant)
+	clusterRole := r.clusterRoleOf(key)
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, clusterRole, func() error {
 		clusterRole.Labels = labels
 		clusterRole.Rules = []rbacv1.PolicyRule{{
@@ -105,7 +118,7 @@ func (r *GrantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if err := r.Get(ctx, client.ObjectKey{Namespace: r.MirrorNamespace, Name: GrantConfig}, config); client.IgnoreNotFound(err) != nil {
 		return ctrl.Result{}, fmt.Errorf("reading ConfigMap %s: %w", GrantConfig, err)
 	}
-	configMap := r.configMapOf(grant)
+	configMap := r.configMapOf(key)
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, configMap, func() error {
 		configMap.Labels = labels
 		configMap.Data = map[string]string{labelKey: config.Data[labelKey], "level": strconv.Itoa(int(grant.Spec.Level))}
@@ -118,30 +131,22 @@ func (r *GrantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	return ctrl.Result{}, patchReadyStatus(ctx, r.Client, grant, &grant.Status, status)
 }
 
-func (r *GrantReconciler) clusterRoleOf(grant *toyv1.Grant) *rbacv1.ClusterRole {
+func (r *GrantReconciler) clusterRoleOf(grant types.NamespacedName) *rbacv1.ClusterRole {
 	return &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("grant-%s-%s", grant.Namespace, grant.Name)}}
 }
 
-func (r *GrantReconciler) configMapOf(grant *toyv1.Grant) *corev1.ConfigMap {
+func (r *GrantReconciler) configMapOf(grant types.NamespacedName) *corev1.ConfigMap {
 	return &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: r.MirrorNamespace, Name: grant.Namespace + "." + grant.Name}}
 }
 
 // cleanUp deletes a deleted Grant's children and releases it once an
 // uncached read finds them gone.
 func (r *GrantReconciler) cleanUp(ctx context.Context, grant *toyv1.Grant) error {
-	var children []client.Object
-	if r.Bug != B28 { // B28 leaves the ClusterRole to the garbage collector.
-		children = append(children, r.clusterRoleOf(grant))
+	key := client.ObjectKeyFromObject(grant)
+	if err := r.deleteChildren(ctx, key); err != nil {
+		return err
 	}
-	if r.Bug != B27 { // B27 forgets the ConfigMap in the other namespace.
-		children = append(children, r.configMapOf(grant))
-	}
-	for _, child := range children {
-		if err := r.Delete(ctx, child); client.IgnoreNotFound(err) != nil {
-			return fmt.Errorf("deleting %T %s: %w", child, child.GetName(), err)
-		}
-	}
-	for _, child := range children {
+	for _, child := range r.children(key) {
 		err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(child), child)
 		if err == nil {
 			return nil // Its deletion reconciles the Grant again.
@@ -159,4 +164,25 @@ func (r *GrantReconciler) cleanUp(ctx context.Context, grant *toyv1.Grant) error
 		return fmt.Errorf("removing the finalizer: %w", err)
 	}
 	return nil
+}
+
+func (r *GrantReconciler) deleteChildren(ctx context.Context, grant types.NamespacedName) error {
+	for _, child := range r.children(grant) {
+		if err := r.Delete(ctx, child); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("deleting %T %s: %w", child, child.GetName(), err)
+		}
+	}
+	return nil
+}
+
+// children are the Grant's children that its cleanup deletes.
+func (r *GrantReconciler) children(grant types.NamespacedName) []client.Object {
+	var children []client.Object
+	if r.Bug != B28 { // B28 leaves the ClusterRole to the garbage collector.
+		children = append(children, r.clusterRoleOf(grant))
+	}
+	if r.Bug != B27 { // B27 forgets the ConfigMap in the other namespace.
+		children = append(children, r.configMapOf(grant))
+	}
+	return children
 }

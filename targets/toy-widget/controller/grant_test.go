@@ -159,6 +159,33 @@ func TestADeletedGrantKeepsItsFinalizerUntilBothChildrenAreGone(t *testing.T) {
 	}
 }
 
+// The apiserver deletes a Grant at once when its delete read the Grant
+// before the finalizer was added.
+func TestTheChildrenOfAGrantDeletedPastItsFinalizerAreDeleted(t *testing.T) {
+	grant := newGrant(1)
+	r := grantFixture(t, 0, grant)
+	mustReconcileGrant(t, r, grant)
+	deletePastFinalizer(t, r, grant)
+	mustReconcileGrant(t, r, grant)
+
+	if !gone(t, r, grantClusterRoleKey, &rbacv1.ClusterRole{}) {
+		t.Error("The ClusterRole remains.")
+	}
+	if !gone(t, r, grantConfigMapKey, &corev1.ConfigMap{}) {
+		t.Error("The ConfigMap remains.")
+	}
+}
+
+func deletePastFinalizer(t *testing.T, r *GrantReconciler, grant *toyv1.Grant) {
+	t.Helper()
+	observed := readGrant(t, r, grant)
+	observed.Finalizers = nil
+	if err := r.Update(t.Context(), observed); err != nil {
+		t.Fatal(err)
+	}
+	deleteGrant(t, r, grant)
+}
+
 func TestAGrantsChildrenAndGrantConfigEnqueueGrants(t *testing.T) {
 	grant, other := newGrant(0), newGrant(0)
 	other.Name, other.UID = "h", "other-uid"
@@ -166,20 +193,32 @@ func TestAGrantsChildrenAndGrantConfigEnqueueGrants(t *testing.T) {
 	labelled := func(uid string) client.Object {
 		return &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "x", Labels: map[string]string{GrantUIDLabel: uid}}}
 	}
+	orphanConfigMap := func(name, uid string) client.Object {
+		configMap := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: mirror, Name: name}}
+		if uid != "" {
+			configMap.Labels = map[string]string{GrantUIDLabel: uid}
+		}
+		return configMap
+	}
 
 	for _, testCase := range []struct {
 		object client.Object
 		want   []string
 	}{
-		{labelled("grant-uid"), []string{"g"}},
+		{labelled("grant-uid"), []string{"ns/g"}},
 		{labelled("unknown"), nil},
+		{orphanConfigMap("ns.gone", "unknown"), []string{"ns/gone"}},
+		{orphanConfigMap("ns.g", "unknown"), []string{"ns/g"}},
+		{orphanConfigMap("kube-root-ca.crt", ""), nil},
+		{orphanConfigMap("ns.g", "grant-uid"), []string{"ns/g"}},
+		{&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "ns.gone", Labels: map[string]string{GrantUIDLabel: "unknown"}}}, nil},
 		{&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "unlabelled"}}, nil},
-		{grantConfig("red"), []string{"g", "h"}},
+		{grantConfig("red"), []string{"ns/g", "ns/h"}},
 		{&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "elsewhere", Name: GrantConfig}}, nil},
 	} {
 		var names []string
 		for _, request := range r.grantsFor(t.Context(), testCase.object) {
-			names = append(names, request.Name)
+			names = append(names, request.String())
 		}
 		if !reflect.DeepEqual(names, testCase.want) {
 			t.Errorf("%s/%s enqueues %v, want %v.", testCase.object.GetNamespace(), testCase.object.GetName(), names, testCase.want)
@@ -193,6 +232,7 @@ func TestB27sCleanupLeavesTheMirrorConfigMap(t *testing.T) {
 	mustReconcileGrant(t, r, grant)
 	deleteGrant(t, r, grant)
 	mustReconcileGrant(t, r, grant)
+	mustReconcileGrant(t, r, grant) // Reconciles the deleted Grant.
 
 	if gone(t, r, grantConfigMapKey, &corev1.ConfigMap{}) {
 		t.Error("The cleanup deleted the ConfigMap.")
@@ -220,6 +260,7 @@ func TestB28LeavesTheClusterRoleToAGarbageCollectorThatNeverComes(t *testing.T) 
 
 	deleteGrant(t, r, grant)
 	mustReconcileGrant(t, r, grant)
+	mustReconcileGrant(t, r, grant) // Reconciles the deleted Grant.
 	if gone(t, r, grantClusterRoleKey, &rbacv1.ClusterRole{}) {
 		t.Error("The cleanup deleted the ClusterRole.")
 	}
