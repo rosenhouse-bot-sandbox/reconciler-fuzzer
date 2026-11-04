@@ -1,0 +1,5 @@
+{
+  "steps": [
+    {"period": "2s", "faults": [{"match": {"verb": "create", "group": "storage.thirdparty", "resource": "volumes"}, "nth": 1, "error": {"code": 500}}], "actions": [{"do": "create", "slot": "a", "object": {"apiVersion": "toy.reconciler-fuzzer/v1", "kind": "Cluster", "metadata": {"name": "cluster"}, "spec": {"volumes": 2, "volumeSize": "small"}}}]}
+  ]
+}

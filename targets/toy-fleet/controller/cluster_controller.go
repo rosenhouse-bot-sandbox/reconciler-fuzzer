@@ -37,9 +37,15 @@ const Provisioner = "storage.thirdparty/volumes"
 // manualCleanup is the message of a Cluster that B117 stopped finalizing.
 const manualCleanup = "a Volume failed; clean up by hand"
 
+// gaveUp starts the message of a Cluster that B133 gave up on.
+const gaveUp = "gave up: "
+
 // ClusterReconciler moves a Cluster through its phases and keeps its Volumes.
 type ClusterReconciler struct {
 	reconciler
+	// generated holds, under B132, the names of the Volumes this process made
+	// for each Cluster.
+	generated map[types.UID][]string
 	// suffix ends the name of each Volume this process makes under B135.
 	suffix string
 	// finalizing holds, under B161, the Clusters this process began to finalize.
@@ -108,12 +114,18 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, r.writeStatus(ctx, cluster, old, cluster.Status)
 	case r.Version == 2 && r.Bug == B142 && old.Phase == fleetv1.Provisioning:
 		return ctrl.Result{}, nil // B142 leaves a Cluster that version 1 was provisioning.
+	case r.Bug == B133 && strings.HasPrefix(old.Message, gaveUp):
+		return ctrl.Result{}, nil
 	}
 	if err := r.syncStorageClass(ctx, cluster); err != nil {
 		return ctrl.Result{}, err
 	}
 	ready, err := r.syncVolumes(ctx, cluster)
 	if err != nil {
+		if r.Bug == B133 {
+			cluster.Status.Phase, cluster.Status.Message = r.provisioning(), gaveUp+err.Error()
+			return ctrl.Result{}, r.writeStatus(ctx, cluster, old, cluster.Status)
+		}
 		return ctrl.Result{}, err
 	}
 	status := fleetv1.ClusterStatus{ReadyVolumes: ready}
@@ -178,40 +190,68 @@ func (r *ClusterReconciler) syncVolumes(ctx context.Context, cluster *fleetv1.Cl
 	want := map[string]bool{}
 	var ready int32
 	for i := range cluster.Spec.Volumes {
-		name := r.volumeName(cluster, i)
-		want[name] = true
-		volume := &storagev1.Volume{ObjectMeta: metav1.ObjectMeta{Namespace: cluster.Namespace, Name: name}}
-		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, volume, func() error {
-			volume.Spec.Size = cluster.Spec.VolumeSize
-			if volume.Labels == nil {
-				volume.Labels = map[string]string{}
-			}
-			volume.Labels[ClusterLabel] = cluster.Name
-			if r.Version == 2 {
-				volume.Labels[VersionLabel] = "2"
-			}
-			if r.Bug == B151 {
-				controllerutil.AddFinalizer(volume, VolumeFinalizer)
-			}
-			if r.Bug == B160 {
-				return nil
-			}
-			return controllerutil.SetControllerReference(cluster, volume, r.Scheme)
-		}); err != nil {
-			return 0, fmt.Errorf("ensuring Volume %s: %w", name, err)
+		volume, err := r.ensureVolume(ctx, cluster, i)
+		if err != nil {
+			return 0, err
 		}
-		if volumeReady(volume) {
+		want[volume.Name] = true
+		if r.countsReady(volume) {
 			ready++
 		}
 	}
 	for i := range volumes {
-		if v := &volumes[i]; !want[v.Name] && r.mine(v) && v.DeletionTimestamp.IsZero() {
+		if v := &volumes[i]; !want[v.Name] && r.mine(cluster, v) && v.DeletionTimestamp.IsZero() {
 			if err := r.deleteVolume(ctx, v); err != nil {
 				return 0, err
+			}
+			if r.Bug == B132 {
+				r.generated[cluster.UID] = slices.DeleteFunc(r.generated[cluster.UID], func(name string) bool { return name == v.Name })
 			}
 		}
 	}
 	return ready, nil
+}
+
+// ensureVolume creates or updates the Cluster's ith Volume. B132 creates a
+// Volume it has no name for with generateName.
+func (r *ClusterReconciler) ensureVolume(ctx context.Context, cluster *fleetv1.Cluster, i int32) (*storagev1.Volume, error) {
+	name := r.volumeName(cluster, i)
+	volume := &storagev1.Volume{ObjectMeta: metav1.ObjectMeta{Namespace: cluster.Namespace, Name: name}}
+	mutate := func() error {
+		volume.Spec.Size = cluster.Spec.VolumeSize
+		if volume.Labels == nil {
+			volume.Labels = map[string]string{}
+		}
+		volume.Labels[ClusterLabel] = cluster.Name
+		if r.Version == 2 {
+			volume.Labels[VersionLabel] = "2"
+		}
+		if r.Bug == B151 {
+			controllerutil.AddFinalizer(volume, VolumeFinalizer)
+		}
+		if r.Bug == B160 {
+			return nil
+		}
+		return controllerutil.SetControllerReference(cluster, volume, r.Scheme)
+	}
+	if name == "" {
+		volume.GenerateName = r.baseName(cluster, i) + "-"
+		if err := mutate(); err != nil {
+			return nil, fmt.Errorf("creating Volume %s: %w", volume.GenerateName, err)
+		}
+		if err := r.Create(ctx, volume); err != nil {
+			return nil, fmt.Errorf("creating Volume %s: %w", volume.GenerateName, err)
+		}
+		if r.generated == nil {
+			r.generated = map[types.UID][]string{}
+		}
+		r.generated[cluster.UID] = append(r.generated[cluster.UID], volume.Name)
+		return volume, nil
+	}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, volume, mutate); err != nil {
+		return nil, fmt.Errorf("ensuring Volume %s: %w", name, err)
+	}
+	return volume, nil
 }
 
 // deleteVolume deletes the Volume. B118 orphans its dependents.
@@ -259,19 +299,39 @@ func (r *ClusterReconciler) deleteStorageClass(ctx context.Context, cluster *fle
 	return nil
 }
 
-// volumeName names the Cluster's ith Volume.
-func (r *ClusterReconciler) volumeName(cluster *fleetv1.Cluster, i int32) string {
-	name := fmt.Sprintf("%s%d", r.volumePrefix(cluster), i)
-	if r.Bug == B135 {
-		return name + "-" + r.suffix
-	}
-	return name
+// baseName is the name of the Cluster's ith Volume before any suffix.
+func (r *ClusterReconciler) baseName(cluster *fleetv1.Cluster, i int32) string {
+	return fmt.Sprintf("%s%d", r.volumePrefix(cluster), i)
 }
 
-// mine says whether this process counts the Volume as its own. B135 counts
-// only the Volumes with its suffix.
-func (r *ClusterReconciler) mine(v *storagev1.Volume) bool {
-	return r.Bug != B135 || strings.HasSuffix(v.Name, "-"+r.suffix)
+// volumeName names the Cluster's ith Volume. B132 knows only the names of
+// the Volumes this process made, and gives "" for any other.
+func (r *ClusterReconciler) volumeName(cluster *fleetv1.Cluster, i int32) string {
+	switch r.Bug {
+	case B132:
+		prefix := r.baseName(cluster, i) + "-"
+		for _, name := range r.generated[cluster.UID] {
+			if strings.HasPrefix(name, prefix) {
+				return name
+			}
+		}
+		return ""
+	case B135:
+		return r.baseName(cluster, i) + "-" + r.suffix
+	}
+	return r.baseName(cluster, i)
+}
+
+// mine says whether this process counts the Cluster's Volume as its own.
+// B132 and B135 count only the Volumes this process made.
+func (r *ClusterReconciler) mine(cluster *fleetv1.Cluster, v *storagev1.Volume) bool {
+	switch r.Bug {
+	case B132:
+		return slices.Contains(r.generated[cluster.UID], v.Name)
+	case B135:
+		return strings.HasSuffix(v.Name, "-"+r.suffix)
+	}
+	return true
 }
 
 // finalize waits until no Database names the Cluster, deletes its Volumes,
@@ -404,9 +464,14 @@ func volumeFailed(v storagev1.Volume) bool {
 	return meta.IsStatusConditionFalse(v.Status.Conditions, "Ready")
 }
 
-// volumeReady says whether the Volume's Ready condition is True for its
-// current generation.
-func volumeReady(v *storagev1.Volume) bool {
+// countsReady says whether the Cluster counts the Volume ready: live, with a
+// Ready condition True for its current generation. B131 counts every Volume,
+// and B172 a Ready condition of any generation.
+func (r *ClusterReconciler) countsReady(v *storagev1.Volume) bool {
+	if r.Bug == B131 {
+		return true
+	}
 	c := meta.FindStatusCondition(v.Status.Conditions, "Ready")
-	return v.DeletionTimestamp.IsZero() && c != nil && c.Status == metav1.ConditionTrue && c.ObservedGeneration == v.Generation
+	return v.DeletionTimestamp.IsZero() && c != nil && c.Status == metav1.ConditionTrue &&
+		(c.ObservedGeneration == v.Generation || r.Bug == B172)
 }

@@ -73,6 +73,14 @@ var gate = []gateRow{
 	{plan: "slow-delete", bug: 118},
 	{plan: "slow-delete", bug: 119, finding: "Teardown: released a CR before deleting its resources", step: 1, detail: "-cluster (rule 3, slot a)", config: storageClassConfig},
 	{plan: "secret-first", bug: 126, finding: "Ordered: released an object that another names", step: 1, detail: "/admin-password: slot a names it", config: secretConfig},
+	{plan: "b131", bug: 131, finding: "Honest: reported ready before seeing its dependency ready", step: 0, detail: "/cluster-vol-1 seen not ready"},
+	{plan: "b131", bug: 131, finding: "Honest: reported ready before seeing its dependency ready", step: 1, detail: "/cluster-vol-2 seen not ready"},
+	// The kill follows the first process's second Volume create. The
+	// restarted process makes a second set, and the update deletes only one
+	// of its own.
+	{plan: "b132", bug: 132, finding: "Unique: duplicate resources", step: 0, detail: `role "cluster-vol-1": `},
+	{plan: "b132", bug: 132, finding: "Unique: duplicate resources", step: 1, detail: `role "cluster-vol-0": `},
+	{plan: "b133", bug: 133, finding: "Converge: did not settle (clause 1)", step: 0, detail: "cluster is not ready", notes: []string{"primaries[0].ready held for no CR version"}},
 	// The restart comes 500 ms after the create, long after the first
 	// process makes its Volumes. The second makes its own, and the update
 	// deletes only one of them.
@@ -112,6 +120,8 @@ var gate = []gateRow{
 	{plan: "restart-deleting", bug: 161, finding: "Converge: did not settle (clause 2)", step: 1, detail: "cluster is being deleted"},
 	{plan: "foreground-kill", bug: 161, finding: "Converge: did not settle (clause 2)", step: 1, detail: "cluster is being deleted"},
 	{plan: "slow-delete", bug: 162, finding: "Backoff: repeated a no-op write in a tight loop", step: 1, detail: "delete volumes.storage.thirdparty "},
+	// The resize raises each Volume's generation past its Ready condition's.
+	{plan: "resize", bug: 172, finding: "Honest: reported ready before seeing its dependency ready", step: 1, detail: "/cluster-vol-0 seen not ready"},
 	{plan: "crd-first-stop", config: uninstallConfig},
 	{plan: "kill-recreate", config: uninstallConfig},
 	// The create waits for the name, the slowDelete for the create, and the
