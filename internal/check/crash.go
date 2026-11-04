@@ -1,7 +1,6 @@
 package check
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
@@ -27,10 +26,7 @@ func Crash(ix *trace.Index) []Finding {
 	var findings []Finding
 	for _, step := range order {
 		first := exits[step][0]
-		summary := "the controller exited 1 time"
-		if n := len(exits[step]); n > 1 {
-			summary = fmt.Sprintf("the controller exited %d times", n)
-		}
+		summary := "the controller exited " + times(len(exits[step]))
 		details := []string{"first exit: " + first.Proc.Exit}
 		if first.Proc.StderrTail != "" {
 			details = append(details, "output tail:", first.Proc.StderrTail)

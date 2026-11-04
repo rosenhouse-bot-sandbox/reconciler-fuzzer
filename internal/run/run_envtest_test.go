@@ -310,6 +310,30 @@ timeouts: {settle: 3s, stable: 1s}
 	}
 }
 
+func TestAReportWithFindingsGivesTheCommandThatReplaysItsPlan(t *testing.T) {
+	toyDir, err := filepath.Abs(toy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	config := fmt.Sprintf("launch: {binary: /bin/sh, args: [-c, '%[2]s'], rbac: [%[1]s/rbac/role.yaml]}\ncrds: [%[1]s/crds/]\nprimary: {kind: toy.reconciler-fuzzer/v1/Widget, sample: %[1]s/widget.yaml, ready: \"false\"}\ntimeouts: {settle: 3s, stable: 1s}\n",
+		toyDir, widgetLister)
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	o := Options{ConfigPath: filepath.Join(dir, "config.yaml"), Plan: &plan.Plan{Steps: []plan.Step{{Actions: []plan.Action{{Do: plan.Create, Slot: "a"}}}}}, Out: filepath.Join(dir, "out")}
+	if report, err := Run(context.Background(), o); err != nil || len(report.Findings) == 0 {
+		t.Fatalf("Run = %+v, %v; want a finding", report.Findings, err)
+	}
+	text, err := os.ReadFile(filepath.Join(o.Out, "report.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "```\n" + replayCommand(o) + "\n```\n"; !strings.Contains(string(text), want) {
+		t.Errorf("report.md:\n%s\nwant it to hold:\n%s", text, want)
+	}
+}
+
 // A restart's args expand ${key}s and keep the --launch-args after them,
 // and the appended restart starts the same command.
 func TestARestartExpandsItsArgsAndKeepsTheLaunchArgs(t *testing.T) {

@@ -124,6 +124,9 @@ values: {fixtures: {fixture.yaml: [data.label]}, deletable: [fixture.yaml]}
 	if s.Kind != l.Kind || s.Ready != l.Ready || filepath.Base(s.Sample) != filepath.Base(l.Sample) || !reflect.DeepEqual(s.Values, l.Values) {
 		t.Errorf("primary loads as %+v, primaries as %+v; want the same entry.", s, l)
 	}
+	if s.Key != "primary" || l.Key != "primaries[0]" {
+		t.Errorf("keys = %q and %q, want primary and primaries[0].", s.Key, l.Key)
+	}
 	for _, c := range []*config.Config{short, long} {
 		if got := c.FixtureValues[c.Fixtures[0]]; !slices.Equal(got, []string{"data.label"}) {
 			t.Errorf("FixtureValues = %v, want fixture.yaml's data.label.", c.FixtureValues)

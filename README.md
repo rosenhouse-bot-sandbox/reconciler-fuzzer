@@ -63,11 +63,22 @@ It exits 1 and prints this, with a new namespace and time on each run:
 
 ## Clean: left resources behind
 
-Step 1, at 14.814449459s.
+Step 1, at 15.356s.
+Actions: delete slot a.
 
 ```
-configmaps rf-cd767d99/widget-0 (rule 4, slot a)
+configmaps rf-26dbb0d4/widget-0 (rule 4, slot a)
 ```
+
+# Next steps
+
+Replay the plan:
+
+```
+reconciler-fuzzer run --config targets/toy-widget/config.yaml --plan reconciler-fuzzer-out/b3/plan.json --out reconciler-fuzzer-out/b3/replay --launch-arg --bug=3
+```
+
+[docs/failures.md](https://github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/blob/main/docs/failures.md) says what each finding means.
 ````
 
 `--seed n` draws a plan from the config instead, and `plan` prints that plan without running
@@ -524,7 +535,15 @@ properties:
         || v.metadata.ownerReferences.all(o, crs.exists(c, c.metadata.uid == o.uid)))
 ```
 
-It fails at the first version that shows a Volume whose owner is no longer a live CR.
+It fails at the first version that shows a Volume whose owner is no longer a live CR. A failing
+property's details say when it turned false, and the writes at that time:
+
+```
+it turned false at 13.328547311s: cluster deleted clusters.toy.reconciler-fuzzer rf-c1e784db/cluster
+```
+
+Each write names its caller, or `cluster` if no recorded response carried it, as for the delete
+that follows a CR's last finalizer.
 
 `firstWrittenUnder(object, path)` names the CR that owned the object when its value at `path`
 first appeared, across deletes and recreates. cert-manager's `fresh-key` property uses it. A

@@ -143,7 +143,7 @@ func (g sight) describe() string {
 	if !g.looked {
 		return "not seen"
 	}
-	return g.state.describe()
+	return fmt.Sprintf("%s at %v", g.state.describe(), g.look.At)
 }
 
 // sight is the controller's sight of n at t.

@@ -47,7 +47,7 @@ func TestCorpus(t *testing.T) {
 				if skip != "" {
 					t.Skipf("%s; got %q, want %q", skip, got, want)
 				}
-				t.Fatalf("findings = %q, want %q\n%s", got, want, check.Markdown(ix, report))
+				t.Fatalf("findings = %q, want %q\n%s", got, want, check.Markdown(ix, report, ""))
 			}
 			if skip != "" {
 				t.Fatalf("passes but is marked skipped: %s", skip)

@@ -6,6 +6,7 @@ import (
 	"maps"
 	"math"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/owner"
@@ -163,12 +164,15 @@ func lapse(ix *trace.Index, step trace.StepSpan, s Spec) time.Duration {
 	return step.EndFaults + poll*3/2
 }
 
-// changes are the step's damage, changeFixture and createFixture actions
-// that changed an object without error.
+// objectActions are the actions that change an object other than a slot's CR.
+var objectActions = []string{"damage", "changeFixture", "createFixture"}
+
+// changes are the step's object actions that changed an object without
+// error.
 func changes(ix *trace.Index, step int) []trace.Event {
 	var changed []trace.Event
 	for _, e := range ix.Actions(step) {
-		if slices.Contains([]string{"damage", "changeFixture", "createFixture"}, e.Action.Do) && e.Action.Ref != nil && e.Action.Error == "" {
+		if slices.Contains(objectActions, e.Action.Do) && e.Action.Ref != nil && e.Action.Error == "" {
 			changed = append(changed, e)
 		}
 	}
@@ -193,11 +197,33 @@ func crClauses(ix *trace.Index, p Primary, cr trace.Version, t time.Duration, s 
 		return deletionClauses(ix, cr, t, s, inUse)
 	}
 	if ready, err := p.Ready(body); err != nil {
-		return []unmet{{1, k, fmt.Sprintf("%s: ready: %v", name, err)}}
+		return []unmet{{1, k, fmt.Sprintf("%s: ready: %v; it %s", name, err, quoteStatus(body))}}
 	} else if !ready && !halted(ix, p, cr, body, t, s) && !s.heldBack(ix, cr.Ref, body, t) {
-		return []unmet{{1, k, name + " is not ready" + s.describeLooks(ix, cr.Ref, body, t)}}
+		return []unmet{{1, k, name + " is not ready; it " + quoteStatus(body) + s.describeLooks(ix, cr.Ref, body, t)}}
 	}
 	return nil
+}
+
+// quoteStatus quotes body's generation and status as stored, as "has
+// generation 2 and status {...}", or says "has no status".
+func quoteStatus(body map[string]any) string {
+	status := "no status"
+	if m, isMap := body["status"].(map[string]any); body["status"] != nil && !(isMap && len(m) == 0) {
+		status = "status " + quoteJSON(body["status"])
+	}
+	if metadata, _ := body["metadata"].(map[string]any); metadata["generation"] != nil {
+		return "has generation " + quoteJSON(metadata["generation"]) + " and " + status
+	}
+	return "has " + status
+}
+
+// quoteJSON encodes v as JSON without HTML escapes.
+func quoteJSON(v any) string {
+	var quoted strings.Builder
+	e := json.NewEncoder(&quoted)
+	e.SetEscapeHTML(false)
+	e.Encode(v)
+	return strings.TrimSuffix(quoted.String(), "\n")
 }
 
 // deletionClauses holds cr, being deleted at t, to clause 2. It excuses a CR
@@ -207,7 +233,11 @@ func crClauses(ix *trace.Index, p Primary, cr trace.Version, t time.Duration, s 
 func deletionClauses(ix *trace.Index, cr trace.Version, t time.Duration, s Spec, inUse func(trace.Ref) bool) []unmet {
 	name, k := describe(cr.Ref), kind(cr.Ref)
 	if !inUse(cr.Ref) {
-		return []unmet{{2, k, name + " is being deleted"}}
+		text := name + " is being deleted"
+		if f := finalizers(cr); len(f) > 0 {
+			text += ", held by " + listFinalizers(f)
+		}
+		return []unmet{{2, k, text}}
 	}
 	start, _ := deletionStart(ix.Versions(cr.Ref, cr.UID))
 	step, _ := latestStep(ix, t)
@@ -218,6 +248,18 @@ func deletionClauses(ix *trace.Index, cr trace.Version, t time.Duration, s Spec,
 		return []unmet{{2, k, fmt.Sprintf("%s waits in deletion, which counts as settled only from %v", name, from)}}
 	}
 	return nil
+}
+
+// listFinalizers names finalizers as "finalizer a", "finalizers a, b" or
+// "no finalizers".
+func listFinalizers(finalizers []string) string {
+	switch len(finalizers) {
+	case 0:
+		return "no finalizers"
+	case 1:
+		return "finalizer " + finalizers[0]
+	}
+	return "finalizers " + strings.Join(finalizers, ", ")
 }
 
 // deletionStart is when an instance got its deletionTimestamp: the time of

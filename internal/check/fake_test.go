@@ -318,6 +318,13 @@ func TestHonestJudgesADependencyFake(t *testing.T) {
 	requireFinding(t, honest(t, r), "Honest", 0, beforeSeeing, "cloud/buckets", "slot a", "cloud buckets b1 seen not ready")
 }
 
+func TestHonestNamesAnUnownedDependencyFake(t *testing.T) {
+	r := bucketRun(trace.Dependency{Required: true})
+	r.Spec.Owners = nil
+	r.See(ctl, bucketA).Ready(widgetA)
+	requireFinding(t, honest(t, r), "Honest", 0, noDependency, "kube/toy/widgets", "slot a: cloud buckets b1 has no owner; declare primary.owns or a cloud owner")
+}
+
 func TestHonestCountsOnlyTheFakesOwnSystem(t *testing.T) {
 	r := newRun(1)
 	r.Spec.Systems, r.Spec.Owners = []trace.System{cloudSystem}, map[string]string{"cloud": "self.tags.cr", "other": "self.tags.cr"}

@@ -86,6 +86,8 @@ type Launch struct {
 // Primary describes one CR kind the controller serves, which the harness
 // creates, changes and deletes.
 type Primary struct {
+	// Key names the entry, as "primary" or "primaries[1]".
+	Key string
 	// Kind is written group/version/Kind, or version/Kind for the core group.
 	Kind   schema.GroupVersionKind
 	Sample string
@@ -593,7 +595,7 @@ func primary(key string, declared declaredEntry, dir string, fakes []System, kin
 	if err != nil {
 		return Primary{}, fmt.Errorf("%s.kind %s: %w", key, declared.Kind, err)
 	}
-	p := Primary{Kind: kind, Ready: declared.Ready, Retain: declared.Retain, Halted: declared.Halted, Values: Values(declared.Values)}
+	p := Primary{Key: key, Kind: kind, Ready: declared.Ready, Retain: declared.Retain, Halted: declared.Halted, Values: Values(declared.Values)}
 	if declared.Sample == "" {
 		return Primary{}, fmt.Errorf("%s.sample is required", key)
 	}

@@ -2,7 +2,6 @@ package main_test
 
 import (
 	"cmp"
-	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -36,9 +35,9 @@ type gateRow struct {
 	// config is the config's path, config.yaml when empty. Its plans are
 	// in plans/ beside it.
 	config string
-	// note is what the run's one note must say. Without it the run gives
-	// no note.
-	note string
+	// notes are what the run's notes say, in order. Without them the run
+	// gives no note.
+	notes []string
 }
 
 func (g gateRow) configPath() string { return cmp.Or(g.config, "config.yaml") }
@@ -63,7 +62,7 @@ var gate = []gateRow{
 	// catches B120 there.
 	{plan: "cluster-delete", bug: 120, finding: "Converge: did not settle (clause 1)", step: 1, detail: "/db is not ready", config: databaseConfig},
 	{plan: "delete-database-first", bug: 121, finding: "Ordered: released an object that another names", step: 1, detail: "/db: slot c names it"},
-	{plan: "user-first", bug: 122, finding: "Converge: did not settle (clause 1)", step: 0, detail: "/alice is not ready"},
+	{plan: "user-first", bug: 122, finding: "Converge: did not settle (clause 1)", step: 0, detail: "/alice is not ready", notes: []string{"primaries[2].ready held for no CR version"}},
 	{plan: "create-together", bug: 123, finding: "Honest: reported ready before seeing its dependency ready", step: 0, detail: "slot b: clusters.toy.reconciler-fuzzer "},
 	{plan: "secret-late", bug: 124, finding: "Honest: reported ready with no dependency", step: 0, detail: "slot b: secrets "},
 	{plan: "secret-recreate", bug: 125, finding: "Honest: stayed ready after seeing its dependency not ready", step: 1, detail: "slot b: secrets "},
@@ -87,7 +86,7 @@ var gate = []gateRow{
 	// Each plan under upgrade/ restarts the controller as version 2.
 	{plan: "delete", bug: 140, finding: "Converge: did not settle (clause 2)", step: 2, detail: "cluster is being deleted", config: upgradeConfig},
 	{plan: "update", bug: 141, finding: "Restore: replaced resources", step: 1, detail: "/cluster-data-0 (rule 1, slot a)", config: upgradeConfig},
-	{plan: "mid-provisioning", bug: 142, finding: "Converge: did not settle (clause 1)", step: 0, detail: "cluster is not ready", config: upgradeConfig},
+	{plan: "mid-provisioning", bug: 142, finding: "Converge: did not settle (clause 1)", step: 0, detail: "cluster is not ready", config: upgradeConfig, notes: []string{"primary.ready held for no CR version"}},
 	{plan: "upgrade-and-update", bug: 141, finding: "Property: property volumes-go-first does not hold", step: 2, detail: "is false", config: upgradePropertiesConfig},
 	// The slowDelete keeps each Volume being deleted for 2 s before its
 	// Cluster is gone, so this row does not race the two kinds' watches.
@@ -119,8 +118,8 @@ var gate = []gateRow{
 	// plan ends at its create.
 	{plan: "recreate", config: uninstallConfig},
 	// B0 updates no Volume while it deletes them.
-	{plan: "stop-after-delete", config: uninstallConfig, note: "fault 1 (error(500) on verb=update group=storage.thirdparty resource=volumes) picked no request"},
-	{plan: "stop-first", config: uninstallConfig, note: "cluster is not judged: the stop did not wait for it"},
+	{plan: "stop-after-delete", config: uninstallConfig, notes: []string{"fault 1 (error(500) on verb=update group=storage.thirdparty resource=volumes) picked no request"}},
+	{plan: "stop-first", config: uninstallConfig, notes: []string{"cluster is not judged: the stop did not wait for it"}},
 }
 
 func planPath(config, plan string) string {
@@ -134,29 +133,6 @@ func plans(config string) ([]string, error) {
 		paths[i] = strings.TrimSuffix(filepath.Base(path), ".json")
 	}
 	return paths, err
-}
-
-// hasFinding says whether report holds a finding whose heading starts with
-// heading, at step, that says detail. The delete-all step's body names it,
-// as in "Step 2 (delete all),".
-func hasFinding(report, heading string, step int, detail string) bool {
-	for _, section := range strings.Split(report, "\n## ")[1:] {
-		title, body, _ := strings.Cut(section, "\n\n")
-		at := fmt.Sprintf("Step %d", step)
-		if strings.HasPrefix(title, heading) && (strings.HasPrefix(body, at+",") || strings.HasPrefix(body, at+" (")) && strings.Contains(body, detail) {
-			return true
-		}
-	}
-	return false
-}
-
-// notesMatch says whether notes are one note that says note, or none when
-// note is empty.
-func notesMatch(notes []string, note string) bool {
-	if note == "" {
-		return len(notes) == 0
-	}
-	return len(notes) == 1 && strings.Contains(notes[0], note)
 }
 
 // byRun groups the gate's rows by config, plan and bug, in order.
@@ -173,21 +149,6 @@ func byRun(rows []gateRow) [][]gateRow {
 		runs[n] = append(runs[n], g)
 	}
 	return runs
-}
-
-// checkOf is the check a finding heading names.
-func checkOf(heading string) string {
-	check, _, _ := strings.Cut(heading, ":")
-	return check
-}
-
-// checksOf lists the check of each finding in report.
-func checksOf(report string) []string {
-	var checks []string
-	for _, section := range strings.Split(report, "\n## ")[1:] {
-		checks = append(checks, checkOf(section))
-	}
-	return checks
 }
 
 // A config outside configs has no run of every plan under B0, so each of
@@ -214,44 +175,6 @@ func TestByRunGroupsRowsOfOneRun(t *testing.T) {
 	rows := []gateRow{{plan: "a", bug: 1}, {plan: "b", bug: 1}, {plan: "a", bug: 1, step: 2}, {plan: "a", bug: 0}, {plan: "a", bug: 1, config: "x.yaml"}}
 	if got := byRun(rows); len(got) != 4 || len(got[0]) != 2 || got[0][1].step != 2 {
 		t.Errorf("byRun = %+v", got)
-	}
-}
-
-func TestChecksOfListsEachFindingsCheck(t *testing.T) {
-	const report = "# Findings\n\n## Clean: left resources behind\n\nStep 2.\n\n## Converge: did not settle (clause 2)\n\nStep 0.\n"
-	if got := checksOf(report); !slices.Equal(got, []string{"Clean", "Converge"}) {
-		t.Errorf("checksOf = %q", got)
-	}
-}
-
-func TestHasFindingMatchesTheStep(t *testing.T) {
-	const report = "# Findings\n\n## Clean: left resources behind\n\nStep 2 (delete all), at 1s.\n\n```\nvolumes v\n```\n"
-	if !hasFinding(report, "Clean", 2, "volumes v") {
-		t.Error("missed step 2 (delete all)")
-	}
-	for _, step := range []int{1, 3, 12} {
-		if hasFinding(report, "Clean", step, "volumes v") {
-			t.Errorf("matched step %d", step)
-		}
-	}
-}
-
-func TestNotesMatchWantsTheOneNoteOrNone(t *testing.T) {
-	for _, c := range []struct {
-		notes []string
-		note  string
-		want  bool
-	}{
-		{nil, "", true},
-		{[]string{"x"}, "", false},
-		{[]string{"a CR is not judged"}, "not judged", true},
-		{[]string{"a CR is not judged", "another"}, "not judged", false},
-		{[]string{"another"}, "not judged", false},
-		{nil, "not judged", false},
-	} {
-		if got := notesMatch(c.notes, c.note); got != c.want {
-			t.Errorf("notesMatch(%q, %q) = %v", c.notes, c.note, got)
-		}
 	}
 }
 

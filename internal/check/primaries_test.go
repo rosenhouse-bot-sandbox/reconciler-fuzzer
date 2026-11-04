@@ -2,6 +2,7 @@ package check_test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,9 +51,62 @@ func TestSettleWaitsOnACROfEveryListedKind(t *testing.T) {
 		r.CreateCR("a", clusterA)
 		create(r)
 		r.Ready(clusterA).EndFaults()
-		if unmet := settledAt(t, r, r.Now+5*s); !slices.Equal(unmet, []string{"databases.toy ns/b is not ready"}) {
+		if unmet := settledAt(t, r, r.Now+5*s); !slices.Equal(unmet, []string{`databases.toy ns/b is not ready; it has status {"ready":false}`}) {
 			t.Errorf("%s Database: unmet = %q, want only that it is not ready.", name, unmet)
 		}
+	}
+}
+
+// The note names the entry whose ready no CR met.
+func TestJudgeNotesTheEntryWhoseReadyNoCRMet(t *testing.T) {
+	r := fleetRun(1, clusters, databases)
+	r.Begin()
+	r.CreateCR("a", clusterA)
+	r.CreateCR("b", databaseB)
+	r.Ready(clusterA).EndFaults().TimeOut()
+	ix := r.Index()
+	spec, err := check.SpecFor(nil, ix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes := slices.DeleteFunc(check.Judge(ix, spec).Notes, func(n string) bool { return !strings.Contains(n, "held for no CR version") })
+	if want := []string{`primaries[1].ready held for no CR version; the last of databases.toy ns/b has status {"ready":false}`}; !slices.Equal(notes, want) {
+		t.Errorf("notes = %q, want %q", notes, want)
+	}
+}
+
+// Clusters never met ready either, but no unmet clause 1 is about them.
+func TestJudgeNotesOnlyAKindThatClause1Names(t *testing.T) {
+	r := fleetRun(1, clusters, databases)
+	r.Begin()
+	r.CreateCR("a", clusterA)
+	r.CreateCR("b", databaseB)
+	r.DeleteCR("a", clusterA).EndFaults().TimeOut()
+	ix := r.Index()
+	spec, err := check.SpecFor(nil, ix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes := slices.DeleteFunc(check.Judge(ix, spec).Notes, func(n string) bool { return !strings.Contains(n, "held for no CR version") })
+	if want := []string{`primaries[1].ready held for no CR version; the last of databases.toy ns/b has status {"ready":false}`}; !slices.Equal(notes, want) {
+		t.Errorf("notes = %q, want %q", notes, want)
+	}
+}
+
+func TestJudgeNotesTheKeyThatTheRunRecords(t *testing.T) {
+	r := fleetRun(1, clusters)
+	r.Spec.Primaries[0].Key = "primaries[0]"
+	r.Begin()
+	r.CreateCR("a", clusterA)
+	r.EndFaults().TimeOut()
+	ix := r.Index()
+	spec, err := check.SpecFor(nil, ix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes := slices.DeleteFunc(check.Judge(ix, spec).Notes, func(n string) bool { return !strings.Contains(n, "held for no CR version") })
+	if want := []string{`primaries[0].ready held for no CR version; the last of clusters.toy ns/a has status {"ready":false}`}; !slices.Equal(notes, want) {
+		t.Errorf("notes = %q, want %q", notes, want)
 	}
 }
 

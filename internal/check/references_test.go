@@ -1165,9 +1165,9 @@ func TestClause1SaysWhatTheControllerLastSawOfWhatTheCRNames(t *testing.T) {
 		look := r.Now
 		c.look(r)
 		r.EndFaults()
-		want := "databases.toy ns/b is not ready; the controller never saw secrets ns/pw"
+		want := `databases.toy ns/b is not ready; it has status {"ready":false}; the controller never saw secrets ns/pw`
 		if c.shown != "" {
-			want = fmt.Sprintf("databases.toy ns/b is not ready; the controller last saw secrets ns/pw %s at %v", c.shown, look)
+			want = fmt.Sprintf(`databases.toy ns/b is not ready; it has status {"ready":false}; the controller last saw secrets ns/pw %s at %v`, c.shown, look)
 		}
 		if unmet := settledAt(t, r, r.Now+5*s); !slices.Contains(unmet, want) {
 			t.Errorf("%s: unmet = %q, want %q.", name, unmet, want)
@@ -1185,7 +1185,7 @@ func TestClause1IgnoresAResponseAfterTheSightOfADeletion(t *testing.T) {
 	r.Delete(trace.Harness, pw)
 	gone := r.Now
 	r.SeeDeleted(ctl, pw).Add(tt.Seen(ctl, pw, live.UID, live.RV)).EndFaults()
-	want := fmt.Sprintf("databases.toy ns/b is not ready; the controller last saw secrets ns/pw missing at %v", gone)
+	want := fmt.Sprintf(`databases.toy ns/b is not ready; it has status {"ready":false}; the controller last saw secrets ns/pw missing at %v`, gone)
 	if unmet := settledAt(t, r, r.Now+5*s); !slices.Contains(unmet, want) {
 		t.Errorf("unmet = %q, want %q.", unmet, want)
 	}
@@ -1197,7 +1197,7 @@ func TestSettleStillWaitsForACRNoReferenceHoldsBack(t *testing.T) {
 	namesNothing["metadata"] = map[string]any{"name": "c"}
 	r.Create(trace.Harness, databaseC, namesNothing)
 	r.Act("create", "c", &databaseC).Call(ctl, "get", databaseC, 200).EndFaults()
-	if unmet := settledAt(t, r, r.Now+5*s); !slices.Equal(unmet, []string{"databases.toy ns/c is not ready"}) {
+	if unmet := settledAt(t, r, r.Now+5*s); !slices.Equal(unmet, []string{`databases.toy ns/c is not ready; it has status {"ready":false}`}) {
 		t.Errorf("unmet = %q, want only that Database c, which names nothing, is not ready.", unmet)
 	}
 }

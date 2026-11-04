@@ -1,6 +1,7 @@
 package check_test
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -143,6 +144,69 @@ func TestHonestRequiresADependency(t *testing.T) {
 	r.Begin().CreateCR("a", widgetA)
 	r.Ready(widgetA)
 	requireNone(t, honest(t, r))
+}
+
+// A Gadget the controller made without an ownerReference is no dependency.
+// The finding names it and how to declare its owner. Owner rule 4 gives the
+// CR an object that another caller made too, but that one needs no
+// ownerReference.
+func TestHonestNamesAnUnownedDependency(t *testing.T) {
+	for creator, want := range map[trace.Caller][]string{
+		ctl:           {"slot a: gadgets.toy ns/a has no ownerReference to it; declare primary.owns or a kube owner"},
+		trace.Harness: {"slot a"},
+		gadgetModel:   {"slot a"},
+	} {
+		r := newRun(1)
+		r.Spec.Models = []trace.Model{{Kind: trace.Kind{Group: "toy", Version: "v1", Kind: "Gadget", Resource: "gadgets"},
+			Ready: config.ReadyConditionCEL, Dependency: &trace.Dependency{Required: true}}}
+		r.Begin().CreateCR("a", widgetA)
+		r.Create(creator, gadgetA, tt.ReadyCondition("a", 1, false))
+		r.Update(gadgetModel, gadgetA, tt.ReadyCondition("a", 1, true))
+		r.See(ctl, gadgetA).Ready(widgetA)
+		f := only(t, honest(t, r))
+		if f.Summary != noDependency || f.Kind != "kube/toy/widgets" || !slices.Equal(f.Details, want) {
+			t.Errorf("Gadget by %s: finding = %+v, want details %q", creator, f, want)
+		}
+	}
+}
+
+// The finding names only what the controller made while the CR lived.
+func TestHonestNamesNoUnownedDependencyMadeBeforeTheCR(t *testing.T) {
+	r := newRun(1)
+	r.Spec.Models = []trace.Model{{Kind: trace.Kind{Group: "toy", Version: "v1", Kind: "Gadget", Resource: "gadgets"},
+		Ready: config.ReadyConditionCEL, Dependency: &trace.Dependency{Required: true}}}
+	r.Begin()
+	r.Create(ctl, gadgetA, tt.ReadyCondition("a", 1, true))
+	r.CreateCR("a", widgetA)
+	r.See(ctl, gadgetA).Ready(widgetA)
+	f := only(t, honest(t, r))
+	if !slices.Equal(f.Details, []string{"slot a"}) {
+		t.Fatalf("details = %q", f.Details)
+	}
+}
+
+func TestHonestDetailsSayWhenTheControllerLastLooked(t *testing.T) {
+	r := gadgetRun(trace.Dependency{Required: true})
+	r.Update(gadgetModel, gadgetA, gadget(r, false))
+	looked := r.Now
+	r.See(ctl, gadgetA).Ready(widgetA)
+	requireFinding(t, honest(t, r), "Honest", 0, beforeSeeing, "kube/toy/gadgets", fmt.Sprintf("slot a: gadgets.toy ns/a seen not ready at %v", looked))
+
+	r = gadgetRun(trace.Dependency{Required: true})
+	r.See(ctl, gadgetA)
+	wrote := r.Now
+	r.Update(ctl, gadgetA, gadget(r, true)).Ready(widgetA)
+	requireFinding(t, honest(t, r), "Honest", 0, beforeSeeing, "kube/toy/gadgets", fmt.Sprintf("slot a: gadgets.toy ns/a not seen since the controller's write at %v", wrote))
+
+	r = secretRun(secretRef(), nil)
+	looked = r.Now
+	readyB(r.Call(ctl, "get", pw, 404))
+	requireFinding(t, honest(t, r), "Honest", 0, noDependency, "kube/secrets", fmt.Sprintf("slot b: secrets ns/pw seen missing at %v", looked))
+
+	r = secretRun(secretRef(), secret(false))
+	looked = r.Now
+	readyB(r.See(ctl, pw))
+	requireFinding(t, honest(t, r), "Honest", 0, beforeSeeing, "kube/secrets", fmt.Sprintf("slot b: secrets ns/pw seen not ready at %v", looked))
 }
 
 func TestHonestIgnoresARule4Dependency(t *testing.T) {

@@ -430,7 +430,7 @@ func (rec *recorder) WriteHeader(status int) {
 		rec.ResponseWriter.WriteHeader(status)
 		return
 	}
-	if rec.decode && status >= 200 && status < 300 && decodable(header.Get("Content-Type")) {
+	if (status == http.StatusForbidden || rec.decode && status >= 200 && status < 300) && decodable(header.Get("Content-Type")) {
 		rec.body = &bytes.Buffer{}
 	}
 	switch {
@@ -443,7 +443,7 @@ func (rec *recorder) WriteHeader(status int) {
 		rec.seenBody = &bytes.Buffer{}
 	}
 	rec.ResponseWriter.WriteHeader(status)
-	if rec.call.Watch {
+	if rec.call.Watch && rec.body == nil {
 		rec.record()
 	}
 }
@@ -477,7 +477,11 @@ func (rec *recorder) Write(p []byte) (int, error) {
 func (rec *recorder) Unwrap() http.ResponseWriter { return rec.ResponseWriter }
 
 func (rec *recorder) finish() {
-	if rec.body != nil && rec.body.Len() <= MaxResultBody {
+	switch {
+	case rec.body == nil || rec.body.Len() > MaxResultBody:
+	case rec.call.Status == http.StatusForbidden:
+		rec.readForbidden(rec.Header().Get("Content-Encoding"))
+	default:
 		rec.readResult(rec.Header().Get("Content-Encoding"))
 	}
 	switch {
@@ -540,6 +544,24 @@ func (rec *recorder) readResult(encoding string) {
 		finalizers := append([]string{}, meta.Finalizers...)
 		rec.call.ResultFinalizers = &finalizers
 	}
+}
+
+// readForbidden takes the message of a 403's Status.
+func (rec *recorder) readForbidden(encoding string) {
+	body := decompress(rec.body, encoding)
+	if body == nil {
+		return
+	}
+	var status metav1.Status
+	if media(rec.Header().Get("Content-Type")) == protobufType {
+		envelope, err := protobufEnvelope(body)
+		if err != nil || status.Unmarshal(envelope.Raw) != nil {
+			return
+		}
+	} else if json.NewDecoder(body).Decode(&status) != nil {
+		return
+	}
+	rec.call.Forbidden = status.Message
 }
 
 // readObjects shows each object an API map reads, records a Seen of each
@@ -727,18 +749,11 @@ var protobufMagic = []byte("k8s\x00")
 // kind's metadata is a ListMeta, so of a list it returns only the
 // resourceVersion.
 func protobufMeta(body io.Reader) (metav1.ObjectMeta, error) {
-	data, err := io.ReadAll(body)
-	if err != nil {
-		return metav1.ObjectMeta{}, err
-	}
-	if !bytes.HasPrefix(data, protobufMagic) {
-		return metav1.ObjectMeta{}, errors.New("no protobuf magic")
-	}
-	var envelope runtime.Unknown
-	if err := envelope.Unmarshal(data[len(protobufMagic):]); err != nil {
-		return metav1.ObjectMeta{}, err
-	}
 	var meta metav1.ObjectMeta
+	envelope, err := protobufEnvelope(body)
+	if err != nil {
+		return meta, err
+	}
 	raw := envelope.Raw
 	tag, n := binary.Uvarint(raw)
 	if tag != 1<<3|2 {
@@ -756,6 +771,20 @@ func protobufMeta(body io.Reader) (metav1.ObjectMeta, error) {
 		return meta, err
 	}
 	return meta, meta.Unmarshal(field)
+}
+
+// protobufEnvelope decodes the runtime.Unknown envelope of a Kubernetes
+// protobuf body.
+func protobufEnvelope(body io.Reader) (runtime.Unknown, error) {
+	var envelope runtime.Unknown
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return envelope, err
+	}
+	if !bytes.HasPrefix(data, protobufMagic) {
+		return envelope, errors.New("no protobuf magic")
+	}
+	return envelope, envelope.Unmarshal(data[len(protobufMagic):])
 }
 
 func (rec *recorder) record() {

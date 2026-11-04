@@ -28,7 +28,7 @@ var (
 )
 
 var spec = check.Spec{
-	Primaries: []check.Primary{{Kind: widgets, Ready: func(obj map[string]any) (bool, error) {
+	Primaries: []check.Primary{{Key: "primary", Kind: widgets, Ready: func(obj map[string]any) (bool, error) {
 		status, _ := obj["status"].(map[string]any)
 		ready, isBool := status["ready"].(bool)
 		if !isBool {
@@ -84,6 +84,26 @@ func TestClause1QuotesAReadyError(t *testing.T) {
 	requireUnmet(t, b, 3*s, "status.ready is not a bool")
 }
 
+// A message in the status often says why the CR is not ready, and its
+// observedGeneration whether it is up to date.
+func TestClause1QuotesTheCRsGenerationAndStatus(t *testing.T) {
+	for _, c := range []struct {
+		body map[string]any
+		want string
+	}{
+		{map[string]any{"status": map[string]any{"ready": false, "message": "gave up: <create volumes>"}},
+			`ns/b is not ready; it has status {"message":"gave up: <create volumes>","ready":false}`},
+		{map[string]any{"metadata": map[string]any{"generation": 1234567}, "status": map[string]any{"ready": false, "observedGeneration": 1234566}},
+			`ns/b is not ready; it has generation 1234567 and status {"observedGeneration":1234566,"ready":false}`},
+		{map[string]any{"metadata": map[string]any{"name": "b"}}, "ns/b: ready: status.ready is not a bool; it has no status"},
+		{map[string]any{"metadata": map[string]any{"generation": 1}, "status": map[string]any{}}, "ns/b: ready: status.ready is not a bool; it has generation 1 and no status"},
+	} {
+		b := settledAt3s()
+		b.At(2 * s).Add(tt.Version(widgetB, "ub", "2", c.body))
+		requireUnmetNamed(t, c.want, b, 3*s, c.want)
+	}
+}
+
 func TestClause1IgnoresOtherKindsAndDeletedCRs(t *testing.T) {
 	b := settledAt3s()
 	b.At(1 * s).Add(tt.Version(cm, "uc", "2", ready(false))).
@@ -100,12 +120,21 @@ func TestClause2NoCRIsBeingDeleted(t *testing.T) {
 	requireUnmet(t, b, 3*s, "ns/a is being deleted")
 }
 
+func TestClause2NamesTheFinalizersThatHoldTheCR(t *testing.T) {
+	body := deleting()
+	body["metadata"].(map[string]any)["finalizers"] = []any{"toy/old", "toy/new"}
+	b := settledAt3s()
+	b.At(1 * s).Add(tt.Version(widgetA, "ua", "2", body))
+	requireUnmet(t, b, 3*s, "ns/a is being deleted, held by finalizers toy/old, toy/new")
+}
+
 func TestClause2ADeletedCRIsNotAlsoUnready(t *testing.T) {
 	body := deleting()
+	body["metadata"].(map[string]any)["finalizers"] = []any{"toy/cleanup"}
 	body["status"] = map[string]any{"ready": false}
 	b := settledAt3s()
 	b.At(1 * s).Add(tt.Version(widgetA, "ua", "2", body))
-	if unmet := check.Settled(b.Index(), 3*s, spec); !slices.Equal(unmet, []string{"widgets.toy ns/a is being deleted"}) {
+	if unmet := check.Settled(b.Index(), 3*s, spec); !slices.Equal(unmet, []string{"widgets.toy ns/a is being deleted, held by finalizer toy/cleanup"}) {
 		t.Fatalf("unmet = %q", unmet)
 	}
 }

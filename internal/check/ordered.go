@@ -1,6 +1,7 @@
 package check
 
 import (
+	"fmt"
 	"maps"
 	"slices"
 	"strconv"
@@ -49,7 +50,7 @@ func Ordered(ix *trace.Index, s Spec) []Finding {
 			}
 			at[step] = min(at[step], r.at)
 			k := kind(object.Ref)
-			details[step][k] = append(details[step][k], describe(object.Ref)+": "+crName(w, cr.UID)+" names it")
+			details[step][k] = append(details[step][k], describe(object.Ref)+": "+crName(w, cr.UID)+" names it; "+r.describe())
 		}
 	}
 	var findings []Finding
@@ -80,10 +81,20 @@ func (s Spec) holdDue(ix *trace.Index) func(sight time.Duration) time.Duration {
 
 // A release is an instance's deleted version, at at with resourceVersion
 // rv. The instance's deletion started at start: its first version with a
-// deletionTimestamp, or else the release.
+// deletionTimestamp, or else the release. finalizers are that version's.
 type release struct {
-	at, start time.Duration
-	rv        uint64
+	at, start  time.Duration
+	rv         uint64
+	finalizers []string
+}
+
+// describe says when the release's deletion started and ended, and which
+// finalizers held it.
+func (r release) describe() string {
+	if r.start == r.at {
+		return fmt.Sprintf("it was deleted at %v with %s", r.at, listFinalizers(r.finalizers))
+	}
+	return fmt.Sprintf("its deletion started at %v with %s, and it was gone at %v", r.start, listFinalizers(r.finalizers), r.at)
 }
 
 // releaseOf is i's release, if it has one. A delete that the observer
@@ -95,12 +106,12 @@ func releaseOf(w *owner.World, i owner.Instance) (release, bool) {
 	if !last.Version.Deleted {
 		return release{}, false
 	}
-	r := release{at: last.At, start: last.At, rv: revision(last.Version.RV)}
+	r := release{at: last.At, start: last.At, rv: revision(last.Version.RV), finalizers: finalizers(*last.Version)}
 	if len(versions) > 1 && r.rv <= revision(versions[len(versions)-2].Version.RV) {
 		return release{}, false
 	}
-	if start, found := deletionStart(versions); found {
-		r.start = start
+	if n := firstDeleting(versions); n >= 0 {
+		r.start, r.finalizers = versions[n].At, finalizers(*versions[n].Version)
 	}
 	return r, true
 }

@@ -39,7 +39,8 @@ Each finding is one section:
 ````
 ## Restore: did not restore damaged resources
 
-Step 1, at 16.907430335s.
+Step 1, at 16.907s.
+Actions: damage configmaps rf-da5dd4dd/widget-0.
 
 ```
 configmaps rf-da5dd4dd/widget-0 (rule 1, slot a)
@@ -50,14 +51,19 @@ The heading is the check and its summary. The first line names the step,
 counting from 0, and the time since the run started. `Before step 0` means
 during startup. The runner appends two steps to every plan without a
 `stop`: `Step N (delete all)` and `Step N+1 (restart)`.
-A `Labels:` line may follow. The block lists the detail lines.
+The `Actions:` line lists the step's actions. A `damage`, `changeFixture` or
+`createFixture` names its object, and any other action its slot. A failed
+action says `(failed)`. The `Faults:` line lists the step's faults and its
+period, if it has one. A `Labels:` line may follow. The block lists the
+detail lines.
 
 A `# Notes` section follows the findings. A note says what the checks
 could not judge, or names a config mistake: an action that failed, a fault
 that picked no request, a step the trace ended too early to judge, a CR
-still being deleted that a `stop` did not wait for, an unmapped request, or
-a `role` that failed on every resource of a kind. A note also names each
-time the controller outlived `launch.gracePeriod`. Notes do not fail a run.
+still being deleted that a `stop` did not wait for, an unmapped request, a
+request that `launch.rbac` forbids, a `ready` that no CR met, or a `role`
+that failed on every resource of a kind. A note also names each time the
+controller outlived `launch.gracePeriod`. Notes do not fail a run.
 A fault that picked no request tested nothing, so a plan with such notes
 may need a different fault. A step without a `period` ends its faults by
 the time its last action returns. Such a fault's note says how long the
@@ -85,6 +91,24 @@ objects the harness created, such as fixtures. Neither matches a CRD that
 `crds:` or a restart installed. The note of a `changeFixture` that targets
 CRDs says so.
 
+`kube: launch.rbac forbids the controller's watch on
+volumes.storage.thirdparty in namespace rf-1, 14 times` counts the 403s that
+RBAC gave the controller, by the verb, resource or subresource, and scope.
+A server-side apply that creates needs `create`. A role or binding that
+grants permissions the controller lacks gets a 403 too, and its note says
+`which grants permissions the controller lacks`. Other 403s do not count,
+such as an injected `error(403)`, or one for a namespace being deleted, a
+quota or a webhook. Add the rule to `launch.rbac` if the controller needs
+it. For a grant, add the permissions it grants, or the `escalate` or `bind`
+verb on its role.
+
+`primary.ready held for no CR version; the last of widgets.toy ns/a has
+generation 1 and status {...}` follows a clause 1 finding when no version
+of that kind's CRs met `ready`. It quotes the last version that is neither
+deleted nor being deleted, as clause 1 judges only those. `primaries[1]`
+names the second entry. Either `ready` or the controller is wrong. Compare
+the quoted status with `ready`.
+
 `cloud: unmapped request POST /v2/buckets/b-1/acl` means the system's API
 map could not place a controller request on a resource. No check judges
 that request, so a leak or duplicate it causes goes unseen. The `crud` map
@@ -104,6 +128,10 @@ then killed it. Such a stop tested a crash, not a clean shutdown. A note
 that begins `After the last step` names the stop at the run's end. Raise
 `launch.gracePeriod` if the controller needs longer to shut down.
 
+A report with findings ends with `# Next steps`. It gives the command that
+replays the plan into `<out>/replay`, and a link to this page. `judge` gives
+only the link.
+
 Hunt and shrink match findings by check, summary and kind, so a replay
 need not fail at the same step or on the same names.
 
@@ -118,13 +146,14 @@ deadline. The toy with `--bug=2` gives:
 ````
 ## Converge: did not settle (clause 1)
 
-Step 0, at 11.953863534s.
+Step 0, at 14.008s.
+Actions: create slot a.
 
 ```
-widgets.toy.reconciler-fuzzer rf-6d6981a4/widget is not ready
+widgets.toy.reconciler-fuzzer rf-f232d025/widget is not ready; it has generation 1 and status {"observedGeneration":1,"ready":440}
 model gc has work pending
-the controller made 226 changed writes in (9.953863534s, 11.953863534s]; first it changed configmaps rf-6d6981a4/widget-0-5dt88 with create at 9.9584852s
-the controller made 238 writes in (9.953863534s, 11.953863534s], over the budget of 4
+the controller made 290 changed writes in (12.007871362s, 14.007871362s]; first it changed widgets.toy.reconciler-fuzzer rf-f232d025/widget with patch at 12.00893056s
+the controller made 305 writes in (12.007871362s, 14.007871362s], over the budget of 4
 ```
 ````
 
@@ -132,8 +161,8 @@ Look at the clause first:
 
 | Clause | Meaning | Look at |
 | --- | --- | --- |
-| 1 | A CR is not `ready`. | The CR's last status in `trace.jsonl`, and `ready` in the config. |
-| 2 | A CR is still being deleted. | Its finalizers, and why the controller did not remove them. |
+| 1 | A CR is not `ready`. | The status that the line quotes, and `ready` in the config. |
+| 2 | A CR is still being deleted. | The finalizers that the line names. The controller should remove its own once its cleanup is done. |
 | 3 | The controller is down, or restarted within `stable`. | `controller.log`, and any Crash finding. |
 | 4 | The controller made no successful request since it started. | Its startup in `controller.log`, and its RBAC. |
 | 5 | The controller did not look at an object a `damage`, `changeFixture` or `createFixture` changed. | Its watches and the kinds it reads. |
@@ -162,10 +191,13 @@ is now would hold the CR back too, or that a reference leaves unknown. It
 does so once `stable`, and the time the step's faults lasted, at most
 `timeouts.backoffCap`, have passed since the faults ended.
 
-Clause 1's line says what the controller last saw of each object that the
-CR names, such as `; the controller last saw secrets ns/admin-password
-ready at 7.24s`. If it saw the object ready, the reference's `ready`
-accepts an object that the controller treats as not ready. If it saw the
+Clause 1's line quotes the CR's generation and status as stored, such as
+`it has generation 2 and status {"observedGeneration":1,"ready":false}`,
+or says `it has generation 2 and no status`. It then says what the
+controller last saw of each object that the CR names, such as `; the
+controller last saw secrets ns/admin-password ready at 7.24s`. If it saw
+the object ready, the reference's `ready` accepts an object that the
+controller treats as not ready. If it saw the
 object missing under `required: false`, the controller treats the object
 as required. If it saw the object missing or not ready, and the object is
 ready now, the controller missed the change, as when it does not watch the
@@ -269,10 +301,16 @@ line names the CR, by its slot or else by its kind and name, and the
 dependency:
 
 - `reported ready before seeing its dependency ready`: `not seen` means
-  the controller never read the dependency after its last write to it;
-  `seen not ready` means its last read showed it not ready.
+  the controller never read the dependency; `not seen since the
+  controller's write at <t>` means it did not read the dependency after
+  that write; `seen not ready at <t>` means its last read, at t, showed
+  it not ready.
 - `reported ready with no dependency`: under `dependency.required`, the
-  CR owned none that counts.
+  CR owned none that counts. A line such as `slot a: gadgets.toy ns/a has
+  no ownerReference to it; declare primary.owns or a kube owner` names a
+  dependency that the controller made but that no rule of DESIGN.md §11
+  gives to one CR. Set an ownerReference to the CR, or tie the dependency
+  to it with the entry's `owns` or the system's `owner`.
 - `stayed ready after seeing its dependency not ready`: the CR stayed
   ready longer than `track`, not counting time in which the controller
   stalled (README.md, References).
@@ -282,11 +320,11 @@ the CR and the object that its field names. The finding takes the object's
 kind:
 
 - `reported ready with no dependency`: the object was missing and
-  `required`. `seen missing` means the controller's last look showed it
-  missing; `not seen` means the controller never looked.
-- `reported ready before seeing its dependency ready`: `seen not ready`
-  means the controller's last look showed the object not ready; `not seen`
-  means the controller never looked at the live object.
+  `required`. `seen missing at <t>` means the controller's last look, at
+  t, showed it missing; `not seen` means the controller never looked.
+- `reported ready before seeing its dependency ready`: `seen not ready at
+  <t>` means the controller's last look, at t, showed the object not
+  ready; `not seen` means the controller never looked at the live object.
 - `stayed ready after seeing its dependency not ready`: the CR stayed
   ready, naming the object, for `track` after the look at the time the
   line gives, not counting time in which the controller stalled, and each
@@ -300,10 +338,11 @@ deletion started, shows it ready.
 
 An object that a `references` entry with `onDelete: block` names was
 released, that is gone, while a CR named it. Each line names the object and
-the CR, by its slot or else by its kind and name:
+the CR, by its slot or else by its kind and name. It then says when the
+object's deletion started, with which finalizers, and when it was gone:
 
 ```
-secrets rf-1b0b8a35/admin-password: slot a names it
+secrets rf-a419ddab/admin-password: slot a names it; it was deleted at 13.308348852s with no finalizers
 ```
 
 The controller saw both in time to hold the object: `stable` before the

@@ -128,6 +128,8 @@ func (r Reference) ToRef() Ref {
 // Halted are CEL over self, a CR of Kind; Retain and Halted are empty when
 // unset. Owns are its owning-CR rule 3, and Periodic is nil when unset.
 type Primary struct {
+	// Key names the entry in the config, as "primary" or "primaries[1]".
+	Key      string    `json:"key,omitempty"`
 	Kind     Kind      `json:"kind"`
 	Ready    string    `json:"ready"`
 	Retain   string    `json:"retain,omitempty"`
@@ -267,7 +269,8 @@ type Fault struct {
 }
 
 // Call is one request on one listener, recorded when its response ends. A
-// watch is recorded when its stream opens.
+// watch is recorded when its stream opens, unless it answers 403 in JSON or
+// protobuf.
 type Call struct {
 	Caller Caller `json:"caller"`
 	Method string `json:"method"`
@@ -276,12 +279,15 @@ type Call struct {
 	// non-resource URL.
 	Verb string `json:"verb"`
 	// APIVersion is the version segment of the path, such as "v1".
-	APIVersion  string        `json:"apiVersion,omitempty"`
-	Ref         Ref           `json:"ref"`
-	Subresource string        `json:"subresource,omitempty"`
-	Watch       bool          `json:"watch,omitempty"`
-	Status      int           `json:"status"`
-	Latency     time.Duration `json:"latency,omitempty"`
+	APIVersion  string `json:"apiVersion,omitempty"`
+	Ref         Ref    `json:"ref"`
+	Subresource string `json:"subresource,omitempty"`
+	Watch       bool   `json:"watch,omitempty"`
+	Status      int    `json:"status"`
+	// Forbidden is the Status message of a kube 403 answer in JSON or
+	// protobuf.
+	Forbidden string        `json:"forbidden,omitempty"`
+	Latency   time.Duration `json:"latency,omitempty"`
 	// Injected names the fault that altered the request.
 	Injected string `json:"injected,omitempty"`
 	// ResultUID and ResultRV come from the response body of a mutating

@@ -348,7 +348,7 @@ func judge(configPath, tracePath string) (string, int, error) {
 		return "", 0, err
 	}
 	report := check.Judge(ix, spec)
-	return check.Markdown(ix, report), len(report.Findings), nil
+	return check.Markdown(ix, report, ""), len(report.Findings), nil
 }
 
 // count is a flag that takes a count from 0 to math.MaxInt.

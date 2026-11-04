@@ -222,11 +222,19 @@ func TestRecordedB0RunHasNoFindings(t *testing.T) {
 	}
 }
 
+// Under B16, launch.rbac lacks widgets/status, so the widget never gets a
+// status. The trace predates recorded 403 messages, so it has no RBAC note.
 func TestRecordedB16RunDidNotSettle(t *testing.T) {
 	r := judgeRecorded(t, "testdata/b16.jsonl")
 	if f := only(t, r.Findings); f.Summary != "did not settle (clause 1)" || f.Step != 0 ||
-		!slices.ContainsFunc(f.Details, func(d string) bool { return strings.HasSuffix(d, "/widget is not ready") }) {
+		!slices.ContainsFunc(f.Details, func(d string) bool {
+			return strings.HasSuffix(d, "/widget is not ready; it has generation 1 and no status")
+		}) {
 		t.Fatalf("finding = %+v", f)
+	}
+	want := []string{"primary.ready held for no CR version; the last of widgets.toy.reconciler-fuzzer rf-d1ebbd7f/widget has generation 1 and no status"}
+	if !slices.Equal(r.Notes, want) {
+		t.Errorf("notes = %q, want %q", r.Notes, want)
 	}
 }
 
@@ -295,6 +303,173 @@ func TestJudgeNotesAFailedAction(t *testing.T) {
 	notes := check.Judge(b.Index(), spec).Notes
 	if len(notes) != 1 || notes[0] != "Step 1, action 2 (create) failed at 10s: the slot's name is still taken after the create waited 1s" {
 		t.Fatalf("notes = %q", notes)
+	}
+}
+
+// A ready that no CR ever meets more likely names the wrong field or value
+// than finds a bug, so the report says so. The note quotes the last version
+// that is neither deleted nor being deleted, as clause 1 does.
+func TestJudgeNotesAReadyNoCRVersionMet(t *testing.T) {
+	unready := func() *tt.Builder {
+		var b tt.Builder
+		b.Add(tt.Run("toy", "widgets"), tt.Start(1)).
+			At(0).Add(tt.Phase(0, trace.FaultPeriod)).
+			At(100*ms).Add(tt.Call(trace.Harness, "create", widgetA, 201, "1"), tt.Version(widgetA, "ua", "1", ready(false))).
+			At(1*s).Add(tt.EndFaults(0, 10*s, false)).
+			At(1500*ms).Add(tt.Call(ctl, "update", widgetA, 200, "2"), tt.Version(widgetA, "ua", "2", ready("Ready")))
+		return &b
+	}
+	timedOut := unready()
+	timedOut.At(10 * s).Add(tt.Phase(0, trace.TimedOut))
+	finalized := unready()
+	finalizing := objectBody("a", true, "toy/cleanup")
+	finalizing["status"] = map[string]any{"phase": "Deleting"}
+	finalized.At(10*s).Add(tt.Phase(0, trace.TimedOut)).
+		At(12*s).Add(tt.Call(trace.Harness, "delete", widgetA, 200, "3"), tt.Version(widgetA, "ua", "3", finalizing))
+	deleted := unready()
+	deleted.At(10*s).Add(tt.Phase(0, trace.TimedOut)).
+		At(12*s).Add(tt.Call(trace.Harness, "delete", widgetA, 200, "3"), tt.Deleted(widgetA, "ua", "3", ready("Gone")))
+	// The CR appears after the step settled, so the step did not stay
+	// settled.
+	var late tt.Builder
+	late.Add(tt.Run("toy", "widgets"), tt.Start(1)).
+		At(0).Add(tt.Phase(0, trace.FaultPeriod)).
+		At(500*ms).Add(tt.Call(ctl, "list", widgetA, 200, "")).
+		At(1*s).Add(tt.EndFaults(0, 10*s, false)).
+		At(3*s).Add(tt.Phase(0, trace.Settled)).
+		At(4*s).Add(tt.Call(trace.Harness, "create", widgetA, 201, "1"), tt.Version(widgetA, "ua", "1", ready(false))).
+		At(5 * s).Add(tt.Phase(0, trace.Confirmed))
+	for _, c := range []struct {
+		name    string
+		b       *tt.Builder
+		summary string
+		status  string
+	}{
+		{"timed out", timedOut, "did not settle (clause 1)", `{"ready":"Ready"}`},
+		{"finalized after the deadline", finalized, "did not settle (clause 1)", `{"ready":"Ready"}`},
+		{"deleted after the deadline", deleted, "did not settle (clause 1)", `{"ready":"Ready"}`},
+		{"created after the settle", &late, "did not stay settled (clause 1)", `{"ready":false}`},
+	} {
+		r := check.Judge(c.b.Index(), spec)
+		if !slices.ContainsFunc(r.Findings, func(f check.Finding) bool { return f.Summary == c.summary }) {
+			t.Errorf("%s: findings = %+v, want %q", c.name, r.Findings, c.summary)
+		}
+		want := []string{"primary.ready held for no CR version; the last of widgets.toy ns/a has status " + c.status}
+		if notes := neverReadyNotes(r); !slices.Equal(notes, want) {
+			t.Errorf("%s: notes = %q, want %q", c.name, notes, want)
+		}
+	}
+}
+
+func neverReadyNotes(r check.Report) []string {
+	return slices.DeleteFunc(r.Notes, func(n string) bool { return !strings.Contains(n, "held for no CR version") })
+}
+
+// The note explains an unmet clause 1, so a run without one gets none, nor
+// does one in which a CR was ready once.
+func TestNoNeverReadyNoteOnceReadyHeldOrWithoutAnUnreadyCR(t *testing.T) {
+	once := createStep()
+	once.At(3500*ms).Add(tt.Phase(0, trace.Settled)).
+		At(5500*ms).Add(tt.Phase(0, trace.Confirmed)).
+		At(5500*ms).Add(tt.Phase(1, trace.FaultPeriod)).
+		At(5600*ms).Add(tt.EndFaults(1, 20*s, false)).
+		At(6*s).Add(tt.Call(ctl, "update", widgetA, 200, "3"), tt.Version(widgetA, "ua", "3", ready(false))).
+		At(20 * s).Add(tt.Phase(1, trace.TimedOut))
+	var gone tt.Builder
+	gone.Add(tt.Run("toy", "widgets"), tt.Start(1)).
+		At(0).Add(tt.Phase(0, trace.FaultPeriod)).
+		At(100 * ms).Add(tt.Version(widgetA, "ua", "1", ready(false))).
+		At(200 * ms).Add(tt.Call(ctl, "get", widgetA, 200, "")).
+		At(500 * ms).Add(tt.Deleted(widgetA, "ua", "2", ready(false))).
+		At(1 * s).Add(tt.EndFaults(0, 10*s, false)).
+		At(3500 * ms).Add(tt.Phase(0, trace.Settled)).
+		At(5500 * ms).Add(tt.Phase(0, trace.Confirmed))
+	var held tt.Builder
+	held.Add(tt.Run("toy", "widgets"), tt.Start(1)).
+		At(0).Add(tt.Phase(0, trace.FaultPeriod)).
+		At(100*ms).Add(tt.Call(trace.Harness, "create", widgetA, 201, "1"), tt.Version(widgetA, "ua", "1", ready(false))).
+		At(1*s).Add(tt.EndFaults(0, 10*s, false)).
+		At(2*s).Add(tt.Call(trace.Harness, "delete", widgetA, 200, "2"), tt.Version(widgetA, "ua", "2", objectBody("a", true, "toy/cleanup"))).
+		At(10 * s).Add(tt.Phase(0, trace.TimedOut))
+	for _, c := range []struct {
+		name    string
+		b       *tt.Builder
+		summary string
+	}{
+		{"ready once", once, "did not stay settled (clause 1)"},
+		{"deleted unready", &gone, ""},
+		{"held in deletion", &held, "did not settle (clause 2)"},
+	} {
+		r := check.Judge(c.b.Index(), spec)
+		if c.summary != "" && !slices.ContainsFunc(r.Findings, func(f check.Finding) bool { return f.Summary == c.summary }) {
+			t.Errorf("%s: findings = %+v, want %q", c.name, r.Findings, c.summary)
+		}
+		if notes := neverReadyNotes(r); len(notes) != 0 {
+			t.Errorf("%s: notes = %q, want no never-ready note", c.name, notes)
+		}
+	}
+}
+
+// forbiddenBy returns a call that the API server answered with 403 and
+// message.
+func forbiddenBy(caller trace.Caller, verb string, ref trace.Ref, message string) trace.Event {
+	e := tt.Call(caller, verb, ref, 403, "")
+	e.Call.Forbidden = message
+	return e
+}
+
+func rbacNotes(r check.Report) []string {
+	return slices.DeleteFunc(r.Notes, func(n string) bool { return !strings.HasPrefix(n, "kube: launch.rbac") })
+}
+
+func TestJudgeNotesARequestLaunchRBACForbids(t *testing.T) {
+	b := cleanRun()
+	gadgets := tt.Ref("toy/gadgets", "ns", "")
+	for _, at := range []time.Duration{2 * s, 4 * s} {
+		watch := forbiddenBy(ctl, "watch", gadgets, `gadgets.toy is forbidden: User "u" cannot watch resource "gadgets" in API group "toy" in the namespace "ns"`)
+		watch.Call.Watch = true
+		b.At(at).Add(watch)
+	}
+	want := []string{"kube: launch.rbac forbids the controller's watch on gadgets.toy in namespace ns, 2 times"}
+	if notes := rbacNotes(check.Judge(b.Index(), spec)); !slices.Equal(notes, want) {
+		t.Fatalf("notes = %q, want %q", notes, want)
+	}
+}
+
+// Only RBAC's 403s to the controller count: the authorizer's, in its words,
+// where a server-side apply needs create, and a refused grant of
+// permissions the controller lacks. An injected fault, a namespace being
+// deleted, a quota or a webhook give other messages.
+func TestJudgeNotesOnlyRBACDenialsOfTheController(t *testing.T) {
+	const user = `User "system:serviceaccount:ns:ctl"`
+	const grant = ` is forbidden: user "system:serviceaccount:ns:ctl" (groups=["system:serviceaccounts" "system:authenticated"]) is attempting to grant RBAC permissions not currently held:` + "\n" + `{APIGroups:["toy"], Resources:["widgets"], Verbs:["get"]}`
+	b := cleanRun()
+	status := forbiddenBy(ctl, "update", widgetA, `widgets.toy "a" is forbidden: `+user+` cannot update resource "widgets/status" in API group "toy" in the namespace "ns"`)
+	status.Call.Subresource, status.Call.Injected = "status", "delay(1s)"
+	injected := forbiddenBy(ctl, "get", widgetA, "reconciler-fuzzer fault: get /apis/toy/v1/namespaces/ns/widgets/a")
+	injected.Call.Injected = "error(403)"
+	b.At(2*s).Add(injected, status,
+		forbiddenBy(trace.Harness, "get", cm, `configmaps "c" is forbidden: User "harness" cannot get resource "configmaps" in API group "" in the namespace "ns"`),
+		forbiddenBy(ctl, "create", cm, `configmaps "c" is forbidden: unable to create new content in namespace ns because it is being terminated`),
+		forbiddenBy(ctl, "create", cm, `configmaps "c" is forbidden: exceeded quota: q, requested: count/configmaps=1, used: count/configmaps=1, limited: count/configmaps=1`),
+		forbiddenBy(ctl, "create", cm, `admission webhook "deny.example.com" denied the request: no`),
+		forbiddenBy(ctl, "patch", cm, `configmaps "c" is forbidden: `+user+` cannot create resource "configmaps" in API group "" in the namespace "ns"`),
+		forbiddenBy(ctl, "list", tt.Ref("toy/widgets", "", ""), `widgets.toy is forbidden: `+user+` cannot list resource "widgets" in API group "toy" at the cluster scope: RBAC: clusterrole.rbac.authorization.k8s.io "ctl" not found`),
+		forbiddenBy(ctl, "get", trace.Ref{System: "kube"}, `forbidden: `+user+` cannot get path "/livez"`),
+		forbiddenBy(ctl, "update", widgetA, `widgets.toy "a" is forbidden: `+user+` cannot update resource "widgets/status" in API group "toy" in the namespace "ns"`),
+		forbiddenBy(ctl, "create", tt.Ref("rbac.authorization.k8s.io/clusterroles", "", "r"), `clusterroles.rbac.authorization.k8s.io "r"`+grant),
+		forbiddenBy(ctl, "patch", tt.Ref("rbac.authorization.k8s.io/rolebindings", "ns", "rb"), `rolebindings.rbac.authorization.k8s.io "rb"`+grant),
+		forbiddenBy(trace.Harness, "create", tt.Ref("rbac.authorization.k8s.io/roles", "ns", "r"), `roles.rbac.authorization.k8s.io "r"`+grant))
+	want := []string{
+		"kube: launch.rbac forbids the controller's update on the status subresource of widgets.toy in namespace ns, 2 times",
+		"kube: launch.rbac forbids the controller's create on configmaps in namespace ns, 1 time",
+		"kube: launch.rbac forbids the controller's list on widgets.toy at the cluster scope, 1 time",
+		"kube: launch.rbac forbids the controller's get on path /livez, 1 time",
+		"kube: launch.rbac forbids the controller's create on clusterroles.rbac.authorization.k8s.io at the cluster scope, which grants permissions the controller lacks, 1 time",
+		"kube: launch.rbac forbids the controller's patch on rolebindings.rbac.authorization.k8s.io in namespace ns, which grants permissions the controller lacks, 1 time",
+	}
+	if notes := rbacNotes(check.Judge(b.Index(), spec)); !slices.Equal(notes, want) {
+		t.Fatalf("notes = %q, want %q", notes, want)
 	}
 }
 
@@ -447,27 +622,49 @@ func TestMarkdown(t *testing.T) {
 	var b tt.Builder
 	run := tt.Run("toy", "widgets")
 	run.Run.PlanSteps = 2
-	ix := b.Add(run).Index()
-	if got := check.Markdown(ix, check.Report{}); got != "No findings.\n" {
+	upgrade := trace.Event{Action: &trace.Action{Step: 1, Index: 2, Do: "restart", Upgrade: true}}
+	kill := trace.Event{Action: &trace.Action{Step: 1, Index: 3, Do: "kill"}}
+	failed := trace.Event{Action: &trace.Action{Step: 1, Index: 4, Do: "changeFixture", Error: "no instance matches"}}
+	const stuck = "stuck on group=toy resource=gadgets"
+	held := tt.HoldFault(1, 1, false, trace.Ref{System: "kube", Group: "toy", Resource: "widgets"})
+	unrecordedPeriod := trace.Event{Phase: &trace.Phase{Step: 0, Name: trace.FaultPeriod}}
+	ix := b.Add(run, unrecordedPeriod, tt.Fault(0, 0, false, "error(409)")).
+		At(1*s).Add(tt.FaultPeriod(1, 2*s), tt.Fault(1, 0, false, stuck), held, tt.SlotAction(1, "create", "a", widgetA), tt.SlotAction(1, "damage", "a", cm)).
+		At(2*s).Add(upgrade, kill, failed, tt.Fault(1, 0, true, stuck)).
+		At(3*s).Add(tt.FaultPeriod(2, 0), tt.Fault(2, 0, false, "error(500)"), tt.FaultPeriod(3, 2*s)).
+		Index()
+	const replay = "reconciler-fuzzer run --config c.yaml --plan out/plan.json --out out/replay"
+	if got := check.Markdown(ix, check.Report{}, replay); got != "No findings.\n" {
 		t.Fatalf("Markdown of nothing = %q", got)
 	}
 	got := check.Markdown(ix, check.Report{
 		Findings: []check.Finding{
 			{Check: "Converge", Step: 1, At: 1500 * ms, Labels: []string{"backoff-bound"}, Summary: "did not settle", Details: []string{"ns/a is not ready"}},
-			{Check: "Converge", Step: 2, Summary: "did not settle"},
+			{Check: "Converge", Step: 2, At: 16907430335, Summary: "did not settle"},
 			{Check: "Crash", Step: 3, Summary: "the controller exited 1 time"},
 			{Check: "Crash", Step: -1, Summary: "the controller exited 2 times"},
+			{Check: "Crash", Step: 0, Summary: "the controller exited 3 times"},
 		},
 		Notes: []string{"Step 0 is not judged."},
-	})
-	for _, want := range []string{"# Findings", "## Converge: did not settle\n\nStep 1, at 1.5s.", "backoff-bound", "ns/a is not ready",
-		"Step 2 (delete all), at 0s.", "## Crash: the controller exited 1 time\n\nStep 3 (restart)",
-		"## Crash: the controller exited 2 times\n\nBefore step 0, at 0s.", "# Notes\n\n- Step 0 is not judged.\n"} {
+	}, replay)
+	for _, want := range []string{"# Findings",
+		"## Converge: did not settle\n\nStep 1, at 1.5s.\nActions: create slot a, damage configmaps ns/c, restart (upgrade), kill, changeFixture (failed).\n" +
+			"Faults: stuck on group=toy resource=gadgets, holdWatch, period 2s.\nLabels: backoff-bound.\n",
+		"ns/a is not ready", "Step 2 (delete all), at 16.907s.\nFaults: error(500).\n\n## Crash: the controller exited 1 time\n\nStep 3 (restart), at 0s.\n\n## Crash",
+		"## Crash: the controller exited 2 times\n\nBefore step 0, at 0s.\n\n## Crash: the controller exited 3 times\n\nStep 0, at 0s.\nFaults: error(409).\n\n# Notes\n\n- Step 0 is not judged.\n"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Markdown lacks %q:\n%s", want, got)
 		}
 	}
-	if got := check.Markdown(ix, check.Report{Notes: []string{"n"}}); !strings.HasPrefix(got, "No findings.\n") {
+	const failures = "[docs/failures.md](https://github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/blob/main/docs/failures.md) says what each finding means.\n"
+	if want := "\n# Next steps\n\nReplay the plan:\n\n```\n" + replay + "\n```\n\n" + failures; !strings.HasSuffix(got, want) {
+		t.Errorf("Markdown does not end with %q:\n%s", want, got)
+	}
+	unreplayed := check.Markdown(ix, check.Report{Findings: []check.Finding{{Check: "Crash", Step: 3}}}, "")
+	if want := "\n# Next steps\n\n" + failures; !strings.HasSuffix(unreplayed, want) || strings.Contains(unreplayed, "Replay") {
+		t.Errorf("Markdown without a replay = %q, want it to end with %q", unreplayed, want)
+	}
+	if got := check.Markdown(ix, check.Report{Notes: []string{"n"}}, replay); got != "No findings.\n\n# Notes\n\n- n\n" {
 		t.Errorf("Markdown with only notes = %q", got)
 	}
 }

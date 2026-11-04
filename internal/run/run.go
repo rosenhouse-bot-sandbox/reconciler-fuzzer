@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -215,7 +216,7 @@ func Run(ctx context.Context, o Options) (check.Report, error) {
 		return check.Report{}, err
 	}
 	report := check.Judge(ix, spec)
-	if err := os.WriteFile(filepath.Join(o.Out, "report.md"), []byte(check.Markdown(ix, report)), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(o.Out, "report.md"), []byte(check.Markdown(ix, report, replayCommand(o))), 0o644); err != nil {
 		return check.Report{}, err
 	}
 	return report, nil
@@ -645,4 +646,26 @@ func loadSamples(primaries []config.Primary) ([]map[string]any, error) {
 		samples = append(samples, sample)
 	}
 	return samples, nil
+}
+
+// replayCommand is the command that runs o's plan again, as written to
+// o.Out, into o.Out/replay.
+func replayCommand(o Options) string {
+	args := []string{"reconciler-fuzzer", "run", "--config", o.ConfigPath, "--plan", filepath.Join(o.Out, "plan.json"), "--out", filepath.Join(o.Out, "replay")}
+	for _, a := range o.LaunchArgs {
+		args = append(args, "--launch-arg", a)
+	}
+	for i, a := range args {
+		args[i] = shellQuote(a)
+	}
+	return strings.Join(args, " ")
+}
+
+// shellQuote quotes s for a POSIX shell when it holds more than letters,
+// digits and @%+=:,./-_.
+func shellQuote(s string) string {
+	if s != "" && strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@%+=:,./-_") == "" {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

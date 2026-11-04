@@ -536,6 +536,8 @@ func TestJudgeReadsTheSpecFromTheTraceUnlessGivenAConfig(t *testing.T) {
 	path := cleanTrace(t, "false")
 	if code, stdout, stderr := cliOutput("judge", "--trace", path); code != 1 || !strings.Contains(stdout, "is not ready") {
 		t.Errorf("cli = %d, stdout %q, stderr %q; want 1 under the trace's ready", code, stdout, stderr)
+	} else if !strings.Contains(stdout, "docs/failures.md") || strings.Contains(stdout, "Replay") {
+		t.Errorf("stdout %q, want a link to docs/failures.md and no replay, since judge has no plan", stdout)
 	}
 	if code, stdout, stderr := cliOutput("judge", "--trace", path, "--config", toyConfig); code != 0 {
 		t.Errorf("cli = %d, stdout %q, stderr %q; want 0 under the config's ready", code, stdout, stderr)

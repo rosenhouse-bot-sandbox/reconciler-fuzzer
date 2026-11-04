@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -60,6 +61,8 @@ type Reference struct {
 
 // Primary is one listed kind as the checks judge its CRs.
 type Primary struct {
+	// Key names the entry in the config, as "primary" or "primaries[1]".
+	Key   string
 	Kind  trace.Kind
 	Ready func(cr map[string]any) (bool, error)
 	// Retain says whether Clean and Teardown allow a deleted CR's resources
@@ -87,11 +90,19 @@ func (s Spec) listed(ref trace.Ref) bool {
 	return listed
 }
 
-// compilePrimaries compiles each entry's CEL.
+// compilePrimaries compiles each entry's CEL. An entry that names no key
+// is "primary" if it is the only one, and else "primaries[i]".
 func compilePrimaries(entries []trace.Primary) ([]Primary, error) {
 	var compiled []Primary
-	for _, e := range entries {
-		p := Primary{Kind: e.Kind, Periodic: e.Periodic}
+	for i, e := range entries {
+		p := Primary{Key: e.Key, Kind: e.Kind, Periodic: e.Periodic}
+		switch {
+		case p.Key != "":
+		case len(entries) == 1:
+			p.Key = "primary"
+		default:
+			p.Key = fmt.Sprintf("primaries[%d]", i)
+		}
 		name := groupResource(e.Kind)
 		var err error
 		if p.Ready, err = config.CompileReady(e.Ready, e.Schema); err != nil {
@@ -435,7 +446,7 @@ func Judge(ix *trace.Index, s Spec) Report {
 	findings = append(findings, Backoff(ix, s)...)
 	findings = append(findings, Finalizers(ix, s)...)
 	findings = append(findings, Property(ix, s)...)
-	notes = slices.Concat(actionErrors(ix), killedStops(ix), unpicked(ix, s), notes, unmapped(ix), failedRoles(ix, s))
+	notes = slices.Concat(actionErrors(ix), killedStops(ix), unpicked(ix, s), notes, unmapped(ix), forbidden(ix), failedRoles(ix, s))
 	return Report{Findings: findings, Notes: notes}
 }
 
@@ -482,6 +493,77 @@ func unmapped(ix *trace.Index) []string {
 		}
 	}
 	return notes
+}
+
+// deniedResource and deniedPath match the authorizer's words in a 403's
+// message. Admission, such as a namespace being deleted, a quota or a
+// webhook, says something else.
+var (
+	deniedResource = regexp.MustCompile(`cannot (\S+) resource "([^"/]*)(?:/([^"]*))?" in API group "([^"]*)" (?:in the namespace "([^"]*)"|at the cluster scope)`)
+	deniedPath     = regexp.MustCompile(`cannot (\S+) path "([^"]*)"`)
+)
+
+// deniedGrant is in the RBAC API's 403 to a write of a role or binding that
+// grants permissions the writer lacks.
+const deniedGrant = "is attempting to grant RBAC permissions not currently held"
+
+// denial says what RBAC forbids in a 403 answer to c, such as "watch on
+// volumes.storage.thirdparty in namespace ns", or "" for another 403.
+func denial(c trace.Call) string {
+	if m := deniedResource.FindStringSubmatch(c.Forbidden); m != nil {
+		return describeRequest(m[1], m[4], m[2], m[3], m[5])
+	}
+	if m := deniedPath.FindStringSubmatch(c.Forbidden); m != nil {
+		return fmt.Sprintf("%s on path %s", m[1], m[2])
+	}
+	if strings.Contains(c.Forbidden, deniedGrant) {
+		return describeRequest(c.Verb, c.Ref.Group, c.Ref.Resource, "", c.Ref.Namespace) + ", which grants permissions the controller lacks"
+	}
+	return ""
+}
+
+// describeRequest names a request by its verb, resource or subresource,
+// and scope.
+func describeRequest(verb, group, resource, subresource, namespace string) string {
+	on := schema.GroupResource{Group: group, Resource: resource}.String()
+	if subresource != "" {
+		on = "the " + subresource + " subresource of " + on
+	}
+	scope := "at the cluster scope"
+	if namespace != "" {
+		scope = "in namespace " + namespace
+	}
+	return fmt.Sprintf("%s on %s %s", verb, on, scope)
+}
+
+// forbidden notes how many times RBAC denied the controller each request it
+// names.
+func forbidden(ix *trace.Index) []string {
+	var order []string
+	counts := map[string]int{}
+	for _, e := range ix.Calls(trace.Controller, -1, math.MaxInt64) {
+		what := denial(*e.Call)
+		if what == "" {
+			continue
+		}
+		if counts[what] == 0 {
+			order = append(order, what)
+		}
+		counts[what]++
+	}
+	notes := make([]string, len(order))
+	for i, what := range order {
+		notes[i] = fmt.Sprintf("kube: launch.rbac forbids the controller's %s, %s", what, times(counts[what]))
+	}
+	return notes
+}
+
+// times says n times, as "1 time" or "2 times".
+func times(n int) string {
+	if n == 1 {
+		return "1 time"
+	}
+	return fmt.Sprintf("%d times", n)
 }
 
 // unpicked notes each request fault that altered no controller request
@@ -630,16 +712,24 @@ func stepName(ix *trace.Index, step int) string {
 	return name
 }
 
-// Markdown renders a report as report.md.
-func Markdown(ix *trace.Index, r Report) string {
+// Markdown renders a report as report.md. replay is a command that runs
+// the plan again, or empty.
+func Markdown(ix *trace.Index, r Report, replay string) string {
 	var b strings.Builder
 	if len(r.Findings) == 0 {
 		b.WriteString("No findings.\n")
 	} else {
 		b.WriteString("# Findings\n")
 	}
+	stepFaults := faults(ix)
 	for _, f := range r.Findings {
-		fmt.Fprintf(&b, "\n## %s: %s\n\n%s, at %v.\n", f.Check, f.Summary, stepName(ix, f.Step), f.At)
+		fmt.Fprintf(&b, "\n## %s: %s\n\n%s, at %v.\n", f.Check, f.Summary, stepName(ix, f.Step), f.At.Round(time.Millisecond))
+		if done := actions(ix, f.Step); len(done) > 0 {
+			fmt.Fprintf(&b, "Actions: %s.\n", strings.Join(done, ", "))
+		}
+		if on := stepFaults[f.Step]; len(on) > 0 {
+			fmt.Fprintf(&b, "Faults: %s.\n", strings.Join(on, ", "))
+		}
 		if len(f.Labels) > 0 {
 			fmt.Fprintf(&b, "Labels: %s.\n", strings.Join(f.Labels, ", "))
 		}
@@ -653,5 +743,53 @@ func Markdown(ix *trace.Index, r Report) string {
 			fmt.Fprintf(&b, "- %s\n", note)
 		}
 	}
+	if len(r.Findings) > 0 {
+		b.WriteString("\n# Next steps\n\n")
+		if replay != "" {
+			fmt.Fprintf(&b, "Replay the plan:\n\n```\n%s\n```\n\n", replay)
+		}
+		b.WriteString("[docs/failures.md](https://github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/blob/main/docs/failures.md) says what each finding means.\n")
+	}
 	return b.String()
+}
+
+// faults describes each step's faults, and its period when it has one.
+func faults(ix *trace.Index) map[int][]string {
+	on := map[int][]string{}
+	for _, e := range ix.Events() {
+		if f := e.Fault; f != nil && !f.Ended {
+			on[f.Step] = append(on[f.Step], f.What)
+		}
+	}
+	for step := range on {
+		if span, _ := ix.Step(step); span.Period != nil && *span.Period > 0 {
+			on[step] = append(on[step], "period "+span.Period.String())
+		}
+	}
+	return on
+}
+
+// actions describes the harness's actions in step, such as "create slot a",
+// "damage configmaps ns/widget-0" and "restart (upgrade)". An object action
+// names its object, and any other action its slot.
+func actions(ix *trace.Index, step int) []string {
+	var done []string
+	for _, e := range ix.Actions(step) {
+		a := e.Action
+		what := a.Do
+		switch {
+		case slices.Contains(objectActions, a.Do) && a.Ref != nil:
+			what += " " + describe(*a.Ref)
+		case a.Slot != "":
+			what += " slot " + a.Slot
+		}
+		if a.Upgrade {
+			what += " (upgrade)"
+		}
+		if a.Error != "" {
+			what += " (failed)"
+		}
+		done = append(done, what)
+	}
+	return done
 }

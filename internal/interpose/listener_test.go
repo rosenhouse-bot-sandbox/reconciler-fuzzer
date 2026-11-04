@@ -388,6 +388,46 @@ func TestADryRunOrAnAnswerWithoutAnObjectRecordsNoFinalizers(t *testing.T) {
 	}
 }
 
+// A 403's message says why the API server forbade the request. A forbidden
+// watch is recorded once its message is read.
+func TestAForbiddenAnswerRecordsItsMessage(t *testing.T) {
+	const message = `configmaps is forbidden: User "u" cannot watch resource "configmaps" in API group "" in the namespace "ns1"`
+	status := &metav1.Status{Status: metav1.StatusFailure, Message: message, Reason: metav1.StatusReasonForbidden, Code: http.StatusForbidden}
+	raw, err := status.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := (&runtime.Unknown{TypeMeta: runtime.TypeMeta{APIVersion: "v1", Kind: "Status"}, Raw: raw}).Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(status)
+	for name, upstream := range map[string]http.Handler{
+		"json":     respondStatus(http.StatusForbidden, "application/json", "", string(encoded)),
+		"gzip":     respondStatus(http.StatusForbidden, "application/json", "gzip", string(encoded)),
+		"protobuf": respondStatus(http.StatusForbidden, "application/vnd.kubernetes.protobuf", "", "k8s\x00"+string(envelope)),
+	} {
+		for _, path := range []string{"/api/v1/namespaces/ns1/configmaps/cm", "/api/v1/namespaces/ns1/configmaps?watch=true"} {
+			t.Run(name+" "+path, func(t *testing.T) {
+				l, recorded := listen(t, upstream)
+
+				do(t, l, "GET", path)
+
+				if got := recorded.waitCalls(t, 1)[0]; got.Status != http.StatusForbidden || got.Forbidden != message {
+					t.Errorf("Recorded status %d and message %q, want 403 and %q.", got.Status, got.Forbidden, message)
+				}
+			})
+		}
+	}
+	for _, code := range []int{http.StatusOK, http.StatusConflict} {
+		l, recorded := listen(t, respondStatus(code, "application/json", "", string(encoded)))
+		do(t, l, "PUT", "/api/v1/namespaces/ns1/configmaps/cm")
+		if got := recorded.waitCalls(t, 1)[0].Forbidden; got != "" {
+			t.Errorf("Recorded message %q for a %d, want none.", got, code)
+		}
+	}
+}
+
 func TestPassesUpgradeRequestsThroughUnrecorded(t *testing.T) {
 	var reached atomic.Int32
 	l, recorded := listen(t, counting(&reached))
@@ -851,19 +891,26 @@ func seenGadget(name, uid, rv string) trace.Seen {
 }
 
 func respondOK(contentType, encoding, body string) http.Handler {
+	return respondStatus(http.StatusOK, contentType, encoding, body)
+}
+
+// respondStatus answers with status and body, in encoding.
+func respondStatus(status int, contentType, encoding, body string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", contentType)
 		if encoding != "" {
 			w.Header().Set("Content-Encoding", encoding)
 		}
+		sent := []byte(body)
 		if encoding == "gzip" {
 			var zipped bytes.Buffer
 			z := gzip.NewWriter(&zipped)
-			z.Write([]byte(body))
+			z.Write(sent)
 			z.Close()
-			body = zipped.String()
+			sent = zipped.Bytes()
 		}
-		w.Write([]byte(body))
+		w.WriteHeader(status)
+		w.Write(sent)
 	})
 }
 

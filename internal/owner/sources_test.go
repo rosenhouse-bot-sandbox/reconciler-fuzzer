@@ -37,10 +37,10 @@ func TestSourcesDescribeEachPrimariesEntry(t *testing.T) {
 	c := &config.Config{
 		Systems: []config.System{{Name: "kube", Owner: "self.metadata.labels.owner"}, {Name: "s3"}},
 		Primaries: []config.Primary{
-			{Kind: widgetKind, Ready: "self.ok", Retain: "self.keep", Halted: "self.halted",
+			{Key: "primaries[0]", Kind: widgetKind, Ready: "self.ok", Retain: "self.keep", Halted: "self.halted",
 				Periodic: &config.Periodic{Every: time.Second, Paths: []string{"status.refreshTime"}},
 				Owns:     []config.Owns{{Kind: clusterRoleKind, Name: "self.metadata.name", Namespace: "'other'"}}},
-			{Kind: databaseKind, Ready: "true"},
+			{Key: "primaries[1]", Kind: databaseKind, Ready: "true"},
 		},
 	}
 	owners, primaries, err := owner.Sources(c, resolver(map[string]string{"Widget": "widgetries", "Database": "databases", "ClusterRole": "clusterroleries"}))
@@ -51,11 +51,11 @@ func TestSourcesDescribeEachPrimariesEntry(t *testing.T) {
 		t.Errorf("owners = %v", owners)
 	}
 	want := []trace.Primary{
-		{Kind: trace.Kind{Group: "toy", Version: "v1", Kind: "Widget", Resource: "widgetries"}, Ready: "self.ok", Retain: "self.keep", Halted: "self.halted",
+		{Key: "primaries[0]", Kind: trace.Kind{Group: "toy", Version: "v1", Kind: "Widget", Resource: "widgetries"}, Ready: "self.ok", Retain: "self.keep", Halted: "self.halted",
 			Periodic: &trace.Periodic{Every: time.Second, Paths: []string{"status.refreshTime"}},
 			Owns: []trace.Owns{{Kind: trace.Kind{Group: clusterRoleKind.Group, Version: "v1", Kind: "ClusterRole", Resource: "clusterroleries"},
 				Name: "self.metadata.name", Namespace: "'other'"}}},
-		{Kind: trace.Kind{Group: "toy", Version: "v1", Kind: "Database", Resource: "databases"}, Ready: "true"},
+		{Key: "primaries[1]", Kind: trace.Kind{Group: "toy", Version: "v1", Kind: "Database", Resource: "databases"}, Ready: "true"},
 	}
 	if !reflect.DeepEqual(primaries, want) {
 		t.Errorf("primaries = %+v, want %+v", primaries, want)

@@ -311,16 +311,17 @@ its check, summary and `kind` (`system/group/resource`). `check.Judge` runs
 every check, and notes each action error, stop whose controller outlived its
 grace period, request fault that picked no request, `holdWatch` while the
 controller had no watch of its kind, stage-model fault that held no object,
-distinct unmapped (system, method, path), and kind whose `role` failed on every
-resource the controller created. A step's **end** is its `confirmed` time.
+distinct unmapped (system, method, path), request that RBAC forbade
+the controller (entry 91), and kind whose `role` failed on every resource the
+controller created. A step's **end** is its `confirmed` time.
 Clean, Restore and Unique judge only settled steps (§17, entry 15).
 
 **Converge.** The settle condition holds by the deadline, and still holds at
 `t* + stable`. The summary names the first unmet clause, such as `did not
 settle (clause 7)`. `backoff-bound` labels a finding whose deadline
 `backoffCap` set. `converge.go` suggests missing `models:`. It notes a step
-whose record ends too early, and a CR still being deleted at the trace's last
-event that a `stop` did not wait for.
+whose record ends too early, a CR still being deleted at the trace's last event
+that a `stop` did not wait for, and a kind whose `ready` no CR version met.
 
 **Crash.** A controller exit the harness did not cause fails its step.
 
@@ -371,9 +372,8 @@ looked at the object and retracts the write in time (entry 86): `reported ready
 with no dependency` if missing, else `reported ready before seeing its
 dependency ready`. With `track: d`, a CR fails that stays `ready`, naming the
 object, `d`, stalls aside, after a look that held it back: `stayed ready after
-seeing its dependency not ready`. Each finding takes the `to` kind. Under
-`onDelete: block`, Honest, unlike Converge and Restore, also counts a look at
-the object being deleted `ready` if its last version before the deletion was.
+seeing its dependency not ready`. Each finding takes the `to` kind. Entry 89
+says how Honest judges a look at an object that waits in deletion.
 
 **Ordered.** Under `onDelete: block`, a `to` instance's **release** is its
 deleted version, and its deletion starts at its first `deletionTimestamp`, or
@@ -403,11 +403,10 @@ added (entry 85): `removed another caller's finalizer`.
 `always` one at each `version` event. Its CEL sees `crs`, the live CRs' bodies,
 and `world.<system>.<key>`, the live instances' bodies, where a key is
 `<resource>` or `<resource>.<group>` on kube and the collection on a fake. Each
-kind in the run event's `kinds` or in an entry's `owns` has a key.
-`firstWrittenUnder(object, path)` returns the UID of the rule 1 to 3 owning CR
-of the earliest version of the object's ref with its value at the path, or `""`
-(`property.go`). The string and base64 CEL extensions apply. Summaries:
-`property <name> does not hold`, `could not be evaluated`.
+kind in the run event's `kinds` or in an entry's `owns` has a key. The string
+and base64 CEL extensions apply. `property.go` documents `firstWrittenUnder`.
+A failure names the version event at which it last turned false, and its
+writes. Summaries: `property <name> does not hold`, `could not be evaluated`.
 
 **Corpus.** `corpus_test.go` judges traces of known bugs and false positives.
 
@@ -597,3 +596,4 @@ Each entry changes a check, exception, `System` interface or ignore list.
 88. Backoff counts a no-op write, such as a delete of an object already being deleted, as futile (#139). A no-op success ends a run of failing calls, since its reconcile may have reset the rate limiter. A run of no-op writes allows twice the calls, since a reconcile may repeat a write, as a deferred status update after an explicit one does. An update that empties a deleting object's finalizers is not futile, since it deletes the object (entry 85). A kube `deletecollection` answers with the resourceVersion of its list. By default that is the latest, which repeats only while nothing in the cluster changes. So a repeat counts as a no-op. The rule assumes that the repeat has the earlier call's selector and options.
 89. Under `onDelete: block` (#126, #127), a `to` CR that waits in deletion while a live `from` CR names it meets clauses 1 and 2 from `stable` after its deletion started, and not before the step's `backoff + stable` after `endFaults`, since its controller may write it as it starts to wait, from retry backoff if a fault failed that write, and may report it not `ready` while it waits. Ordered needs the `from` CR to name the instance in each version up to the release, so a moved reference releases the old object, and a CR being deleted still names it. It skips a CR that waits for the instance in turn, through CRs being deleted, since such a cycle waits for good unless the controller breaks it, as Kubernetes' garbage collector breaks a cycle of foreground deletions. Clause 2 holds the cycle's CRs to it. Ordered also skips what the trace cannot order: a delete that the observer recorded from a relist, which carries the resourceVersion of the version before it, and a CR with a version that the controller saw and the observer missed. It counts a seen of the instance or the CR only if the controller must hold the instance by the deletion's start. A hold is due `stable` after the seen, stalls aside (entry 86). If a step's faults stalled the controller after the seen and began by then, the hold is due no sooner than the step's `backoff + stable` after `endFaults`. A controller that adds its finalizer in a reconcile cannot hold an object deleted first, and one in retry backoff reconciles only after the backoff. Only admission control closes the first race. It compares resourceVersions as integers, as etcd assigns them, since the observer's watches order no events across kinds. Honest counts an object that waits in deletion `ready` if it is, or if its last version before the deletion was, since a controller may still use that version. Converge and Restore judge the object as it is, so they still excuse a CR that is not `ready` on it.
 90. Teardown skips a kube resource whose ownerReferences name the CR, or a resource that gc deletes with it, since gc deletes it after the CR whatever the controller's order (#130). Like Clean, it skips the resources of a CR whose `retain` holds. The gc resolves no ownerReference of a cluster-scoped object to a namespaced owner, so Teardown judges such an object. A resource that the `owns` entries of several CRs name fails only at the release of the last of them that lives, since the others may still use it, and not if one of them retains it. A CR counts as gone once the controller releases it, though the observer may still show it. A resource is being deleted once it has a `deletionTimestamp` or a delete of it succeeded or found it gone. Such a delete counts, since the observer may record the deletion after the release, but not one sent before the resource appeared, which may have hit an earlier instance of its name. A resource appears at its first version, the answer to its create or the controller's first sight of it, whichever is first. A kube delete counts only if the trace shows the resource deleting or gone, since a dry run or a `deletecollection`'s selector may spare it. A dry run before the release still counts if the resource is deleted later, since the trace records no `dryRun`. A deleting namespace counts for what it holds, which the namespace controller deletes.
+91. The `launch.rbac` note counts only the controller's 403s with the authorizer's message, by the verb, resource and scope it names, since a server-side apply that creates is a `patch` that needs `create` (#149). It also counts the RBAC API's refusal of a role or binding that grants permissions the controller lacks, by the request. An injected `error(403)` and admission, such as of a namespace being deleted, a quota or a webhook, give other messages. The note that no CR version met `ready` comes only with a clause 1 finding of that kind, which it explains. The config or the controller may be wrong, so it states only what the trace shows.
