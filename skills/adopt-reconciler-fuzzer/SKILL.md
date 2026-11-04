@@ -381,7 +381,7 @@ A note that a `role` failed on every resource of a kind names the CEL's first er
 `role`, or guard it by kind.
 A note `launch.rbac forbids the controller's <verb> on <resource> <scope>` counts RBAC's 403
 answers to the controller. Add the rule to `launch.rbac` if the controller needs it. A note
-that ends `which grants permissions the controller lacks` needs those permissions, or the
+that says `which grants permissions the controller lacks` needs those permissions, or the
 `escalate` or `bind` verb on the role.
 
 A note that the harness sent SIGKILL means the controller did not exit within

@@ -503,8 +503,8 @@ var (
 	deniedPath     = regexp.MustCompile(`cannot (\S+) path "([^"]*)"`)
 )
 
-// deniedGrant is the RBAC API's refusal of a role or binding that grants
-// permissions its writer lacks.
+// deniedGrant is in the RBAC API's 403 to a write of a role or binding that
+// grants permissions the writer lacks.
 const deniedGrant = "is attempting to grant RBAC permissions not currently held"
 
 // denial says what RBAC forbids in a 403 answer to c, such as "watch on
