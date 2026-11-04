@@ -78,13 +78,26 @@ type held struct {
 	timer               *time.Timer
 	// fresh is the message a fault's end writes.
 	fresh string
+	// wrote is the generation of the stage's last status write.
+	wrote int64
 }
 
 type stageCondition struct {
-	Type               string `json:"type"`
-	Status             string `json:"status"`
-	Reason             string `json:"reason"`
-	ObservedGeneration int64  `json:"observedGeneration"`
+	Type   string `json:"type"`
+	Status string `json:"status"`
+	Reason string `json:"reason"`
+	// ObservedGeneration is nil when the kind's condition type lacks the
+	// field, as a Job's and a PVC's do, so the API server drops it.
+	ObservedGeneration *int64 `json:"observedGeneration"`
+}
+
+// current says whether h's condition holds for h's generation. A condition
+// without observedGeneration holds for the generation the stage last wrote.
+func (h *held) current() bool {
+	if og := h.ready.ObservedGeneration; og != nil {
+		return *og == h.generation
+	}
+	return h.wrote == h.generation
 }
 
 // stageOp writes finalizers, or else status, at resourceVersion rv.
@@ -93,6 +106,7 @@ type stageOp struct {
 	uid, rv    string
 	finalizers []string
 	status     map[string]any
+	generation int64
 }
 
 type stageWriter interface {
@@ -341,17 +355,20 @@ func (s *Stage) decide(h *held, now time.Time) []stageOp {
 		c.Type, c.ObservedGeneration, c.LastTransitionTime = "Ready", h.generation, metav1.NewTime(now)
 		patch := maps.Clone(fields)
 		patch["conditions"] = []any{c}
-		return stageOp{ref: h.ref, uid: h.uid, rv: h.rv, status: patch}
+		return stageOp{ref: h.ref, uid: h.uid, rv: h.rv, status: patch, generation: h.generation}
 	}
 	switch {
 	case s.active(h, true):
 		h.fresh = ""
-		if r := h.ready; r == nil || r.Status != "False" || r.Reason != trace.StuckReason || r.ObservedGeneration != h.generation {
+		if r := h.ready; r == nil || r.Status != "False" || r.Reason != trace.StuckReason || !h.current() {
 			ops = append(ops, status(s.stuckFields, metav1.Condition{Status: metav1.ConditionFalse, Reason: trace.StuckReason, Message: "a stuck fault holds it"}))
 		}
 	case h.fresh != "":
 		ops = append(ops, status(s.readyFields, metav1.Condition{Status: metav1.ConditionTrue, Reason: "Modelled", Message: h.fresh}))
-	case h.ready != nil && h.ready.Status == "True" && h.ready.ObservedGeneration == h.generation:
+	case h.ready != nil && h.ready.Status == "True" && h.current():
+	case h.ready != nil && h.ready.Status == "True" && h.ready.ObservedGeneration == nil:
+		// The ready check cannot tell that this Ready is stale.
+		ops = append(ops, status(s.readyFields, metav1.Condition{Status: metav1.ConditionFalse, Reason: "Progressing", Message: "a new generation"}))
 	case !now.Before(h.heardAt.Add(s.m.After)):
 		ops = append(ops, status(s.readyFields, metav1.Condition{Status: metav1.ConditionTrue, Reason: "Modelled", Message: "modelled ready"}))
 	default:
@@ -489,7 +506,7 @@ func (s *Stage) sweep(ctx context.Context) {
 			h.awaited, h.conflicted = r.rv, ""
 		}
 		if r.op.status != nil && !r.conflict {
-			h.fresh = ""
+			h.fresh, h.wrote = "", r.op.generation
 		}
 	}
 	if retry && ctx.Err() == nil && !s.retrying {

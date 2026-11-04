@@ -490,6 +490,9 @@ func TestModelReady(t *testing.T) {
 		"false":     {gadget(2, condition("False", 2)), false},
 		"other":     {gadget(1, map[string]any{"type": "Synced", "status": "True", "observedGeneration": 1}), false},
 		"no status": {map[string]any{"metadata": map[string]any{"generation": 1}}, false},
+		"dropped":   {gadget(2, map[string]any{"type": "Ready", "status": "True"}), true},
+		"no generation": {map[string]any{"metadata": map[string]any{},
+			"status": map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "True"}}}}, true},
 	} {
 		if got, err := ready(c.obj); err != nil || got != c.want {
 			t.Errorf("%s: ready = %v, %v; want %v", name, got, err, c.want)

@@ -221,7 +221,9 @@ func (c *Config) Fakes() []System {
 const ReadyCondition = "readyCondition"
 
 // ReadyConditionCEL says whether a ReadyCondition model's object is ready.
-const ReadyConditionCEL = `has(self.status) && has(self.status.conditions) && self.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True' && has(c.observedGeneration) && c.observedGeneration == self.metadata.generation)`
+// It takes a condition without observedGeneration as current, since the API
+// server drops that field from a Job's and a PVC's condition.
+const ReadyConditionCEL = `has(self.status) && has(self.status.conditions) && self.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True' && (!has(c.observedGeneration) || c.observedGeneration == self.metadata.generation))`
 
 // Model is one models entry: the harness plays the controller of Kind.
 type Model struct {
