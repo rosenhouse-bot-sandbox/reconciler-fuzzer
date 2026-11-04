@@ -26,10 +26,12 @@ var (
 )
 
 // fakeRun records each run's directory, relative to out, and returns the
-// findings that finds gives for it. log holds the hunt's log.
+// findings that finds gives for it, and the failed actions that fails gives,
+// if set. log holds the hunt's log.
 type fakeRun struct {
 	out   string
 	finds func(dir string, p *plan.Plan) []check.Finding
+	fails func(dir string) []string
 	mu    sync.Mutex
 	dirs  []string
 	log   strings.Builder
@@ -46,7 +48,11 @@ func (f *fakeRun) run(_ context.Context, p *plan.Plan, out string) (check.Report
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return check.Report{}, err
 	}
-	return check.Report{Findings: f.finds(dir, p)}, os.WriteFile(filepath.Join(out, "trace.jsonl"), nil, 0o644)
+	r := check.Report{Findings: f.finds(dir, p)}
+	if f.fails != nil {
+		r.FailedActions = f.fails(dir)
+	}
+	return r, os.WriteFile(filepath.Join(out, "trace.jsonl"), nil, 0o644)
 }
 
 func hunt(t *testing.T, seeds []uint64, finds func(dir string, p *plan.Plan) []check.Finding) ([]Found, *fakeRun) {
@@ -540,6 +546,89 @@ func TestHuntRemovesTheRunOfASeedWithNothingNew(t *testing.T) {
 	wantKept(t, fake.out, map[string]bool{"seed-1": true, "seed-2": false})
 }
 
+func TestHuntRemovesAStaleSummaryWhenItFailsBeforeItsFirstSeed(t *testing.T) {
+	out := t.TempDir()
+	stale := filepath.Join(out, "summary.md")
+	if err := os.WriteFile(stale, []byte("OLD SUMMARY\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Hunt(context.Background(), Options{ConfigPath: filepath.Join(out, "missing.yaml"), Seeds: slices.Values([]uint64{1}), Out: out,
+		Run: (&fakeRun{out: out, finds: always()}).run})
+	if _, statErr := os.Stat(stale); err == nil || !errors.Is(statErr, fs.ErrNotExist) {
+		t.Errorf("Hunt returned %v and left summary.md: %v. Want an error and no summary.md.", err, statErr)
+	}
+}
+
+const stillTaken = "Step 4, action 0 (createFixture) failed at 39.7s: the name of secrets ns/pw is still taken after the createFixture waited 12s"
+
+func failsOn(seed string, notes ...string) func(string) []string {
+	return func(dir string) []string {
+		if dir == seed {
+			return notes
+		}
+		return nil
+	}
+}
+
+func TestHuntKeepsAndListsASeedWithAFailedAction(t *testing.T) {
+	fake := &fakeRun{out: t.TempDir(), finds: always(), fails: failsOn("seed-2", stillTaken, "second line\nmore")}
+	if _, err := Hunt(context.Background(), Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1, 2}), Out: fake.out, Run: fake.run, Log: &fake.log,
+		Replays: DefaultReplays, Candidates: DefaultCandidates}); err != nil {
+		t.Fatal(err)
+	}
+	wantKept(t, fake.out, map[string]bool{"seed-1": false, "seed-2": true})
+	summary, err := os.ReadFile(filepath.Join(fake.out, "summary.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "No findings over 2 seeds.\n\nRuns with a failed action, whose later steps may not have run:\n\n- seed 2: " + stillTaken + "\n- seed 2: second line\n"
+	if string(summary) != want {
+		t.Errorf("summary.md is %q, want %q.", summary, want)
+	}
+	if want := "seed 2: 0 new findings, 2 failed actions\n"; !strings.Contains(fake.log.String(), want) {
+		t.Errorf("The log lacks %q:\n%s", want, fake.log.String())
+	}
+}
+
+func TestHuntListsOnlyTheFailedActionsOfTheRunOfTheSeedsPlan(t *testing.T) {
+	fake := &fakeRun{out: t.TempDir(), finds: always(clean), fails: func(dir string) []string {
+		if dir == "seed-1" {
+			return nil
+		}
+		return []string{stillTaken}
+	}}
+	if _, err := Hunt(context.Background(), Options{ConfigPath: toyConfig, Seeds: slices.Values([]uint64{1}), Out: fake.out, Run: fake.run,
+		Replays: DefaultReplays, Candidates: DefaultCandidates}); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := os.ReadFile(filepath.Join(fake.out, "summary.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(summary), "failed action") {
+		t.Errorf("summary.md lists a replay's or candidate's failed action:\n%s", summary)
+	}
+}
+
+func TestShrinkPlanListsAFailedActionOfItsPlan(t *testing.T) {
+	out := t.TempDir()
+	path := filepath.Join(t.TempDir(), "plan.json")
+	if err := plan.Save(path, parsePlan(t, `{"steps":[{"actions":[`+create+`]}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeRun{out: out, finds: always(clean), fails: failsOn(".", stillTaken)}
+	if _, err := ShrinkPlan(context.Background(), ShrinkOptions{ConfigPath: toyConfig, PlanPath: path, Out: out, Run: fake.run}); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := os.ReadFile(filepath.Join(out, "summary.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "- plan: " + stillTaken + "\n"; !strings.Contains(string(summary), want) {
+		t.Errorf("summary.md lacks %q:\n%s", want, summary)
+	}
+}
+
 func TestHuntLogsEachRunAndNamesTheFinding(t *testing.T) {
 	_, fake := hunt(t, []uint64{1}, always(clean))
 	for _, want := range []string{
@@ -860,7 +949,7 @@ func TestShrinkPlanLeavesNothingPendingAfterAFailedSave(t *testing.T) {
 }
 
 func TestSummaryShowsNoSeedForAPlanWithout(t *testing.T) {
-	got := Summary("1 plan", []Found{{Finding: clean}, {Finding: clean, Seed: 4}}, nil)
+	got := Summary("1 plan", []Found{{Finding: clean}, {Finding: clean, Seed: 4}}, nil, nil)
 	if !strings.Contains(got, "| - | Clean |") || !strings.Contains(got, "| 4 | Clean |") {
 		t.Errorf("Summary is %q.", got)
 	}
@@ -888,7 +977,7 @@ func TestHuntLogsAReplayErrorOnlyWhenThereIsOne(t *testing.T) {
 }
 
 func TestSummaryEscapesPipes(t *testing.T) {
-	got := Summary("1 plan", []Found{{Finding: check.Finding{Check: "Clean", Summary: "a|b"}}}, nil)
+	got := Summary("1 plan", []Found{{Finding: check.Finding{Check: "Clean", Summary: "a|b"}}}, nil, nil)
 	if !strings.Contains(got, `| a\|b |`) {
 		t.Errorf("Summary is %q.", got)
 	}
@@ -896,7 +985,7 @@ func TestSummaryEscapesPipes(t *testing.T) {
 
 // A panic's output has a blank line, which would end a Markdown list item.
 func TestSummaryListsEachFailedRunByItsErrorsFirstLine(t *testing.T) {
-	got := Summary("2 seeds", nil, []string{"seed 1: the controller never started\noutput tail:\npanic: boom\n\ngoroutine 1 [running]:", "seed 2: boom"})
+	got := Summary("2 seeds", nil, []string{"seed 1: the controller never started\noutput tail:\npanic: boom\n\ngoroutine 1 [running]:", "seed 2: boom"}, nil)
 	if want := "No findings over 2 seeds.\n\nRuns that failed:\n\n- seed 1: the controller never started\n- seed 2: boom\n"; got != want {
 		t.Errorf("Summary is %q, want %q.", got, want)
 	}

@@ -18,14 +18,16 @@ define the clauses and checks.
 | `kubeconfig` | The envtest API server's kubeconfig. The server is gone after the run. |
 
 `hunt --out <out>` writes one `seed-<n>` directory per seed that found
-something new or whose run failed, and `summary.md`. Each seed directory
+something new, whose run failed, or whose run had a failed action, and
+`summary.md`. Each seed directory
 holds a run's files, `replay-<i>` runs, and `shrunk.json`, or
 `shrunk-<f>.json` for finding f past the first. A shrink that keeps no
 candidate saves the plan unchanged. `shrink-<f>-<c>-<r>` is run r of
 candidate c in the shrink of finding f, and stays only when it gave the
 finding. `summary.md` has one row per distinct finding: seed, check,
 summary, replays that reproduced it, and the shrunk plan. It also lists
-seeds whose run failed. `hunt` rewrites it while it runs, and a cell says
+seeds whose run failed, and each failed action of a seed's run. A failed
+action may skip the plan's later steps. `hunt` rewrites it while it runs, and a cell says
 `pending` until its replays or shrink end. When an interrupt cuts a
 finding's replays or shrink short, or a harness error cuts its shrink
 short, its row says `(cut short)`. The row names the smallest failing plan

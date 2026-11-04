@@ -79,13 +79,16 @@ type Found struct {
 
 // Hunt runs each seed's plan into <Out>/seed-<n>. For each finding whose
 // signature no earlier seed found, it replays the plan Replays times and
-// shrinks it. It removes the run of a seed that found nothing new. A seed
-// whose run fails is noted, and the hunt continues. A run that finds a
+// shrinks it. It removes the run of a seed that found nothing new and had no
+// failed action. A seed whose run fails is noted, and the hunt continues. A run that finds a
 // program missing ends the hunt, since the setup is at fault, not the seed.
-// It writes summary.md under Out after each seed, and as the replays and
-// shrinks of a seed's findings finish. It returns the distinct findings, and
-// an error when a seed failed or the context ended.
+// It removes any summary.md under Out first, then writes it after each seed,
+// and as the replays and shrinks of a seed's findings finish. It returns the
+// distinct findings, and an error when a seed failed or the context ended.
 func Hunt(ctx context.Context, o Options) ([]Found, error) {
+	if err := os.Remove(filepath.Join(o.Out, "summary.md")); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
 	cfg, err := config.Load(o.ConfigPath)
 	if err != nil {
 		return nil, err
@@ -104,7 +107,7 @@ func Hunt(ctx context.Context, o Options) ([]Found, error) {
 	seeds := 0
 	h.progress = func(more []Found) {
 		// The write after the seed reports an error.
-		_ = writeSummary(o.Out, fmt.Sprintf("%d seeds", seeds+1), slices.Concat(found, more), failed)
+		_ = writeSummary(o.Out, fmt.Sprintf("%d seeds", seeds+1), slices.Concat(found, more), failed, h.incomplete)
 	}
 	for seed := range o.Seeds {
 		p, err := g.Plan(seed)
@@ -112,9 +115,10 @@ func Hunt(ctx context.Context, o Options) ([]Found, error) {
 			return found, err
 		}
 		dir := filepath.Join(o.Out, fmt.Sprintf("seed-%d", seed))
+		incomplete := len(h.incomplete)
 		more, err := h.investigate(ctx, p, dir, fmt.Sprintf("seed %d", seed))
 		found = append(found, more...)
-		if err == nil && len(more) == 0 {
+		if err == nil && len(more) == 0 && len(h.incomplete) == incomplete {
 			if err := os.RemoveAll(dir); err != nil {
 				return found, err
 			}
@@ -127,7 +131,7 @@ func Hunt(ctx context.Context, o Options) ([]Found, error) {
 			if !errors.Is(err, ctx.Err()) {
 				err = errors.Join(ctx.Err(), err)
 			}
-			return found, errors.Join(err, writeSummary(o.Out, fmt.Sprintf("%d seeds", seeds), found, failed))
+			return found, errors.Join(err, writeSummary(o.Out, fmt.Sprintf("%d seeds", seeds), found, failed, h.incomplete))
 		}
 		seeds++
 		missing := missingProgram(err)
@@ -138,14 +142,14 @@ func Hunt(ctx context.Context, o Options) ([]Found, error) {
 				h.logf("%v", err)
 			}
 		}
-		if err := writeSummary(o.Out, fmt.Sprintf("%d seeds", seeds), found, failed); err != nil {
+		if err := writeSummary(o.Out, fmt.Sprintf("%d seeds", seeds), found, failed, h.incomplete); err != nil {
 			return found, err
 		}
 		if missing {
 			return found, err
 		}
 	}
-	err = writeSummary(o.Out, fmt.Sprintf("%d seeds", seeds), found, failed)
+	err = writeSummary(o.Out, fmt.Sprintf("%d seeds", seeds), found, failed, h.incomplete)
 	if len(failed) > 0 {
 		err = errors.Join(err, fmt.Errorf("%d of %d seeds failed", len(failed), seeds))
 	}
@@ -193,13 +197,13 @@ func ShrinkPlan(ctx context.Context, o ShrinkOptions) ([]Found, error) {
 	h := &hunter{run: o.Run, samples: samples, log: o.Log, replays: o.Replays, candidates: o.Candidates, seen: map[string]bool{}}
 	h.progress = func(found []Found) {
 		// The write below reports an error.
-		_ = writeSummary(o.Out, "1 plan", found, nil)
+		_ = writeSummary(o.Out, "1 plan", found, nil, h.incomplete)
 	}
 	found, err := h.investigate(ctx, p, o.Out, "plan")
 	if err != nil && len(found) == 0 {
 		return nil, err
 	}
-	return found, errors.Join(err, writeSummary(o.Out, "1 plan", found, nil))
+	return found, errors.Join(err, writeSummary(o.Out, "1 plan", found, nil, h.incomplete))
 }
 
 // hunter investigates plans and remembers the signatures they found.
@@ -209,6 +213,9 @@ type hunter struct {
 	log                 io.Writer
 	replays, candidates int
 	seen                map[string]bool
+	// incomplete holds each failed action of the plans investigated, named
+	// by plan.
+	incomplete []string
 	// progress hears the findings of the plan under investigation as their
 	// replays and shrinks finish.
 	progress func([]Found)
@@ -220,7 +227,8 @@ func (h *hunter) logf(format string, args ...any) {
 	}
 }
 
-// investigate runs p into dir. For each finding whose signature is not yet
+// investigate runs p into dir, and notes each failed action of that run in
+// h.incomplete. For each finding whose signature is not yet
 // seen, it replays p into dir/replay-<i>, shrinks it with candidate runs
 // into dir/shrink-<f>-<c>-<r>, and saves the result in dir. f numbers the
 // finding, c the candidate and r the run. It removes each candidate run that
@@ -243,7 +251,14 @@ func (h *hunter) investigate(ctx context.Context, p *plan.Plan, dir, name string
 			found = append(found, Found{Finding: f, Seed: p.Seed, Replays: h.replays, replaying: true, shrinking: h.candidates > 0})
 		}
 	}
-	h.logf("%s: %d new %s", name, len(found), plural(len(found), "finding"))
+	for _, a := range report.FailedActions {
+		h.incomplete = append(h.incomplete, name+": "+a)
+	}
+	line := fmt.Sprintf("%s: %d new %s", name, len(found), plural(len(found), "finding"))
+	if n := len(report.FailedActions); n > 0 {
+		line += fmt.Sprintf(", %d failed %s", n, plural(n, "action"))
+	}
+	h.logf("%s", line)
 	if len(found) == 0 {
 		return nil, nil
 	}
@@ -375,9 +390,9 @@ func loadSamples(cfg *config.Config) ([]map[string]any, error) {
 }
 
 // Summary is summary.md: one row for each finding, then the first line of
-// each failed run's error. A row says "pending" for replays or a shrink yet
-// to finish.
-func Summary(over string, found []Found, failed []string) string {
+// each failed run's error, then of each failed action. A row says "pending"
+// for replays or a shrink yet to finish.
+func Summary(over string, found []Found, failed, actions []string) string {
 	var b strings.Builder
 	if len(found) == 0 {
 		fmt.Fprintf(&b, "No findings over %s.\n", over)
@@ -405,21 +420,28 @@ func Summary(over string, found []Found, failed []string) string {
 				strings.ReplaceAll(f.Finding.Summary, "|", `\|`), reproduced, shrunk)
 		}
 	}
-	if len(failed) > 0 {
-		b.WriteString("\nRuns that failed:\n\n")
-		for _, run := range failed {
-			first, _, _ := strings.Cut(run, "\n")
-			fmt.Fprintf(&b, "- %s\n", first)
-		}
-	}
+	firstLines(&b, "Runs that failed", failed)
+	firstLines(&b, "Runs with a failed action, whose later steps may not have run", actions)
 	return b.String()
 }
 
-func writeSummary(out, over string, found []Found, failed []string) error {
+// firstLines lists the first line of each entry under heading, if any.
+func firstLines(b *strings.Builder, heading string, entries []string) {
+	if len(entries) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "\n%s:\n\n", heading)
+	for _, e := range entries {
+		first, _, _ := strings.Cut(e, "\n")
+		fmt.Fprintf(b, "- %s\n", first)
+	}
+}
+
+func writeSummary(out, over string, found []Found, failed, actions []string) error {
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(out, "summary.md"), []byte(Summary(over, found, failed)), 0o644)
+	return os.WriteFile(filepath.Join(out, "summary.md"), []byte(Summary(over, found, failed, actions)), 0o644)
 }
 
 // listFindings names findings by number, as in "findings 1, 2 and 4".

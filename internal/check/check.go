@@ -427,10 +427,12 @@ func (f Finding) Signature() string {
 }
 
 // Report holds the findings and the notes on what the trace could not
-// decide.
+// decide. FailedActions holds the notes of failed actions, which Notes
+// starts with.
 type Report struct {
-	Findings []Finding
-	Notes    []string
+	Findings      []Finding
+	Notes         []string
+	FailedActions []string
 }
 
 // Judge runs every check.
@@ -446,8 +448,9 @@ func Judge(ix *trace.Index, s Spec) Report {
 	findings = append(findings, Backoff(ix, s)...)
 	findings = append(findings, Finalizers(ix, s)...)
 	findings = append(findings, Property(ix, s)...)
-	notes = slices.Concat(actionErrors(ix), killedStops(ix), unpicked(ix, s), notes, unmapped(ix), forbidden(ix), failedRoles(ix, s))
-	return Report{Findings: findings, Notes: notes}
+	failed := actionErrors(ix)
+	notes = slices.Concat(failed, killedStops(ix), unpicked(ix, s), notes, unmapped(ix), forbidden(ix), failedRoles(ix, s))
+	return Report{Findings: findings, Notes: notes, FailedActions: failed}
 }
 
 // failedRoles notes each kind whose role CEL failed on every resource the

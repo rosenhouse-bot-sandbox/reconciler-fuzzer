@@ -96,7 +96,8 @@ A toy run takes half a minute or more. `hunt` replays the plan of a seed with ne
 times. For each finding, it then tries up to 16 smaller plans, called shrink candidates, and
 runs each at most 4 times, so this hunt takes several minutes. `--replays` and `--candidates`
 change these counts. `hunt` rewrites `summary.md` while it runs. It lists each finding with its
-seed, reproduction rate and shrunk plan. `reconciler-fuzzer help hunt` describes each flag.
+seed, reproduction rate and shrunk plan, and each failed action, which may skip a plan's later
+steps. `reconciler-fuzzer help hunt` describes each flag.
 
 ## Writing a config
 
