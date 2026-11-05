@@ -453,3 +453,12 @@ func TestRestoreFailsADamagedResourceDespiteASiblingCRsResourceOfItsRole(t *test
 		})
 	}
 }
+
+func TestRestoreLetsAKindTheControllerDoesNotRestoreStayGone(t *testing.T) {
+	r, request, secret := reissue()
+	r.Spec.NotRestored = []trace.Kind{{Group: "cert-manager.io", Version: "v1", Kind: "CertificateRequest", Resource: "certificaterequests"}}
+	r.Delete(ctl, request)
+	r.Create(ctl, secret, tt.OwnedBy(tt.Object("a-tls"), r.UID(widgetA), true))
+	r.Settle()
+	requireNone(t, restore(t, r))
+}

@@ -278,7 +278,9 @@ the findings an upgrade can cause.
   damaged one's kind and role under that root. A resource recreated under
   another name counts when its system's `role` gives it the damaged one's
   role. A resource may stay gone while each of its CRs is not ready at the
-  step's end, but halted or held back by a reference.
+  step's end, but halted or held back by a reference. A resource of a
+  [`notRestored`](../README.md#kinds-the-controller-does-not-restore) kind
+  may stay gone.
 - `replaced resources`: an undamaged resource disappeared or changed owner,
   or a new one appeared.
 - `changed resources`: an undamaged resource's body changed in a step

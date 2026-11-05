@@ -49,6 +49,9 @@ type Config struct {
 	Timeouts   Timeouts
 	Properties []Property
 	References []Reference
+	// NotRestored are the kinds whose damaged objects Restore does not
+	// require back.
+	NotRestored []trace.Kind
 
 	kinds servedKinds
 }
@@ -345,6 +348,7 @@ type declaration struct {
 		Expr string `json:"expr"`
 		When string `json:"when"`
 	} `json:"properties"`
+	NotRestored []string `json:"notRestored"`
 }
 
 // declaredPrimary is the primary key, which takes no values: they sit at
@@ -507,6 +511,9 @@ func load(path string) (*Config, error) {
 		return nil, err
 	}
 	if c.Models, err = models(d, c.ListedKinds(), c.kinds); err != nil {
+		return nil, err
+	}
+	if c.NotRestored, err = c.notRestored(d.NotRestored); err != nil {
 		return nil, err
 	}
 	if err := refuseListedFixtures(d.Fixtures, c.Fixtures, c.ListedKinds()); err != nil {

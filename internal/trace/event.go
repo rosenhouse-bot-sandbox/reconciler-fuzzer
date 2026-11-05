@@ -98,6 +98,9 @@ type Run struct {
 	// record Seen events of each To kind, and of each From kind of a block
 	// reference.
 	References []Reference `json:"references,omitempty"`
+	// NotRestored are the kinds whose damaged objects Restore does not
+	// require back.
+	NotRestored []Kind `json:"notRestored,omitempty"`
 }
 
 // Reference is one config reference as the checks need it. A fake's To

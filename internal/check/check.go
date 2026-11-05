@@ -41,6 +41,9 @@ type Spec struct {
 	Properties []PropertySpec
 	// References come from the config, or else the Run event.
 	References []Reference
+	// NotRestored are the kinds whose damaged objects Restore does not
+	// require back, from the config or else the Run event.
+	NotRestored []trace.Kind
 }
 
 // Reference is a config reference as Honest and Converge judge it.
@@ -204,6 +207,7 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 		if s.References, err = configReferences(c, run); err != nil {
 			return Spec{}, err
 		}
+		s.NotRestored = c.NotRestored
 		return s, nil
 	}
 	if run.Stable <= 0 || run.Reads <= 0 || run.Writes <= 0 {
@@ -233,6 +237,7 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 	if s.References, err = compileReferences(run.References); err != nil {
 		return Spec{}, fmt.Errorf("the trace's references: %w", err)
 	}
+	s.NotRestored = run.NotRestored
 	return s, nil
 }
 

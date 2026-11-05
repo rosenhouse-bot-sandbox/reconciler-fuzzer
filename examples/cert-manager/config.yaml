@@ -38,6 +38,12 @@ values:
     # Under Never, cert-manager keeps a stored key that a later algorithm
     # does not match, and waits for a user. plans/rotation-never.json covers it.
     spec.privateKey.rotationPolicy: {enum: ["Always"]}
+# Each CertificateRequest, Order and Challenge is a one-shot record of an
+# issuance, which cert-manager never makes again.
+notRestored:
+  - cert-manager.io/v1/CertificateRequest
+  - acme.cert-manager.io/v1/Order
+  - acme.cert-manager.io/v1/Challenge
 # #63: a Certificate's Secret holds a key first written while that
 # Certificate owned the Secret, not one its deleted namesake left behind.
 # Both paths fail it: a write-back, whose Secret is a new instance, and a

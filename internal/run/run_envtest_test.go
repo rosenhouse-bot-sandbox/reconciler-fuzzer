@@ -390,6 +390,7 @@ references:
   - {from: toy.reconciler-fuzzer/v1/Widget, to: v1/Secret, name: metadata.annotations.secret, ready: has(self.data.password)}
 timeouts: {settle: 10s, stable: 500ms}
 budgets: {reads: 100}
+notRestored: [v1/ConfigMap]
 `, toyDir),
 	}
 	for name, content := range files {
@@ -419,6 +420,9 @@ budgets: {reads: 100}
 	run, _ := ix.Run()
 	if len(run.References) != 1 || run.References[0].To.Resource != "secrets" {
 		t.Errorf("the run event's references are %+v, want the one to secrets", run.References)
+	}
+	if want := []trace.Kind{{Version: "v1", Kind: "ConfigMap", Resource: "configmaps"}}; !slices.Equal(run.NotRestored, want) {
+		t.Errorf("the run event's notRestored is %+v, want %+v", run.NotRestored, want)
 	}
 	deleted, _ := findAction(events, 1, 0)
 	created, _ := findAction(events, 2, 0)

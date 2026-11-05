@@ -12,6 +12,12 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 )
 
+// notRestored reports whether ref names a kind whose damaged objects the
+// controller does not restore.
+func (s Spec) notRestored(ref trace.Ref) bool {
+	return slices.ContainsFunc(s.NotRestored, func(k trace.Kind) bool { return ref.OfKind(k) })
+}
+
 // Restore fails a settled step without a create, update, delete or fixture
 // change whose controller resources differ from the previous settled step's.
 // A step whose restart upgrades the controller may change them, but not
@@ -53,7 +59,7 @@ func Restore(ix *trace.Index, s Spec) []Finding {
 				if o, hit := damaged[g]; hit {
 					restored = !v.lives(o, to) && remade[group{kind: g.kind, root: g.root, role: g.role}]
 				}
-				if len(was) > 0 && len(is) == 0 && !restored && !v.stopped(v.w.Owner(was[0], from), to) {
+				if len(was) > 0 && len(is) == 0 && !restored && !v.stopped(v.w.Owner(was[0], from), to) && !v.s.notRestored(g.kind) {
 					missing[k] = append(missing[k], v.describeAll(was[:1], from)...)
 				}
 				continue
