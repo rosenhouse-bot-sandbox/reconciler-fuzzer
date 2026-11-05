@@ -1,6 +1,7 @@
 package check_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/check"
@@ -451,5 +452,33 @@ func TestRestoreFailsADamagedResourceDespiteASiblingCRsResourceOfItsRole(t *test
 			r.Settle()
 			requireFinding(t, restore(t, r), "Restore", 1, "did not restore damaged resources", "kube/configmaps", "configmaps ns/db-b1 (rule 1, CR databases.toy ns/b)")
 		})
+	}
+}
+
+func TestRestoreLetsAKindTheControllerDoesNotRestoreStayGone(t *testing.T) {
+	r, request, secret := reissue()
+	r.Spec.NotRestored = []trace.Kind{{Group: "cert-manager.io", Version: "v1", Kind: "CertificateRequest", Resource: "certificaterequests"}}
+	r.Delete(ctl, request)
+	r.Create(ctl, secret, tt.OwnedBy(tt.Object("a-tls"), r.UID(widgetA), true))
+	r.Settle()
+	requireNone(t, restore(t, r))
+}
+
+func TestRestoreLetsADamagedObjectOfAKindTheControllerDoesNotRestoreStayGone(t *testing.T) {
+	for _, notRestored := range []bool{false, true} {
+		r := newRun(2)
+		request := tt.Ref("cert-manager.io/certificaterequests", "ns", "a-1")
+		r.Begin()
+		r.Create(ctl, request, tt.OwnedBy(tt.Object("a-1"), r.CreateCR("a", widgetA), true))
+		r.Ready(widgetA).EndFaults().Settle()
+		r.Begin().Delete(trace.Harness, request).Act("damage", "a", &request).EndFaults()
+		if notRestored {
+			r.Spec.NotRestored = []trace.Kind{{Group: "cert-manager.io", Version: "v1", Kind: "CertificateRequest", Resource: "certificaterequests"}}
+		}
+		r.Call(ctl, "get", request, 404).Settle()
+		findings := restore(t, r)
+		if got := slices.ContainsFunc(findings, func(f check.Finding) bool { return f.Kind == "kube/cert-manager.io/certificaterequests" }); got == notRestored {
+			t.Errorf("notRestored %v: findings %+v", notRestored, findings)
+		}
 	}
 }

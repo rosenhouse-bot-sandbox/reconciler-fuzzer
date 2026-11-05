@@ -340,9 +340,9 @@ controller's resources at the two ends by group, without volatile fields
 `damage` touched the root, each instance must stay, with no new one and, except
 at an upgrade, an equal body: `replaced resources`, `changed resources`. Where
 one did, each group's kind must stay under the root. A damaged group must be
-live again while its owner lives, or else a CR made in the step must own its
-kind and role there: `did not restore damaged resources` (entries 22 and 82). A
-group whose CRs are all not ready but halted or held back may empty (entry 83).
+live again while its owner lives, or a CR made in the step must own its kind and
+role there: `did not restore damaged resources` (entries 22, 82). A group may empty
+if its CRs are all halted or held back (entry 83), or its kind is `notRestored`.
 
 **Unique.** At each settled step's end, a group holds at most one live controller
 instance. Each detail line names its role. Summary: `duplicate resources`.

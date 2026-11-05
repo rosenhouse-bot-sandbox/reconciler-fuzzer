@@ -514,6 +514,7 @@ func runEvent(cfg *config.Config, k *kube.Kube, planSteps int) (trace.Event, err
 		Stable: cfg.Timeouts.Stable, Reads: cfg.Budgets.Reads, Writes: cfg.Budgets.Writes,
 		Models: models, StatusKinds: k.StatusKinds(), Kinds: k.Kinds(),
 		Owners: owners, Systems: owner.Systems(cfg), Properties: owner.Properties(cfg), References: references,
+		NotRestored: cfg.NotRestored,
 	}}, nil
 }
 

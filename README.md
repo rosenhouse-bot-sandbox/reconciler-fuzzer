@@ -589,6 +589,20 @@ A controller that refreshes on a timer writes its CR each period. In the CR's en
 `periodic: {every: 2s, paths: [status.refreshTime]}` lets those writes pass the settle
 condition. `[*]` names a field of every list item, as in `status.conditions[*].lastTransitionTime`.
 
+### Kinds the controller does not restore
+
+Generated plans damage the objects the controller creates, and Restore wants each damaged object
+back. Some kinds are one-shot records that a correct controller never makes again, such as
+cert-manager's CertificateRequest. `notRestored` lists them:
+
+```yaml
+notRestored: [cert-manager.io/v1/CertificateRequest]
+```
+
+Plans still damage these kinds, and every other check still judges them. Restore only stops
+requiring a damaged object of such a kind, or any object of its kind under the damaged root, to
+come back.
+
 ### Known findings
 
 A `known` entry names a finding the target is known to give, such as an

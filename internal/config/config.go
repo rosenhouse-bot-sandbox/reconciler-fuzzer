@@ -49,7 +49,9 @@ type Config struct {
 	Timeouts   Timeouts
 	Properties []Property
 	References []Reference
-	Known      []Known
+	// NotRestored are the kinds Restore lets stay gone under a damaged root.
+	NotRestored []trace.Kind
+	Known       []Known
 
 	kinds servedKinds
 }
@@ -346,7 +348,8 @@ type declaration struct {
 		Expr string `json:"expr"`
 		When string `json:"when"`
 	} `json:"properties"`
-	Known []struct {
+	NotRestored []string `json:"notRestored"`
+	Known       []struct {
 		Check   string `json:"check"`
 		Summary string `json:"summary"`
 		Details string `json:"details"`
@@ -514,6 +517,9 @@ func load(path string) (*Config, error) {
 		return nil, err
 	}
 	if c.Models, err = models(d, c.ListedKinds(), c.kinds); err != nil {
+		return nil, err
+	}
+	if c.NotRestored, err = c.notRestored(d.NotRestored); err != nil {
 		return nil, err
 	}
 	if err := refuseListedFixtures(d.Fixtures, c.Fixtures, c.ListedKinds()); err != nil {

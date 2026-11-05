@@ -697,6 +697,10 @@ func TestSpecFor(t *testing.T) {
 	if ok, err := got.Primaries[0].Ready(ready); !ok || err != nil {
 		t.Fatalf("Ready is not the config's: %v, %v", ok, err)
 	}
+	c.NotRestored = []trace.Kind{{Version: "v1", Kind: "Secret", Resource: "secrets"}}
+	if got, err := check.SpecFor(c, b.Index()); err != nil || !slices.Equal(got.NotRestored, c.NotRestored) {
+		t.Fatalf("notRestored = %+v, %v; want the config's", got.NotRestored, err)
+	}
 	if ok, _ := got.Primaries[0].Ready(map[string]any{}); ok {
 		t.Fatal("Ready holds for an empty object")
 	}
