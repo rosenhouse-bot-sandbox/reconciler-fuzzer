@@ -411,11 +411,10 @@ finding's replays or shrink end, and `(cut short)` if an interrupt or error ends
 Treat each finding as in step 8.
 `reconciler-fuzzer plan --config config.yaml --seed <n>` prints seed n's plan without running it.
 
-Under `onDelete: block`, a seed's plan may stop early: a create or `createFixture` into a name
-that waits in deletion gives up with a `still taken` note, and the later steps do not run.
-`summary.md` does not show this
-([#190](https://github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/issues/190)). Run such a
-seed with `reconciler-fuzzer run --seed` to read its notes in `report.md`.
+`summary.md` also lists each plan that a failed action ended early. Under `onDelete: block`, a
+create or `createFixture` into a name that waits in deletion gives up with a `still taken`
+note, and the plan's later steps do not run. Leave such a seed out of `seeds`. Its `report.md`
+in `seed-<n>` holds all its notes.
 
 ## 10. Commit plans and seeds
 

@@ -288,7 +288,7 @@ func (s *stepRun) faultPeriod(ctx context.Context) error {
 			event.Waited = s.waited
 		}
 		if err != nil {
-			event.Error = err.Error()
+			event.Error, event.EndedPlan = err.Error(), errors.Is(err, errStillTaken)
 		}
 		s.Recorder.Record(trace.Event{Action: event})
 		if err != nil && !errors.Is(err, owner.ErrNoMatch) {

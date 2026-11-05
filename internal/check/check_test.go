@@ -295,14 +295,17 @@ func TestJudgeRunsConvergeThenCrash(t *testing.T) {
 	}
 }
 
-func TestJudgeNotesAFailedAction(t *testing.T) {
+func TestJudgeNotesAFailedActionAndWhetherItEndedThePlan(t *testing.T) {
 	b := cleanRun()
-	failed := tt.Action(1, "create", widgetA)
-	failed.Action.Index, failed.Action.Error = 2, "the slot's name is still taken after the create waited 1s"
-	b.At(10 * s).Add(failed)
-	notes := check.Judge(b.Index(), spec).Notes
-	if len(notes) != 1 || notes[0] != "Step 1, action 2 (create) failed at 10s: the slot's name is still taken after the create waited 1s" {
-		t.Fatalf("notes = %q", notes)
+	unmatched := tt.Action(1, "damage", widgetA)
+	unmatched.Action.Error = "no instance matches"
+	taken := tt.Action(1, "create", widgetA)
+	taken.Action.Index, taken.Action.Error, taken.Action.EndedPlan = 2, "the slot's name is still taken after the create waited 1s", true
+	b.At(9 * s).Add(unmatched).At(10 * s).Add(taken)
+	r := check.Judge(b.Index(), spec)
+	want := []string{"Step 1, action 0 (damage) failed at 9s: no instance matches", "Step 1, action 2 (create) failed at 10s: the slot's name is still taken after the create waited 1s"}
+	if !slices.Equal(r.Notes, want) || !slices.Equal(r.EndedPlan, want[1:]) {
+		t.Fatalf("notes = %q, ended plan = %q, want %q and its last", r.Notes, r.EndedPlan, want)
 	}
 }
 

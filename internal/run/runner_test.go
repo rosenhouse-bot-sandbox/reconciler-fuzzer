@@ -373,11 +373,14 @@ func TestExecuteEndsThePlanWhenADeletedSlotStaysTaken(t *testing.T) {
 	checkWaitNote(t, events, create, `: the CR with that name has deletionTimestamp 2026-10-24T09:06:40Z and finalizers [toy/cleanup toy/audit]`)
 }
 
-// checkWaitNote checks that a create's error notes how long it waited, and
-// then rest. The create began to wait once the step's previous action was
-// recorded.
+// checkWaitNote checks that a create ended the plan, and that its error
+// notes how long it waited, and then rest. The create began to wait once the
+// step's previous action was recorded.
 func checkWaitNote(t *testing.T, events []trace.Event, create trace.Event, rest string) {
 	t.Helper()
+	if !create.Action.EndedPlan {
+		t.Error("the create that gave up does not say that it ended the plan")
+	}
 	previous, _ := findAction(events, create.Action.Step, create.Action.Index-1)
 	waited := create.At - previous.At
 	note := regexp.MustCompile(`^the slot's name is still taken after the create waited (\S+)` + regexp.QuoteMeta(rest) + `$`)
@@ -1440,10 +1443,10 @@ func TestExecuteGoesOnAfterAnUnmatchedTarget(t *testing.T) {
 	var errs []string
 	for _, e := range f.rec.Events() {
 		if a := e.Action; a != nil {
-			errs = append(errs, fmt.Sprintf("%d.%d %s %q", a.Step, a.Index, a.Do, a.Error))
+			errs = append(errs, fmt.Sprintf("%d.%d %s %q %v", a.Step, a.Index, a.Do, a.Error, a.EndedPlan))
 		}
 	}
-	want := []string{`0.0 damage "no instance matches"`, `0.1 create ""`, `1.0 changeFixture "no instance matches"`, `2.0 delete ""`, `3.0 restart ""`}
+	want := []string{`0.0 damage "no instance matches" false`, `0.1 create "" false`, `1.0 changeFixture "no instance matches" false`, `2.0 delete "" false`, `3.0 restart "" false`}
 	if !reflect.DeepEqual(errs, want) {
 		t.Errorf("actions = %q, want %q", errs, want)
 	}

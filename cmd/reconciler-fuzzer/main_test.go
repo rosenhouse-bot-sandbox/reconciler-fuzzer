@@ -301,6 +301,17 @@ func TestHuntRunsTheSeedsAndPrintsTheSummary(t *testing.T) {
 	}
 }
 
+func TestHuntPrintsNoStaleSummaryWhenItsConfigFailsToLoad(t *testing.T) {
+	out := t.TempDir()
+	if err := os.WriteFile(filepath.Join(out, "summary.md"), []byte("OLD SUMMARY\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr := cliOutput("hunt", "--config", filepath.Join(out, "missing.yaml"), "--seeds", "1", "--out", out)
+	if code != 2 || stdout != "" || !strings.Contains(stderr, "missing.yaml") {
+		t.Errorf("cli = %d, stdout %q, stderr %q; want 2, no stdout and the config's error", code, stdout, stderr)
+	}
+}
+
 func TestHuntExits2WhenEverySeedFails(t *testing.T) {
 	runPlan = func(context.Context, run.Options) (check.Report, error) {
 		return check.Report{}, errors.New("no controller")
