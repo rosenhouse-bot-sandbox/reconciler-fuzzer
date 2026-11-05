@@ -44,3 +44,8 @@ systems:
     process:
       command: [../../bin/vault, server, -dev, -dev-root-token-id=root, "-dev-listen-address=${addr}"]
     fixtures: [vault.yaml]
+known:
+  - check: Converge
+    summary: did not settle (clause 1)
+    details: '"reason":"SecretSyncedError"'
+    see: docs/findings/external-secrets-onchange-stale-failure.md

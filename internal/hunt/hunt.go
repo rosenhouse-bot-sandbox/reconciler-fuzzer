@@ -72,6 +72,9 @@ type Found struct {
 	// replays or shrink unfinished. Shrunk is then the smallest failing plan
 	// so far, if any.
 	CutShort bool
+	// Known is the config's known entry that the finding matches, if any.
+	// The hunt neither replays nor shrinks a known finding.
+	Known *config.Known
 	// replaying and shrinking say that the hunt has yet to finish the
 	// finding's replays or its shrink.
 	replaying, shrinking bool
@@ -102,7 +105,7 @@ func Hunt(ctx context.Context, o Options) ([]Found, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := &hunter{run: o.Run, samples: samples, log: o.Log, replays: o.Replays, candidates: o.Candidates, seen: map[string]bool{}}
+	h := &hunter{run: o.Run, samples: samples, log: o.Log, replays: o.Replays, candidates: o.Candidates, seen: map[string]bool{}, known: cfg.Known}
 	var found []Found
 	var failed []string
 	seeds := 0
@@ -213,6 +216,7 @@ type hunter struct {
 	log                 io.Writer
 	replays, candidates int
 	seen                map[string]bool
+	known               []config.Known
 	// endedPlan holds the note of each failed action that ended a plan
 	// investigated early, prefixed with the plan's name.
 	endedPlan []string
@@ -249,7 +253,11 @@ func (h *hunter) investigate(ctx context.Context, p *plan.Plan, dir, name string
 	for _, f := range report.Findings {
 		if !h.seen[f.Signature()] {
 			h.seen[f.Signature()] = true
-			found = append(found, Found{Finding: f, Seed: p.Seed, Replays: h.replays, replaying: true, shrinking: h.candidates > 0})
+			if k := knownAs(h.known, f); k != nil {
+				found = append(found, Found{Finding: f, Seed: p.Seed, Known: k})
+			} else {
+				found = append(found, Found{Finding: f, Seed: p.Seed, Replays: h.replays, replaying: true, shrinking: h.candidates > 0})
+			}
 		}
 	}
 	for _, note := range report.EndedPlan {
@@ -265,7 +273,15 @@ func (h *hunter) investigate(ctx context.Context, p *plan.Plan, dir, name string
 		return nil, ended, nil
 	}
 	for j, f := range found {
-		h.logf("%s, finding %d: %s: %s", name, j+1, f.Finding.Check, f.Finding.Summary)
+		line := fmt.Sprintf("%s, finding %d: %s: %s", name, j+1, f.Finding.Check, f.Finding.Summary)
+		if f.Known != nil {
+			line += ", known, see " + f.Known.See
+		}
+		h.logf("%s", line)
+	}
+	if Unknown(found) == 0 {
+		h.progress(found)
+		return found, ended, nil
 	}
 	defer finish(found)
 	h.progress(found)
@@ -277,7 +293,7 @@ func (h *hunter) investigate(ctx context.Context, p *plan.Plan, dir, name string
 		}
 		var reproduced []int
 		for j := range found {
-			if err == nil && gives(replay, found[j].Finding) {
+			if found[j].Known == nil && err == nil && gives(replay, found[j].Finding) {
 				found[j].Reproduced++
 				reproduced = append(reproduced, j+1)
 			}
@@ -292,6 +308,7 @@ func (h *hunter) investigate(ctx context.Context, p *plan.Plan, dir, name string
 		f := &found[j]
 		f.replaying = false
 		switch {
+		case f.Known != nil:
 		case h.candidates == 0:
 			h.logf("%s, finding %d: not shrunk, since the candidate limit is 0", name, j+1)
 		case h.replays > 0 && f.Reproduced == 0:
@@ -370,6 +387,27 @@ func finish(found []Found) {
 	}
 }
 
+// Unknown counts the findings that match no known entry.
+func Unknown(found []Found) int {
+	n := 0
+	for _, f := range found {
+		if f.Known == nil {
+			n++
+		}
+	}
+	return n
+}
+
+// knownAs returns the first known entry that f matches, or nil.
+func knownAs(known []config.Known, f check.Finding) *config.Known {
+	for i, k := range known {
+		if k.Check == f.Check && k.Summary == f.Summary && (k.Details == nil || slices.ContainsFunc(f.Details, k.Details.MatchString)) {
+			return &known[i]
+		}
+	}
+	return nil
+}
+
 func gives(r check.Report, f check.Finding) bool {
 	return slices.ContainsFunc(r.Findings, func(g check.Finding) bool { return g.Signature() == f.Signature() })
 }
@@ -399,7 +437,11 @@ func Summary(over string, found []Found, failed, endedPlan []string) string {
 	if len(found) == 0 {
 		fmt.Fprintf(&b, "No findings over %s.\n", over)
 	} else {
-		fmt.Fprintf(&b, "%d distinct findings over %s.\n\n", len(found), over)
+		known := ""
+		if n := len(found) - Unknown(found); n > 0 {
+			known = fmt.Sprintf(", %d known,", n)
+		}
+		fmt.Fprintf(&b, "%d distinct findings%s over %s.\n\n", len(found), known, over)
 		b.WriteString("| Seed | Check | Finding | Reproduced | Shrunk plan |\n| --- | --- | --- | --- | --- |\n")
 		for _, f := range found {
 			reproduced := fmt.Sprintf("%d/%d", f.Reproduced, f.Replays)
@@ -412,6 +454,9 @@ func Summary(over string, found []Found, failed, endedPlan []string) string {
 			}
 			if f.CutShort {
 				shrunk += " (cut short)"
+			}
+			if f.Known != nil {
+				reproduced, shrunk = "known", "see "+f.Known.See
 			}
 			// A plan's seed 0 means it has none, as in plan.json.
 			seed := "-"

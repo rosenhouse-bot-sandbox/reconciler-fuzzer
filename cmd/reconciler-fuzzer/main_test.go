@@ -554,3 +554,22 @@ func TestJudgeReadsTheSpecFromTheTraceUnlessGivenAConfig(t *testing.T) {
 		t.Errorf("cli = %d, stdout %q, stderr %q; want 0 under the config's ready", code, stdout, stderr)
 	}
 }
+
+func TestHuntExitsZeroWhenEachFindingIsKnown(t *testing.T) {
+	runPlan = func(_ context.Context, o run.Options) (check.Report, error) {
+		return check.Report{Findings: []check.Finding{{Check: "Clean", Summary: "a ConfigMap stays"}}}, os.MkdirAll(o.Out, 0o755)
+	}
+	t.Cleanup(func() { runPlan = run.Run })
+	data, err := os.ReadFile(toyConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := filepath.Join(filepath.Dir(toyConfig), "known-cli-test.yaml")
+	t.Cleanup(func() { os.Remove(cfg) })
+	if err := os.WriteFile(cfg, append(data, "\nknown: [{check: Clean, summary: a ConfigMap stays, see: '#1'}]\n"...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code, stdout, stderr := cliOutput("hunt", "--config", cfg, "--seeds", "2", "--out", t.TempDir()); code != 0 || !strings.Contains(stdout, "| known | see #1 |") {
+		t.Errorf("cli = %d, stdout %q, stderr %q; want 0 and the known row", code, stdout, stderr)
+	}
+}
