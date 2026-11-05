@@ -12,8 +12,8 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 )
 
-// notRestored reports whether ref names a kind whose damaged objects the
-// controller does not restore.
+// notRestored reports whether Restore lets ref's kind stay gone under a
+// damaged root.
 func (s Spec) notRestored(ref trace.Ref) bool {
 	return slices.ContainsFunc(s.NotRestored, func(k trace.Kind) bool { return ref.OfKind(k) })
 }

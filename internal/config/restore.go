@@ -7,8 +7,8 @@ import (
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 )
 
-// notRestored loads the kinds whose damaged objects the controller does not
-// restore, such as a one-shot record. Restore does not require them back.
+// notRestored loads the kinds Restore lets stay gone under a damaged root,
+// such as a record of a finished operation.
 func (c *Config) notRestored(declared []string) ([]trace.Kind, error) {
 	var kinds []trace.Kind
 	for i, d := range declared {

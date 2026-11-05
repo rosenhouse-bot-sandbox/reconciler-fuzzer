@@ -41,8 +41,8 @@ type Spec struct {
 	Properties []PropertySpec
 	// References come from the config, or else the Run event.
 	References []Reference
-	// NotRestored are the kinds whose damaged objects Restore does not
-	// require back, from the config or else the Run event.
+	// NotRestored are the kinds Restore lets stay gone under a damaged
+	// root, from the config or else the Run event.
 	NotRestored []trace.Kind
 }
 

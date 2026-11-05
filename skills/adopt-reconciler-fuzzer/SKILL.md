@@ -372,6 +372,7 @@ controller's output. Fix the config or the sample.
 | Clean or Teardown | The controller keeps resources by design. | Set the entry's `retain`. |
 | Unique | The CR owns several resources of one kind and role by design, such as several with one `generateName`, or several in one collection of a fake. | Set the system's `role`. |
 | Restore, `did not restore damaged resources` | The controller recreates a damaged resource under a new name by design. | Set the system's `role` to CEL that gives both names one role. |
+| Restore, `did not restore damaged resources` | The controller never recreates the kind by design, as with a record of a finished operation. | Add the kind to `notRestored`. |
 | Converge or Restore, with a CR that halted after a create of unknown outcome | The controller stops on purpose and waits for a person. | Set the entry's `halted` to CEL over its halted condition. |
 | Converge after an upgrade, with a note that `launch.rbac` forbids a request | `launch.rbac` lacks a rule the new version needs. | Add the rule to `launch.rbac`. |
 | Restore after an upgrade, on a resource the new version adds, deletes, renames or gives another owner, or on a field the new CRDs default | Nothing: `<module>/README.md` lists this limit under Upgrading. | Ask the user whether the change is intended. If so, report the finding as that limit, not as a bug. |

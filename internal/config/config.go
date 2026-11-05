@@ -49,8 +49,7 @@ type Config struct {
 	Timeouts   Timeouts
 	Properties []Property
 	References []Reference
-	// NotRestored are the kinds whose damaged objects Restore does not
-	// require back.
+	// NotRestored are the kinds Restore lets stay gone under a damaged root.
 	NotRestored []trace.Kind
 
 	kinds servedKinds
