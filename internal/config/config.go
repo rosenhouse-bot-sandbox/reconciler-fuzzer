@@ -49,6 +49,7 @@ type Config struct {
 	Timeouts   Timeouts
 	Properties []Property
 	References []Reference
+	Known      []Known
 
 	kinds servedKinds
 }
@@ -345,6 +346,12 @@ type declaration struct {
 		Expr string `json:"expr"`
 		When string `json:"when"`
 	} `json:"properties"`
+	Known []struct {
+		Check   string `json:"check"`
+		Summary string `json:"summary"`
+		Details string `json:"details"`
+		See     string `json:"see"`
+	} `json:"known"`
 }
 
 // declaredPrimary is the primary key, which takes no values: they sit at
@@ -538,6 +545,9 @@ func load(path string) (*Config, error) {
 		c.Deletable = append(c.Deletable, path)
 	}
 	if c.Properties, err = properties(d); err != nil {
+		return nil, err
+	}
+	if c.Known, err = known(d); err != nil {
 		return nil, err
 	}
 	if err := c.checkLaunchVars(); err != nil {

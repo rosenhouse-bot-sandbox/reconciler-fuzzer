@@ -7,7 +7,8 @@
 //
 // Each command exits 1 with findings and 2 on a usage or harness error. A
 // hunt or shrink with findings exits 1 even when a seed failed or an
-// interrupt cut it short.
+// interrupt cut it short. A hunt counts only the findings its config's
+// known entries do not match.
 package main
 
 import (
@@ -54,7 +55,9 @@ var purposes = map[string]string{
 	"judge": "Judge judges a stored trace and prints its report.",
 	"hunt": `Hunt runs the plans of n seeds from s on and prints summary.md. It replays the
 plan of a seed with new findings r times. For each finding, it then tries up to
-c smaller plans, called shrink candidates, and runs each at most 4 times.`,
+c smaller plans, called shrink candidates, and runs each at most 4 times. It
+lists a finding that the config's known entries match, but neither replays nor
+shrinks it. It exits 0 when every finding is known and no seed failed.`,
 	"shrink": `Shrink runs a plan and prints summary.md. It replays a plan with findings r
 times. For each finding, it then tries up to c smaller plans, called shrink
 candidates, and runs each at most 4 times.`,
@@ -181,14 +184,15 @@ func cli(args []string, stdout, stderr io.Writer) int {
 			found, err := hunt.Hunt(ctx, o)
 			printSummary(stdout, *out)
 			// A find outranks a failed seed or a cut-short hunt.
-			if err != nil && len(found) > 0 {
+			unknown := hunt.Unknown(found)
+			if err != nil && unknown > 0 {
 				fmt.Fprintln(stderr, err)
-				return len(found), nil
+				return unknown, nil
 			}
 			if err != nil {
 				return 0, harnessError{err}
 			}
-			return len(found), nil
+			return unknown, nil
 		}
 	case "shrink":
 		command = func() (int, error) {

@@ -589,6 +589,27 @@ A controller that refreshes on a timer writes its CR each period. In the CR's en
 `periodic: {every: 2s, paths: [status.refreshTime]}` lets those writes pass the settle
 condition. `[*]` names a field of every list item, as in `status.conditions[*].lastTransitionTime`.
 
+### Known findings
+
+A `known` entry names a finding the target is known to give, such as an
+upstream bug. `hunt` lists the finding as `known` with the entry's `see`, does
+not replay or shrink it, and does not count it in its exit code:
+
+```yaml
+known:
+  - check: Property
+    summary: property fresh-key does not hold
+    see: docs/findings/cert-manager-secret-write-back.md
+  - check: Converge
+    summary: did not settle (clause 1)
+    details: 'could not update secret: [^,]*EOF","reason":"SecretSyncedError"'   # each detail line must match
+    see: docs/findings/external-secrets-onchange-stale-failure.md
+```
+
+A finding matches an entry when its check and summary are equal and, if
+`details` is set, the regexp matches each of its detail lines. A failed seed or
+an interrupt still makes `hunt` exit 2 when every find is known. `run` and `shrink` ignore `known`.
+
 ### Holding watch events
 
 A `holdWatch` fault pauses the controller's watch events of one kind for the fault period, and
@@ -757,6 +778,7 @@ reconciler-fuzzer shrink --config targets/toy-widget/config.yaml \
 
 Every command exits 0 with no findings, 1 with findings, and 2 on a usage or harness error.
 `hunt` and `shrink` exit 1 on any find, even after a failed seed or an interrupt.
+`hunt` exits 0 when every find is [known](#known-findings) and no seed failed.
 A minimal GitHub Actions job:
 
 ```yaml
