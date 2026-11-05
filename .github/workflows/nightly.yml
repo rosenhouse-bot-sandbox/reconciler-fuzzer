@@ -106,16 +106,7 @@ jobs:
             TITLE="Nightly: the $EXAMPLE hunt hit an error"
             DESC="An error from the nightly $EXAMPLE hunt"
           fi
-          body=$(cat <<EOF
-          🤖 Created by Claude 🤖
-
-          \`make hunt-$EXAMPLE\` exited $STATUS on $(date -u +%Y-%m-%d).
-
-          - Run: $RUN_URL
-          - Fetch its output: \`gh run download $GITHUB_RUN_ID --name reconciler-fuzzer-out-$EXAMPLE --dir reconciler-fuzzer-out\`
-          - Replay a failing seed: run \`make build $EXAMPLE\` and \`export KUBEBUILDER_ASSETS=\$(make -s assets-path)\`, then \`./bin/reconciler-fuzzer run --config examples/$EXAMPLE/config.yaml --plan reconciler-fuzzer-out/hunt-$EXAMPLE/seed-<n>/plan.json --out replay\`. summary.md names the failing seeds and each shrunk plan, which replays the same way.
-          EOF
-          )
+          body=$(.github/nightly-issue-body.sh "$EXAMPLE" "$STATUS" "$GITHUB_RUN_ID" "$RUN_URL" "reconciler-fuzzer-out/hunt-$EXAMPLE/summary.md")
           gh label create "$LABEL" --description "$DESC" --color B60205 --force
           open=$(gh issue list --state open --label "$LABEL" --json number --jq '.[0].number // empty')
           if [ -n "$open" ]; then

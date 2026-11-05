@@ -2,6 +2,7 @@ package reconcilerfuzzer_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -181,4 +182,55 @@ func generatedSelectionProblems(makefile string, tests map[string]string) []stri
 		}
 	}
 	return problems
+}
+
+func nightlyIssueBody(t *testing.T, summary string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "summary.md")
+	if summary != "" {
+		if err := os.WriteFile(path, []byte(summary), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	body, err := exec.Command(".github/nightly-issue-body.sh", "ack-s3", "1", "42", "https://example.com/runs/42", path).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
+}
+
+func TestTheNightlyIssueShowsTheHuntsSummary(t *testing.T) {
+	const summary = "1 distinct findings over 20 seeds.\n\n| Seed | Check |\n"
+	body := nightlyIssueBody(t, summary)
+	for _, want := range []string{"`make hunt-ack-s3` exited 1 on ", "gh run download 42 --name reconciler-fuzzer-out-ack-s3", "## summary.md\n\n" + summary} {
+		if !strings.Contains(body, want) {
+			t.Errorf("The body lacks %q:\n%s", want, body)
+		}
+	}
+	if !strings.HasPrefix(body, "🤖 Created by Claude 🤖") {
+		t.Errorf("The body does not start with the attribution line:\n%s", body)
+	}
+}
+
+func TestTheNightlyIssueSaysWhenTheHuntWroteNoSummary(t *testing.T) {
+	if body := nightlyIssueBody(t, ""); !strings.Contains(body, "The hunt wrote no summary.md.") || strings.Contains(body, "## summary.md") {
+		t.Errorf("The body is:\n%s", body)
+	}
+}
+
+func TestTheNightlyIssueCutsALongSummary(t *testing.T) {
+	body := nightlyIssueBody(t, strings.Repeat("x", 70000))
+	if len(body) > 65536 || !strings.Contains(body, "summary.md is cut at 60000 bytes.") {
+		t.Errorf("The body has %d bytes and ends %q.", len(body), body[max(0, len(body)-200):])
+	}
+}
+
+func TestTheNightlyWorkflowWritesItsIssueWithTheScript(t *testing.T) {
+	workflow, err := os.ReadFile(".github/workflows/nightly.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(workflow), "body=$(.github/nightly-issue-body.sh ") {
+		t.Error("nightly.yml does not write its issue body with .github/nightly-issue-body.sh.")
+	}
 }
