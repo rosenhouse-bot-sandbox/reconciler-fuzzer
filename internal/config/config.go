@@ -51,6 +51,7 @@ type Config struct {
 	References []Reference
 	// NotRestored are the kinds Restore lets stay gone under a damaged root.
 	NotRestored []trace.Kind
+	Known       []Known
 
 	kinds servedKinds
 }
@@ -348,6 +349,12 @@ type declaration struct {
 		When string `json:"when"`
 	} `json:"properties"`
 	NotRestored []string `json:"notRestored"`
+	Known       []struct {
+		Check   string `json:"check"`
+		Summary string `json:"summary"`
+		Details string `json:"details"`
+		See     string `json:"see"`
+	} `json:"known"`
 }
 
 // declaredPrimary is the primary key, which takes no values: they sit at
@@ -544,6 +551,9 @@ func load(path string) (*Config, error) {
 		c.Deletable = append(c.Deletable, path)
 	}
 	if c.Properties, err = properties(d); err != nil {
+		return nil, err
+	}
+	if c.Known, err = known(d); err != nil {
 		return nil, err
 	}
 	if err := c.checkLaunchVars(); err != nil {

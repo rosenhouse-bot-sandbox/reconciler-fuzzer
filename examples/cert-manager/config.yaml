@@ -50,3 +50,7 @@ properties:
     expr: >-
       crs.all(c, world.kube.secrets.all(s, s.metadata.name != c.spec.secretName
         || !has(s.data) || firstWrittenUnder(s, ["data", "tls.key"]) == c.metadata.uid))
+known:
+  - check: Property
+    summary: property fresh-key does not hold
+    see: docs/findings/cert-manager-secret-write-back.md
