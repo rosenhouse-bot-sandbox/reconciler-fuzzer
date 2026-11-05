@@ -251,9 +251,15 @@ func (h *hunter) investigate(ctx context.Context, p *plan.Plan, dir, name string
 	}
 	var found []Found
 	for _, f := range report.Findings {
-		if !h.seen[f.Signature()] {
-			h.seen[f.Signature()] = true
-			if k := knownAs(h.known, f); k != nil {
+		// A known finding does not hide an unknown one of its signature.
+		k := knownAs(h.known, f)
+		seen := f.Signature()
+		if k != nil {
+			seen += "|known " + k.See
+		}
+		if !h.seen[seen] {
+			h.seen[seen] = true
+			if k != nil {
 				found = append(found, Found{Finding: f, Seed: p.Seed, Known: k})
 			} else {
 				found = append(found, Found{Finding: f, Seed: p.Seed, Replays: h.replays, replaying: true, shrinking: h.candidates > 0})
@@ -401,7 +407,7 @@ func Unknown(found []Found) int {
 // knownAs returns the first known entry that f matches, or nil.
 func knownAs(known []config.Known, f check.Finding) *config.Known {
 	for i, k := range known {
-		if k.Check == f.Check && k.Summary == f.Summary && (k.Details == nil || slices.ContainsFunc(f.Details, k.Details.MatchString)) {
+		if k.Check == f.Check && k.Summary == f.Summary && (k.Details == nil || len(f.Details) > 0 && !slices.ContainsFunc(f.Details, func(line string) bool { return !k.Details.MatchString(line) })) {
 			return &known[i]
 		}
 	}

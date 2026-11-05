@@ -555,21 +555,45 @@ func TestJudgeReadsTheSpecFromTheTraceUnlessGivenAConfig(t *testing.T) {
 	}
 }
 
+// knownConfig is toyConfig with known appended to it.
+func knownConfig(t *testing.T, known string) string {
+	t.Helper()
+	data, err := os.ReadFile(toyConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.CreateTemp(filepath.Dir(toyConfig), "known-*.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(f.Name()) })
+	if _, err := f.Write(append(data, "\nknown: "+known+"\n"...)); err != nil {
+		t.Fatal(err)
+	}
+	return f.Name()
+}
+
 func TestHuntExitsZeroWhenEachFindingIsKnown(t *testing.T) {
 	runPlan = func(_ context.Context, o run.Options) (check.Report, error) {
 		return check.Report{Findings: []check.Finding{{Check: "Clean", Summary: "a ConfigMap stays"}}}, os.MkdirAll(o.Out, 0o755)
 	}
 	t.Cleanup(func() { runPlan = run.Run })
-	data, err := os.ReadFile(toyConfig)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg := filepath.Join(filepath.Dir(toyConfig), "known-cli-test.yaml")
-	t.Cleanup(func() { os.Remove(cfg) })
-	if err := os.WriteFile(cfg, append(data, "\nknown: [{check: Clean, summary: a ConfigMap stays, see: '#1'}]\n"...), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	cfg := knownConfig(t, "[{check: Clean, summary: a ConfigMap stays, see: '#1'}]")
 	if code, stdout, stderr := cliOutput("hunt", "--config", cfg, "--seeds", "2", "--out", t.TempDir()); code != 0 || !strings.Contains(stdout, "| known | see #1 |") {
 		t.Errorf("cli = %d, stdout %q, stderr %q; want 0 and the known row", code, stdout, stderr)
+	}
+}
+
+func TestHuntWithOnlyKnownFindingsAndAFailedSeedExitsTwo(t *testing.T) {
+	runPlan = func(_ context.Context, o run.Options) (check.Report, error) {
+		if o.Plan.Seed == 2 {
+			return check.Report{}, errors.New("boom")
+		}
+		return check.Report{Findings: []check.Finding{{Check: "Clean", Summary: "a ConfigMap stays"}}}, os.MkdirAll(o.Out, 0o755)
+	}
+	t.Cleanup(func() { runPlan = run.Run })
+	cfg := knownConfig(t, "[{check: Clean, summary: a ConfigMap stays, see: '#1'}]")
+	if code, _, stderr := cliOutput("hunt", "--config", cfg, "--seeds", "2", "--out", t.TempDir()); code != 2 {
+		t.Errorf("cli = %d, stderr %q; want 2", code, stderr)
 	}
 }

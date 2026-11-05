@@ -57,7 +57,7 @@ var purposes = map[string]string{
 plan of a seed with new findings r times. For each finding, it then tries up to
 c smaller plans, called shrink candidates, and runs each at most 4 times. It
 lists a finding that the config's known entries match, but neither replays nor
-shrinks it, and exits 0 when every finding is known.`,
+shrinks it. It exits 0 when every finding is known and no seed failed.`,
 	"shrink": `Shrink runs a plan and prints summary.md. It replays a plan with findings r
 times. For each finding, it then tries up to c smaller plans, called shrink
 candidates, and runs each at most 4 times.`,

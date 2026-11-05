@@ -47,5 +47,5 @@ systems:
 known:
   - check: Converge
     summary: did not settle (clause 1)
-    details: '"reason":"SecretSyncedError"'
+    details: 'could not update secret: [^,]*EOF","reason":"SecretSyncedError"'
     see: docs/findings/external-secrets-onchange-stale-failure.md

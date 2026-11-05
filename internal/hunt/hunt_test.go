@@ -1127,6 +1127,10 @@ func TestHuntListsAKnownFindingWithoutReplayingOrShrinkingIt(t *testing.T) {
 	if found[0].Reproduced != 0 || found[0].ShrunkPath != "" {
 		t.Errorf("Hunt replayed or shrank the known finding: %+v", found[0])
 	}
+	log := fake.log.String()
+	if !strings.Contains(log, "seed 1, finding 1: Clean: a ConfigMap outlives its Widget, known, see #63\n") || strings.Contains(log, "finding 1: not shrunk") {
+		t.Errorf("log:\n%s", log)
+	}
 	summary, err := os.ReadFile(filepath.Join(fake.out, "summary.md"))
 	if err != nil {
 		t.Fatal(err)
@@ -1138,16 +1142,55 @@ func TestHuntListsAKnownFindingWithoutReplayingOrShrinkingIt(t *testing.T) {
 	}
 }
 
-func TestHuntKnowsAFindingByADetailLine(t *testing.T) {
-	detailed := unique
-	detailed.Details = []string{"first", "index 3"}
-	fake := &fakeRun{out: t.TempDir(), finds: always(detailed)}
+func TestHuntKnowsAFindingWhenEachDetailLineMatches(t *testing.T) {
 	cfg := knownConfig(t, "- {check: Unique, summary: two ConfigMaps hold one index, details: 'index [0-9]', see: x}\n")
-	found, err := Hunt(context.Background(), Options{ConfigPath: cfg, Seeds: slices.Values([]uint64{1}), Out: fake.out, Run: fake.run, Replays: 1, Candidates: 1})
+	for details, want := range map[string]bool{"index 3": true, "index 3|index 4": true, "index 3|other": false, "": false} {
+		detailed := unique
+		if details != "" {
+			detailed.Details = strings.Split(details, "|")
+		}
+		fake := &fakeRun{out: t.TempDir(), finds: always(detailed)}
+		found, err := Hunt(context.Background(), Options{ConfigPath: cfg, Seeds: slices.Values([]uint64{1}), Out: fake.out, Run: fake.run, Replays: 1, Candidates: 0})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if known := Unknown(found) == 0; known != want {
+			t.Errorf("details %q: known %v, want %v.", details, known, want)
+		}
+		if want && !slices.Equal(fake.dirs, []string{"seed-1"}) {
+			t.Errorf("details %q: Hunt ran %v, want only seed-1.", details, fake.dirs)
+		}
+	}
+}
+
+func TestAKnownEntryNeedsTheFindingsCheckAndSummary(t *testing.T) {
+	for _, entry := range []string{"{check: Unique, summary: a ConfigMap outlives its Widget, see: x}", "{check: Clean, summary: other, see: x}"} {
+		fake := &fakeRun{out: t.TempDir(), finds: always(clean)}
+		found, err := Hunt(context.Background(), Options{ConfigPath: knownConfig(t, "- "+entry+"\n"), Seeds: slices.Values([]uint64{1}), Out: fake.out, Run: fake.run, Replays: 1, Candidates: 0})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if Unknown(found) != 1 {
+			t.Errorf("%s matched %+v.", entry, found)
+		}
+	}
+}
+
+func TestAKnownFindingDoesNotHideAnUnknownOneOfItsSignature(t *testing.T) {
+	fake := &fakeRun{out: t.TempDir(), finds: func(dir string, _ *plan.Plan) []check.Finding {
+		f := unique
+		f.Details = []string{"index 3"}
+		if strings.HasPrefix(dir, "seed-2") {
+			f.Details = []string{"something else"}
+		}
+		return []check.Finding{f}
+	}}
+	cfg := knownConfig(t, "- {check: Unique, summary: two ConfigMaps hold one index, details: 'index [0-9]', see: x}\n")
+	found, err := Hunt(context.Background(), Options{ConfigPath: cfg, Seeds: slices.Values([]uint64{1, 2, 3}), Out: fake.out, Run: fake.run, Replays: 1, Candidates: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(found) != 1 || found[0].Known == nil || Unknown(found) != 0 {
-		t.Errorf("Hunt found %+v, want one known finding.", found)
+	if len(found) != 2 || found[0].Known == nil || found[1].Known != nil || found[1].Seed != 2 {
+		t.Errorf("Hunt found %+v, want seed 1's known finding and seed 2's unknown one.", found)
 	}
 }

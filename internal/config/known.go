@@ -7,7 +7,7 @@ import (
 
 // Known is a finding the target is known to give, such as an upstream bug.
 // A finding is known when its check and summary are equal and, if Details is
-// set, one of its detail lines matches.
+// set, it has detail lines and each one matches.
 type Known struct {
 	Check, Summary string
 	Details        *regexp.Regexp
