@@ -155,6 +155,8 @@ type gadget struct {
 	// ready, when set, is the Ready condition's status, reason and
 	// observedGeneration.
 	ready *condition
+	// dropped drops the condition's observedGeneration.
+	dropped bool
 }
 
 type condition struct {
@@ -172,9 +174,11 @@ func (g gadget) version() trace.Version {
 	}
 	body := map[string]any{"apiVersion": "toy.reconciler-fuzzer/v1", "kind": "Gadget", "metadata": metadata}
 	if g.ready != nil {
-		body["status"] = map[string]any{"conditions": []any{map[string]any{
-			"type": "Ready", "status": g.ready.status, "reason": g.ready.reason, "observedGeneration": g.ready.generation,
-		}}}
+		c := map[string]any{"type": "Ready", "status": g.ready.status, "reason": g.ready.reason, "observedGeneration": g.ready.generation}
+		if g.dropped {
+			delete(c, "observedGeneration")
+		}
+		body["status"] = map[string]any{"conditions": []any{c}}
 	}
 	raw, _ := json.Marshal(body)
 	return trace.Version{Ref: g.ref(), UID: g.uid, RV: g.rv, Body: raw}
@@ -252,6 +256,35 @@ func TestStageWritesEachNewGenerationAfterTheDelay(t *testing.T) {
 	if time.Since(heard) < after || readyCondition(t, second)["observedGeneration"] != 2.0 || precondition(second) != "200" {
 		t.Errorf("Wrote %+v after %v, want generation 2 after %v.", second, time.Since(heard), after)
 	}
+}
+
+func TestStageWritesReadyOnceWhenTheAPIServerDropsObservedGeneration(t *testing.T) {
+	s, w, _ := testStage(t)
+	s.hear(gadget{name: "job", uid: "u", rv: "1", generation: 1}.version())
+	first := w.await(t, 1)[0]
+	s.hear(gadget{name: "job", uid: "u", rv: first.rv, generation: 1, ready: readyFor(1), dropped: true}.version())
+	w.still(t, 1, 2*after)
+}
+
+func TestStageMarksAJobNotReadyAtOnceOnANewGenerationWhenTheAPIServerDropsObservedGeneration(t *testing.T) {
+	s, w, _ := testStage(t)
+	s.hear(gadget{name: "job", uid: "u", rv: "1", generation: 1}.version())
+	first := w.await(t, 1)[0]
+	s.hear(gadget{name: "job", uid: "u", rv: first.rv, generation: 1, ready: readyFor(1), dropped: true}.version())
+
+	heard := time.Now()
+	s.hear(gadget{name: "job", uid: "u", rv: "200", generation: 2, ready: readyFor(1), dropped: true}.version())
+	progressing := w.await(t, 2)[1]
+	if c := readyCondition(t, progressing); c["status"] != "False" || time.Since(heard) >= after {
+		t.Errorf("Wrote %v after %v, want Ready False at once.", c, time.Since(heard))
+	}
+	s.hear(gadget{name: "job", uid: "u", rv: progressing.rv, generation: 2, ready: &condition{"False", "Progressing", 2}, dropped: true}.version())
+	ready := w.await(t, 3)[2]
+	if c := readyCondition(t, ready); c["status"] != "True" || time.Since(heard) < after {
+		t.Errorf("Wrote %v after %v, want Ready True after %v.", c, time.Since(heard), after)
+	}
+	s.hear(gadget{name: "job", uid: "u", rv: ready.rv, generation: 2, ready: readyFor(2), dropped: true}.version())
+	w.still(t, 3, 2*after)
 }
 
 func TestStageSkipsReadyAndDeletingObjects(t *testing.T) {
@@ -379,6 +412,17 @@ func TestStuckKeepsMatchingObjectsNotReadyUntilItEnds(t *testing.T) {
 	if c := readyCondition(t, writes[2]); writes[2].ref.Name != "g1" || c["status"] != "True" || c["message"] != "fault 1 ended" || c["observedGeneration"] != 2.0 {
 		t.Errorf("end wrote %+v, want g1 Ready True with message 'fault 1 ended'.", writes[2])
 	}
+}
+
+func TestStuckWritesOnceWhenTheAPIServerDropsObservedGeneration(t *testing.T) {
+	s, w, _ := testStage(t)
+	s.hear(gadget{name: "g1", uid: "u1", rv: "1", generation: 1, ready: readyFor(1), dropped: true}.version())
+	if _, err := s.Fault(stuck("g1")); err != nil {
+		t.Fatal(err)
+	}
+	writes := w.await(t, 1)
+	s.hear(gadget{name: "g1", uid: "u1", rv: writes[0].rv, generation: 1, ready: &condition{"False", "Stuck", 1}, dropped: true}.version())
+	w.still(t, 1, 2*after)
 }
 
 func TestStuckWritesEachObjectsOwnGeneration(t *testing.T) {

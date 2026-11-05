@@ -278,3 +278,68 @@ func TestAStageHoldsAGadgetsDeletionWithItsFinalizer(t *testing.T) {
 		t.Errorf("The gadget was gone %v after its delete, want %v to %v.", elapsed, hold, hold+time.Second)
 	}
 }
+
+func TestAStageMakesBuiltInKindsReadyWithOneWriteEach(t *testing.T) {
+	ctx := context.Background()
+	pod := schema.GroupVersionKind{Version: "v1", Kind: "Pod"}
+	pvc := schema.GroupVersionKind{Version: "v1", Kind: "PersistentVolumeClaim"}
+	job := schema.GroupVersionKind{Group: "batch", Version: "v1", Kind: "Job"}
+	recorded := &events{}
+	k := kube.New(kube.Options{Watch: []schema.GroupVersionKind{pod, pvc, job}})
+	if _, err := k.Start(ctx, &system.Env{Record: recorded.record, Dir: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { k.Stop(ctx) })
+	ready, err := config.CompileReady(config.ReadyConditionCEL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	podSpec := map[string]any{"restartPolicy": "Never", "containers": []any{map[string]any{"name": "c", "image": "busybox"}}}
+	for _, c := range []struct {
+		kind   schema.GroupVersionKind
+		status map[string]any
+		spec   map[string]any
+	}{
+		{pod, map[string]any{"phase": "Running"}, podSpec},
+		{pvc, map[string]any{"phase": "Bound"}, map[string]any{
+			"accessModes": []any{"ReadWriteOnce"}, "resources": map[string]any{"requests": map[string]any{"storage": "1Gi"}}}},
+		{job, map[string]any{"succeeded": int64(1)}, map[string]any{"template": map[string]any{"spec": podSpec}}},
+	} {
+		t.Run(c.kind.Kind, func(t *testing.T) {
+			s, err := NewStage(k, config.Model{Kind: c.kind, Stage: config.ReadyCondition, After: 100 * time.Millisecond, Status: c.status})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.Start(ctx, &system.Env{Record: recorded.record}); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { s.Stop(ctx) })
+			ref, err := k.Create(ctx, map[string]any{"apiVersion": c.kind.GroupVersion().String(), "kind": c.kind.Kind,
+				"metadata": map[string]any{"name": "x"}, "spec": c.spec})
+			if err != nil {
+				t.Fatal(err)
+			}
+			isReady := func() bool {
+				var obj map[string]any
+				if err := json.Unmarshal(lastVersion(recorded, ref).Body, &obj); err != nil {
+					return false
+				}
+				got, err := ready(obj)
+				return err == nil && got
+			}
+			deadline := time.Now().Add(10 * time.Second)
+			for !isReady() {
+				if time.Now().After(deadline) {
+					t.Fatalf("The %s never became ready.", c.kind.Kind)
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			time.Sleep(time.Second)
+			if writes := recorded.count(func(e trace.Event) bool {
+				return e.Call != nil && e.Call.Caller == s.caller() && e.Call.Subresource == "status" && e.Call.Status == 200
+			}); writes != 1 {
+				t.Errorf("The stage wrote the %s's status %d times, want once.", c.kind.Kind, writes)
+			}
+		})
+	}
+}

@@ -54,6 +54,16 @@ func TestHonestPassesACRReadyAfterSeeingItsDependencyReady(t *testing.T) {
 	requireNone(t, honest(t, r))
 }
 
+func TestHonestPassesACRReadyAfterSeeingAPVCLikeDependencyReady(t *testing.T) {
+	r := gadgetRun(trace.Dependency{Required: true})
+	r.Update(gadgetModel, gadgetA, tt.OwnedBy(map[string]any{
+		"metadata": map[string]any{"name": "a"},
+		"status":   map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "True"}}},
+	}, r.UID(widgetA), true))
+	r.See(ctl, gadgetA).Ready(widgetA)
+	requireNone(t, honest(t, r))
+}
+
 func TestHonestFailsACRReadyBeforeSeeingItsDependencyReady(t *testing.T) {
 	for name, see := range map[string]func(r *tt.Script){
 		"not seen": func(r *tt.Script) {},
