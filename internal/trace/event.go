@@ -100,6 +100,8 @@ type Run struct {
 	References []Reference `json:"references,omitempty"`
 	// NotRestored are the kinds Restore lets stay gone under a damaged root.
 	NotRestored []Kind `json:"notRestored,omitempty"`
+	// AllowExitBeforeWatch is the config's launch.allowExitBeforeWatch.
+	AllowExitBeforeWatch bool `json:"allowExitBeforeWatch,omitempty"`
 }
 
 // Reference is one config reference as the checks need it. A fake's To

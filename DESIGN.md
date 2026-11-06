@@ -323,7 +323,7 @@ settle (clause 7)`. `backoff-bound` labels a finding whose deadline
 whose record ends too early, a CR still being deleted at the trace's last event
 that a `stop` did not wait for, and a kind whose `ready` no CR version met.
 
-**Crash.** A controller exit the harness did not cause fails its step.
+**Crash.** A controller exit the harness did not cause fails its step, unless `launch.allowExitBeforeWatch` is set and its process opened no watch of a listed kind.
 
 **Clean.** At the end of a settled step with a `delete` action, or of the plan's
 last step after a `stop`, a controller resource fails when its rule 1 to 3 CR is

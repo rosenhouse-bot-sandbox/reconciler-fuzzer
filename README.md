@@ -142,6 +142,10 @@ timeouts: {settle: 30s, stable: 3s}
 - `launch.gracePeriod`, 5s by default, is how long a stop of the controller waits after
   SIGTERM before it sends SIGKILL. The report notes each time the controller outlived the
   grace period. After an interrupt, such as Ctrl-C, a stop sends SIGKILL at once.
+- The harness restarts a controller that exits on its own, with backoff, as a pod's restart
+  would. `launch.allowExitBeforeWatch: true` lets a process exit before it opens a watch of a
+  listed kind, as a controller does when a check at its start fails. Crash then skips that exit.
+  An exit after such a watch still fails.
 - `values` steers generated CRs: `overlay` narrows the CRD schema, `distinct` fields differ
   across a plan's CRs, `mutate` names the fields updates change, and `fixtures` names the
   fixture strings `changeFixture` sets.

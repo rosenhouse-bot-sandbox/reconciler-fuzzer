@@ -383,6 +383,7 @@ func TestRunSeesAReferencedFixtureAndCreatesItAgain(t *testing.T) {
   binary: /bin/sh
   args: [-c, 'while true; do curl -sf -H "Accept: application/vnd.kubernetes.protobuf" "${systems.kube.url}/api/v1/namespaces/${systems.kube.namespace}/secrets" >/dev/null; sleep 0.2; done']
   rbac: [role.yaml]
+  allowExitBeforeWatch: true
 crds: [%[1]s/crds/]
 fixtures: [secret.yaml]
 primary: {kind: toy.reconciler-fuzzer/v1/Widget, sample: %[1]s/widget.yaml, ready: "true"}
@@ -423,6 +424,9 @@ notRestored: [v1/ConfigMap]
 	}
 	if want := []trace.Kind{{Version: "v1", Kind: "ConfigMap", Resource: "configmaps"}}; !slices.Equal(run.NotRestored, want) {
 		t.Errorf("the run event's notRestored is %+v, want %+v", run.NotRestored, want)
+	}
+	if !run.AllowExitBeforeWatch {
+		t.Error("the run event's allowExitBeforeWatch is false, want the config's true")
 	}
 	deleted, _ := findAction(events, 1, 0)
 	created, _ := findAction(events, 2, 0)
