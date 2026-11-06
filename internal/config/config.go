@@ -84,9 +84,9 @@ type Launch struct {
 	// Upgrades are the later versions that generated plans restart into, in
 	// order.
 	Upgrades []plan.Upgrade
-	// AllowExitBeforeWatch says Crash skips an exit of a process that never
-	// opened a watch of a listed kind, as when a controller exits on a failed
-	// startup check. The harness restarts it either way.
+	// AllowExitBeforeWatch says Crash skips an exit of a process that opened
+	// no watch of a listed kind when a later process opened one, as when a
+	// controller exits on a failed check at its start and then recovers.
 	AllowExitBeforeWatch bool
 }
 

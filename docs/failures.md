@@ -232,8 +232,8 @@ later start. So at or after a step whose actions name `restart (upgrade)`,
 those `args` may lack a flag that the controller needs, such as
 `--kubeconfig=${systems.kube.kubeconfig}`. The tail may then show an error
 without naming the flag. If those `args` lack such a flag, add it. If the
-controller exits on purpose when a check at its start fails, such as a call to
-a fault that the step injected into, set `launch.allowExitBeforeWatch`.
+controller exits on purpose when a check at its start fails, such as a call
+that a fault in the step answered, set `launch.allowExitBeforeWatch`.
 Otherwise the controller has a bug.
 
 ### Clean: left resources behind

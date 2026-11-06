@@ -277,40 +277,46 @@ func TestCrashAllowsAnExitWithinASecondOfALeaseFault(t *testing.T) {
 	}
 }
 
-func TestCrashAllowsAnExitBeforeTheProcessWatchesAListedKind(t *testing.T) {
-	watch := func(ref trace.Ref, status int) trace.Event {
+func TestCrashAllowsAnExitBeforeTheProcessWatchesAListedKindWhenALaterOneDoes(t *testing.T) {
+	watch := func(ref trace.Ref, status int) []trace.Event {
 		e := tt.Call(ctl, "watch", ref, status, "")
 		e.Call.Watch = true
-		return e
+		return []trace.Event{e}
 	}
 	widgets := trace.Ref{System: "kube", Group: "toy", Resource: "widgets"}
+	// Process 3 starts at 9s and exits at 10s. Process 4 starts at 10s.
 	for name, tc := range map[string]struct {
-		allowed bool
-		watch   *trace.Event
-		want    int
+		allowed       bool
+		before, after []trace.Event
+		want          string
 	}{
-		"not allowed":                   {false, nil, 1},
-		"no watch":                      {true, nil, 0},
-		"a failed watch":                {true, ptr(watch(widgets, 503)), 0},
-		"a watch of an unlisted kind":   {true, ptr(watch(trace.Ref{System: "kube", Resource: "configmaps"}, 200)), 0},
-		"a watch of the listed kind":    {true, ptr(watch(widgets, 200)), 1},
-		"a watch before the last start": {true, nil, 1},
+		"not allowed":                                  {false, nil, watch(widgets, 200), "the controller exited 1 time"},
+		"a later watch":                                {true, nil, watch(widgets, 200), ""},
+		"no later watch":                               {true, nil, nil, "the controller exited 1 time"},
+		"a later failed watch":                         {true, nil, watch(widgets, 503), "the controller exited 1 time"},
+		"a later dropped watch":                        {true, nil, watch(widgets, 0), "the controller exited 1 time"},
+		"a later watch of an unlisted kind":            {true, nil, watch(trace.Ref{System: "kube", Resource: "configmaps"}, 200), "the controller exited 1 time"},
+		"a watch before the exit":                      {true, watch(widgets, 200), watch(widgets, 200), "the controller exited 1 time"},
+		"a failed watch before the exit":               {true, watch(widgets, 503), watch(widgets, 200), ""},
+		"a watch before the exit, by an earlier start": {true, nil, watch(widgets, 200), ""},
 	} {
 		b := cleanRun()
-		if name == "a watch before the last start" {
-			// The first exit, after its process watched, counts. The second does not.
-			b.At(9 * s).Add(watch(widgets, 200)).At(9500 * ms).Add(tt.Exit("exit status 1", false, "")).Add(tt.Start(3))
+		if name == "a watch before the exit, by an earlier start" {
+			b.At(8 * s).Add(watch(widgets, 200)...)
 		}
-		b.At(10 * s)
-		if tc.watch != nil {
-			b.Add(*tc.watch)
-		}
-		b.At(10500 * ms).Add(tt.Exit("exit status 1", false, "")).Add(tt.Start(4))
+		b.At(9 * s).Add(tt.Exit("signal: terminated", true, "")).Add(tt.Start(3))
+		b.At(9500 * ms).Add(tc.before...)
+		b.At(10 * s).Add(tt.Exit("exit status 1", false, "")).Add(tt.Start(4))
+		b.At(11 * s).Add(tc.after...)
 		sp := spec
 		sp.AllowExitBeforeWatch = tc.allowed
 		got := check.Crash(b.Index(), sp)
-		if len(got) != tc.want {
-			t.Errorf("%s: findings = %+v, want %d", name, got, tc.want)
+		var summaries []string
+		for _, f := range got {
+			summaries = append(summaries, f.Summary)
+		}
+		if summary := strings.Join(summaries, "; "); summary != tc.want {
+			t.Errorf("%s: findings = %+v, want %q", name, got, tc.want)
 		}
 	}
 }
@@ -325,8 +331,6 @@ func TestSpecForATraceReadsAllowExitBeforeWatch(t *testing.T) {
 		t.Errorf("spec = %+v, %v; want allowExitBeforeWatch", got, err)
 	}
 }
-
-func ptr[T any](v T) *T { return &v }
 
 func TestCrashOutsideAnyStepIsStepMinusOne(t *testing.T) {
 	var b tt.Builder

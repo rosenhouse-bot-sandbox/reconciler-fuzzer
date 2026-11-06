@@ -144,8 +144,9 @@ timeouts: {settle: 30s, stable: 3s}
   grace period. After an interrupt, such as Ctrl-C, a stop sends SIGKILL at once.
 - The harness restarts a controller that exits on its own, with backoff, as a pod's restart
   would. `launch.allowExitBeforeWatch: true` lets a process exit before it opens a watch of a
-  listed kind, as a controller does when a check at its start fails. Crash then skips that exit.
-  An exit after such a watch still fails.
+  listed kind, as a controller does when a check at its start fails. Crash skips that exit
+  when a later process opens such a watch. An exit after such a watch, or a start that never
+  recovers, still fails.
 - `values` steers generated CRs: `overlay` narrows the CRD schema, `distinct` fields differ
   across a plan's CRs, `mutate` names the fields updates change, and `fixtures` names the
   fixture strings `changeFixture` sets.
@@ -769,7 +770,7 @@ Each finding's heading names its check:
 | Check | It fails when |
 | --- | --- |
 | Converge | A step does not settle by its deadline, or does not stay settled. |
-| Crash | The controller exits, and the harness did not cause the exit. |
+| Crash | The controller exits, and the harness did not cause the exit or allow it with `launch.allowExitBeforeWatch`. |
 | Clean | A resource that the controller made for a CR outlives the CR. |
 | Restore | After a step that changes no CR or fixture, the controller's resources differ from the previous step's end, as when a damaged one stays gone. |
 | Unique | At a settled step's end, two live controller resources share an owner, kind, namespace and role. |

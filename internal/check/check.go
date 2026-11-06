@@ -44,8 +44,9 @@ type Spec struct {
 	// NotRestored are the kinds Restore lets stay gone under a damaged
 	// root, from the config or else the Run event.
 	NotRestored []trace.Kind
-	// AllowExitBeforeWatch says Crash skips an exit of a process that never
-	// opened a watch of a listed kind, from the config or else the Run event.
+	// AllowExitBeforeWatch says Crash skips an exit of a process that opened
+	// no watch of a listed kind when a later process opened one, from the
+	// config or else the Run event.
 	AllowExitBeforeWatch bool
 }
 
