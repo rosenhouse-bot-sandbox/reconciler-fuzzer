@@ -242,7 +242,7 @@ func TestCrash(t *testing.T) {
 	b := cleanRun()
 	b.At(6 * s).Add(tt.Exit("exit status 2", false, "panic: boom")).Add(tt.Start(3)).
 		At(6100 * ms).Add(tt.Exit("exit status 3", false, "panic: again")).Add(tt.Start(4))
-	f := only(t, check.Crash(b.Index()))
+	f := only(t, check.Crash(b.Index(), spec))
 	if f.Check != "Crash" || f.Step != 1 || f.At != 6*s || f.Summary != "the controller exited 2 times" {
 		t.Fatalf("finding = %+v", f)
 	}
@@ -271,9 +271,64 @@ func TestCrashAllowsAnExitWithinASecondOfALeaseFault(t *testing.T) {
 	} {
 		b := cleanRun()
 		b.At(10 * s).Add(tc.call).At(10*s + tc.after).Add(tt.Exit("exit status 1", false, "")).Add(tt.Start(3))
-		if got := check.Crash(b.Index()); len(got) != tc.want {
+		if got := check.Crash(b.Index(), spec); len(got) != tc.want {
 			t.Errorf("%s: findings = %+v, want %d", name, got, tc.want)
 		}
+	}
+}
+
+func TestCrashAllowsAnExitBeforeTheProcessWatchesAListedKindWhenALaterOneDoes(t *testing.T) {
+	watch := func(ref trace.Ref, status int) []trace.Event {
+		e := tt.Call(ctl, "watch", ref, status, "")
+		e.Call.Watch = true
+		return []trace.Event{e}
+	}
+	widgets := trace.Ref{System: "kube", Group: "toy", Resource: "widgets"}
+	// Process 3 starts at 9s and exits at 10s. Process 4 starts at 10s.
+	for name, tc := range map[string]struct {
+		allowed       bool
+		before, after []trace.Event
+		want          string
+	}{
+		"not allowed":                                  {false, nil, watch(widgets, 200), "the controller exited 1 time"},
+		"a later watch":                                {true, nil, watch(widgets, 200), ""},
+		"no later watch":                               {true, nil, nil, "the controller exited 1 time"},
+		"a later failed watch":                         {true, nil, watch(widgets, 503), "the controller exited 1 time"},
+		"a later dropped watch":                        {true, nil, watch(widgets, 0), "the controller exited 1 time"},
+		"a later watch of an unlisted kind":            {true, nil, watch(trace.Ref{System: "kube", Resource: "configmaps"}, 200), "the controller exited 1 time"},
+		"a watch before the exit":                      {true, watch(widgets, 200), watch(widgets, 200), "the controller exited 1 time"},
+		"a failed watch before the exit":               {true, watch(widgets, 503), watch(widgets, 200), ""},
+		"a watch before the exit, by an earlier start": {true, nil, watch(widgets, 200), ""},
+	} {
+		b := cleanRun()
+		if name == "a watch before the exit, by an earlier start" {
+			b.At(8 * s).Add(watch(widgets, 200)...)
+		}
+		b.At(9 * s).Add(tt.Exit("signal: terminated", true, "")).Add(tt.Start(3))
+		b.At(9500 * ms).Add(tc.before...)
+		b.At(10 * s).Add(tt.Exit("exit status 1", false, "")).Add(tt.Start(4))
+		b.At(11 * s).Add(tc.after...)
+		sp := spec
+		sp.AllowExitBeforeWatch = tc.allowed
+		got := check.Crash(b.Index(), sp)
+		var summaries []string
+		for _, f := range got {
+			summaries = append(summaries, f.Summary)
+		}
+		if summary := strings.Join(summaries, "; "); summary != tc.want {
+			t.Errorf("%s: findings = %+v, want %q", name, got, tc.want)
+		}
+	}
+}
+
+func TestSpecForATraceReadsAllowExitBeforeWatch(t *testing.T) {
+	run := tt.Run("toy", "widgets")
+	run.Run.Stable, run.Run.Reads, run.Run.Writes = s, 1, 1
+	run.Run.Primaries[0].Ready = "true"
+	run.Run.AllowExitBeforeWatch = true
+	var b tt.Builder
+	if got, err := check.SpecFor(nil, b.Add(run).Index()); err != nil || !got.AllowExitBeforeWatch {
+		t.Errorf("spec = %+v, %v; want allowExitBeforeWatch", got, err)
 	}
 }
 
@@ -281,7 +336,7 @@ func TestCrashOutsideAnyStepIsStepMinusOne(t *testing.T) {
 	var b tt.Builder
 	b.Add(tt.Run("toy", "widgets"), tt.Start(1), tt.Exit("exit status 1", false, "")).
 		At(1 * s).Add(tt.Phase(0, trace.FaultPeriod))
-	if f := only(t, check.Crash(b.Index())); f.Step != -1 || f.Summary != "the controller exited 1 time" {
+	if f := only(t, check.Crash(b.Index(), spec)); f.Step != -1 || f.Summary != "the controller exited 1 time" {
 		t.Fatalf("finding = %+v", f)
 	}
 }
@@ -698,8 +753,9 @@ func TestSpecFor(t *testing.T) {
 		t.Fatalf("Ready is not the config's: %v, %v", ok, err)
 	}
 	c.NotRestored = []trace.Kind{{Version: "v1", Kind: "Secret", Resource: "secrets"}}
-	if got, err := check.SpecFor(c, b.Index()); err != nil || !slices.Equal(got.NotRestored, c.NotRestored) {
-		t.Fatalf("notRestored = %+v, %v; want the config's", got.NotRestored, err)
+	c.Launch.AllowExitBeforeWatch = true
+	if got, err := check.SpecFor(c, b.Index()); err != nil || !slices.Equal(got.NotRestored, c.NotRestored) || !got.AllowExitBeforeWatch {
+		t.Fatalf("spec = %+v, %v; want the config's notRestored and allowExitBeforeWatch", got, err)
 	}
 	if ok, _ := got.Primaries[0].Ready(map[string]any{}); ok {
 		t.Fatal("Ready holds for an empty object")

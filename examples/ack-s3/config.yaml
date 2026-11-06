@@ -22,6 +22,9 @@ launch:
     AWS_CA_BUNDLE: ""
   rbac:
     - rbac/clusterrole.yaml
+  # ACK calls STS GetCallerIdentity once before it starts its manager, and
+  # exits on an error. A pod's restart covers that.
+  allowExitBeforeWatch: true
 crds:
   - crds/
 primary:

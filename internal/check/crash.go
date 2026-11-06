@@ -1,6 +1,8 @@
 package check
 
 import (
+	"math"
+	"slices"
 	"time"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
@@ -8,13 +10,21 @@ import (
 
 // Crash fails every controller exit the harness did not cause, except one
 // within leaseGrace of a fault on a Lease request: leader election exits by
-// design. It gives one finding per step.
-func Crash(ix *trace.Index) []Finding {
+// design. With AllowExitBeforeWatch, it also skips an exit of a process that
+// opened no watch of a listed kind when a later process opened one: the
+// controller failed at its start and then recovered. It gives one finding per
+// step.
+func Crash(ix *trace.Index, s Spec) []Finding {
 	var order []int
 	exits := map[int][]trace.Event{}
 	steps := ix.Steps()
+	var started time.Duration
 	for _, e := range ix.Procs() {
-		if e.Proc.Event != trace.Exit || e.Proc.HarnessCaused || leaseFaulted(ix, e.At) {
+		if e.Proc.Event == trace.Start {
+			started = e.At
+		}
+		if e.Proc.Event != trace.Exit || e.Proc.HarnessCaused || leaseFaulted(ix, e.At) ||
+			s.AllowExitBeforeWatch && !s.watchedListed(ix, started, e.At) && s.watchedListed(ix, e.At, math.MaxInt64) {
 			continue
 		}
 		step := stepAt(steps, e.At)
@@ -34,6 +44,15 @@ func Crash(ix *trace.Index) []Finding {
 		findings = append(findings, Finding{Check: "Crash", Step: step, At: first.At, Summary: summary, Details: details})
 	}
 	return findings
+}
+
+// watchedListed reports whether the controller opened a watch of a listed
+// kind between from and to.
+func (s Spec) watchedListed(ix *trace.Index, from, to time.Duration) bool {
+	return slices.ContainsFunc(ix.Calls(trace.Controller, from, to), func(e trace.Event) bool {
+		c := e.Call
+		return c.Watch && c.Status >= 200 && c.Status <= 299 && s.listed(c.Ref)
+	})
 }
 
 const leaseGrace = time.Second

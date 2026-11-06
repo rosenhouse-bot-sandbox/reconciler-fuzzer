@@ -84,6 +84,10 @@ type Launch struct {
 	// Upgrades are the later versions that generated plans restart into, in
 	// order.
 	Upgrades []plan.Upgrade
+	// AllowExitBeforeWatch says Crash skips an exit of a process that opened
+	// no watch of a listed kind when a later process opened one, as when a
+	// controller exits on a failed check at its start and then recovers.
+	AllowExitBeforeWatch bool
 }
 
 // Primary describes one CR kind the controller serves, which the harness
@@ -290,12 +294,13 @@ const defaultGracePeriod = 5 * time.Second
 // declaration mirrors the YAML file.
 type declaration struct {
 	Launch struct {
-		Binary      string            `json:"binary"`
-		Args        []string          `json:"args"`
-		Env         map[string]string `json:"env"`
-		RBAC        []string          `json:"rbac"`
-		GracePeriod string            `json:"gracePeriod"`
-		Upgrades    []plan.Upgrade    `json:"upgrades"`
+		Binary               string            `json:"binary"`
+		Args                 []string          `json:"args"`
+		Env                  map[string]string `json:"env"`
+		RBAC                 []string          `json:"rbac"`
+		GracePeriod          string            `json:"gracePeriod"`
+		Upgrades             []plan.Upgrade    `json:"upgrades"`
+		AllowExitBeforeWatch bool              `json:"allowExitBeforeWatch"`
 	} `json:"launch"`
 	CRDs       []string            `json:"crds"`
 	Primary    *declaredPrimary    `json:"primary"`
@@ -436,7 +441,7 @@ func load(path string) (*Config, error) {
 	if env["KUBECONFIG"] == "" {
 		env["KUBECONFIG"] = "${systems.kube.kubeconfig}"
 	}
-	c := &Config{Launch: Launch{Args: d.Launch.Args, Env: env, GracePeriod: defaultGracePeriod}}
+	c := &Config{Launch: Launch{Args: d.Launch.Args, Env: env, GracePeriod: defaultGracePeriod, AllowExitBeforeWatch: d.Launch.AllowExitBeforeWatch}}
 
 	if d.Launch.Binary == "" {
 		return nil, errors.New("launch.binary is required")

@@ -750,3 +750,11 @@ func TestLaunchArgsNameDeclaredSystems(t *testing.T) {
 		t.Errorf("err = %v, want one containing %q", err, want)
 	}
 }
+
+func TestAllowExitBeforeWatch(t *testing.T) {
+	data := strings.Replace(minimal(t), "  rbac: [role.yaml]\n", "  rbac: [role.yaml]\n  allowExitBeforeWatch: true\n", 1)
+	c, err := config.Load(writeConfig(t, data))
+	if err != nil || !c.Launch.AllowExitBeforeWatch {
+		t.Errorf("launch = %+v, %v; want allowExitBeforeWatch", c.Launch, err)
+	}
+}

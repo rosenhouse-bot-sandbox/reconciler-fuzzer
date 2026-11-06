@@ -44,6 +44,10 @@ type Spec struct {
 	// NotRestored are the kinds Restore lets stay gone under a damaged
 	// root, from the config or else the Run event.
 	NotRestored []trace.Kind
+	// AllowExitBeforeWatch says Crash skips an exit of a process that opened
+	// no watch of a listed kind when a later process opened one, from the
+	// config or else the Run event.
+	AllowExitBeforeWatch bool
 }
 
 // Reference is a config reference as Honest and Converge judge it.
@@ -208,6 +212,7 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 			return Spec{}, err
 		}
 		s.NotRestored = c.NotRestored
+		s.AllowExitBeforeWatch = c.Launch.AllowExitBeforeWatch
 		return s, nil
 	}
 	if run.Stable <= 0 || run.Reads <= 0 || run.Writes <= 0 {
@@ -238,6 +243,7 @@ func SpecFor(c *config.Config, ix *trace.Index) (Spec, error) {
 		return Spec{}, fmt.Errorf("the trace's references: %w", err)
 	}
 	s.NotRestored = run.NotRestored
+	s.AllowExitBeforeWatch = run.AllowExitBeforeWatch
 	return s, nil
 }
 
@@ -443,7 +449,7 @@ type Report struct {
 // Judge runs every check.
 func Judge(ix *trace.Index, s Spec) Report {
 	findings, notes := Converge(ix, s)
-	findings = append(findings, Crash(ix)...)
+	findings = append(findings, Crash(ix, s)...)
 	findings = append(findings, Clean(ix, s)...)
 	findings = append(findings, Restore(ix, s)...)
 	findings = append(findings, Unique(ix, s)...)

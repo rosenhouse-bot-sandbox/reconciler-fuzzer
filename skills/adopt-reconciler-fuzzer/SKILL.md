@@ -354,6 +354,7 @@ controller's output. Fix the config or the sample.
 
 | Finding | What the config got wrong | Fix |
 | --- | --- | --- |
+| Crash, with an output tail that shows the controller exiting on a failed check at its start, such as a call that a fault in the step answered | The controller exits on purpose before it starts its controllers, and a pod's restart would retry. | Set `launch.allowExitBeforeWatch: true`. |
 | Crash, `Before step 0`, or at or after a step whose actions name `restart (upgrade)` | The controller may lack what it needs to start: a free port, a certificate, an env var, a CRD or a permission. A restart's `args`, from the plan or `launch.upgrades`, replace `launch.args` for every later start, so they may lack a flag it needs, such as `--kubeconfig=${systems.kube.kubeconfig}`. | If the output tail in the details names such a need, fix `launch`, `crds`, or the restart's `args` or `crds`. If the restart's `args` lack a flag that the controller needs, add it. Otherwise report the bug (step 11). |
 | Converge, clause 4 | A restart's `args`, from the plan or `launch.upgrades`, replace `launch.args`. They may lack the `--kubeconfig=${systems.kube.kubeconfig}` that a controller needs if it does not read `KUBECONFIG`. `launch.rbac` may also forbid the controller's requests. | Add the flag to those `args`. Add the rules that a `launch.rbac forbids` note names. Otherwise report the bug (step 11). |
 | Converge, with a line `whose status nothing models` | Another controller sets that kind's status. | Add the `models:` entry it suggests. |
