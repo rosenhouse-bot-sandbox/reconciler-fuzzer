@@ -281,10 +281,10 @@ references:
 - Under `block`, the settle condition counts an object that waits in deletion while a live CR
   names it as settled. For a CR, this starts `stable` after its deletion started, and not before
   `stable` and the time the step's faults lasted, at most `timeouts.backoffCap`, have passed
-  since the faults ended. An object that stays after its last naming CR is gone fails clause 2.
-  CRs being deleted that name each other, directly or through other CRs being deleted, would
-  wait for good, so those names do not count. A CR that names itself is such a cycle. Ordered
-  passes the release that breaks one.
+  since the faults ended. An object that the controller holds after its last naming CR is gone
+  fails clause 2. CRs being deleted that name each other, directly or through other CRs being
+  deleted, would wait for good, so those names do not count. A CR that names itself is such a
+  cycle. Ordered passes the release that breaks one.
 - Under `block`, Honest counts a look at an object that waits in deletion as ready if the look,
   or the object's last version before its deletion started, shows it ready, since the
   controller may still use the object.

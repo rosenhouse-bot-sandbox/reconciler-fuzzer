@@ -72,20 +72,29 @@ func unfinalized(ix *trace.Index, live []trace.Version, t time.Duration, s Spec,
 	return unmets
 }
 
-// unreleased holds each object of a block reference's to kind that is not
-// listed to clause 2: one being deleted must be in use. Unlike a CR, it
-// settles at once while in use, since the controller writes no status of it
-// as it starts to wait.
+// unreleased holds to clause 2 each object of an unlisted block to kind
+// that a CR named before its deletion started: while a finalizer that may be
+// the controller's own holds it, a live CR must name it. It needs no delay,
+// since the controller writes no status of it as it starts to wait.
 func unreleased(ix *trace.Index, t time.Duration, s Spec, inUse func(trace.Ref) bool) []unmet {
 	var unmets []unmet
 	for _, to := range s.blockedKinds() {
 		for _, v := range ix.Live(to.Group, to.Resource, t) {
-			if deleting(v.Body) && !inUse(v.Ref) {
+			if !inUse(v.Ref) && heldByController(ix, v) && s.namedBeforeDeletion(ix, v) {
 				unmets = append(unmets, unmetDeletion(v))
 			}
 		}
 	}
 	return unmets
+}
+
+// heldByController reports whether v holds a finalizer that may be the
+// controller's own.
+func heldByController(ix *trace.Index, v trace.Version) bool {
+	return slices.ContainsFunc(finalizers(v), func(f string) bool {
+		_, foreign := adder(ix, v, f)
+		return !foreign
+	})
 }
 
 // runClauses holds the controller to clauses 3 to 5.

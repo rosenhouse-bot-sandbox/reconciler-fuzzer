@@ -811,38 +811,59 @@ func TestHonestWithTrackPassesACRReadyWhileWhatItNamesWaitsInDeletion(t *testing
 	}
 }
 
-// heldPw is the Secret pw being deleted, held by the in-use finalizer.
-func heldPw() map[string]any {
+// heldPw is the Secret pw being deleted, held by finalizer.
+func heldPw(finalizer string) map[string]any {
 	body := tt.Deleting(secret(true))
-	body["metadata"].(map[string]any)["finalizers"] = []any{"toy/in-use"}
+	body["metadata"].(map[string]any)["finalizers"] = []any{finalizer}
 	return body
 }
 
 // Clause 2 judges an object of a block reference's to kind that waits in
-// deletion as it judges a CR, but at once, since clause 5 already holds the
-// step for the change that deleted it.
+// deletion as it judges a CR, but at once.
 func TestAnObjectWaitingInDeletionSettlesOnlyWhileACRNamesIt(t *testing.T) {
 	const notNamed = "secrets ns/pw is being deleted, held by finalizer toy/in-use"
+	deletePw := func(r *tt.Script) *tt.Script { return r.Update(trace.Harness, pw, heldPw("toy/in-use")) }
+	pw2 := tt.Ref("secrets", "ns", "pw2")
+	backupRef := blockRef()
+	backupRef.Name = "spec.backupSecretRef.name"
 	for name, c := range map[string]struct {
-		ref   trace.Reference
-		after func(r *tt.Script)
+		refs  []trace.Reference
+		act   func(r *tt.Script)
 		unmet []string
 	}{
-		"named by a live CR": {blockRef(), func(*tt.Script) {}, nil},
-		"named by a CR being deleted": {blockRef(), func(r *tt.Script) {
-			r.Update(trace.Harness, databaseB, tt.Deleting(database(true, "pw")))
+		"named by a live CR": {[]trace.Reference{blockRef()}, func(r *tt.Script) { deletePw(r) }, nil},
+		"named by a CR being deleted": {[]trace.Reference{blockRef()}, func(r *tt.Script) {
+			deletePw(r).Update(trace.Harness, databaseB, tt.Deleting(database(true, "pw")))
 		}, []string{"databases.toy ns/b is being deleted"}},
-		"after its last CR left": {blockRef(), func(r *tt.Script) { r.DeleteCR("b", databaseB) }, []string{notNamed}},
-		"after its CR named another": {blockRef(), func(r *tt.Script) {
-			r.Update(trace.Harness, databaseB, database(true, "other"))
+		"after its last CR left": {[]trace.Reference{blockRef()}, func(r *tt.Script) { deletePw(r).DeleteCR("b", databaseB) }, []string{notNamed}},
+		"after its CR named another": {[]trace.Reference{blockRef()}, func(r *tt.Script) {
+			deletePw(r).Update(trace.Harness, databaseB, database(true, "other"))
 		}, []string{notNamed}},
-		"named without block": {secretRef(), func(r *tt.Script) { r.DeleteCR("b", databaseB) }, nil},
+		"after its last CR left, by two block references": {[]trace.Reference{blockRef(), backupRef}, func(r *tt.Script) {
+			deletePw(r).DeleteCR("b", databaseB)
+		}, []string{notNamed}},
+		"not being deleted after its last CR left": {[]trace.Reference{blockRef()}, func(r *tt.Script) {
+			held := heldPw("toy/in-use")
+			delete(held["metadata"].(map[string]any), "deletionTimestamp")
+			r.Update(trace.Harness, pw, held).DeleteCR("b", databaseB)
+		}, nil},
+		"named without block": {[]trace.Reference{secretRef()}, func(r *tt.Script) { deletePw(r).DeleteCR("b", databaseB) }, nil},
+		"held only by another's finalizer": {[]trace.Reference{blockRef()}, func(r *tt.Script) {
+			r.Update(trace.ModelCaller("toy", "keepers"), pw, heldPw("keeper.toy/keep")).DeleteCR("b", databaseB)
+		}, nil},
+		"held only by gc's finalizer": {[]trace.Reference{blockRef()}, func(r *tt.Script) {
+			r.Update(trace.Harness, pw, heldPw("foregroundDeletion")).DeleteCR("b", databaseB)
+		}, nil},
+		"named only after its deletion started": {[]trace.Reference{blockRef()}, func(r *tt.Script) {
+			r.Create(trace.Harness, pw2, heldPw("toy/in-use"))
+			r.Update(trace.Harness, databaseB, database(true, "pw2")).Update(trace.Harness, databaseB, database(true, "pw"))
+		}, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
-			r := secretRun(c.ref, secret(true))
+			r := secretRun(c.refs[0], secret(true))
+			r.Spec.References = c.refs
 			readyB(r).EndFaults().Tick(5 * s)
-			r.Update(trace.Harness, pw, heldPw())
-			c.after(r)
+			c.act(r)
 			if unmet := settledAt(t, r, r.Now); !slices.Equal(unmet, c.unmet) {
 				t.Errorf("unmet = %q, want %q.", unmet, c.unmet)
 			}
@@ -853,7 +874,7 @@ func TestAnObjectWaitingInDeletionSettlesOnlyWhileACRNamesIt(t *testing.T) {
 // The stop waits only for CRs, and a stopped controller holds no object.
 func TestAStopDoesNotWaitForAnObjectWaitingInDeletion(t *testing.T) {
 	r := secretRun(blockRef(), secret(true))
-	readyB(r).Update(trace.Harness, pw, heldPw()).DeleteCR("b", databaseB).Stop().EndFaults()
+	readyB(r).Update(trace.Harness, pw, heldPw("toy/in-use")).DeleteCR("b", databaseB).Stop().EndFaults()
 	if unmet := settledAt(t, r, r.Now+5*s); len(unmet) != 0 {
 		t.Errorf("unmet = %q, want none.", unmet)
 	}
@@ -863,7 +884,7 @@ func TestConvergeFailsAnObjectLeftInDeletionAfterTheCRsThatNameIt(t *testing.T) 
 	r := secretRun(blockRef(), secret(true))
 	seeBoth(r)
 	r.Delete(trace.Harness, databaseB).Tick(r.Spec.Stable)
-	r.Update(trace.Harness, pw, heldPw()).See(ctl, pw).Call(ctl, "get", pw, 200).Tick(3 * r.Spec.Stable)
+	r.Update(trace.Harness, pw, heldPw("toy/in-use")).See(ctl, pw).Call(ctl, "get", pw, 200).Tick(3 * r.Spec.Stable)
 	ix := r.EndFaults().Settle().Index()
 	spec, err := check.SpecFor(nil, ix)
 	if err != nil {

@@ -65,6 +65,17 @@ func (s Spec) blockedKinds() []trace.Ref {
 	return kinds
 }
 
+// namedBeforeDeletion reports whether v's object is being deleted and a CR
+// version recorded by the deletion's start names it by a block reference.
+// Only then may the controller hold the object with its finalizer.
+func (s Spec) namedBeforeDeletion(ix *trace.Index, v trace.Version) bool {
+	start, deleting := deletionStart(ix.Versions(v.Ref, v.UID))
+	return deleting && slices.ContainsFunc(ix.EventsIn(-1, start), func(e trace.Event) bool {
+		cr := e.Version
+		return cr != nil && s.listed(cr.Ref) && slices.Contains(s.blocked(cr.Ref, decode(cr.Body)), v.Ref)
+	})
+}
+
 // inUse returns a func that reports whether the deletion of an object,
 // being deleted at t, waits for a live CR that names it by a block reference.
 // A namer that waits for the object in turn, through CRs being deleted, does
