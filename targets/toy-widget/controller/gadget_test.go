@@ -129,10 +129,10 @@ func TestStatusForReportsAChangedGadgetReady(t *testing.T) {
 	widget := newWidget(1)
 	widget.Status = toyv1.WidgetStatus{Ready: 1, ObservedGeneration: 1, GadgetReady: ptr.To(false)}
 
-	if _, changed := statusFor(widget, 1, ptr.To(false)); changed {
+	if _, changed := statusFor(widget, 1, ptr.To(false), nil); changed {
 		t.Error("statusFor asked for a write although gadgetReady already matched.")
 	}
-	if status, changed := statusFor(widget, 1, ptr.To(true)); !changed || !*status.GadgetReady {
+	if status, changed := statusFor(widget, 1, ptr.To(true), nil); !changed || !*status.GadgetReady {
 		t.Errorf("statusFor returned %+v, changed %t, for a Gadget that became ready.", status, changed)
 	}
 }

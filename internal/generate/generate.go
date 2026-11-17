@@ -65,6 +65,8 @@ type Generator struct {
 	creatable []gvk.GroupResource
 	// models are the resources of the model kinds, which model faults match.
 	models []gvk.GroupResource
+	// failures are each model kind's failures besides its default.
+	failures map[gvk.GroupResource][]string
 	// fakes are the fake services' names. modelFakes take model faults,
 	// and readOnly fakes take no damage and no write faults.
 	fakes      []string
@@ -361,8 +363,11 @@ func (g *Generator) readRBAC(paths []string) error {
 // readModels records each model kind's resource and the longest dependency
 // track.
 func (g *Generator) readModels(models []config.Model) {
+	g.failures = map[gvk.GroupResource][]string{}
 	for _, m := range models {
-		g.models = append(g.models, gvk.GroupResource{Group: m.Kind.Group, Resource: m.Resource})
+		gr := gvk.GroupResource{Group: m.Kind.Group, Resource: m.Resource}
+		g.models = append(g.models, gr)
+		g.failures[gr] = m.Failures()
 		if m.Dependency != nil {
 			g.track = max(g.track, m.Dependency.Track)
 		}
@@ -869,7 +874,8 @@ func (g *Generator) addRequests() {
 
 // fault draws a request and one of five request effects. With models, it
 // draws one of seven effects instead, and the last two are stuck and
-// slowDelete on a model kind drawn uniformly. With a watchable kind, two
+// slowDelete on a model kind drawn uniformly. A stuck fault draws its
+// failure, or the stage's default, uniformly. With a watchable kind, two
 // more effects are a holdWatch of one drawn by its kindWeight. With fakes,
 // half the draws are a fake fault instead.
 func (g *Generator) fault(t *rapid.T) plan.Fault {
@@ -903,6 +909,9 @@ func (g *Generator) fault(t *rapid.T) plan.Fault {
 	default:
 		gr := sampled(t, g.models, "model")
 		f = plan.Fault{Match: plan.Match{Group: gr.Group, Resource: gr.Resource}, Stuck: effect == 5, SlowDelete: effect == 6}
+		if failures := g.failures[gr]; f.Stuck && len(failures) > 0 {
+			f.Failure = sampled(t, append([]string{""}, failures...), "failure")
+		}
 	}
 	return f
 }

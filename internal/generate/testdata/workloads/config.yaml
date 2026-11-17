@@ -1,0 +1,13 @@
+# Nothing launches this target.
+launch:
+  binary: none
+  rbac: [../../../../targets/toy-widget/rbac/role.yaml]
+crds: [../../../../targets/toy-widget/crds/]
+primary:
+  kind: toy.reconciler-fuzzer/v1/Widget
+  sample: ../../../../targets/toy-widget/widget.yaml
+  ready: "true"
+timeouts: {stable: 1s}
+models:
+  - {kind: apps/v1/Deployment, stages: deployment, after: 200ms}
+  - {kind: v1/Pod, stages: pod, after: 200ms}

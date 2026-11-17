@@ -3,6 +3,7 @@ package config_test
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -756,5 +757,108 @@ func TestAllowExitBeforeWatch(t *testing.T) {
 	c, err := config.Load(writeConfig(t, data))
 	if err != nil || !c.Launch.AllowExitBeforeWatch {
 		t.Errorf("launch = %+v, %v; want allowExitBeforeWatch", c.Launch, err)
+	}
+}
+
+func TestWorkloadStages(t *testing.T) {
+	c, err := config.Load(writeConfig(t, minimal(t)+`models:
+  - {kind: apps/v1/Deployment, stages: deployment, after: 1s}
+  - {kind: v1/Pod, stages: pod, after: 1s}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment, pod := c.Models[0], c.Models[1]
+	if deployment.Stage != config.DeploymentStage || pod.Stage != config.PodStage {
+		t.Errorf("stages = %s, %s", deployment.Stage, pod.Stage)
+	}
+	if want := []string{"progressDeadlineExceeded", "replicaFailure", "unavailable"}; !reflect.DeepEqual(deployment.Failures(), want) {
+		t.Errorf("deployment failures = %v, want %v", deployment.Failures(), want)
+	}
+	if want := []string{"unschedulable", "imagePullBackOff", "crashLoopBackOff", "initContainerFailed", "sidecarFailed"}; !reflect.DeepEqual(pod.Failures(), want) {
+		t.Errorf("pod failures = %v, want %v", pod.Failures(), want)
+	}
+	if (config.Model{}).Failures() != nil {
+		t.Error("readyCondition has failures")
+	}
+}
+
+func TestWorkloadStagesRefuseMistakes(t *testing.T) {
+	for models, want := range map[string]string{
+		"- {kind: example.com/v1/Gadget, stages: deployment, after: 1s}":                   "models[0].stages deployment: it models apps/v1/Deployment, not example.com/v1/Gadget",
+		"- {kind: apps/v1/Deployment, stages: pod, after: 1s}":                             "models[0].stages pod: it models v1/Pod, not apps/v1/Deployment",
+		"- {kind: v1/Pod, stages: pod, after: 1s, status: {phase: Running}}":               "models[0].status: only readyCondition takes status and stuckStatus",
+		"- {kind: apps/v1/Deployment, stages: deployment, after: 1s, stuckStatus: {a: b}}": "models[0].status: only readyCondition takes status and stuckStatus",
+		"- {kind: example.com/v1/Gadget, after: 1s, stages: flap}":                         `models[0].stages "flap": want readyCondition, deployment or pod`,
+	} {
+		_, err := config.Load(writeConfig(t, minimal(t)+"models:\n"+models+"\n"))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("models %q: err = %v, want %q", models, err, want)
+		}
+	}
+}
+
+func TestDeploymentReady(t *testing.T) {
+	ready, err := config.CompileReady((config.Model{Stage: config.DeploymentStage}).Ready(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment := func(replicas any, status map[string]any) map[string]any {
+		spec := map[string]any{}
+		if replicas != nil {
+			spec["replicas"] = replicas
+		}
+		return map[string]any{"metadata": map[string]any{"generation": 2}, "spec": spec, "status": status}
+	}
+	rolledOut := func(n int) map[string]any {
+		return map[string]any{"observedGeneration": 2, "replicas": n, "updatedReplicas": n, "availableReplicas": n}
+	}
+	with := func(status map[string]any, key string, value any) map[string]any {
+		status = maps.Clone(status)
+		status[key] = value
+		return status
+	}
+	for name, c := range map[string]struct {
+		obj  map[string]any
+		want bool
+	}{
+		"rolled out":       {deployment(3, rolledOut(3)), true},
+		"default replicas": {deployment(nil, rolledOut(1)), true},
+		"scaled to zero":   {deployment(0, map[string]any{"observedGeneration": 2}), true},
+		"stale":            {deployment(3, with(rolledOut(3), "observedGeneration", 1)), false},
+		"not updated":      {deployment(3, with(rolledOut(3), "updatedReplicas", 2)), false},
+		"old pods remain":  {deployment(3, with(rolledOut(3), "replicas", 4)), false},
+		"unavailable":      {deployment(3, with(rolledOut(3), "availableReplicas", 2)), false},
+		"deadline exceeded": {deployment(3, with(rolledOut(3), "conditions", []any{
+			map[string]any{"type": "Progressing", "status": "False", "reason": "ProgressDeadlineExceeded"}})), false},
+		"no status": {deployment(3, nil), false},
+	} {
+		if got, err := ready(c.obj); err != nil || got != c.want {
+			t.Errorf("%s: ready = %v, %v; want %v", name, got, err, c.want)
+		}
+	}
+}
+
+func TestPodReady(t *testing.T) {
+	ready, err := config.CompileReady((config.Model{Stage: config.PodStage}).Ready(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod := func(conditions ...any) map[string]any {
+		return map[string]any{"status": map[string]any{"phase": "Running", "conditions": conditions}}
+	}
+	for name, c := range map[string]struct {
+		obj  map[string]any
+		want bool
+	}{
+		"ready":     {pod(map[string]any{"type": "Ready", "status": "True"}), true},
+		"not ready": {pod(map[string]any{"type": "Ready", "status": "False"}, map[string]any{"type": "PodScheduled", "status": "True"}), false},
+		"no status": {map[string]any{}, false},
+		"stale": {map[string]any{"metadata": map[string]any{"generation": 2},
+			"status": map[string]any{"observedGeneration": 1, "conditions": []any{map[string]any{"type": "Ready", "status": "True"}}}}, false},
+	} {
+		if got, err := ready(c.obj); err != nil || got != c.want {
+			t.Errorf("%s: ready = %v, %v; want %v", name, got, err, c.want)
+		}
 	}
 }

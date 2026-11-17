@@ -274,20 +274,24 @@ func checkFault(cfg *config.Config, f plan.Fault) error {
 			return fmt.Errorf("%w; did you mean %s?", err, near)
 		}
 		return err
-	case !f.ModelFault() || i >= 0 && fakes[i].Map().ModelFaults:
+	case !f.ModelFault() || i >= 0 && fakes[i].Map().ModelFaults && f.Failure == "":
 		return nil
 	}
 	var resources []string
 	for _, m := range cfg.Models {
 		gvr := m.Kind.GroupVersion().WithResource(m.Resource)
-		if model.Takes(f, gvr) {
+		if model.Takes(f, gvr, m.Failures()) {
 			return nil
 		}
 		renamed := f
-		renamed.Match.Resource = gvr.Resource
-		if model.Takes(renamed, gvr) {
-			resources = append(resources, gvr.Resource)
+		renamed.Match.Resource, renamed.Failure = gvr.Resource, ""
+		if !model.Takes(renamed, gvr, nil) {
+			continue
 		}
+		if renamed.Match.Resource == f.Match.Resource {
+			return fmt.Errorf("no model takes %s; the %s stage's failures are %s", f, m.Stage, cmp.Or(strings.Join(m.Failures(), ", "), "none"))
+		}
+		resources = append(resources, gvr.Resource)
 	}
 	err := fmt.Errorf("no model takes %s", f)
 	if near := suggest.Nearest(f.Match.Resource, resources); near != "" {
@@ -566,7 +570,7 @@ func traceModels(models []config.Model, ref func(schema.GroupVersionKind, string
 		}
 		d := trace.Model{
 			Kind:  trace.Kind{Group: m.Kind.Group, Version: m.Kind.Version, Kind: m.Kind.Kind, Resource: r.Resource},
-			Ready: config.ReadyConditionCEL,
+			Ready: m.Ready(),
 		}
 		if m.Dependency != nil {
 			d.Dependency = &trace.Dependency{Required: m.Dependency.Required, Track: m.Dependency.Track}

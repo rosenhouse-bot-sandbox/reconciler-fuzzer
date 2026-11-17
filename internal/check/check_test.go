@@ -760,6 +760,16 @@ func TestSpecFor(t *testing.T) {
 	if ok, _ := got.Primaries[0].Ready(map[string]any{}); ok {
 		t.Fatal("Ready holds for an empty object")
 	}
+
+	c.Models = []config.Model{{Kind: schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}, Stage: config.DeploymentStage}}
+	if got, err = check.SpecFor(c, b.Index()); err != nil {
+		t.Fatal(err)
+	}
+	rolledOut := map[string]any{"metadata": map[string]any{"generation": 1}, "spec": map[string]any{},
+		"status": map[string]any{"observedGeneration": 1, "replicas": 1, "updatedReplicas": 1, "availableReplicas": 1}}
+	if ok, err := got.Models[0].Ready(rolledOut); !ok || err != nil {
+		t.Fatalf("A model's Ready is not its stage's: %v, %v", ok, err)
+	}
 }
 
 // thingCR is a CR of testdata/numbers as a trace holds it, so that its
@@ -998,7 +1008,8 @@ func TestJudgeNotesAModelFaultThatHeldNoObject(t *testing.T) {
 		"nothing written":          {"stuck", "", nil, true},
 		"a stuck status":           {"stuck", model, stuck, false},
 		"another's stuck status":   {"stuck", ctl, stuck, true},
-		"a not ready status":       {"stuck", model, tt.ReadyCondition("a", 1, false), true},
+		"a not ready status":       {"stuck", model, tt.ReadyCondition("a", 1, false), false},
+		"a ready status":           {"stuck", model, tt.ReadyCondition("a", 1, true), true},
 		"the slowDelete finalizer": {"slowDelete", model, held, false},
 		"a stuck for slowDelete":   {"slowDelete", model, stuck, true},
 	} {
@@ -1086,5 +1097,23 @@ func TestJudgeNotesARoleThatFailedOnEveryResourceOfAKind(t *testing.T) {
 		if notes := check.Judge(ix, spec).Notes; !slices.Equal(notes, c.notes) {
 			t.Errorf("%s: notes = %q, want %q", name, notes, c.notes)
 		}
+	}
+}
+
+func TestAModelFaultHoldsAnObjectItsModelsReadyRejects(t *testing.T) {
+	model := trace.Caller("model:gadgets.toy")
+	phaseSpec := spec
+	phaseSpec.Models = []check.Model{{Kind: trace.Kind{Group: "toy", Resource: "gadgets"}, Ready: func(obj map[string]any) (bool, error) {
+		status, _ := obj["status"].(map[string]any)
+		return status["phase"] == "Running", nil
+	}}}
+	pending := tt.ReadyCondition("a", 1, true)
+	pending["status"].(map[string]any)["phase"] = "Pending"
+	b := createStep()
+	b.At(2*s).Add(tt.Phase(1, trace.FaultPeriod), tt.ModelFault(1, 0, false, "stuck(crashLoopBackOff)", string(model)))
+	b.At(2500*ms).Add(tt.Call(model, "patch", gadgetA, 200, "9"), tt.Version(gadgetA, "ug", "9", pending))
+	b.At(3 * s).Add(tt.ModelFault(1, 0, true, "stuck(crashLoopBackOff)", string(model)))
+	if notes := check.Judge(b.Index(), phaseSpec).Notes; slices.ContainsFunc(notes, func(n string) bool { return strings.Contains(n, "held no object") }) {
+		t.Errorf("notes = %q, want the Pending gadget held", notes)
 	}
 }

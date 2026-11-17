@@ -5,6 +5,7 @@ package config
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
@@ -223,14 +224,54 @@ func (c *Config) Fakes() []System {
 	return fakes
 }
 
-// ReadyCondition is the only stage: the model sets the Ready condition True
-// for the object's generation, After the object or its generation appears.
-const ReadyCondition = "readyCondition"
+// Stages a model can play. ReadyCondition sets the Ready condition True for
+// the object's generation, After the object or its generation appears.
+// DeploymentStage and PodStage write the status that Kubernetes' Deployment
+// controller and kubelet write, and fail as their failures name.
+const (
+	ReadyCondition  = "readyCondition"
+	DeploymentStage = "deployment"
+	PodStage        = "pod"
+)
 
 // ReadyConditionCEL says whether a ReadyCondition model's object is ready.
 // It takes a condition without observedGeneration as current, since the API
 // server drops that field from a Job's and a PVC's condition.
 const ReadyConditionCEL = `has(self.status) && has(self.status.conditions) && self.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True' && (!has(c.observedGeneration) || c.observedGeneration == self.metadata.generation))`
+
+// stage is what config knows of a stage: the kind it plays, if only one,
+// its ready, and the failures a stuck fault may name.
+type stage struct {
+	kind     string
+	ready    string
+	failures []string
+}
+
+var stages = map[string]stage{
+	ReadyCondition: {ready: ReadyConditionCEL},
+	// The ready is kubectl rollout status's: every replica runs the current
+	// template and is available, and no old replica remains.
+	DeploymentStage: {
+		kind: "apps/v1/Deployment",
+		ready: `has(self.status) && has(self.status.observedGeneration) && self.status.observedGeneration == self.metadata.generation` +
+			` && [has(self.status.replicas) ? self.status.replicas : 0, has(self.status.updatedReplicas) ? self.status.updatedReplicas : 0, has(self.status.availableReplicas) ? self.status.availableReplicas : 0]` +
+			`.all(n, n == (has(self.spec.replicas) ? self.spec.replicas : 1))` +
+			` && !(has(self.status.conditions) && self.status.conditions.exists(c, c.type == 'Progressing' && c.reason == 'ProgressDeadlineExceeded'))`,
+		failures: []string{"progressDeadlineExceeded", "replicaFailure", "unavailable"},
+	},
+	PodStage: {
+		kind: "v1/Pod",
+		ready: `has(self.status) && has(self.status.conditions) && self.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True')` +
+			` && (!has(self.status.observedGeneration) || self.status.observedGeneration == self.metadata.generation)`,
+		failures: []string{"unschedulable", "imagePullBackOff", "crashLoopBackOff", "initContainerFailed", "sidecarFailed"},
+	},
+}
+
+// Ready is the CEL that says whether an object of m's kind is ready.
+func (m Model) Ready() string { return stages[cmp.Or(m.Stage, ReadyCondition)].ready }
+
+// Failures are the failures m's stage takes besides its default.
+func (m Model) Failures() []string { return stages[cmp.Or(m.Stage, ReadyCondition)].failures }
 
 // Model is one models entry: the harness plays the controller of Kind.
 type Model struct {
@@ -851,9 +892,14 @@ func models(d declaration, listed []schema.GroupKind, kinds servedKinds) ([]Mode
 			return nil, fmt.Errorf("%s.kind %s: a primary or another model has this kind", key, declared.Kind)
 		}
 		seen[kind.GroupKind()] = true
-		m := Model{Kind: kind, Resource: served.resource, Stage: ReadyCondition, Status: declared.Status, StuckStatus: declared.StuckStatus}
-		if declared.Stages != "" && declared.Stages != ReadyCondition {
-			return nil, fmt.Errorf("%s.stages %q: the only stage is %s", key, declared.Stages, ReadyCondition)
+		m := Model{Kind: kind, Resource: served.resource, Stage: cmp.Or(declared.Stages, ReadyCondition), Status: declared.Status, StuckStatus: declared.StuckStatus}
+		switch st, known := stages[m.Stage]; {
+		case !known:
+			return nil, fmt.Errorf("%s.stages %q: want %s, %s or %s", key, m.Stage, ReadyCondition, DeploymentStage, PodStage)
+		case st.kind != "" && st.kind != declared.Kind:
+			return nil, fmt.Errorf("%s.stages %s: it models %s, not %s", key, m.Stage, st.kind, declared.Kind)
+		case m.Stage != ReadyCondition && (m.Status != nil || m.StuckStatus != nil):
+			return nil, fmt.Errorf("%s.status: only %s takes status and stuckStatus", key, ReadyCondition)
 		}
 		if declared.After == "" {
 			return nil, fmt.Errorf("%s.after is required", key)

@@ -41,16 +41,25 @@ const (
 	B29
 )
 
+// B30 to B35 are toy-bucket's.
+const (
+	B36 Bug = iota + 36
+	B37
+)
+
 // MaxBug is the highest seeded bug ID.
-const MaxBug = int(B29)
+const MaxBug = int(B37)
+
+// bucketBug says whether id is one of toy-bucket's.
+func bucketBug(id int) bool { return id > int(B29) && id < int(B36) }
 
 // defaultB1Hold is Reconciler.B1Hold's value when left unset.
 const defaultB1Hold = 3 * time.Second
 
 // ParseBug converts a --bug value into a Bug.
 func ParseBug(id int) (Bug, error) {
-	if id < 0 || id > MaxBug {
-		return 0, fmt.Errorf("--bug=%d: want a bug ID from 0 to %d", id, MaxBug)
+	if id < 0 || id > MaxBug || bucketBug(id) {
+		return 0, fmt.Errorf("--bug=%d: want a bug ID from 0 to %d, other than toy-bucket's %d to %d", id, MaxBug, B29+1, B36-1)
 	}
 	return Bug(id), nil
 }

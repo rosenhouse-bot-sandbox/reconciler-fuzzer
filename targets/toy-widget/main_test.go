@@ -247,3 +247,13 @@ func TestRunPrintsTheUsageForHelp(t *testing.T) {
 		}
 	}
 }
+
+func TestRunRejectsAnUnknownWorkload(t *testing.T) {
+	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "no-such-kubeconfig"))
+	for workload, rejected := range map[string]bool{"deployment": false, "pod": false, "job": true} {
+		err := run([]string{"--workload=" + workload}, io.Discard)
+		if got := err != nil && strings.Contains(err.Error(), "--workload=job"); got != rejected {
+			t.Errorf("run returned %v for %s, want it rejected: %v.", err, workload, rejected)
+		}
+	}
+}

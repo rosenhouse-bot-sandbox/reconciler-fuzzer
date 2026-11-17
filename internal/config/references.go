@@ -272,8 +272,8 @@ func (c *Config) defaultReady(r Reference, fake System) string {
 	if i := c.listed(r.To.GroupKind()); i >= 0 {
 		return c.Primaries[i].Ready
 	}
-	if slices.ContainsFunc(c.Models, func(m Model) bool { return m.Kind.GroupKind() == r.To.GroupKind() }) {
-		return ReadyConditionCEL
+	if i := slices.IndexFunc(c.Models, func(m Model) bool { return m.Kind.GroupKind() == r.To.GroupKind() }); i >= 0 {
+		return c.Models[i].Ready()
 	}
 	return ""
 }

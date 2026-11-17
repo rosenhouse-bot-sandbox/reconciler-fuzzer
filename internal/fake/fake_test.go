@@ -233,7 +233,7 @@ func TestTheObserverRecordsWorkWhenPendingChanges(t *testing.T) {
 func TestStuckHoldsABucketCreatingUntilItsEnd(t *testing.T) {
 	s := start(t, 30*time.Millisecond)
 	stuck := plan.Fault{System: "cloud", Stuck: true, Match: plan.Match{Resource: "buckets"}}
-	if !s.fake.Takes(stuck) || s.fake.Takes(plan.Fault{System: "other", Stuck: true}) || s.fake.Takes(plan.Fault{System: "cloud", Drop: true}) {
+	if !s.fake.Takes(stuck) || s.fake.Takes(plan.Fault{System: "cloud", Stuck: true, Failure: "unschedulable"}) || s.fake.Takes(plan.Fault{System: "other", Stuck: true}) || s.fake.Takes(plan.Fault{System: "cloud", Drop: true}) {
 		t.Fatal("Takes accepts the wrong faults")
 	}
 	end, err := s.fake.Fault(stuck)

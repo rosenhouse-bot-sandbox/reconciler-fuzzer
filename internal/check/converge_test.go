@@ -44,20 +44,22 @@ func TestConvergeNamesAnUnmodelledKind(t *testing.T) {
 	sp := spec
 	sp.StatusKinds = []trace.Kind{{Group: "toy", Version: "v1", Kind: "Gadget", Resource: "gadgets"}}
 	pod, pvc, job := tt.Ref("pods", "ns", "p"), tt.Ref("persistentvolumeclaims", "ns", "p"), tt.Ref("batch/jobs", "ns", "j")
+	deployment := tt.Ref("apps/deployments", "ns", "d")
 	for name, c := range map[string]struct {
 		events []trace.Event
 		want   string
 	}{
 		"a status kind": {[]trace.Event{bare(gadgetA), tt.Call(ctl, "get", gadgetA, 200, "")}, "{kind: toy/v1/Gadget, stages: readyCondition, after: 200ms}"},
-		"a watch":       {[]trace.Event{bare(gadgetA), watchOf(tt.Ref("toy/gadgets", "", ""))}, "toy/v1/Gadget"},
-		"a spec write":  {[]trace.Event{bare(gadgetA), watchOf(gadgetA), tt.Call(ctl, "patch", gadgetA, 200, "")}, "toy/v1/Gadget"},
-		"a pod":         {[]trace.Event{bare(pod), tt.Call(ctl, "get", pod, 200, "")}, "{kind: v1/Pod, stages: readyCondition, after: 200ms, status: {phase: Running}}, and set its status fields to the ones the controller reads"},
-		"a pvc":         {[]trace.Event{bare(pvc), tt.Call(ctl, "get", pvc, 200, "")}, "{kind: v1/PersistentVolumeClaim, stages: readyCondition, after: 200ms, status: {phase: Bound}, stuckStatus: {phase: Pending}}"},
-		"a job":         {[]trace.Event{bare(job), tt.Call(ctl, "get", job, 200, "")}, "{kind: batch/v1/Job, stages: readyCondition, after: 200ms, status: {succeeded: 1}, stuckStatus: {active: 1}}"},
+		"a watch":       {[]trace.Event{bare(gadgetA), watchOf(tt.Ref("toy/gadgets", "", ""))}, "{kind: toy/v1/Gadget, stages: readyCondition, after: 200ms}"},
+		"a spec write":  {[]trace.Event{bare(gadgetA), watchOf(gadgetA), tt.Call(ctl, "patch", gadgetA, 200, "")}, "{kind: toy/v1/Gadget, stages: readyCondition, after: 200ms}"},
+		"a pod":         {[]trace.Event{bare(pod), tt.Call(ctl, "get", pod, 200, "")}, "{kind: v1/Pod, stages: pod, after: 200ms}"},
+		"a deployment":  {[]trace.Event{bare(deployment), tt.Call(ctl, "get", deployment, 200, "")}, "{kind: apps/v1/Deployment, stages: deployment, after: 200ms}"},
+		"a pvc":         {[]trace.Event{bare(pvc), tt.Call(ctl, "get", pvc, 200, "")}, "{kind: v1/PersistentVolumeClaim, stages: readyCondition, after: 200ms, status: {phase: Bound}, stuckStatus: {phase: Pending}}, and set its status fields to the ones the controller reads"},
+		"a job":         {[]trace.Event{bare(job), tt.Call(ctl, "get", job, 200, "")}, "{kind: batch/v1/Job, stages: readyCondition, after: 200ms, status: {succeeded: 1}, stuckStatus: {active: 1}}, and set its status fields to the ones the controller reads"},
 	} {
 		lines := unmodelled(t, sp, c.events...)
-		if len(lines) != 1 || !strings.Contains(lines[0], c.want) || !strings.Contains(lines[0], "reads") {
-			t.Errorf("%s: lines = %q, want one with %q", name, lines, c.want)
+		if len(lines) != 1 || !strings.HasSuffix(lines[0], c.want) {
+			t.Errorf("%s: lines = %q, want one that ends %q", name, lines, c.want)
 		}
 	}
 }
@@ -77,7 +79,6 @@ func TestConvergeNamesNoKind(t *testing.T) {
 	modelled.Models = []check.Model{{Kind: sp.StatusKinds[0]}}
 	get := tt.Call(ctl, "get", gadgetA, 200, "")
 	withStatus := tt.Version(gadgetA, "u-a", "1", map[string]any{"status": map[string]any{"phase": "Up"}})
-	deployment := tt.Ref("apps/deployments", "ns", "d")
 	listed := sp
 	listed.Primaries = append(slices.Clone(sp.Primaries), check.Primary{Kind: sp.StatusKinds[0], Ready: sp.Primaries[0].Ready})
 	for name, c := range map[string]struct {
@@ -92,7 +93,6 @@ func TestConvergeNamesNoKind(t *testing.T) {
 		"not read":                  {sp, []trace.Event{bare(gadgetA), tt.Call(trace.Harness, "get", gadgetA, 200, "")}},
 		"no instance":               {sp, []trace.Event{get}},
 		"an instance with a status": {sp, []trace.Event{withStatus, get}},
-		"a deployment":              {sp, []trace.Event{bare(deployment), tt.Call(ctl, "get", deployment, 200, "")}},
 	} {
 		if lines := unmodelled(t, c.s, c.events...); len(lines) != 0 {
 			t.Errorf("%s: lines = %q", name, lines)

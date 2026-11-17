@@ -3,6 +3,7 @@
 package check
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -28,8 +29,10 @@ import (
 
 func TestSuggestedBuiltinModelsWorkOnARealAPIServer(t *testing.T) {
 	type row struct {
-		name, kind        string
-		spec              map[string]any
+		name, kind string
+		spec       map[string]any
+		// condition is the condition that says ready, Ready when empty.
+		condition         string
 		createdUnderStuck bool
 		// ready and stuck map each status field to its value, or to nil
 		// when it is absent.
@@ -41,7 +44,11 @@ func TestSuggestedBuiltinModelsWorkOnARealAPIServer(t *testing.T) {
 	job := map[string]any{"template": map[string]any{"spec": map[string]any{"containers": []any{container}, "restartPolicy": "Never"}}}
 	rows := []row{
 		{name: "pod", kind: "Pod", spec: map[string]any{"containers": []any{container}},
-			ready: map[string]any{"phase": "Running"}, stuck: map[string]any{"phase": "Running"}},
+			ready: map[string]any{"phase": "Running"}, stuck: map[string]any{"phase": "Pending"}},
+		{name: "deployment", kind: "Deployment", condition: "Available", createdUnderStuck: true, spec: map[string]any{
+			"selector": map[string]any{"matchLabels": map[string]any{"app": "a"}},
+			"template": map[string]any{"metadata": map[string]any{"labels": map[string]any{"app": "a"}}, "spec": map[string]any{"containers": []any{container}}},
+		}, ready: map[string]any{"availableReplicas": 1, "updatedReplicas": 1}, stuck: map[string]any{"availableReplicas": nil, "updatedReplicas": 1}},
 		{name: "pvc", kind: "PersistentVolumeClaim", spec: map[string]any{"accessModes": []any{"ReadWriteOnce"}, "resources": map[string]any{"requests": map[string]any{"storage": "1Gi"}}},
 			ready: map[string]any{"phase": "Bound"}, stuck: map[string]any{"phase": "Pending"}},
 		{name: "job-created-under-stuck", kind: "Job", spec: job, createdUnderStuck: true,
@@ -94,11 +101,11 @@ func TestSuggestedBuiltinModelsWorkOnARealAPIServer(t *testing.T) {
 						t.Fatal(err)
 					}
 					status, _ = got.Object["status"].(map[string]any)
-					if readyIn(status) == ready && shows(status, fields) {
+					if conditionIn(status, cmp.Or(c.condition, "Ready")) == ready && shows(status, fields) {
 						return
 					}
 				}
-				t.Fatalf("The %s never showed Ready %s and %v. Its status is %v.", c.name, ready, fields, status)
+				t.Fatalf("The %s never showed %s %s and %v. Its status is %v.", c.name, cmp.Or(c.condition, "Ready"), ready, fields, status)
 			}
 			startStuck := func() func() {
 				end, err := s.Fault(plan.Fault{Match: plan.Match{Group: kind.Group, Resource: kind.Resource, Name: c.name}, Stuck: true})
@@ -160,13 +167,13 @@ func loadSuggestedModels(t *testing.T) []config.Model {
 	return c.Models
 }
 
-// readyIn returns the Ready condition's status, such as "True". It does not
-// use ReadyConditionCEL, which is false for a PVC or a Job, because their
-// conditions lose observedGeneration (#163).
-func readyIn(status map[string]any) any {
+// conditionIn returns the status of status's condition kind, such as "True".
+// It does not use ReadyConditionCEL, which is false for a PVC or a Job,
+// because their conditions lose observedGeneration (#163).
+func conditionIn(status map[string]any, kind string) any {
 	conditions, _ := status["conditions"].([]any)
 	for _, c := range conditions {
-		if c, _ := c.(map[string]any); c["type"] == "Ready" {
+		if c, _ := c.(map[string]any); c["type"] == kind {
 			return c["status"]
 		}
 	}

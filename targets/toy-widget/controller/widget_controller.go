@@ -69,6 +69,9 @@ type Reconciler struct {
 	LabelFrom string
 	// Gadget gives each Widget a Gadget it depends on.
 	Gadget bool
+	// Workload gives each Widget a DeploymentWorkload or PodWorkload it
+	// depends on. Empty gives none.
+	Workload string
 
 	// createdFor holds the Widgets this process created a child for. Only B10
 	// reads it, and a restart loses it. Reconciles run on one worker (the
@@ -97,6 +100,9 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	if r.Gadget {
 		builder = builder.Owns(&toyv1.Gadget{}, ctrlbuilder.WithPredicates(predicate.NewPredicateFuncs(r.passesGadgetEvent)))
+	}
+	if workload := workloadObject(r.Workload); workload != nil {
+		builder = builder.Owns(workload)
 	}
 	return builder.WithOptions(r.controllerOptions()).Complete(r)
 }
@@ -162,7 +168,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, err
 	}
 
-	status, changed := statusFor(widget, ready, gadgetReady)
+	workloadReady, err := r.syncWorkload(ctx, widget)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	status, changed := statusFor(widget, ready, gadgetReady, workloadReady)
 	if r.Bug == B6 {
 		// B6: a fresh lastSyncTime on every reconcile.
 		syncedAt := metav1.NowMicro()
@@ -190,7 +201,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 // claimChildrenEarly reports the children ready and holds that state, so that a
 // checkpoint sees a status no ConfigMap backs (B1).
 func (r *Reconciler) claimChildrenEarly(ctx context.Context, widget *toyv1.Widget) error {
-	status, changed := statusFor(widget, widget.Spec.Count, widget.Status.GadgetReady)
+	status, changed := statusFor(widget, widget.Spec.Count, widget.Status.GadgetReady, widget.Status.WorkloadReady)
 	if !changed {
 		return nil
 	}
@@ -269,14 +280,15 @@ func (r *Reconciler) label(ctx context.Context, namespace string) (string, error
 
 // statusFor returns the status a Widget should carry and whether that differs
 // from the one it carries now.
-func statusFor(widget *toyv1.Widget, ready int32, gadgetReady *bool) (toyv1.WidgetStatus, bool) {
-	status := toyv1.WidgetStatus{Ready: ready, ObservedGeneration: widget.Generation, GadgetReady: gadgetReady}
+func statusFor(widget *toyv1.Widget, ready int32, gadgetReady, workloadReady *bool) (toyv1.WidgetStatus, bool) {
+	status := toyv1.WidgetStatus{Ready: ready, ObservedGeneration: widget.Generation, GadgetReady: gadgetReady, WorkloadReady: workloadReady}
 	current := widget.Status
 	// Field by field: the pointers would compare by address.
 	changed := status.Ready != current.Ready ||
 		status.ObservedGeneration != current.ObservedGeneration ||
 		!status.LastSyncTime.Equal(current.LastSyncTime) ||
-		!ptr.Equal(status.GadgetReady, current.GadgetReady)
+		!ptr.Equal(status.GadgetReady, current.GadgetReady) ||
+		!ptr.Equal(status.WorkloadReady, current.WorkloadReady)
 	return status, changed
 }
 

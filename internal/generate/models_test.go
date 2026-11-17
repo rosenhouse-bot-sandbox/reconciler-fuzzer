@@ -251,3 +251,22 @@ func TestTheGadgetToyDrawsBothModelFaultsOnGadgets(t *testing.T) {
 		t.Errorf("The gadget toy draws model faults %v, want stuck and slowDelete.", drawn)
 	}
 }
+
+func TestAStuckFaultDrawsEachFailureOfItsStage(t *testing.T) {
+	cfg := loadConfig(t, "testdata/workloads/config.yaml")
+	want := map[string]bool{}
+	for _, m := range cfg.Models {
+		for _, failure := range append([]string{""}, m.Failures()...) {
+			want[m.Resource+" "+failure] = true
+		}
+	}
+	drawn := map[string]bool{}
+	for _, f := range faults(plans(t, "testdata/workloads/config.yaml", 300)) {
+		if f.Stuck {
+			drawn[f.Match.Resource+" "+f.Failure] = true
+		}
+	}
+	if !maps.Equal(drawn, want) {
+		t.Errorf("Drawn stuck faults %v, want %v.", slices.Sorted(maps.Keys(drawn)), slices.Sorted(maps.Keys(want)))
+	}
+}

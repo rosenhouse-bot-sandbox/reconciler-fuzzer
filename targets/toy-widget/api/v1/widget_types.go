@@ -40,6 +40,10 @@ type WidgetStatus struct {
 	// writes it.
 	// +optional
 	GadgetReady *bool `json:"gadgetReady,omitempty"`
+	// WorkloadReady says whether the Widget's Deployment or Pod is ready.
+	// Only --workload writes it.
+	// +optional
+	WorkloadReady *bool `json:"workloadReady,omitempty"`
 }
 
 // +kubebuilder:object:root=true

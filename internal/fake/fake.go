@@ -551,7 +551,7 @@ func (f *Fake) Pending() bool {
 // Takes reports whether f is a model fault on this fake, which serves
 // FaultsPath.
 func (f *Fake) Takes(fault plan.Fault) bool {
-	return f.o.ModelFaults && fault.ModelFault() && fault.System == f.o.Name
+	return f.o.ModelFaults && fault.ModelFault() && fault.Failure == "" && fault.System == f.o.Name
 }
 
 // do sends a harness request with the map's credentials.

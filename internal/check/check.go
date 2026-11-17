@@ -4,7 +4,6 @@ package check
 
 import (
 	"cmp"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -395,12 +394,12 @@ func recordedResource(run trace.Run) func(schema.GroupVersionKind) (string, bool
 // configModels takes each model's ready and dependency from the config, and
 // its resource from the run event's model of the same kind, or else a guess.
 func configModels(models []config.Model, recorded []trace.Model) ([]Model, error) {
-	ready, err := config.CompileReady(config.ReadyConditionCEL, nil)
-	if err != nil {
-		return nil, err
-	}
 	var judged []Model
 	for _, m := range models {
+		ready, err := config.CompileReady(m.Ready(), nil)
+		if err != nil {
+			return nil, err
+		}
 		plural, _ := meta.UnsafeGuessKindToResource(m.Kind)
 		kind := trace.Kind{Group: m.Kind.Group, Version: m.Kind.Version, Kind: m.Kind.Kind, Resource: plural.Resource}
 		if i := slices.IndexFunc(recorded, func(r trace.Model) bool { return r.Kind.Group == kind.Group && r.Kind.Kind == kind.Kind }); i >= 0 {
@@ -609,7 +608,7 @@ func unpicked(ix *trace.Index, s Spec) []string {
 		}
 		start := starts[key].At
 		switch {
-		case f.Model != "" && !s.fake(f.Model) && !held(ix, *f, start, e.At):
+		case f.Model != "" && !s.fake(f.Model) && !held(ix, s, *f, start, e.At):
 			notes = append(notes, faultNote(ix, f.Step, f.Index, f.What, "held no object", start, e.At))
 		case f.Model == "" && !slices.ContainsFunc(ix.Calls(trace.Controller, start, math.MaxInt64), func(c trace.Event) bool {
 			return c.At-c.Call.Latency <= e.At && c.Call.Ref.System == cmp.Or(f.System, "kube") &&
@@ -652,8 +651,10 @@ func (s Spec) fake(model string) bool {
 }
 
 // held reports whether f's model wrote, in (from, to], a version that f
-// holds: a stuck status, or the slowDelete finalizer.
-func held(ix *trace.Index, f trace.Fault, from, to time.Duration) bool {
+// holds: one its model's ready says is not ready, or one with the
+// slowDelete finalizer.
+func held(ix *trace.Index, s Spec, f trace.Fault, from, to time.Duration) bool {
+	ready := s.modelReady(trace.Caller(f.Model))
 	return slices.ContainsFunc(ix.EventsIn(from, to), func(e trace.Event) bool {
 		v := e.Version
 		if v == nil || ix.Writer(*v) != trace.Caller(f.Model) {
@@ -662,16 +663,21 @@ func held(ix *trace.Index, f trace.Fault, from, to time.Duration) bool {
 		if strings.HasPrefix(f.What, "slowDelete") {
 			return slices.Contains(finalizers(*v), trace.SlowDeleteFinalizer)
 		}
-		var body struct {
-			Status struct {
-				Conditions []struct{ Type, Reason string } `json:"conditions"`
-			} `json:"status"`
-		}
-		json.Unmarshal(v.Body, &body)
-		return slices.ContainsFunc(body.Status.Conditions, func(c struct{ Type, Reason string }) bool {
-			return c.Type == "Ready" && c.Reason == trace.StuckReason
-		})
+		ok, err := ready(decode(v.Body))
+		return err == nil && !ok
 	})
+}
+
+// modelReady is the ready of the model named caller, or a readyCondition
+// model's when the spec lacks it.
+func (s Spec) modelReady(caller trace.Caller) func(map[string]any) (bool, error) {
+	for _, m := range s.Models {
+		if m.System == "" && trace.ModelCaller(m.Kind.Group, m.Kind.Resource) == caller {
+			return m.Ready
+		}
+	}
+	ready, _ := config.CompileReady(config.ReadyConditionCEL, nil)
+	return ready
 }
 
 // actionErrors notes each failed action, and returns the notes of those
