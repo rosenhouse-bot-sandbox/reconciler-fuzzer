@@ -1,9 +1,11 @@
 package check
 
 import (
+	"cmp"
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
@@ -106,16 +108,14 @@ func unwaitedDeletions(ix *trace.Index, s Spec) []string {
 }
 
 // builtinStatusKinds are built-in kinds whose status another controller
-// writes, each with the status keys of the models entry that report.md
-// suggests. A stuck Pod stays Running, as one that fails its readiness probe
-// does. A stuck PVC is Pending. A stuck Job shows one active Pod and no
-// succeeded one. The API server refuses to lower a done Job's succeeded, so
-// that Job stays done. A model cannot track a Deployment's or StatefulSet's
-// observedGeneration, so those kinds are left out.
+// writes, each with the models entry that report.md suggests. A stuck PVC is
+// Pending. A stuck Job shows one active Pod and no succeeded one. The API
+// server refuses to lower a done Job's succeeded, so that Job stays done.
 var builtinStatusKinds = map[trace.Kind]string{
-	{Group: "batch", Version: "v1", Kind: "Job", Resource: "jobs"}:                     "status: {succeeded: 1}, stuckStatus: {active: 1}",
-	{Version: "v1", Kind: "Pod", Resource: "pods"}:                                     "status: {phase: Running}",
-	{Version: "v1", Kind: "PersistentVolumeClaim", Resource: "persistentvolumeclaims"}: "status: {phase: Bound}, stuckStatus: {phase: Pending}",
+	{Group: "batch", Version: "v1", Kind: "Job", Resource: "jobs"}:                     "stages: readyCondition, after: 200ms, status: {succeeded: 1}, stuckStatus: {active: 1}",
+	{Version: "v1", Kind: "PersistentVolumeClaim", Resource: "persistentvolumeclaims"}: "stages: readyCondition, after: 200ms, status: {phase: Bound}, stuckStatus: {phase: Pending}",
+	{Version: "v1", Kind: "Pod", Resource: "pods"}:                                     "stages: pod, after: 200ms",
+	{Group: "apps", Version: "v1", Kind: "Deployment", Resource: "deployments"}:        "stages: deployment, after: 200ms",
 }
 
 // unmodelledKinds names each status kind that the controller read or
@@ -150,7 +150,7 @@ func unmodelledKinds(ix *trace.Index, t time.Duration, s Spec) []string {
 			continue
 		}
 		line := fmt.Sprintf("The controller reads %s, whose status nothing models. If another controller sets it, add to models: - %s", kindName(k), suggestedModel(k))
-		if _, builtin := builtinStatusKinds[k]; builtin {
+		if strings.Contains(builtinStatusKinds[k], "status:") {
 			line += ", and set its status fields to the ones the controller reads"
 		}
 		lines = append(lines, line)
@@ -161,11 +161,7 @@ func unmodelledKinds(ix *trace.Index, t time.Duration, s Spec) []string {
 
 // suggestedModel returns the models entry that report.md suggests for k.
 func suggestedModel(k trace.Kind) string {
-	entry := "{kind: " + kindName(k) + ", stages: readyCondition, after: 200ms"
-	if keys, builtin := builtinStatusKinds[k]; builtin {
-		entry += ", " + keys
-	}
-	return entry + "}"
+	return "{kind: " + kindName(k) + ", " + cmp.Or(builtinStatusKinds[k], "stages: readyCondition, after: 200ms") + "}"
 }
 
 // kindName names k as a config does, such as batch/v1/Job.

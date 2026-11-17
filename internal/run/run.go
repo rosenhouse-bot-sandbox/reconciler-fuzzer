@@ -570,7 +570,7 @@ func traceModels(models []config.Model, ref func(schema.GroupVersionKind, string
 		}
 		d := trace.Model{
 			Kind:  trace.Kind{Group: m.Kind.Group, Version: m.Kind.Version, Kind: m.Kind.Kind, Resource: r.Resource},
-			Ready: config.ReadyConditionCEL,
+			Ready: m.Ready(),
 		}
 		if m.Dependency != nil {
 			d.Dependency = &trace.Dependency{Required: m.Dependency.Required, Track: m.Dependency.Track}

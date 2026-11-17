@@ -21,7 +21,7 @@ import (
 const referencesHead = `launch: {binary: bin/controller, rbac: [role.yaml]}
 crds: [crd.yaml, crds]
 fixtures: [fixture.yaml]
-models: [{kind: toy/v1/Volume, after: 1s}]
+models: [{kind: toy/v1/Volume, after: 1s}, {kind: apps/v1/Deployment, stages: deployment, after: 1s}]
 systems:
   - {name: cloud, api: crud, process: {command: [x]}, ready: "self.state == 'ready'"}
   - {name: other, api: crud, process: {command: [x]}}
@@ -90,6 +90,7 @@ func TestReferencesLoad(t *testing.T) {
   - {from: toy/v1/Tenant, to: v1/Namespace, name: spec.namespace, ready: "true"}
   - {from: toy/v1/User, to: toy/v2/Gadget, name: spec.gadget, ready: "true"}
   - {from: toy/v1/Database, to: apps/v1/Deployment, name: spec.deployment, ready: "true"}
+  - {from: toy/v1/User, to: apps/v1/Deployment, name: spec.deployment}
   - {from: toy/v1/Database, to: storage.k8s.io/v1/StorageClass, name: spec.storageClass, ready: "true"}
 `))
 	if err != nil {
@@ -104,6 +105,7 @@ func TestReferencesLoad(t *testing.T) {
 		{From: toyKind("toy", "Tenant"), To: toyKind("", "Namespace"), Name: "spec.namespace", Ready: "true", Required: true},
 		{From: toyKind("toy", "User"), To: schema.GroupVersionKind{Group: "toy", Version: "v2", Kind: "Gadget"}, Namespaced: true, Name: "spec.gadget", Ready: "true", Required: true},
 		{From: toyKind("toy", "Database"), To: toyKind("apps", "Deployment"), Namespaced: true, Name: "spec.deployment", Ready: "true", Required: true},
+		{From: toyKind("toy", "User"), To: toyKind("apps", "Deployment"), Namespaced: true, Name: "spec.deployment", Ready: (config.Model{Stage: config.DeploymentStage}).Ready(), Required: true},
 		{From: toyKind("toy", "Database"), To: toyKind("storage.k8s.io", "StorageClass"), Name: "spec.storageClass", Ready: "true", Required: true},
 	}
 	if !reflect.DeepEqual(c.References, want) {

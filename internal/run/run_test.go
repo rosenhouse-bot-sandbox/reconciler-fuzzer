@@ -60,7 +60,7 @@ var (
 	sprocketKind = schema.GroupVersionKind{Group: "toy.reconciler-fuzzer", Version: "v2", Kind: "Sprocket"}
 	testModels   = []config.Model{
 		{Kind: gadgetKind, Dependency: &config.Dependency{Required: true, Track: time.Second}},
-		{Kind: sprocketKind},
+		{Kind: sprocketKind, Stage: config.PodStage},
 	}
 )
 
@@ -83,7 +83,7 @@ func TestTraceModelsNameKindsBothWays(t *testing.T) {
 	}
 	want := []trace.Model{
 		{Kind: trace.Kind{Group: gadgetKind.Group, Version: "v1", Kind: "Gadget", Resource: "gadgets"}, Ready: config.ReadyConditionCEL, Dependency: &trace.Dependency{Required: true, Track: time.Second}},
-		{Kind: trace.Kind{Group: sprocketKind.Group, Version: "v2", Kind: "Sprocket", Resource: "sprockets"}, Ready: config.ReadyConditionCEL},
+		{Kind: trace.Kind{Group: sprocketKind.Group, Version: "v2", Kind: "Sprocket", Resource: "sprockets"}, Ready: testModels[1].Ready()},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("traceModels = %+v, want %+v", got, want)
