@@ -435,9 +435,10 @@ A `stuck` fault may name a `failure`, which generated plans draw too:
 
 | Stage | Failure | What the model writes |
 |---|---|---|
-| `deployment` | none | A rollout makes no progress. Once rolled out, every Pod is unavailable. |
-| `deployment` | `progressDeadlineExceeded` | `Progressing` False. |
-| `deployment` | `replicaFailure` | `ReplicaFailure` True, and no new replica. |
+| `deployment` | none | A rollout makes no progress. |
+| `deployment` | `progressDeadlineExceeded` | A rollout makes no progress, and `Progressing` is False. |
+| `deployment` | `replicaFailure` | A rollout makes no progress, `ReplicaFailure` is True, and no new replica exists. |
+| `deployment` | `unavailable` | Every replica is unavailable, rolling out or not. |
 | `pod` | none | Every container stays creating. |
 | `pod` | `unschedulable` | `PodScheduled` False. |
 | `pod` | `imagePullBackOff` | The first container waits on its image. |
@@ -445,7 +446,8 @@ A `stuck` fault may name a `failure`, which generated plans draw too:
 | `pod` | `initContainerFailed` | The first init container that is not a sidecar crash-loops. |
 | `pod` | `sidecarFailed` | The first sidecar crash-loops. The Pod is Running, not ready. |
 
-A Pod without the container a failure needs gets the default. A plan step writes one as
+Only `unavailable` changes a Deployment that has no rollout under way. A Pod without the
+container a failure needs gets the default. A plan step writes one as
 `{"match": {"resource": "pods"}, "stuck": true, "failure": "imagePullBackOff"}`.
 [targets/toy-widget/deployment](targets/toy-widget/deployment) and
 [targets/toy-widget/pod](targets/toy-widget/pod) run the toy with each.

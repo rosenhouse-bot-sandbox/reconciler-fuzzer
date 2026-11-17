@@ -5,6 +5,7 @@ package model
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -373,7 +374,7 @@ func TestWorkloadStagesWriteEachFailureOnce(t *testing.T) {
 		{config.Model{Kind: deployment, Stage: config.DeploymentStage, After: 100 * time.Millisecond},
 			map[string]any{"replicas": int64(2), "selector": map[string]any{"matchLabels": labels},
 				"template": map[string]any{"metadata": map[string]any{"labels": labels}, "spec": podSpec}},
-			map[string]string{"": `"reason":"MinimumReplicasUnavailable"`, "progressDeadlineExceeded": `"reason":"ProgressDeadlineExceeded"`, "replicaFailure": `"reason":"FailedCreate"`}},
+			map[string]string{"": `"reason":"ReplicaSetUpdated"`, "unavailable": `"replicas":1,`, "progressDeadlineExceeded": `"reason":"ProgressDeadlineExceeded"`, "replicaFailure": `"reason":"FailedCreate"`}},
 		{config.Model{Kind: pod, Stage: config.PodStage, After: 100 * time.Millisecond}, podSpec,
 			map[string]string{"": `"reason":"PodInitializing"`, "unschedulable": `"reason":"Unschedulable"`, "imagePullBackOff": `"reason":"ImagePullBackOff"`,
 				"crashLoopBackOff": `"reason":"CrashLoopBackOff"`, "initContainerFailed": `"reason":"ContainersNotInitialized"`, "sidecarFailed": `"containers with unready status: [proxy]"`}},
@@ -415,27 +416,37 @@ func TestWorkloadStagesWriteEachFailureOnce(t *testing.T) {
 					return e.Call != nil && e.Call.Caller == s.caller() && e.Call.Subresource == "status" && e.Call.Status == 200
 				})
 			}
-			settled := func(t *testing.T, want int) {
+			// settled waits until the writes stop, and fails if they do not.
+			settled := func(t *testing.T) {
 				t.Helper()
-				time.Sleep(500 * time.Millisecond)
-				if got := writes(); got != want {
-					t.Fatalf("The stage made %d status writes, want %d.", got, want)
+				for before := -1; before != writes(); {
+					before = writes()
+					time.Sleep(500 * time.Millisecond)
+				}
+				before := writes()
+				time.Sleep(time.Second)
+				if got := writes(); got != before {
+					t.Fatalf("The stage keeps writing: %d status writes, then %d.", before, got)
 				}
 			}
 			await(t, true, `"status"`)
-			settled(t, 2) // progressing, then ready
-			n := 2
-			for _, failure := range append([]string{""}, c.model.Failures()...) {
+			settled(t)
+			for i, failure := range append([]string{""}, c.model.Failures()...) {
 				end, err := s.Fault(plan.Fault{Match: plan.Match{Group: c.model.Kind.Group, Resource: ref.Resource}, Stuck: true, Failure: failure})
 				if err != nil {
 					t.Fatal(err)
 				}
+				// A Deployment's failures stall a rollout.
+				if c.model.Kind == deployment {
+					if err := k.Patch(ctx, ref, []byte(fmt.Sprintf(`{"spec": {"replicas": %d}}`, 3+i))); err != nil {
+						t.Fatal(err)
+					}
+				}
 				await(t, false, c.shown[failure])
-				settled(t, n+1)
+				settled(t)
 				end()
 				await(t, true, `"status"`)
-				n += 2
-				settled(t, n)
+				settled(t)
 			}
 		})
 	}

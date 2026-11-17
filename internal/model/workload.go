@@ -15,10 +15,10 @@ import (
 )
 
 // deploymentStatus is the status Kubernetes' Deployment controller writes.
-// At a generation the stage has not written ready, a rollout keeps the
-// replicas the last status counted available, as an old ReplicaSet's Pods,
-// and adds one unavailable Pod of the new template. At a generation it has,
-// a stuck Deployment's Pods are all unavailable.
+// A stuck rollout keeps the replicas the last status counted available, as
+// an old ReplicaSet's Pods, and adds one unavailable Pod of the new
+// template. A generation the stage wrote ready has no rollout to stall, so
+// only the unavailable failure changes it: every Pod is unavailable.
 func deploymentStatus(h *held, w want, now time.Time) map[string]any {
 	var spec appsv1.DeploymentSpec
 	decodeInto(h.spec, &spec)
@@ -31,7 +31,8 @@ func deploymentStatus(h *held, w want, now time.Time) map[string]any {
 		return map[string]any{"type": kind, "status": status, "reason": reason, "message": message,
 			"lastUpdateTime": now.UTC().Format(time.RFC3339), "lastTransitionTime": now.UTC().Format(time.RFC3339)}
 	}
-	if w.state == wantReady {
+	rollingOut := h.readyGeneration != h.generation
+	if w.state == wantReady || !rollingOut && w.failure != "unavailable" {
 		return map[string]any{
 			"observedGeneration": h.generation, "replicas": replicas, "updatedReplicas": replicas,
 			"readyReplicas": replicas, "availableReplicas": replicas, "unavailableReplicas": nil,
@@ -41,15 +42,17 @@ func deploymentStatus(h *held, w want, now time.Time) map[string]any {
 			},
 		}
 	}
-	rollingOut := h.readyGeneration != h.generation
 	available := min(numberAt(h.status, "availableReplicas"), replicas)
 	updated, current := min(replicas, 1), available+min(replicas, 1)
 	if spec.Strategy.Type == appsv1.RecreateDeploymentStrategyType {
 		available, current = 0, updated
 	}
 	progressingCondition := condition("Progressing", "True", "ReplicaSetUpdated", rs+" is progressing.")
+	if w.failure == "unavailable" {
+		available, current = 0, updated
+	}
 	if !rollingOut {
-		available, updated, current = 0, replicas, replicas
+		updated, current = replicas, replicas
 		progressingCondition = condition("Progressing", "True", "NewReplicaSetAvailable", rs+" has successfully progressed.")
 	}
 	var failure map[string]any

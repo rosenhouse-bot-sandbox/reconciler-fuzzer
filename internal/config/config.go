@@ -257,7 +257,7 @@ var stages = map[string]stage{
 			` && [has(self.status.replicas) ? self.status.replicas : 0, has(self.status.updatedReplicas) ? self.status.updatedReplicas : 0, has(self.status.availableReplicas) ? self.status.availableReplicas : 0]` +
 			`.all(n, n == (has(self.spec.replicas) ? self.spec.replicas : 1))` +
 			` && !(has(self.status.conditions) && self.status.conditions.exists(c, c.type == 'Progressing' && c.reason == 'ProgressDeadlineExceeded'))`,
-		failures: []string{"progressDeadlineExceeded", "replicaFailure"},
+		failures: []string{"progressDeadlineExceeded", "replicaFailure", "unavailable"},
 	},
 	PodStage: {
 		kind: "v1/Pod",

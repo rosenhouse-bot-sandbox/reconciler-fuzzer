@@ -772,7 +772,7 @@ func TestWorkloadStages(t *testing.T) {
 	if deployment.Stage != config.DeploymentStage || pod.Stage != config.PodStage {
 		t.Errorf("stages = %s, %s", deployment.Stage, pod.Stage)
 	}
-	if want := []string{"progressDeadlineExceeded", "replicaFailure"}; !reflect.DeepEqual(deployment.Failures(), want) {
+	if want := []string{"progressDeadlineExceeded", "replicaFailure", "unavailable"}; !reflect.DeepEqual(deployment.Failures(), want) {
 		t.Errorf("deployment failures = %v, want %v", deployment.Failures(), want)
 	}
 	if want := []string{"unschedulable", "imagePullBackOff", "crashLoopBackOff", "initContainerFailed", "sidecarFailed"}; !reflect.DeepEqual(pod.Failures(), want) {

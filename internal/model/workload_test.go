@@ -2,8 +2,8 @@ package model
 
 import (
 	"encoding/json"
-	"maps"
 	"fmt"
+	"maps"
 	"reflect"
 	"strings"
 	"testing"
@@ -72,6 +72,8 @@ func TestDeploymentStatusRollsOut(t *testing.T) {
 			[4]any{1.0, 1.0, 0.0, 1.0}, map[string]string{"Available": "False/MinimumReplicasUnavailable", "Progressing": "True/ReplicaSetUpdated"}},
 		"deadline exceeded": {deploymentHeld(three, map[string]any{"availableReplicas": 3.0}), want{state: wantStuck, failure: "progressDeadlineExceeded"},
 			[4]any{4.0, 1.0, 3.0, 1.0}, map[string]string{"Available": "True/MinimumReplicasAvailable", "Progressing": "False/ProgressDeadlineExceeded"}},
+		"unavailable rollout": {deploymentHeld(three, map[string]any{"availableReplicas": 3.0}), want{state: wantStuck, failure: "unavailable"},
+			[4]any{1.0, 1.0, 0.0, 1.0}, map[string]string{"Available": "False/MinimumReplicasUnavailable", "Progressing": "True/ReplicaSetUpdated"}},
 		"replica failure": {deploymentHeld(three, map[string]any{"availableReplicas": 3.0}), want{state: wantStuck, failure: "replicaFailure"},
 			[4]any{3.0, 0.0, 3.0, 0.0}, map[string]string{"Available": "True/MinimumReplicasAvailable", "Progressing": "True/ReplicaSetUpdated", "ReplicaFailure": "True/FailedCreate"}},
 	} {
@@ -279,18 +281,23 @@ func TestACrashingContainerExitedWithAnError(t *testing.T) {
 	}
 }
 
-func TestADeploymentWrittenReadyAtItsGenerationLosesItsPodsWhenStuck(t *testing.T) {
+func TestADeploymentWrittenReadyAtItsGenerationStaysReadyUnlessUnavailable(t *testing.T) {
 	h := deploymentHeld(map[string]any{"replicas": 3.0}, map[string]any{"availableReplicas": 3.0})
 	h.readyGeneration = h.generation
-	status := asJSON(t, deploymentStatus(h, want{state: wantStuck}, time.Unix(0, 0)))
+	for _, failure := range []string{"", "progressDeadlineExceeded", "replicaFailure"} {
+		if got := counts(asJSON(t, deploymentStatus(h, want{state: wantStuck, failure: failure}, time.Unix(0, 0)))); got != [4]any{3.0, 3.0, 3.0, nil} {
+			t.Errorf("%q: replicas, updated, available, unavailable = %v, want all ready", failure, got)
+		}
+	}
+	status := asJSON(t, deploymentStatus(h, want{state: wantStuck, failure: "unavailable"}, time.Unix(0, 0)))
 	if got, want := counts(status), [4]any{3.0, 3.0, 0.0, 3.0}; got != want {
-		t.Errorf("replicas, updated, available, unavailable = %v, want %v", got, want)
+		t.Errorf("unavailable: replicas, updated, available, unavailable = %v, want %v", got, want)
 	}
 	if got := conditionsOf(status); got["Available"] != "False/MinimumReplicasUnavailable" || got["Progressing"] != "True/NewReplicaSetAvailable" {
-		t.Errorf("conditions = %v", got)
+		t.Errorf("unavailable: conditions = %v", got)
 	}
 	h.spec["strategy"] = map[string]any{"rollingUpdate": map[string]any{"maxUnavailable": "100%"}}
-	if got := conditionsOf(asJSON(t, deploymentStatus(h, want{state: wantStuck}, time.Unix(0, 0))))["Available"]; got != "True/MinimumReplicasAvailable" {
+	if got := conditionsOf(asJSON(t, deploymentStatus(h, want{state: wantStuck, failure: "unavailable"}, time.Unix(0, 0))))["Available"]; got != "True/MinimumReplicasAvailable" {
 		t.Errorf("Available = %s with maxUnavailable 100%%, want True", got)
 	}
 }
