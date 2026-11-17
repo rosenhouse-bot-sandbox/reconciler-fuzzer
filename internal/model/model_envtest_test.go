@@ -343,3 +343,100 @@ func TestAStageMakesBuiltInKindsReadyWithOneWriteEach(t *testing.T) {
 		})
 	}
 }
+
+// Each stuck failure shows the reason Kubernetes would, and the API server
+// keeps every field the stage writes, so the stage writes each status once.
+func TestWorkloadStagesWriteEachFailureOnce(t *testing.T) {
+	ctx := context.Background()
+	deployment := schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}
+	pod := schema.GroupVersionKind{Version: "v1", Kind: "Pod"}
+	recorded := &events{}
+	k := kube.New(kube.Options{Watch: []schema.GroupVersionKind{deployment, pod}})
+	if _, err := k.Start(ctx, &system.Env{Record: recorded.record, Dir: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { k.Stop(ctx) })
+	container := func(name string) map[string]any { return map[string]any{"name": name, "image": "example.com/" + name} }
+	sidecar := container("proxy")
+	sidecar["restartPolicy"] = "Always"
+	podSpec := map[string]any{
+		"initContainers": []any{sidecar, container("migrate")},
+		"containers":     []any{container("app"), container("metrics")},
+	}
+	labels := map[string]any{"app": "x"}
+	for _, c := range []struct {
+		model config.Model
+		spec  map[string]any
+		// shown is what each failure's status contains.
+		shown map[string]string
+	}{
+		{config.Model{Kind: deployment, Stage: config.DeploymentStage, After: 100 * time.Millisecond},
+			map[string]any{"replicas": int64(2), "selector": map[string]any{"matchLabels": labels},
+				"template": map[string]any{"metadata": map[string]any{"labels": labels}, "spec": podSpec}},
+			map[string]string{"": `"reason":"ReplicaSetUpdated"`, "progressDeadlineExceeded": `"reason":"ProgressDeadlineExceeded"`, "replicaFailure": `"reason":"FailedCreate"`}},
+		{config.Model{Kind: pod, Stage: config.PodStage, After: 100 * time.Millisecond}, podSpec,
+			map[string]string{"": `"reason":"PodInitializing"`, "unschedulable": `"reason":"Unschedulable"`, "imagePullBackOff": `"reason":"ImagePullBackOff"`,
+				"crashLoopBackOff": `"reason":"CrashLoopBackOff"`, "initContainerFailed": `"reason":"ContainersNotInitialized"`, "sidecarFailed": `"containers with unready status: [proxy]"`}},
+	} {
+		t.Run(c.model.Kind.Kind, func(t *testing.T) {
+			s, err := NewStage(k, c.model)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.Start(ctx, &system.Env{Record: recorded.record}); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { s.Stop(ctx) })
+			ref, err := k.Create(ctx, map[string]any{"apiVersion": c.model.Kind.GroupVersion().String(), "kind": c.model.Kind.Kind,
+				"metadata": map[string]any{"name": "x"}, "spec": c.spec})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ready, err := config.CompileReady(c.model.Ready(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			await := func(t *testing.T, want bool, shown string) {
+				t.Helper()
+				deadline := time.Now().Add(10 * time.Second)
+				for time.Now().Before(deadline) {
+					last := lastVersion(recorded, ref)
+					var obj map[string]any
+					json.Unmarshal(last.Body, &obj)
+					if got, err := ready(obj); err == nil && got == want && strings.Contains(string(last.Body), shown) {
+						return
+					}
+					time.Sleep(20 * time.Millisecond)
+				}
+				t.Fatalf("The %s never became ready=%v showing %s: %s", c.model.Kind.Kind, want, shown, lastVersion(recorded, ref).Body)
+			}
+			writes := func() int {
+				return recorded.count(func(e trace.Event) bool {
+					return e.Call != nil && e.Call.Caller == s.caller() && e.Call.Subresource == "status" && e.Call.Status == 200
+				})
+			}
+			settled := func(t *testing.T, want int) {
+				t.Helper()
+				time.Sleep(500 * time.Millisecond)
+				if got := writes(); got != want {
+					t.Fatalf("The stage made %d status writes, want %d.", got, want)
+				}
+			}
+			await(t, true, `"status"`)
+			settled(t, 2) // progressing, then ready
+			n := 2
+			for _, failure := range append([]string{""}, c.model.Failures()...) {
+				end, err := s.Fault(plan.Fault{Match: plan.Match{Group: c.model.Kind.Group, Resource: ref.Resource}, Stuck: true, Failure: failure})
+				if err != nil {
+					t.Fatal(err)
+				}
+				await(t, false, c.shown[failure])
+				settled(t, n+1)
+				end()
+				await(t, true, `"status"`)
+				n += 2
+				settled(t, n)
+			}
+		})
+	}
+}

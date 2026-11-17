@@ -159,6 +159,9 @@ type Fault struct {
 	KillAfter bool `json:"killAfter,omitempty"`
 	// Stuck keeps each matching object not ready.
 	Stuck bool `json:"stuck,omitempty"`
+	// Failure names how a stuck object fails, from its model's stage, such
+	// as a Pod's imagePullBackOff. Empty means the stage's default.
+	Failure string `json:"failure,omitempty"`
 	// SlowDelete holds each matching object's deletion until the fault ends.
 	SlowDelete bool `json:"slowDelete,omitempty"`
 	// HoldWatch pauses the controller's watch events of the kind Match's
@@ -630,6 +633,9 @@ func (f Fault) Validate() error {
 			return fmt.Errorf("%s takes no nth", effect)
 		}
 	}
+	if f.Failure != "" && !f.Stuck {
+		return errors.New("only stuck takes a failure")
+	}
 	if f.Error != nil && (f.Error.Code < 400 || f.Error.Code > 599) {
 		return fmt.Errorf("error code %d is not from 400 to 599", f.Error.Code)
 	}
@@ -664,6 +670,8 @@ func (f Fault) Effect() string {
 		return "dropResponse"
 	case f.KillAfter:
 		return "killAfter"
+	case f.Stuck && f.Failure != "":
+		return "stuck(" + f.Failure + ")"
 	case f.Stuck:
 		return "stuck"
 	case f.SlowDelete:

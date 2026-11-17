@@ -211,6 +211,7 @@ func TestValidate(t *testing.T) {
 		"slowDelete with verb":    {[]Step{{Faults: []Fault{{SlowDelete: true, Match: Match{Verb: "get", Resource: "gadgets"}}}}}, "slowDelete matches objects, so it takes no verb or subresource"},
 		"stuck subresource":       {[]Step{{Faults: []Fault{{Stuck: true, Match: Match{Resource: "gadgets", Subresource: "status"}}}}}, "stuck matches objects, so it takes no verb or subresource"},
 		"stuck with nth":          {[]Step{{Faults: []Fault{{Stuck: true, Match: gadgets, Nth: 1}}}}, "stuck takes no nth"},
+		"failure without stuck":   {[]Step{{Faults: []Fault{{SlowDelete: true, Failure: "crashLoopBackOff", Match: gadgets}}}}, "only stuck takes a failure"},
 		"fault with two":          {[]Step{{Faults: []Fault{{Drop: true}, {Drop: true, Delay: &delay}}}}, "steps[0].faults[1]: a fault sets 2 of"},
 		"drop and dropResponse":   {[]Step{{Faults: []Fault{{Drop: true, DropResponse: true}}}}, "a fault sets 2 of"},
 		"error and killAfter":     {[]Step{{Faults: []Fault{{Error: &Error{Code: 500}, KillAfter: true}}}}, "a fault sets 2 of"},
@@ -359,9 +360,10 @@ func TestFaultString(t *testing.T) {
 		{Error: &Error{Code: 500}}: "error(500)",
 		{Delay: &delay, Match: Match{Verb: "patch", Resource: "widgets", Subresource: "status"}}: "delay(1.5s) on verb=patch resource=widgets subresource=status",
 		{Drop: true, System: "kube", Match: Match{Group: "g", Name: "n"}, Nth: 2}:                "drop on system=kube group=g name=n nth=2",
-		{Stuck: true, Match: gadgets}:      "stuck on group=example.com resource=gadgets",
-		{SlowDelete: true, Match: gadgets}: "slowDelete on group=example.com resource=gadgets",
-		{HoldWatch: true, Match: gadgets}:  "holdWatch on group=example.com resource=gadgets",
+		{Stuck: true, Match: gadgets}:                                           "stuck on group=example.com resource=gadgets",
+		{Stuck: true, Failure: "unschedulable", Match: Match{Resource: "pods"}}: "stuck(unschedulable) on resource=pods",
+		{SlowDelete: true, Match: gadgets}:                                      "slowDelete on group=example.com resource=gadgets",
+		{HoldWatch: true, Match: gadgets}:                                       "holdWatch on group=example.com resource=gadgets",
 	} {
 		if got := f.String(); got != want {
 			t.Errorf("String() = %q, want %q", got, want)

@@ -36,7 +36,7 @@ type Stage struct {
 	w      stageWriter
 	record func(trace.Event)
 
-	readyFields, stuckFields map[string]any
+	shape shape
 
 	// sweeping serializes sweeps, so a fault's start and end write in
 	// order with the loop's writes.
@@ -71,15 +71,24 @@ type held struct {
 	// deletionTimestamp, which holds whole seconds.
 	releaseAt  time.Time
 	finalizers []string
-	ready      *stageCondition
+	// status is the heard status, and spec the heard spec.
+	status, spec map[string]any
+	ready        *stageCondition
 	// awaited is the resourceVersion a sent write made, or, after a
 	// conflict, conflicted is the one it named.
 	awaited, conflicted string
 	timer               *time.Timer
 	// fresh is the message a fault's end writes.
 	fresh string
-	// wrote is the generation of the stage's last status write.
-	wrote int64
+	// wrote is the generation of the stage's last status write, made at
+	// statusRV for wanted.
+	wrote     int64
+	statusRV  string
+	statusFor want
+	// shown is the want of the stage's last status write, and echo the
+	// status that the first version at or after its statusRV showed.
+	shown *want
+	echo  map[string]any
 }
 
 type stageCondition struct {
@@ -107,6 +116,7 @@ type stageOp struct {
 	finalizers []string
 	status     map[string]any
 	generation int64
+	want       want
 }
 
 type stageWriter interface {
@@ -127,15 +137,7 @@ func NewStage(k *kube.Kube, m config.Model) (*Stage, error) {
 }
 
 func newStage(gvr schema.GroupVersionResource, m config.Model, w stageWriter, record func(trace.Event)) *Stage {
-	stuck := m.StuckStatus
-	if stuck == nil {
-		stuck = m.Status
-	}
-	return &Stage{
-		m: m, gvr: gvr, w: w, record: record,
-		readyFields: replacing(m.Status, stuck), stuckFields: replacing(stuck, m.Status),
-		objects: map[trace.Ref]*held{}, wake: make(chan struct{}, 1),
-	}
+	return &Stage{m: m, gvr: gvr, w: w, record: record, shape: shapeOf(m), objects: map[trace.Ref]*held{}, wake: make(chan struct{}, 1)}
 }
 
 // replacing returns a merge patch that sets fields in place of others, which
@@ -190,12 +192,14 @@ func (s *Stage) Pending() bool {
 }
 
 // Takes reports whether f is a model fault on this stage's kind.
-func (s *Stage) Takes(f plan.Fault) bool { return Takes(f, s.gvr) }
+func (s *Stage) Takes(f plan.Fault) bool { return Takes(f, s.gvr, s.m.Failures()) }
 
-// Takes reports whether f is a model fault on the objects of gvr.
-func Takes(f plan.Fault, gvr schema.GroupVersionResource) bool {
+// Takes reports whether f is a model fault on the objects of gvr, whose
+// stage takes failures.
+func Takes(f plan.Fault, gvr schema.GroupVersionResource, failures []string) bool {
 	return f.ModelFault() && (f.System == "" || f.System == kube.Name) &&
-		(f.Match.Group == "" || f.Match.Group == gvr.Group) && f.Match.Resource == gvr.Resource
+		(f.Match.Group == "" || f.Match.Group == gvr.Group) && f.Match.Resource == gvr.Resource &&
+		(f.Failure == "" || slices.Contains(failures, f.Failure))
 }
 
 // Fault starts stuck or slowDelete on the objects f matches, and returns
@@ -257,8 +261,15 @@ func (s *Stage) run(ctx context.Context) {
 
 func matches(f *plan.Fault, h *held) bool { return f.Match.Name == "" || f.Match.Name == h.ref.Name }
 
-func (s *Stage) active(h *held, stuck bool) bool {
-	return slices.ContainsFunc(s.faults, func(f *plan.Fault) bool { return f.Stuck == stuck && f.SlowDelete == !stuck && matches(f, h) })
+func (s *Stage) active(h *held, stuck bool) bool { return s.activeFault(h, stuck) != nil }
+
+// activeFault is the first stuck, or else slowDelete, fault that matches h.
+func (s *Stage) activeFault(h *held, stuck bool) *plan.Fault {
+	i := slices.IndexFunc(s.faults, func(f *plan.Fault) bool { return f.Stuck == stuck && f.SlowDelete == !stuck && matches(f, h) })
+	if i < 0 {
+		return nil
+	}
+	return s.faults[i]
 }
 
 func (h *held) stopTimer() {
@@ -266,6 +277,12 @@ func (h *held) stopTimer() {
 		h.timer.Stop()
 		h.timer = nil
 	}
+}
+
+// echoed records that h's heard status is the echo of its last status write.
+func (h *held) echoed() {
+	w := h.statusFor
+	h.shown, h.echo, h.statusRV = &w, h.status, ""
 }
 
 func (h *held) waiting() bool { return h.awaited != "" || h.conflicted != "" }
@@ -277,13 +294,17 @@ func (s *Stage) hear(v trace.Version) {
 	}
 	var body struct {
 		metav1.PartialObjectMetadata
-		Status struct {
-			Conditions []stageCondition `json:"conditions"`
-		} `json:"status"`
+		Spec   map[string]any `json:"spec"`
+		Status map[string]any `json:"status"`
 	}
 	if err := json.Unmarshal(v.Body, &body); err != nil {
 		return
 	}
+	var conditions struct {
+		Conditions []stageCondition `json:"conditions"`
+	}
+	raw, _ := json.Marshal(body.Status)
+	json.Unmarshal(raw, &conditions)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h := s.objects[v.Ref]
@@ -303,10 +324,14 @@ func (s *Stage) hear(v trace.Version) {
 			h.generation, h.heardAt = body.Generation, time.Now()
 		}
 		h.rv, h.deleting, h.finalizers, h.ready = v.RV, body.DeletionTimestamp != nil, body.Finalizers, nil
+		h.status, h.spec = body.Status, body.Spec
+		if h.statusRV != "" && observed(h.rv, h.statusRV) {
+			h.echoed()
+		}
 		if f := s.m.Finalizer; f != nil && h.deleting && h.releaseAt.IsZero() {
 			h.releaseAt = time.Now().Add(f.After)
 		}
-		for _, c := range body.Status.Conditions {
+		for _, c := range conditions.Conditions {
 			if c.Type == "Ready" {
 				h.ready = &c
 			}
@@ -351,26 +376,22 @@ func (s *Stage) decide(h *held, now time.Time) []stageOp {
 		}
 		return ops
 	}
-	status := func(fields map[string]any, c metav1.Condition) stageOp {
-		c.Type, c.ObservedGeneration, c.LastTransitionTime = "Ready", h.generation, metav1.NewTime(now)
-		patch := maps.Clone(fields)
-		patch["conditions"] = []any{c}
-		return stageOp{ref: h.ref, uid: h.uid, rv: h.rv, status: patch, generation: h.generation}
+	status := func(w want) stageOp {
+		return stageOp{ref: h.ref, uid: h.uid, rv: h.rv, status: s.shape.status(h, w, now), generation: h.generation, want: w}
 	}
-	switch {
-	case s.active(h, true):
+	switch f := s.activeFault(h, true); {
+	case f != nil:
 		h.fresh = ""
-		if r := h.ready; r == nil || r.Status != "False" || r.Reason != trace.StuckReason || !h.current() {
-			ops = append(ops, status(s.stuckFields, metav1.Condition{Status: metav1.ConditionFalse, Reason: trace.StuckReason, Message: "a stuck fault holds it"}))
+		if w := (want{state: wantStuck, failure: f.Failure}); !s.shape.shows(h, w) {
+			ops = append(ops, status(w))
 		}
 	case h.fresh != "":
-		ops = append(ops, status(s.readyFields, metav1.Condition{Status: metav1.ConditionTrue, Reason: "Modelled", Message: h.fresh}))
-	case h.ready != nil && h.ready.Status == "True" && h.current():
-	case h.ready != nil && h.ready.Status == "True" && h.ready.ObservedGeneration == nil:
-		// The ready check cannot tell that this Ready is stale.
-		ops = append(ops, status(s.readyFields, metav1.Condition{Status: metav1.ConditionFalse, Reason: "Progressing", Message: "a new generation"}))
+		ops = append(ops, status(want{state: wantReady, message: h.fresh}))
+	case s.shape.shows(h, want{state: wantReady}):
 	case !now.Before(h.heardAt.Add(s.m.After)):
-		ops = append(ops, status(s.readyFields, metav1.Condition{Status: metav1.ConditionTrue, Reason: "Modelled", Message: "modelled ready"}))
+		ops = append(ops, status(want{state: wantReady}))
+	case !s.shape.shows(h, want{state: wantProgressing}):
+		ops = append(ops, status(want{state: wantProgressing}))
 	default:
 		s.schedule(h, h.heardAt.Add(s.m.After), now)
 	}
@@ -507,6 +528,10 @@ func (s *Stage) sweep(ctx context.Context) {
 		}
 		if r.op.status != nil && !r.conflict {
 			h.fresh, h.wrote = "", r.op.generation
+			h.statusRV, h.statusFor = r.rv, r.op.want
+			if observed(h.rv, r.rv) {
+				h.echoed()
+			}
 		}
 	}
 	if retry && ctx.Err() == nil && !s.retrying {

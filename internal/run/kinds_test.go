@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,7 +94,7 @@ func TestRunRefusesAFaultNoModelTakesBeforeEnvtest(t *testing.T) {
 
 func TestCheckFaultsRefusesAFaultNothingTakes(t *testing.T) {
 	cfg := &config.Config{
-		Models:  []config.Model{{Kind: gadgetKind, Resource: "gadgets"}},
+		Models:  []config.Model{{Kind: gadgetKind, Resource: "gadgets", Stage: config.ReadyCondition}, {Kind: schema.GroupVersionKind{Version: "v1", Kind: "Pod"}, Resource: "pods", Stage: config.PodStage}},
 		Systems: []config.System{{Name: "store", API: "crud", Process: &config.Process{}}, {Name: "secrets", API: "vault", Process: &config.Process{}}},
 	}
 	for fault, want := range map[string]string{
@@ -104,6 +105,10 @@ func TestCheckFaultsRefusesAFaultNothingTakes(t *testing.T) {
 		`{"holdWatch": true, "match": {"resource": "widgets"}}`:                                                      "",
 		`{"stuck": true, "match": {"resource": "gadget"}}`:                                                           "steps[0].faults[1]: no model takes stuck on resource=gadget; did you mean resource=gadgets?",
 		`{"stuck": true, "match": {"group": "other.io", "resource": "gadgets"}}`:                                     "steps[0].faults[1]: no model takes stuck on group=other.io resource=gadgets",
+		`{"stuck": true, "failure": "unschedulable", "match": {"resource": "pods"}}`:                                 "",
+		`{"stuck": true, "failure": "unschedulable", "match": {"resource": "gadgets"}}`:                              "steps[0].faults[1]: no model takes stuck(unschedulable) on resource=gadgets; the readyCondition stage's failures are none",
+		`{"stuck": true, "failure": "evicted", "match": {"resource": "pods"}}`:                                       "steps[0].faults[1]: no model takes stuck(evicted) on resource=pods; the pod stage's failures are unschedulable, imagePullBackOff, crashLoopBackOff, initContainerFailed, sidecarFailed",
+		`{"stuck": true, "failure": "evicted", "system": "store"}`:                                                   "steps[0].faults[1]: no model takes stuck(evicted) on system=store",
 		`{"slowDelete": true, "system": "secrets"}`:                                                                  "steps[0].faults[1]: no model takes slowDelete on system=secrets",
 		`{"drop": true, "system": "stor"}`:                                                                           `steps[0].faults[1]: unknown system "stor"; did you mean store?`,
 		`{"drop": true, "system": "cloud"}`:                                                                          `steps[0].faults[1]: unknown system "cloud"`,
