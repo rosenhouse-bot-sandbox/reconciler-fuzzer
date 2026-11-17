@@ -207,7 +207,9 @@ Fill each key from the project:
   replaces those fields while a `stuck` fault lasts, and defaults to `status:`. Each write
   removes the fields that only the other key sets. Set `stuckStatus:` when `status:` means
   done, such as `{phase: Bound}`. Otherwise a controller that reads only those fields never
-  sees the fault. For a Job, set `stuckStatus: {active: 1}`. A Job created during the fault
+  sees the fault. When the controller reads more conditions or nested status, as of a
+  Crossplane resource, declare `conditions:`, `${CEL}` status values and `ready:`, as the
+  README's models section shows. For a Job, set `stuckStatus: {active: 1}`. A Job created during the fault
   then stays unfinished. The API server refuses to lower a done Job's `succeeded`, so that Job
   stays done and `Ready`. The model retries the refused write until the fault ends. Add
   `finalizer: {name, after}` when something else puts a finalizer on each object, such as

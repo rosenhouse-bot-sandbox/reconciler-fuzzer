@@ -108,6 +108,18 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              endpoint:
+                description: GadgetEndpoint is where a Gadget serves.
+                properties:
+                  host:
+                    type: string
+                  port:
+                    format: int32
+                    type: integer
+                required:
+                - host
+                - port
+                type: object
             type: object
         required:
         - spec

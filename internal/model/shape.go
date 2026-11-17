@@ -1,7 +1,8 @@
 package model
 
 import (
-	"maps"
+	"cmp"
+	"fmt"
 	"reflect"
 	"slices"
 	"time"
@@ -48,42 +49,86 @@ func shapeOf(m config.Model) shape {
 	if stuckFields == nil {
 		stuckFields = m.Status
 	}
-	return readyConditionShape{readyFields: replacing(m.Status, stuckFields), stuckFields: replacing(stuckFields, m.Status)}
-}
-
-// readyConditionShape writes one Ready condition beside literal fields.
-type readyConditionShape struct {
-	readyFields, stuckFields map[string]any
-}
-
-func (r readyConditionShape) status(h *held, w want, now time.Time) map[string]any {
-	fields := r.readyFields
-	c := metav1.Condition{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Modelled", Message: "modelled ready", ObservedGeneration: h.generation, LastTransitionTime: metav1.NewTime(now)}
-	switch {
-	case w.state == wantStuck:
-		fields, c.Status, c.Reason, c.Message = r.stuckFields, metav1.ConditionFalse, trace.StuckReason, "a stuck fault holds it"
-	case w.state == wantProgressing:
-		c.Status, c.Reason, c.Message = metav1.ConditionFalse, "Progressing", "a new generation"
-	case w.message != "":
-		c.Message = w.message
+	conditions := m.Conditions
+	if len(conditions) == 0 {
+		conditions = []config.Condition{{Type: "Ready"}}
 	}
-	patch := maps.Clone(fields)
-	patch["conditions"] = []any{c}
+	return conditionsShape{readyFields: compiled(replacing(m.Status, stuckFields), m), stuckFields: compiled(replacing(stuckFields, m.Status), m), conditions: conditions}
+}
+
+// compiled renders fields over an object. config.Load refuses fields that
+// do not compile.
+func compiled(fields map[string]any, m config.Model) func(self map[string]any) map[string]any {
+	render, err := config.CompileStatus(fields, m.Schema)
+	if err != nil {
+		panic(fmt.Sprintf("model %s: %v", m.Kind, err))
+	}
+	return render
+}
+
+// conditionsShape writes its conditions beside fields that it renders over
+// the object.
+type conditionsShape struct {
+	readyFields, stuckFields func(self map[string]any) map[string]any
+	conditions               []config.Condition
+}
+
+func (r conditionsShape) status(h *held, w want, now time.Time) map[string]any {
+	fields := r.readyFields
+	if w.state == wantStuck {
+		fields = r.stuckFields
+	}
+	var conditions []any
+	for _, declared := range r.conditions {
+		conditions = append(conditions, r.condition(declared, h, w, now))
+	}
+	patch := fields(h.object)
+	patch["conditions"] = conditions
 	return patch
 }
 
-// shows reads the Ready condition. A generation needs a progressing write
-// only when it inherits a Ready True without observedGeneration, since the
-// ready check cannot tell that it is stale.
-func (r readyConditionShape) shows(h *held, w want) bool {
-	c := h.ready
-	switch w.state {
-	case wantStuck:
-		return c != nil && c.Status == "False" && c.Reason == trace.StuckReason && h.current()
-	case wantReady:
-		return c != nil && c.Status == "True" && h.current()
+func (r conditionsShape) condition(declared config.Condition, h *held, w want, now time.Time) metav1.Condition {
+	c := metav1.Condition{
+		Type: declared.Type, Status: metav1.ConditionTrue, Reason: cmp.Or(declared.Reason, "Modelled"), Message: cmp.Or(w.message, declared.Message, "modelled ready"),
+		ObservedGeneration: h.generation, LastTransitionTime: metav1.NewTime(now),
 	}
-	return c == nil || c.Status != "True" || c.ObservedGeneration != nil
+	switch {
+	case holds(declared, w):
+		c.Status, c.Reason, c.Message = metav1.ConditionFalse, stuckReason(declared), "a stuck fault holds it"
+	case w.state == wantProgressing:
+		c.Status, c.Reason, c.Message = metav1.ConditionFalse, "Progressing", "a new generation"
+	}
+	return c
+}
+
+// holds says whether w holds c False: a stuck fault holds the condition its
+// failure names, or each condition without one.
+func holds(c config.Condition, w want) bool {
+	return w.state == wantStuck && (w.failure == "" || w.failure == c.Type)
+}
+
+func stuckReason(c config.Condition) string { return cmp.Or(c.StuckReason, trace.StuckReason) }
+
+// shows reads each condition. A generation needs a progressing write only
+// when it inherits a True condition without observedGeneration, since the
+// ready check cannot tell that it is stale.
+func (r conditionsShape) shows(h *held, w want) bool {
+	for _, declared := range r.conditions {
+		c := h.condition(declared.Type)
+		var shown bool
+		switch {
+		case holds(declared, w):
+			shown = c != nil && c.Status == "False" && c.Reason == stuckReason(declared) && h.current(c)
+		case w.state != wantProgressing:
+			shown = c != nil && c.Status == "True" && h.current(c)
+		default:
+			shown = c == nil || c.Status != "True" || c.ObservedGeneration != nil
+		}
+		if !shown {
+			return false
+		}
+	}
+	return true
 }
 
 // echoShape writes a whole status, and takes the API server's answer to its

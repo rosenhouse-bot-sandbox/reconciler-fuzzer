@@ -157,6 +157,8 @@ type gadget struct {
 	ready *condition
 	// dropped drops the condition's observedGeneration.
 	dropped bool
+	// status, when set, is the whole status in place of ready's.
+	status map[string]any
 }
 
 type condition struct {
@@ -179,6 +181,9 @@ func (g gadget) version() trace.Version {
 			delete(c, "observedGeneration")
 		}
 		body["status"] = map[string]any{"conditions": []any{c}}
+	}
+	if g.status != nil {
+		body["status"] = g.status
 	}
 	raw, _ := json.Marshal(body)
 	return trace.Version{Ref: g.ref(), UID: g.uid, RV: g.rv, Body: raw}

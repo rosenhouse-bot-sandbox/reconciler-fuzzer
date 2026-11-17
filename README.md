@@ -410,6 +410,32 @@ models:
 - If a run fails to converge while an object of a kind nothing models has no status,
   `report.md` names the kind and suggests a `models:` entry for it.
 
+A controller that reads deeper status can get it:
+
+```yaml
+models:
+  - kind: example.com/v1/Database
+    after: 200ms
+    conditions:
+      - {type: Ready}
+      - {type: Synced, reason: ReconcileSuccess, stuckReason: ReconcileError}
+    status:
+      observedGeneration: ${self.metadata.generation}
+      endpoint: {host: "${self.metadata.name + '.db.example.com'}", port: 5432}
+    ready: self.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True')
+```
+
+- A `status:` or `stuckStatus:` string that is all `${<CEL>}` takes the expression's value
+  over the object. A failed expression, such as one that reads a missing field, removes the
+  field.
+- `conditions:` replace the `Ready` condition. Each is True for the object's generation when
+  ready, and False with `stuckReason` (default `Stuck`) under `stuck`. `reason` defaults to
+  `Modelled`. With more than one condition, a `stuck` fault may name one as its `failure`, as
+  in `"failure": "Synced"`, to hold only that condition False. Generated plans draw these.
+- `ready:` replaces the model's ready, which Honest and references use. It defaults to every
+  condition being True for the object's generation.
+- [targets/toy-widget/synced](targets/toy-widget/synced) runs the toy against such a Gadget.
+
 ### Deployments and Pods
 
 envtest runs no Deployment controller and no kubelet. Two stages write the status they would:

@@ -9,10 +9,10 @@ import (
 func TestParseBugAcceptsEveryCatalogEntry(t *testing.T) {
 	// Deriving the range from MaxBug alone would accept a MaxBug that had
 	// lost an entry.
-	if MaxBug != int(B37) {
-		t.Fatalf("MaxBug is %d, want B37.", MaxBug)
+	if MaxBug != int(B38) {
+		t.Fatalf("MaxBug is %d, want B38.", MaxBug)
 	}
-	for _, id := range []int{0, 1, 29, 36, 37} {
+	for _, id := range []int{0, 1, 29, 36, 37, 38} {
 		bug, err := ParseBug(id)
 		if err != nil {
 			t.Errorf("ParseBug(%d) returned an error: %v", id, err)

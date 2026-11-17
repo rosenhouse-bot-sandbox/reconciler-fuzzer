@@ -47,7 +47,7 @@ func (r *Reconciler) syncGadget(ctx context.Context, widget *toyv1.Widget) (*boo
 	if err != nil {
 		return nil, 0, fmt.Errorf("ensuring Gadget %s: %w", gadget.Name, err)
 	}
-	ready := gadgetIsReady(gadget)
+	ready := r.gadgetIsReady(gadget)
 	var requeue time.Duration
 	switch r.Bug {
 	case B17:
@@ -75,9 +75,21 @@ func (r *Reconciler) syncGadget(ctx context.Context, widget *toyv1.Widget) (*boo
 }
 
 // gadgetIsReady says whether the Gadget's Ready condition is True for its
-// current generation.
-func gadgetIsReady(gadget *toyv1.Gadget) bool {
-	c := meta.FindStatusCondition(gadget.Status.Conditions, "Ready")
+// current generation, and, with --gadget-synced, its Synced condition too
+// and it has an endpoint.
+func (r *Reconciler) gadgetIsReady(gadget *toyv1.Gadget) bool {
+	ready := conditionIsCurrent(gadget, "Ready")
+	if r.GadgetSynced {
+		ready = ready && gadget.Status.Endpoint != nil && gadget.Status.Endpoint.Host != ""
+		if r.Bug != B38 { // B38: the Synced condition goes unread.
+			ready = ready && conditionIsCurrent(gadget, "Synced")
+		}
+	}
+	return ready
+}
+
+func conditionIsCurrent(gadget *toyv1.Gadget, kind string) bool {
+	c := meta.FindStatusCondition(gadget.Status.Conditions, kind)
 	return c != nil && c.Status == metav1.ConditionTrue && c.ObservedGeneration == gadget.Generation
 }
 

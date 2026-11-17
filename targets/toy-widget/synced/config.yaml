@@ -1,0 +1,43 @@
+# config.yaml with --gadget --gadget-synced: each Widget waits for its
+# Gadget's Ready and Synced conditions and endpoint.
+launch:
+  binary: ../../../bin/toy-widget
+  args:
+    - --label-from=widget-config
+    - --gadget
+    - --gadget-synced
+    - --bug=0                      # A later --launch-arg --bug=N wins.
+  env:
+    KUBECONFIG: ${systems.kube.kubeconfig}
+    WATCH_NAMESPACE: ${systems.kube.namespace}
+  rbac:
+    - ../rbac/role.yaml
+    - ../gadget/gadget-role.yaml
+crds:
+  - ../crds/
+primary:
+  kind: toy.reconciler-fuzzer/v1/Widget
+  sample: ../widget.yaml
+  ready: >-
+    has(self.status) && has(self.status.observedGeneration) && self.status.observedGeneration == self.metadata.generation
+    && has(self.status.ready) && self.status.ready == self.spec.count
+    && has(self.status.gadgetReady) && self.status.gadgetReady
+models:
+  - kind: toy.reconciler-fuzzer/v1/Gadget
+    after: 200ms
+    conditions:
+      - {type: Ready}
+      - {type: Synced, reason: ReconcileSuccess, stuckReason: ReconcileError}
+    status:
+      endpoint:
+        host: ${self.metadata.name + '.gadgets.example.com'}
+        port: 443
+    dependency: {track: 1s}
+fixtures:
+  - ../widget-config.yaml
+timeouts:
+  settle: 5s
+  stable: 2s
+values:
+  fixtures:
+    ../widget-config.yaml: [data.label]

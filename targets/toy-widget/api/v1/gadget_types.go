@@ -14,6 +14,14 @@ type GadgetStatus struct {
 	// +listType=map
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	// +optional
+	Endpoint *GadgetEndpoint `json:"endpoint,omitempty"`
+}
+
+// GadgetEndpoint is where a Gadget serves.
+type GadgetEndpoint struct {
+	Host string `json:"host"`
+	Port int32  `json:"port"`
 }
 
 // +kubebuilder:object:root=true

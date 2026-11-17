@@ -114,14 +114,40 @@ func TestGadgetIsReadyOnlyForTheCurrentGeneration(t *testing.T) {
 		{metav1.ConditionFalse, 2, false},
 	} {
 		gadget.Status.Conditions = []metav1.Condition{{Type: "Ready", Status: testCase.status, ObservedGeneration: testCase.observed}}
-		if ready := gadgetIsReady(gadget); ready != testCase.want {
+		if ready := (&Reconciler{}).gadgetIsReady(gadget); ready != testCase.want {
 			t.Errorf("A Gadget of generation 2 with Ready %s for generation %d is ready: %t, want %t.",
 				testCase.status, testCase.observed, ready, testCase.want)
 		}
 	}
 	gadget.Status.Conditions = nil
-	if gadgetIsReady(gadget) {
+	if (&Reconciler{}).gadgetIsReady(gadget) {
 		t.Error("A Gadget with no condition is ready.")
+	}
+}
+
+func TestASyncedGadgetIsReadyWithSyncedAndAnEndpoint(t *testing.T) {
+	condition := func(kind string) metav1.Condition {
+		return metav1.Condition{Type: kind, Status: metav1.ConditionTrue, ObservedGeneration: 1}
+	}
+	endpoint := &toyv1.GadgetEndpoint{Host: "g.gadgets.example.com"}
+	for _, c := range []struct {
+		name       string
+		bug        Bug
+		conditions []metav1.Condition
+		endpoint   *toyv1.GadgetEndpoint
+		want       bool
+	}{
+		{"ready, synced and serving", 0, []metav1.Condition{condition("Ready"), condition("Synced")}, endpoint, true},
+		{"not synced", 0, []metav1.Condition{condition("Ready")}, endpoint, false},
+		{"no endpoint", 0, []metav1.Condition{condition("Ready"), condition("Synced")}, nil, false},
+		{"no host", 0, []metav1.Condition{condition("Ready"), condition("Synced")}, &toyv1.GadgetEndpoint{}, false},
+		{"not synced under B38", B38, []metav1.Condition{condition("Ready")}, endpoint, true},
+		{"not ready under B38", B38, []metav1.Condition{condition("Synced")}, endpoint, false},
+	} {
+		gadget := &toyv1.Gadget{ObjectMeta: metav1.ObjectMeta{Generation: 1}, Status: toyv1.GadgetStatus{Conditions: c.conditions, Endpoint: c.endpoint}}
+		if got := (&Reconciler{GadgetSynced: true, Bug: c.bug}).gadgetIsReady(gadget); got != c.want {
+			t.Errorf("%s: ready = %t, want %t", c.name, got, c.want)
+		}
 	}
 }
 

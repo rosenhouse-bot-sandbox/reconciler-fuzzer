@@ -4,11 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"regexp"
 	"slices"
+	"strings"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/ext"
+	"google.golang.org/protobuf/types/known/structpb"
 	apiservercel "k8s.io/apiserver/pkg/cel"
 )
 
@@ -36,12 +39,13 @@ func compileTo(expr string, want *cel.Type) (cel.Program, error) {
 }
 
 // checked compiles expr in env and refuses it unless it yields want or dyn.
+// Any result fits a want of dyn.
 func checked(env *cel.Env, expr string, want *cel.Type) (*cel.Ast, error) {
 	ast, issues := env.Compile(expr)
 	if issues != nil && issues.Err() != nil {
 		return nil, issues.Err()
 	}
-	if out := ast.OutputType(); !out.IsExactType(want) && !out.IsExactType(cel.DynType) {
+	if out := ast.OutputType(); !want.IsExactType(cel.DynType) && !out.IsExactType(want) && !out.IsExactType(cel.DynType) {
 		return nil, fmt.Errorf("expression yields %s, want %s", out, want)
 	}
 	return ast, nil
@@ -205,4 +209,79 @@ func CompileString(expr string, root map[string]any) (func(self map[string]any) 
 		}
 		return value, nil
 	}, nil
+}
+
+// CompileStatus compiles each string of fields, at any depth, that is
+// ${<CEL over self>}. The result copies fields with each such string
+// replaced by its value over self, or by nil where evaluation fails, as on a
+// missing field.
+func CompileStatus(fields map[string]any, root map[string]any) (func(self map[string]any) map[string]any, error) {
+	render, err := compileTemplates(fields, root)
+	if err != nil {
+		return nil, err
+	}
+	return func(self map[string]any) map[string]any {
+		self, _ = typed(self, root).(map[string]any)
+		out, _ := render(self).(map[string]any)
+		return out
+	}, nil
+}
+
+func compileTemplates(v any, root map[string]any) (func(self map[string]any) any, error) {
+	switch v := v.(type) {
+	case map[string]any:
+		renders := map[string]func(map[string]any) any{}
+		for key, field := range v {
+			render, err := compileTemplates(field, root)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", key, err)
+			}
+			renders[key] = render
+		}
+		return func(self map[string]any) any {
+			out := make(map[string]any, len(renders))
+			for key, render := range renders {
+				out[key] = render(self)
+			}
+			return out
+		}, nil
+	case []any:
+		renders := make([]func(map[string]any) any, len(v))
+		for i, item := range v {
+			render, err := compileTemplates(item, root)
+			if err != nil {
+				return nil, fmt.Errorf("[%d]: %w", i, err)
+			}
+			renders[i] = render
+		}
+		return func(self map[string]any) any {
+			out := make([]any, len(renders))
+			for i, render := range renders {
+				out[i] = render(self)
+			}
+			return out
+		}, nil
+	case string:
+		expr, isTemplate := strings.CutPrefix(v, "${")
+		expr, closed := strings.CutSuffix(expr, "}")
+		if !isTemplate || !closed {
+			break
+		}
+		program, err := compileOver(expr, root, cel.DynType)
+		if err != nil {
+			return nil, fmt.Errorf("%q: %w", v, err)
+		}
+		return func(self map[string]any) any {
+			out, _, err := program.Eval(map[string]any{"self": self})
+			if err != nil {
+				return nil
+			}
+			value, err := out.ConvertToNative(reflect.TypeFor[*structpb.Value]())
+			if err != nil {
+				return nil
+			}
+			return value.(*structpb.Value).AsInterface()
+		}, nil
+	}
+	return func(map[string]any) any { return v }, nil
 }

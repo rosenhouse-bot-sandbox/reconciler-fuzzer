@@ -71,9 +71,9 @@ type held struct {
 	// deletionTimestamp, which holds whole seconds.
 	releaseAt  time.Time
 	finalizers []string
-	// status is the heard status, and spec the heard spec.
-	status, spec map[string]any
-	ready        *stageCondition
+	// object is the heard object, status its status, and spec its spec.
+	object, status, spec map[string]any
+	conditions           []stageCondition
 	// awaited is the resourceVersion a sent write made, or, after a
 	// conflict, conflicted is the one it named.
 	awaited, conflicted string
@@ -102,10 +102,20 @@ type stageCondition struct {
 	ObservedGeneration *int64 `json:"observedGeneration"`
 }
 
-// current says whether h's condition holds for h's generation. A condition
-// without observedGeneration holds for the generation the stage last wrote.
-func (h *held) current() bool {
-	if og := h.ready.ObservedGeneration; og != nil {
+// condition is h's condition of type kind, or nil.
+func (h *held) condition(kind string) *stageCondition {
+	for i := range h.conditions {
+		if h.conditions[i].Type == kind {
+			return &h.conditions[i]
+		}
+	}
+	return nil
+}
+
+// current says whether c holds for h's generation. A condition without
+// observedGeneration holds for the generation the stage last wrote.
+func (h *held) current(c *stageCondition) bool {
+	if og := c.ObservedGeneration; og != nil {
 		return *og == h.generation
 	}
 	return h.wrote == h.generation
@@ -299,7 +309,8 @@ func (s *Stage) hear(v trace.Version) {
 		Spec   map[string]any `json:"spec"`
 		Status map[string]any `json:"status"`
 	}
-	if err := json.Unmarshal(v.Body, &body); err != nil {
+	var object map[string]any
+	if err := json.Unmarshal(v.Body, &body); err != nil || json.Unmarshal(v.Body, &object) != nil {
 		return
 	}
 	var conditions struct {
@@ -325,18 +336,13 @@ func (s *Stage) hear(v trace.Version) {
 		if body.Generation != h.generation || h.heardAt.IsZero() {
 			h.generation, h.heardAt = body.Generation, time.Now()
 		}
-		h.rv, h.deleting, h.finalizers, h.ready = v.RV, body.DeletionTimestamp != nil, body.Finalizers, nil
-		h.status, h.spec = body.Status, body.Spec
+		h.rv, h.deleting, h.finalizers, h.conditions = v.RV, body.DeletionTimestamp != nil, body.Finalizers, conditions.Conditions
+		h.object, h.status, h.spec = object, body.Status, body.Spec
 		if h.statusRV != "" && observed(h.rv, h.statusRV) {
 			h.echoed()
 		}
 		if f := s.m.Finalizer; f != nil && h.deleting && h.releaseAt.IsZero() {
 			h.releaseAt = time.Now().Add(f.After)
-		}
-		for _, c := range conditions.Conditions {
-			if c.Type == "Ready" {
-				h.ready = &c
-			}
 		}
 		if h.awaited != "" && observed(h.rv, h.awaited) || h.conflicted != "" && h.rv != h.conflicted {
 			h.awaited, h.conflicted = "", ""
