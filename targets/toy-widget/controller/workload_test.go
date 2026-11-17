@@ -121,3 +121,54 @@ func TestWithoutAWorkloadNoWorkloadReady(t *testing.T) {
 		t.Errorf("workloadReady = %v, want nil", *ready)
 	}
 }
+
+func TestADeletingWorkloadIsNotReady(t *testing.T) {
+	for _, workload := range []string{DeploymentWorkload, PodWorkload} {
+		widget := newWidget(1)
+		r := workloadFixture(t, 0, workload, widget)
+		mustReconcile(t, r, widget)
+		obj := workloadObject(workload)
+		if err := r.Get(t.Context(), client.ObjectKeyFromObject(widget), obj); err != nil {
+			t.Fatal(err)
+		}
+		switch obj := obj.(type) {
+		case *appsv1.Deployment:
+			obj.Status = appsv1.DeploymentStatus{ObservedGeneration: obj.Generation, Replicas: 1, UpdatedReplicas: 1, AvailableReplicas: 1}
+		case *corev1.Pod:
+			obj.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+		}
+		if err := r.Status().Update(t.Context(), obj); err != nil {
+			t.Fatal(err)
+		}
+		if ready := workloadReadyOf(t, r, widget); ready == nil || !*ready {
+			t.Fatalf("%s: workloadReady = %v before the delete, want true", workload, ready)
+		}
+		obj.SetFinalizers([]string{"example.com/hold"})
+		if err := r.Update(t.Context(), obj); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Delete(t.Context(), obj); err != nil {
+			t.Fatal(err)
+		}
+		if ready := workloadReadyOf(t, r, widget); ready == nil || *ready {
+			t.Errorf("%s: workloadReady = %v, want false", workload, ready)
+		}
+	}
+}
+
+func TestAPodOfAnotherWidgetIsNotTheWidgetsPod(t *testing.T) {
+	widget := newWidget(1)
+	r := workloadFixture(t, 0, PodWorkload, widget)
+	mustReconcile(t, r, widget)
+	pod := &corev1.Pod{}
+	if err := r.Get(t.Context(), client.ObjectKeyFromObject(widget), pod); err != nil {
+		t.Fatal(err)
+	}
+	pod.OwnerReferences[0].UID = "an-earlier-widget"
+	if err := r.Update(t.Context(), pod); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcile(t, r, widget); err == nil {
+		t.Error("Reconcile adopted another Widget's Pod.")
+	}
+}

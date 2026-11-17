@@ -37,13 +37,13 @@ func generator(t *testing.T, path string) (*generate.Generator, []map[string]any
 }
 
 // TestGeneratedPlansWithFaultsPassB0 runs plans with a fault, or with a
-// model fault for the gadget config, from each config it fuzzes. It does not
+// model fault for a config with a model, from each config it fuzzes. It does not
 // fuzz lease/config.yaml: its plans are config.yaml's, and the lease plans
 // cover --lease. It also requires 3 plans of each config it fuzzes to have a
 // request or model fault that picked a request or held an object, so the gate
 // fails if faults stop firing.
 func TestGeneratedPlansWithFaultsPassB0(t *testing.T) {
-	for _, cfg := range []string{"config.yaml", gadgetConfig, tenantConfig, grantConfig} {
+	for _, cfg := range []string{"config.yaml", gadgetConfig, tenantConfig, grantConfig, deploymentConfig, podConfig} {
 		t.Run(cfg, func(t *testing.T) {
 			t.Parallel()
 			generatedPlansPassB0(t, cfg)
@@ -56,7 +56,7 @@ func generatedPlansPassB0(t *testing.T, cfg string) {
 	g, _ := generator(t, cfg)
 	var fired atomic.Int32
 	drawn := faults
-	if cfg == gadgetConfig {
+	if cfg == gadgetConfig || cfg == deploymentConfig || cfg == podConfig {
 		drawn = modelFaults
 	}
 	t.Cleanup(func() {

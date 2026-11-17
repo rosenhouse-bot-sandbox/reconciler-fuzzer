@@ -51,6 +51,9 @@ func (r *Reconciler) syncDeployment(ctx context.Context, widget *toyv1.Widget) (
 	if err != nil {
 		return nil, fmt.Errorf("ensuring Deployment %s: %w", deployment.Name, err)
 	}
+	if !deployment.DeletionTimestamp.IsZero() {
+		return ptr.To(false), nil
+	}
 	if r.Bug == B36 {
 		// B36: an Available Deployment counts as rolled out, though its old
 		// Pods may still serve.
@@ -103,6 +106,12 @@ func (r *Reconciler) syncPod(ctx context.Context, widget *toyv1.Widget) (*bool, 
 	}
 	if err != nil {
 		return nil, fmt.Errorf("ensuring Pod %s: %w", widget.Name, err)
+	}
+	if !metav1.IsControlledBy(pod, widget) {
+		return nil, fmt.Errorf("Pod %s belongs to another owner; waiting for it to go", widget.Name)
+	}
+	if !pod.DeletionTimestamp.IsZero() {
+		return ptr.To(false), nil
 	}
 	if r.Bug == B37 {
 		return ptr.To(pod.Status.Phase == corev1.PodRunning), nil // B37: a Running Pod counts as ready.
