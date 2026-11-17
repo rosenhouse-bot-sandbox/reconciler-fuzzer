@@ -70,8 +70,8 @@ func TestAModelWritesItsConditionsAndRenderedStatus(t *testing.T) {
 func TestAModelRewritesAStatusThatLacksOneOfItsConditions(t *testing.T) {
 	s, w, _ := testStageOf(t, databaseModel())
 	s.hear(gadget{name: "g", uid: "u", rv: "1", generation: 1, ready: readyFor(1)}.version())
-	if got := writtenConditions(t, w.await(t, 1)[0]); got == "" {
-		t.Errorf("Wrote no conditions.")
+	if got, want := writtenConditions(t, w.await(t, 1)[0]), `[["Ready","True","Modelled","modelled ready",1],["Synced","True","ReconcileSuccess","synced",1]]`; got != want {
+		t.Errorf("Wrote conditions %s, want %s.", got, want)
 	}
 }
 
@@ -103,6 +103,44 @@ func TestAStuckFailureHoldsOnlyItsCondition(t *testing.T) {
 	if got, want := writtenConditions(t, synced), `[["Ready","True","Modelled","modelled ready",1],["Synced","False","ReconcileError","a stuck fault holds it",1]]`; got != want {
 		t.Errorf("stuck(Synced) wrote conditions %s, want %s.", got, want)
 	}
+	if got, want := literalFields(synced), `{"endpoint":{"host":"g.db","port":5432},"observedGeneration":1}`; got != want {
+		t.Errorf("stuck(Synced) wrote %s, want the ready fields %s.", got, want)
+	}
 	s.hear(echo(g, synced).version())
 	w.still(t, 2, 2*after)
+}
+
+func TestAModelRewritesAConditionStuckForAnotherReason(t *testing.T) {
+	s, w, _ := testStageOf(t, databaseModel())
+	g := gadget{name: "g", uid: "u", rv: "1", generation: 1}
+	s.hear(g.version())
+	s.hear(echo(g, w.await(t, 1)[0]).version())
+	f := stuck("")
+	f.Failure = "Synced"
+	if _, err := s.Fault(f); err != nil {
+		t.Fatal(err)
+	}
+	other := echo(g, w.await(t, 2)[1])
+	other.status["conditions"].([]any)[1].(map[string]any)["reason"] = "Stuck"
+	s.hear(other.version())
+	w.await(t, 3)
+}
+
+func TestAFaultsEndWritesItsMessageOverADeclaredOne(t *testing.T) {
+	s, w, _ := testStageOf(t, databaseModel())
+	g := gadget{name: "g", uid: "u", rv: "1", generation: 1}
+	s.hear(g.version())
+	s.hear(echo(g, w.await(t, 1)[0]).version())
+	end, err := s.Fault(stuck(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.hear(echo(g, w.await(t, 2)[1]).version())
+	end()
+	ended := w.await(t, 3)[2]
+	for _, c := range ended.patch["status"].(map[string]any)["conditions"].([]any) {
+		if c := c.(map[string]any); c["message"] == "synced" || c["message"] == "modelled ready" {
+			t.Errorf("The end wrote %s's message %q, want the fault's.", c["type"], c["message"])
+		}
+	}
 }

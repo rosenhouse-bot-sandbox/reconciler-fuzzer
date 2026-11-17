@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"reflect"
 	"regexp"
@@ -212,11 +213,14 @@ func CompileString(expr string, root map[string]any) (func(self map[string]any) 
 }
 
 // CompileStatus compiles each string of fields, at any depth, that is
-// ${<CEL over self>}. The result copies fields with each such string
-// replaced by its value over self, or by nil where evaluation fails, as on a
-// missing field.
+// ${<CEL over self>}. It refuses another string with ${ in it, and an
+// expression whose result does not fit the type that root gives its field.
+// The result copies fields with each such string replaced by its value over
+// self, or by nil where evaluation fails, as on a missing field.
 func CompileStatus(fields map[string]any, root map[string]any) (func(self map[string]any) map[string]any, error) {
-	render, err := compileTemplates(fields, root)
+	properties, _ := root["properties"].(map[string]any)
+	status, _ := properties["status"].(map[string]any)
+	render, err := compileTemplates(fields, "", status, root)
 	if err != nil {
 		return nil, err
 	}
@@ -227,14 +231,22 @@ func CompileStatus(fields map[string]any, root map[string]any) (func(self map[st
 	}, nil
 }
 
-func compileTemplates(v any, root map[string]any) (func(self map[string]any) any, error) {
+// compileTemplates compiles the templates in v, the field at path, which s,
+// an OpenAPI v3 schema, describes.
+func compileTemplates(v any, path string, s, root map[string]any) (func(self map[string]any) any, error) {
 	switch v := v.(type) {
 	case map[string]any:
+		properties, _ := s["properties"].(map[string]any)
+		values, _ := s["additionalProperties"].(map[string]any)
 		renders := map[string]func(map[string]any) any{}
-		for key, field := range v {
-			render, err := compileTemplates(field, root)
+		for _, key := range slices.Sorted(maps.Keys(v)) {
+			field, found := properties[key].(map[string]any)
+			if !found {
+				field = values
+			}
+			render, err := compileTemplates(v[key], strings.TrimPrefix(path+"."+key, "."), field, root)
 			if err != nil {
-				return nil, fmt.Errorf("%s: %w", key, err)
+				return nil, err
 			}
 			renders[key] = render
 		}
@@ -246,11 +258,12 @@ func compileTemplates(v any, root map[string]any) (func(self map[string]any) any
 			return out
 		}, nil
 	case []any:
+		items, _ := s["items"].(map[string]any)
 		renders := make([]func(map[string]any) any, len(v))
 		for i, item := range v {
-			render, err := compileTemplates(item, root)
+			render, err := compileTemplates(item, fmt.Sprintf("%s[%d]", path, i), items, root)
 			if err != nil {
-				return nil, fmt.Errorf("[%d]: %w", i, err)
+				return nil, err
 			}
 			renders[i] = render
 		}
@@ -262,14 +275,26 @@ func compileTemplates(v any, root map[string]any) (func(self map[string]any) any
 			return out
 		}, nil
 	case string:
+		if !strings.Contains(v, "${") {
+			break
+		}
 		expr, isTemplate := strings.CutPrefix(v, "${")
 		expr, closed := strings.CutSuffix(expr, "}")
 		if !isTemplate || !closed {
-			break
+			return nil, fmt.Errorf("%s: %q: want a whole ${<CEL>}", path, v)
 		}
-		program, err := compileOver(expr, root, cel.DynType)
+		want := cel.DynType
+		switch s["type"] {
+		case "string":
+			want = cel.StringType
+		case "integer":
+			want = cel.IntType
+		case "boolean":
+			want = cel.BoolType
+		}
+		program, err := compileOver(expr, root, want)
 		if err != nil {
-			return nil, fmt.Errorf("%q: %w", v, err)
+			return nil, fmt.Errorf("%s: %q: %w", path, v, err)
 		}
 		return func(self map[string]any) any {
 			out, _, err := program.Eval(map[string]any{"self": self})

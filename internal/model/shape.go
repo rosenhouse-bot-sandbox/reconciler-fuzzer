@@ -75,7 +75,7 @@ type conditionsShape struct {
 
 func (r conditionsShape) status(h *held, w want, now time.Time) map[string]any {
 	fields := r.readyFields
-	if w.state == wantStuck {
+	if w.state == wantStuck && w.failure == "" {
 		fields = r.stuckFields
 	}
 	var conditions []any

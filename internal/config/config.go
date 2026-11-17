@@ -320,7 +320,8 @@ type Model struct {
 }
 
 // Condition is a condition that a readyCondition model writes: True when
-// ready, and False under a stuck fault. Empty reasons take the model's.
+// ready, and False under a stuck fault. An empty Reason means Modelled, and
+// an empty StuckReason means Stuck.
 type Condition struct {
 	Type        string `json:"type"`
 	Reason      string `json:"reason"`
@@ -984,9 +985,9 @@ func programmable(key string, m Model) error {
 		case slices.ContainsFunc(m.Conditions[:i], func(o Condition) bool { return o.Type == c.Type }):
 			return fmt.Errorf("%s.type %s: another condition has this type", at, c.Type)
 		}
-		for field, reason := range map[string]string{"reason": c.Reason, "stuckReason": c.StuckReason} {
-			if reason != "" && !conditionReason.MatchString(reason) {
-				return fmt.Errorf("%s.%s %q: want a match of %s", at, field, reason, conditionReason)
+		for _, reason := range []struct{ field, value string }{{"reason", c.Reason}, {"stuckReason", c.StuckReason}} {
+			if reason.value != "" && !conditionReason.MatchString(reason.value) {
+				return fmt.Errorf("%s.%s %q: want a match of %s", at, reason.field, reason.value, conditionReason)
 			}
 		}
 	}
@@ -995,9 +996,12 @@ func programmable(key string, m Model) error {
 			return fmt.Errorf("%s.ready %q: %w", key, m.ReadyCEL, err)
 		}
 	}
-	for field, fields := range map[string]map[string]any{"status": m.Status, "stuckStatus": m.StuckStatus} {
-		if _, err := CompileStatus(fields, m.Schema); err != nil {
-			return fmt.Errorf("%s.%s.%w", key, field, err)
+	for _, status := range []struct {
+		field  string
+		fields map[string]any
+	}{{"status", m.Status}, {"stuckStatus", m.StuckStatus}} {
+		if _, err := CompileStatus(status.fields, m.Schema); err != nil {
+			return fmt.Errorf("%s.%s.%w", key, status.field, err)
 		}
 	}
 	return nil
