@@ -412,6 +412,43 @@ models:
 - If a run fails to converge while an object of a kind nothing models has no status,
   `report.md` names the kind and suggests a `models:` entry for it.
 
+### Deployments and Pods
+
+envtest runs no Deployment controller and no kubelet. Two stages write the status they would:
+
+```yaml
+models:
+  - {kind: apps/v1/Deployment, stages: deployment, after: 200ms, dependency: {track: 1s}}
+  - {kind: v1/Pod, stages: pod, after: 200ms, dependency: {track: 1s}}
+```
+
+- `deployment` rolls out each generation: at once, one new replica is unavailable and the
+  replicas the last status counted available stay available, as old Pods do. `after` later,
+  every replica is updated and available. Its `ready` is `kubectl rollout status`'s.
+- `pod` writes Pending with containers creating, then Running with every container, sidecar
+  and init container done. Its `ready` is the `Ready` condition. The Pod keeps running, so a
+  `restartPolicy: Never` Pod never succeeds.
+- Neither creates ReplicaSets or Pods, and neither takes `status:`.
+
+A `stuck` fault may name a `failure`, which generated plans draw too:
+
+| Stage | Failure | What the model writes |
+|---|---|---|
+| `deployment` | none | The rollout makes no progress. |
+| `deployment` | `progressDeadlineExceeded` | `Progressing` False. |
+| `deployment` | `replicaFailure` | `ReplicaFailure` True, and no new replica. |
+| `pod` | none | Every container stays creating. |
+| `pod` | `unschedulable` | `PodScheduled` False. |
+| `pod` | `imagePullBackOff` | The first container waits on its image. |
+| `pod` | `crashLoopBackOff` | The first container crash-loops. The Pod is Running, not ready. |
+| `pod` | `initContainerFailed` | The first init container that is not a sidecar crash-loops. |
+| `pod` | `sidecarFailed` | The first sidecar crash-loops. The Pod is Running, not ready. |
+
+A Pod without the container a failure needs gets the default. A plan step writes one as
+`{"match": {"resource": "pods"}, "stuck": true, "failure": "imagePullBackOff"}`.
+[targets/toy-widget/deployment](targets/toy-widget/deployment) and
+[targets/toy-widget/pod](targets/toy-widget/pod) run the toy with each.
+
 [targets/toy-widget/gadget](targets/toy-widget/gadget) runs the toy with a Gadget model.
 Another toy, in [targets/toy-fleet](targets/toy-fleet), reconciles Cluster, Database and User
 CRs, and its config models the third-party Volumes each Cluster owns.

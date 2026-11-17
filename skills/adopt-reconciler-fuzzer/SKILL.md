@@ -69,12 +69,13 @@ List the kinds it watches, reads and creates. For each, note who sets its status
 - The controller itself, or nobody: nothing to do.
 - Another controller, such as a CRD's from another project: it needs a `models:` entry
   (step 4).
-- A Pod's kubelet, a Job's or a PVC's controller: a model sets only a `Ready` condition and
-  literal `status:` fields, such as `{phase: Bound}`. If the controller reads more than that,
-  tell the user.
-- A Deployment's, StatefulSet's, DaemonSet's or ReplicaSet's controller: a model cannot set
-  `status.observedGeneration` or replica counts that follow the spec. Tell the user that
-  reconciler-fuzzer cannot test this controller yet.
+- A Deployment's controller or a Pod's kubelet: use `stages: deployment` or `stages: pod`
+  (README, "Deployments and Pods"). If the controller reads the ReplicaSets or Pods of a
+  Deployment, tell the user that no model creates them.
+- A Job's or a PVC's controller: a model sets only a `Ready` condition and literal `status:`
+  fields, such as `{phase: Bound}`. If the controller reads more than that, tell the user.
+- A StatefulSet's, DaemonSet's or ReplicaSet's controller: no model sets their replica
+  counts. Tell the user that reconciler-fuzzer cannot test this controller yet.
 
 List the external HTTP APIs it calls, such as a cloud's. Each needs a fake service (step 4).
 The controller must take the API's endpoint from a flag or an environment variable, and speak
