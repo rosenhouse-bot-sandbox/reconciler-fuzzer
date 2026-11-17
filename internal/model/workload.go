@@ -10,12 +10,15 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+
+	"github.com/rosenhouse-bot-sandbox/reconciler-fuzzer/internal/trace"
 )
 
 // deploymentStatus is the status Kubernetes' Deployment controller writes.
-// A rollout that is not done keeps the replicas the last status counted
-// available, as an old ReplicaSet's Pods, and adds one unavailable Pod of
-// the new template.
+// At a generation the stage has not written ready, a rollout keeps the
+// replicas the last status counted available, as an old ReplicaSet's Pods,
+// and adds one unavailable Pod of the new template. At a generation it has,
+// a stuck Deployment's Pods are all unavailable.
 func deploymentStatus(h *held, w want, now time.Time) map[string]any {
 	var spec appsv1.DeploymentSpec
 	decodeInto(h.spec, &spec)
@@ -38,22 +41,28 @@ func deploymentStatus(h *held, w want, now time.Time) map[string]any {
 			},
 		}
 	}
+	rollingOut := h.readyGeneration != h.generation
 	available := min(numberAt(h.status, "availableReplicas"), replicas)
+	updated, current := min(replicas, 1), available+min(replicas, 1)
 	if spec.Strategy.Type == appsv1.RecreateDeploymentStrategyType {
-		available = 0
+		available, current = 0, updated
 	}
-	updated := min(replicas, 1)
 	progressingCondition := condition("Progressing", "True", "ReplicaSetUpdated", rs+" is progressing.")
+	if !rollingOut {
+		available, updated, current = 0, replicas, replicas
+		progressingCondition = condition("Progressing", "True", "NewReplicaSetAvailable", rs+" has successfully progressed.")
+	}
 	var failure map[string]any
 	switch w.failure {
 	case "progressDeadlineExceeded":
 		progressingCondition = condition("Progressing", "False", "ProgressDeadlineExceeded", rs+" has timed out progressing.")
 	case "replicaFailure":
+		current -= updated
 		updated = 0
-		failure = condition("ReplicaFailure", "True", "FailedCreate", fmt.Sprintf(`pods "%s-" is forbidden: exceeded quota: compute-resources`, h.ref.Name))
+		failure = condition("ReplicaFailure", "True", "FailedCreate", fmt.Sprintf(`pods "%s-%s-" is forbidden: exceeded quota: compute-resources`, h.ref.Name, templateHash(h.spec["template"])))
 	}
 	availableCondition := condition("Available", "True", "MinimumReplicasAvailable", "Deployment has minimum availability.")
-	if available < replicas-maxUnavailable(spec, replicas) || replicas > 0 && available == 0 {
+	if available < replicas-maxUnavailable(spec, replicas) {
 		availableCondition = condition("Available", "False", "MinimumReplicasUnavailable", "Deployment does not have minimum availability.")
 	}
 	conditions := []any{availableCondition, progressingCondition}
@@ -61,8 +70,8 @@ func deploymentStatus(h *held, w want, now time.Time) map[string]any {
 		conditions = append(conditions, failure)
 	}
 	return map[string]any{
-		"observedGeneration": h.generation, "replicas": available + updated, "updatedReplicas": updated,
-		"readyReplicas": available, "availableReplicas": available, "unavailableReplicas": updated,
+		"observedGeneration": h.generation, "replicas": current, "updatedReplicas": updated,
+		"readyReplicas": available, "availableReplicas": available, "unavailableReplicas": current - available,
 		"conditions": conditions,
 	}
 }
@@ -96,7 +105,8 @@ func podStatus(h *held, w want, now time.Time) map[string]any {
 	} else if w.state == wantStuck && failure == "" {
 		failure = "containerCreating"
 	}
-	p := pod{now: now.UTC().Format(time.RFC3339), name: h.ref.Name, generation: h.generation}
+	p := pod{now: now.UTC().Format(time.RFC3339), ref: h.ref, generation: h.generation,
+		sandbox: failure != "unschedulable" && failure != "containerCreating", never: spec.RestartPolicy == corev1.RestartPolicyNever}
 	switch failure {
 	case "unschedulable":
 		return p.status("Pending", nil, nil, map[string]podCondition{
@@ -127,7 +137,7 @@ func podStatus(h *held, w want, now time.Time) map[string]any {
 		for i, c := range spec.InitContainers {
 			switch {
 			case i == failed:
-				inits = append(inits, p.crashLooping(c))
+				inits = append(inits, p.failing(c))
 			case i < failed:
 				inits = append(inits, p.started(c, true))
 			default:
@@ -137,9 +147,16 @@ func podStatus(h *held, w want, now time.Time) map[string]any {
 		for _, c := range spec.Containers {
 			containers = append(containers, p.waiting(c, "PodInitializing", ""))
 		}
-		return p.status("Pending", inits, containers, p.notReady(spec.Containers, map[string]podCondition{
-			"Initialized": {"False", "ContainersNotInitialized", "containers with incomplete status: [" + spec.InitContainers[failed].Name + "]"},
-		}), true)
+		var incomplete []corev1.Container
+		for _, c := range spec.InitContainers[failed:] {
+			if !isSidecar(c) {
+				incomplete = append(incomplete, c)
+			}
+		}
+		conditions := p.notReady(spec.Containers, map[string]podCondition{
+			"Initialized": {"False", "ContainersNotInitialized", "containers with incomplete status: " + names(incomplete)},
+		})
+		return p.status(p.failedPhase("Pending"), inits, containers, p.failedReady(conditions), true)
 	}
 	var inits, containers, unready []any
 	failedSidecar, failedContainer := -1, -1
@@ -151,7 +168,7 @@ func podStatus(h *held, w want, now time.Time) map[string]any {
 	}
 	for i, c := range spec.InitContainers {
 		if i == failedSidecar {
-			inits, unready = append(inits, p.crashLooping(c)), append(unready, c.Name)
+			inits, unready = append(inits, p.failing(c)), append(unready, c.Name)
 		} else {
 			inits = append(inits, p.started(c, true))
 		}
@@ -163,7 +180,8 @@ func podStatus(h *held, w want, now time.Time) map[string]any {
 			phase = "Pending"
 			containers = append(containers, p.waiting(c, "ImagePullBackOff", fmt.Sprintf("Back-off pulling image %q", c.Image)))
 		case i == failedContainer:
-			containers = append(containers, p.crashLooping(c))
+			phase = p.failedPhase(phase)
+			containers = append(containers, p.failing(c))
 		default:
 			containers = append(containers, p.started(c, false))
 			continue
@@ -176,16 +194,54 @@ func podStatus(h *held, w want, now time.Time) map[string]any {
 		conditions["Ready"] = podCondition{"False", "ContainersNotReady", message}
 		conditions["ContainersReady"] = podCondition{"False", "ContainersNotReady", message}
 	}
+	if phase == "Failed" {
+		conditions = p.failedReady(conditions)
+	}
 	return p.status(phase, inits, containers, conditions, true)
 }
 
 // podCondition is a Pod condition's status, reason and message.
 type podCondition struct{ status, reason, message string }
 
-// pod builds the parts of one Pod's status at now.
+// pod builds the parts of one Pod's status at now. A Pod has an IP once its
+// sandbox runs, and a never Pod's failed container is not restarted.
 type pod struct {
-	now, name  string
+	now        string
+	ref        trace.Ref
 	generation int64
+	sandbox    bool
+	never      bool
+}
+
+// failing is the status of a container that exits 1: crash-looping, or
+// terminated for good in a never Pod.
+func (p pod) failing(c corev1.Container) map[string]any {
+	if p.never && !isSidecar(c) {
+		return p.containerStatus(c, false, false, 0, map[string]any{"terminated": p.exited()}, nil)
+	}
+	return p.containerStatus(c, false, false, 3,
+		map[string]any{"waiting": map[string]any{"reason": "CrashLoopBackOff", "message": fmt.Sprintf("back-off 40s restarting failed container=%s pod=%s", c.Name, p.ref.Name)}},
+		map[string]any{"terminated": p.exited()})
+}
+
+func (p pod) exited() map[string]any {
+	return map[string]any{"exitCode": 1, "reason": "Error", "startedAt": p.now, "finishedAt": p.now}
+}
+
+// failedReady marks a never Pod's Ready condition failed.
+func (p pod) failedReady(conditions map[string]podCondition) map[string]podCondition {
+	if p.never {
+		conditions["Ready"] = podCondition{"False", "PodFailed", ""}
+	}
+	return conditions
+}
+
+// failedPhase is Failed for a never Pod whose container failed, or else phase.
+func (p pod) failedPhase(phase string) string {
+	if p.never {
+		return "Failed"
+	}
+	return phase
 }
 
 // podConditions are the conditions a scheduled Pod carries, in kubelet's
@@ -215,10 +271,12 @@ func (p pod) status(phase string, inits, containers []any, conditions map[string
 	}
 	status["conditions"] = list
 	if scheduled {
-		ip := podIP(p.name)
-		status["hostIP"], status["hostIPs"] = "10.0.0.1", []any{map[string]any{"ip": "10.0.0.1"}}
-		status["podIP"], status["podIPs"] = ip, []any{map[string]any{"ip": ip}}
 		status["startTime"] = p.now
+		status["hostIP"], status["hostIPs"] = "10.0.0.1", []any{map[string]any{"ip": "10.0.0.1"}}
+	}
+	if p.sandbox {
+		ip := podIP(p.ref)
+		status["podIP"], status["podIPs"] = ip, []any{map[string]any{"ip": ip}}
 	}
 	return status
 }
@@ -247,12 +305,6 @@ func (p pod) started(c corev1.Container, init bool) map[string]any {
 	}
 	return p.containerStatus(c, true, false, 0, map[string]any{"terminated": map[string]any{
 		"exitCode": 0, "reason": "Completed", "startedAt": p.now, "finishedAt": p.now}}, nil)
-}
-
-func (p pod) crashLooping(c corev1.Container) map[string]any {
-	return p.containerStatus(c, false, false, 3,
-		map[string]any{"waiting": map[string]any{"reason": "CrashLoopBackOff", "message": fmt.Sprintf("back-off 40s restarting failed container=%s pod=%s", c.Name, p.name)}},
-		map[string]any{"terminated": map[string]any{"exitCode": 1, "reason": "Error", "startedAt": p.now, "finishedAt": p.now}})
 }
 
 func (p pod) containerStatus(c corev1.Container, ready, started bool, restarts int, state, lastState map[string]any) map[string]any {
@@ -293,10 +345,10 @@ func nilIfEmpty(list []any) any {
 	return list
 }
 
-// podIP is a stable address in 10.244.0.0/16 for the Pod named name.
-func podIP(name string) string {
+// podIP is a stable address in 10.244.0.0/16 for the Pod ref.
+func podIP(ref trace.Ref) string {
 	h := fnv.New32a()
-	h.Write([]byte(name))
+	h.Write([]byte(ref.Namespace + "/" + ref.Name))
 	sum := h.Sum32()
 	return fmt.Sprintf("10.244.%d.%d", sum>>8&0xff, sum&0xfe+1)
 }

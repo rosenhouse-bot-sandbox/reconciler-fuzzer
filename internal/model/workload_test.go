@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/json"
+	"maps"
 	"fmt"
 	"reflect"
 	"strings"
@@ -99,6 +100,12 @@ func container(name string, sidecar bool) map[string]any {
 	return c
 }
 
+func never(spec map[string]any) map[string]any {
+	spec = maps.Clone(spec)
+	spec["restartPolicy"] = "Never"
+	return spec
+}
+
 // podSpec has a sidecar, an init container and two containers.
 var podSpec = map[string]any{
 	"initContainers": []any{container("proxy", true), container("migrate", false)},
@@ -157,6 +164,10 @@ func TestPodStatusShowsEachFailure(t *testing.T) {
 			map[string]string{"PodReadyToStartContainers": "True/<nil>", "Initialized": "False/ContainersNotInitialized", "Ready": "False/ContainersNotReady", "ContainersReady": "False/ContainersNotReady", "PodScheduled": "True/<nil>"}},
 		"sidecarFailed": {podSpec, want{state: wantStuck, failure: "sidecarFailed"}, "Running", "proxy=CrashLoopBackOff migrate=terminated+ app=running+ metrics=running+",
 			map[string]string{"PodReadyToStartContainers": "True/<nil>", "Initialized": "True/<nil>", "Ready": "False/ContainersNotReady", "ContainersReady": "False/ContainersNotReady", "PodScheduled": "True/<nil>"}},
+		"never crashLoopBackOff": {never(podSpec), want{state: wantStuck, failure: "crashLoopBackOff"}, "Failed", "proxy=running+ migrate=terminated+ app=terminated metrics=running+",
+			map[string]string{"PodReadyToStartContainers": "True/<nil>", "Initialized": "True/<nil>", "Ready": "False/PodFailed", "ContainersReady": "False/ContainersNotReady", "PodScheduled": "True/<nil>"}},
+		"never initContainerFailed": {never(podSpec), want{state: wantStuck, failure: "initContainerFailed"}, "Failed", "proxy=running+ migrate=terminated app=PodInitializing metrics=PodInitializing",
+			map[string]string{"PodReadyToStartContainers": "True/<nil>", "Initialized": "False/ContainersNotInitialized", "Ready": "False/PodFailed", "ContainersReady": "False/ContainersNotReady", "PodScheduled": "True/<nil>"}},
 		"no init container": {bare, want{state: wantStuck, failure: "initContainerFailed"}, "Pending", "app=ContainerCreating",
 			map[string]string{"PodReadyToStartContainers": "False/<nil>", "Initialized": "True/<nil>", "Ready": "False/ContainersNotReady", "ContainersReady": "False/ContainersNotReady", "PodScheduled": "True/<nil>"}},
 		"no sidecar": {bare, want{state: wantStuck, failure: "sidecarFailed"}, "Pending", "app=ContainerCreating",
@@ -173,8 +184,11 @@ func TestPodStatusShowsEachFailure(t *testing.T) {
 		if got := conditionsOf(status); !reflect.DeepEqual(got, c.conditions) {
 			t.Errorf("%s: conditions = %v, want %v", name, got, c.conditions)
 		}
-		if scheduled := status["podIP"] != nil; scheduled != (c.w.failure != "unschedulable") {
+		if hasIP, sandbox := status["podIP"] != nil, strings.Contains(c.containers, "running"); hasIP != sandbox {
 			t.Errorf("%s: podIP = %v", name, status["podIP"])
+		}
+		if scheduled := status["startTime"] != nil; scheduled != (c.w.failure != "unschedulable") {
+			t.Errorf("%s: startTime = %v", name, status["startTime"])
 		}
 		obj := map[string]any{"metadata": map[string]any{"generation": 1}, "status": status}
 		if got, err := ready(obj); err != nil || got != (c.w.state == wantReady) {
@@ -246,4 +260,105 @@ func (p podObject) version() trace.Version {
 	raw, _ := json.Marshal(body)
 	ref := trace.Ref{System: "kube", Group: gadgetGVR.Group, Resource: gadgetGVR.Resource, Namespace: ns, Name: "p"}
 	return trace.Version{Ref: ref, UID: "u", RV: p.rv, Body: raw}
+}
+
+func TestACrashingContainerExitedWithAnError(t *testing.T) {
+	spec := map[string]any{"initContainers": []any{container("migrate", false), container("seed", false)}, "containers": []any{container("app", false)}}
+	h := &held{ref: trace.Ref{Name: "p"}, spec: spec}
+	for _, failure := range []string{"crashLoopBackOff", "initContainerFailed"} {
+		status := asJSON(t, podStatus(h, want{state: wantStuck, failure: failure}, time.Unix(0, 0)))
+		raw, _ := json.Marshal(status)
+		if !strings.Contains(string(raw), `"lastState":{"terminated":{"exitCode":1`) {
+			t.Errorf("%s: no exit 1 in %s", failure, raw)
+		}
+	}
+	status := asJSON(t, podStatus(h, want{state: wantStuck, failure: "initContainerFailed"}, time.Unix(0, 0)))
+	raw, _ := json.Marshal(status)
+	if !strings.Contains(string(raw), "containers with incomplete status: [migrate seed]") {
+		t.Errorf("Initialized does not name every init container left: %s", raw)
+	}
+}
+
+func TestADeploymentWrittenReadyAtItsGenerationLosesItsPodsWhenStuck(t *testing.T) {
+	h := deploymentHeld(map[string]any{"replicas": 3.0}, map[string]any{"availableReplicas": 3.0})
+	h.readyGeneration = h.generation
+	status := asJSON(t, deploymentStatus(h, want{state: wantStuck}, time.Unix(0, 0)))
+	if got, want := counts(status), [4]any{3.0, 3.0, 0.0, 3.0}; got != want {
+		t.Errorf("replicas, updated, available, unavailable = %v, want %v", got, want)
+	}
+	if got := conditionsOf(status); got["Available"] != "False/MinimumReplicasUnavailable" || got["Progressing"] != "True/NewReplicaSetAvailable" {
+		t.Errorf("conditions = %v", got)
+	}
+	h.spec["strategy"] = map[string]any{"rollingUpdate": map[string]any{"maxUnavailable": "100%"}}
+	if got := conditionsOf(asJSON(t, deploymentStatus(h, want{state: wantStuck}, time.Unix(0, 0))))["Available"]; got != "True/MinimumReplicasAvailable" {
+		t.Errorf("Available = %s with maxUnavailable 100%%, want True", got)
+	}
+}
+
+// A stage keeps what has not changed: the Pod's start, a running
+// container's start, and a condition's transition.
+func TestAWorkloadStageKeepsTheTimesOfWhatHeld(t *testing.T) {
+	h := &held{ref: trace.Ref{Name: "p"}, spec: podSpec}
+	shape := shapeOf(config.Model{Stage: config.PodStage})
+	ready := asJSON(t, shape.status(h, want{state: wantReady}, time.Unix(0, 0)))
+	h.status = ready
+	stuck := asJSON(t, shape.status(h, want{state: wantStuck, failure: "crashLoopBackOff"}, time.Unix(3600, 0)))
+	const early, late = "1970-01-01T00:00:00Z", "1970-01-01T01:00:00Z"
+	if stuck["startTime"] != early {
+		t.Errorf("startTime = %v, want %s", stuck["startTime"], early)
+	}
+	times := map[string]any{}
+	for _, c := range stuck["conditions"].([]any) {
+		c := c.(map[string]any)
+		times[c["type"].(string)] = c["lastTransitionTime"]
+	}
+	if times["PodScheduled"] != early || times["Ready"] != late {
+		t.Errorf("transition times = %v, want PodScheduled's kept and Ready's new", times)
+	}
+	for _, c := range stuck["containerStatuses"].([]any) {
+		c := c.(map[string]any)
+		running, _ := c["state"].(map[string]any)["running"].(map[string]any)
+		if c["name"] == "metrics" && running["startedAt"] != early {
+			t.Errorf("metrics state = %v, want its start kept", c["state"])
+		}
+	}
+}
+
+func TestAWorkloadStageWritesEachNewGenerationAndEachFailure(t *testing.T) {
+	m := config.Model{Kind: gadgetGVR.GroupVersion().WithKind("Pod"), Stage: config.PodStage, After: after}
+	s, w, _ := testStageOf(t, m)
+	p := podObject{rv: "1", generation: 1}
+	hearEach := func(n int) []write {
+		t.Helper()
+		writes := w.await(t, n)
+		p.rv, p.status = writes[n-1].rv, statusOf(writes[n-1])
+		s.hear(p.version())
+		return writes
+	}
+	s.hear(p.version())
+	hearEach(1)
+	hearEach(2)
+	p.generation = 2
+	s.hear(p.version())
+	if got := statusOf(hearEach(3)[2])["phase"]; got != "Pending" {
+		t.Errorf("phase at a new generation = %v, want Pending", got)
+	}
+	hearEach(4)
+	match := plan.Match{Group: gadgetGVR.Group, Resource: gadgetGVR.Resource}
+	endPull, err := s.Fault(plan.Fault{Match: match, Stuck: true, Failure: "imagePullBackOff"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stateOf(statusOf(hearEach(5)[4])); got != "c=ImagePullBackOff" {
+		t.Errorf("first fault's containers = %q", got)
+	}
+	endCrash, err := s.Fault(plan.Fault{Match: match, Stuck: true, Failure: "crashLoopBackOff"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer endCrash()
+	endPull()
+	if got := stateOf(statusOf(hearEach(6)[5])); got != "c=CrashLoopBackOff" {
+		t.Errorf("second fault's containers = %q", got)
+	}
 }

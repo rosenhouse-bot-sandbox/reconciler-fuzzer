@@ -426,21 +426,22 @@ models:
   replicas the last status counted available stay available, as old Pods do. `after` later,
   every replica is updated and available. Its `ready` is `kubectl rollout status`'s.
 - `pod` writes Pending with containers creating, then Running with every container, sidecar
-  and init container done. Its `ready` is the `Ready` condition. The Pod keeps running, so a
-  `restartPolicy: Never` Pod never succeeds.
-- Neither creates ReplicaSets or Pods, and neither takes `status:`.
+  and init container done. Its `ready` is the `Ready` condition. The Pod never terminates on
+  its own, so a `restartPolicy: Never` Pod never succeeds.
+- Neither creates ReplicaSets or Pods, binds a Pod to a node, or takes `status:`. A Pod's
+  `spec.nodeName` stays empty.
 
 A `stuck` fault may name a `failure`, which generated plans draw too:
 
 | Stage | Failure | What the model writes |
 |---|---|---|
-| `deployment` | none | The rollout makes no progress. |
+| `deployment` | none | A rollout makes no progress. Once rolled out, every Pod is unavailable. |
 | `deployment` | `progressDeadlineExceeded` | `Progressing` False. |
 | `deployment` | `replicaFailure` | `ReplicaFailure` True, and no new replica. |
 | `pod` | none | Every container stays creating. |
 | `pod` | `unschedulable` | `PodScheduled` False. |
 | `pod` | `imagePullBackOff` | The first container waits on its image. |
-| `pod` | `crashLoopBackOff` | The first container crash-loops. The Pod is Running, not ready. |
+| `pod` | `crashLoopBackOff` | The first container crash-loops. The Pod is Running, not ready, or Failed under `restartPolicy: Never`. |
 | `pod` | `initContainerFailed` | The first init container that is not a sidecar crash-loops. |
 | `pod` | `sidecarFailed` | The first sidecar crash-loops. The Pod is Running, not ready. |
 

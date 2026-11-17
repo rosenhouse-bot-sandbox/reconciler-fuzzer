@@ -80,6 +80,8 @@ type held struct {
 	timer               *time.Timer
 	// fresh is the message a fault's end writes.
 	fresh string
+	// readyGeneration is the generation of the stage's last ready write.
+	readyGeneration int64
 	// wrote is the generation of the stage's last status write, made at
 	// statusRV for wanted.
 	wrote     int64
@@ -528,6 +530,9 @@ func (s *Stage) sweep(ctx context.Context) {
 		}
 		if r.op.status != nil && !r.conflict {
 			h.fresh, h.wrote = "", r.op.generation
+			if r.op.want.state == wantReady {
+				h.readyGeneration = r.op.generation
+			}
 			h.statusRV, h.statusFor = r.rv, r.op.want
 			if observed(h.rv, r.rv) {
 				h.echoed()

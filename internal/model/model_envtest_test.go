@@ -373,7 +373,7 @@ func TestWorkloadStagesWriteEachFailureOnce(t *testing.T) {
 		{config.Model{Kind: deployment, Stage: config.DeploymentStage, After: 100 * time.Millisecond},
 			map[string]any{"replicas": int64(2), "selector": map[string]any{"matchLabels": labels},
 				"template": map[string]any{"metadata": map[string]any{"labels": labels}, "spec": podSpec}},
-			map[string]string{"": `"reason":"ReplicaSetUpdated"`, "progressDeadlineExceeded": `"reason":"ProgressDeadlineExceeded"`, "replicaFailure": `"reason":"FailedCreate"`}},
+			map[string]string{"": `"reason":"MinimumReplicasUnavailable"`, "progressDeadlineExceeded": `"reason":"ProgressDeadlineExceeded"`, "replicaFailure": `"reason":"FailedCreate"`}},
 		{config.Model{Kind: pod, Stage: config.PodStage, After: 100 * time.Millisecond}, podSpec,
 			map[string]string{"": `"reason":"PodInitializing"`, "unschedulable": `"reason":"Unschedulable"`, "imagePullBackOff": `"reason":"ImagePullBackOff"`,
 				"crashLoopBackOff": `"reason":"CrashLoopBackOff"`, "initContainerFailed": `"reason":"ContainersNotInitialized"`, "sidecarFailed": `"containers with unready status: [proxy]"`}},

@@ -3,6 +3,7 @@ package model
 import (
 	"maps"
 	"reflect"
+	"slices"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -92,7 +93,58 @@ type echoShape struct {
 	write func(h *held, w want, now time.Time) map[string]any
 }
 
-func (e echoShape) status(h *held, w want, now time.Time) map[string]any { return e.write(h, w, now) }
+// status keeps the times of what has not changed since the heard status: a
+// condition's transition while its status and reason hold, the Pod's start,
+// and a container's start while it stays in one state.
+func (e echoShape) status(h *held, w want, now time.Time) map[string]any {
+	status := e.write(h, w, now)
+	if start, kept := h.status["startTime"]; kept && status["startTime"] != nil {
+		status["startTime"] = start
+	}
+	keepTimes(h.status, status, "conditions", "type", func(old, new map[string]any) bool {
+		return old["status"] == new["status"] && old["reason"] == new["reason"]
+	}, "lastTransitionTime", "lastUpdateTime")
+	for _, key := range []string{"initContainerStatuses", "containerStatuses"} {
+		keepTimes(h.status, status, key, "name", func(old, new map[string]any) bool {
+			return reflect.DeepEqual(stateKind(old["state"]), stateKind(new["state"]))
+		}, "state")
+	}
+	return status
+}
+
+// keepTimes copies fields from each item of the heard list key to the item
+// of the written list with the same id, where same says they match.
+func keepTimes(heard, written map[string]any, key, id string, same func(old, new map[string]any) bool, fields ...string) {
+	olds, _ := heard[key].([]any)
+	news, _ := written[key].([]any)
+	for _, n := range news {
+		n, _ := n.(map[string]any)
+		for _, o := range olds {
+			o, _ := o.(map[string]any)
+			if n == nil || o == nil || o[id] != n[id] || !same(o, n) {
+				continue
+			}
+			for _, field := range fields {
+				if value, set := o[field]; set {
+					n[field] = value
+				}
+			}
+		}
+	}
+}
+
+// stateKind names a container state, such as running, with its waiting
+// reason.
+func stateKind(state any) []string {
+	var kinds []string
+	m, _ := state.(map[string]any)
+	for kind, detail := range m {
+		reason, _ := detail.(map[string]any)["reason"].(string)
+		kinds = append(kinds, kind+"/"+reason)
+	}
+	slices.Sort(kinds)
+	return kinds
+}
 
 func (e echoShape) shows(h *held, w want) bool {
 	return h.shown != nil && h.shown.state == w.state && h.shown.failure == w.failure &&

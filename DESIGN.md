@@ -159,15 +159,15 @@ CRDs that stop serving a watched version. Watches lag a new schema by a second.
 `run.Run` starts the fakes, `kube`, the models, then the controller. A model
 writes through its own listener from `k.Listen`, hears versions through
 `k.Subscribe`, and records `work` as its work starts and ends. `gc` collects an
-instance whose owners a live read finds gone, following Kubernetes'
-cross-scope, foreground and orphan rules (`gc.go`). `namespace` finishes a
-terminating namespace. `model.NewStage` makes a stage model per `models:`
-entry, named `trace.ModelCaller` of its kind. Its `shape` writes `Ready` True
-and `status:` for `readyCondition`, or Kubernetes' status for `deployment` and
-`pod`, `after` a generation's first version. `stuck` writes its `failure`'s
-status, `slowDelete` adds a finalizer, and either's end writes ready again.
-Workload shapes keep the server's answer as what they wrote. A stage keeps its `finalizer:` on each live object, and removes it
-`finalizer.after` past the first deleting version. Each hold is pending work.
+instance whose owners a live read finds gone, following Kubernetes' cross-scope,
+foreground and orphan rules (`gc.go`). `namespace` finishes a terminating
+namespace. `model.NewStage` makes a stage model per `models:` entry, named
+`trace.ModelCaller` of its kind. Its `shape` writes `Ready` True and `status:`
+for `readyCondition`, or Kubernetes' status for `deployment` and `pod`, `after`
+a generation's first version. `stuck` writes its `failure`'s status,
+`slowDelete` adds a finalizer, and either's end writes ready again. A stage
+holds each live object with its `finalizer:` until `finalizer.after` past the
+first deleting version. Each hold is pending work.
 
 **Fake services.** `fake.New` makes a System of a `systems:` entry with a
 `process`, which it runs in the config's directory on the address in
