@@ -810,3 +810,65 @@ func TestHonestWithTrackPassesACRReadyWhileWhatItNamesWaitsInDeletion(t *testing
 		})
 	}
 }
+
+// heldPw is the Secret pw being deleted, held by the in-use finalizer.
+func heldPw() map[string]any {
+	body := tt.Deleting(secret(true))
+	body["metadata"].(map[string]any)["finalizers"] = []any{"toy/in-use"}
+	return body
+}
+
+// Clause 2 judges an object of a block reference's to kind that waits in
+// deletion as it judges a CR, but at once, since clause 5 already holds the
+// step for the change that deleted it.
+func TestAnObjectWaitingInDeletionSettlesOnlyWhileACRNamesIt(t *testing.T) {
+	const notNamed = "secrets ns/pw is being deleted, held by finalizer toy/in-use"
+	for name, c := range map[string]struct {
+		ref   trace.Reference
+		after func(r *tt.Script)
+		unmet []string
+	}{
+		"named by a live CR": {blockRef(), func(*tt.Script) {}, nil},
+		"named by a CR being deleted": {blockRef(), func(r *tt.Script) {
+			r.Update(trace.Harness, databaseB, tt.Deleting(database(true, "pw")))
+		}, []string{"databases.toy ns/b is being deleted"}},
+		"after its last CR left": {blockRef(), func(r *tt.Script) { r.DeleteCR("b", databaseB) }, []string{notNamed}},
+		"after its CR named another": {blockRef(), func(r *tt.Script) {
+			r.Update(trace.Harness, databaseB, database(true, "other"))
+		}, []string{notNamed}},
+		"named without block": {secretRef(), func(r *tt.Script) { r.DeleteCR("b", databaseB) }, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := secretRun(c.ref, secret(true))
+			readyB(r).EndFaults().Tick(5 * s)
+			r.Update(trace.Harness, pw, heldPw())
+			c.after(r)
+			if unmet := settledAt(t, r, r.Now); !slices.Equal(unmet, c.unmet) {
+				t.Errorf("unmet = %q, want %q.", unmet, c.unmet)
+			}
+		})
+	}
+}
+
+// The stop waits only for CRs, and a stopped controller holds no object.
+func TestAStopDoesNotWaitForAnObjectWaitingInDeletion(t *testing.T) {
+	r := secretRun(blockRef(), secret(true))
+	readyB(r).Update(trace.Harness, pw, heldPw()).DeleteCR("b", databaseB).Stop().EndFaults()
+	if unmet := settledAt(t, r, r.Now+5*s); len(unmet) != 0 {
+		t.Errorf("unmet = %q, want none.", unmet)
+	}
+}
+
+func TestConvergeFailsAnObjectLeftInDeletionAfterTheCRsThatNameIt(t *testing.T) {
+	r := secretRun(blockRef(), secret(true))
+	seeBoth(r)
+	r.Delete(trace.Harness, databaseB).Tick(r.Spec.Stable)
+	r.Update(trace.Harness, pw, heldPw()).See(ctl, pw).Call(ctl, "get", pw, 200).Tick(3 * r.Spec.Stable)
+	ix := r.EndFaults().Settle().Index()
+	spec, err := check.SpecFor(nil, ix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireFinding(t, check.Judge(ix, spec).Findings, "Converge", 0, "did not settle (clause 2)", "kube/secrets",
+		"secrets ns/pw is being deleted, held by finalizer toy/in-use")
+}

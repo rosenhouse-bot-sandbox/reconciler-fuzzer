@@ -53,7 +53,7 @@ func (r *SecretReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	changed := false
 	switch {
 	case !named:
-		changed = controllerutil.RemoveFinalizer(secret, fleetv1.SecretInUseFinalizer)
+		changed = r.Bug != B188 && controllerutil.RemoveFinalizer(secret, fleetv1.SecretInUseFinalizer)
 	case secret.DeletionTimestamp.IsZero() && r.Bug != B126:
 		changed = controllerutil.AddFinalizer(secret, fleetv1.SecretInUseFinalizer)
 	}

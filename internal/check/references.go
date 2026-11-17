@@ -53,11 +53,23 @@ func (s Spec) blocked(cr trace.Ref, body map[string]any) []trace.Ref {
 	return objects
 }
 
-// inUse returns a func that reports whether the deletion of a CR, being
-// deleted at t, waits for a live CR that names it by a block reference. A
-// namer that waits for the CR in turn, through CRs being deleted, does not
-// count, since the two would wait for good. A CR that names itself is such a
-// namer.
+// blockedKinds are the to kinds of block references that are not listed,
+// each once. Only kube kinds can be blocked.
+func (s Spec) blockedKinds() []trace.Ref {
+	var kinds []trace.Ref
+	for _, r := range s.References {
+		if r.Block && !s.listed(r.To) && !slices.Contains(kinds, r.To) {
+			kinds = append(kinds, r.To)
+		}
+	}
+	return kinds
+}
+
+// inUse returns a func that reports whether the deletion of an object,
+// being deleted at t, waits for a live CR that names it by a block reference.
+// A namer that waits for the object in turn, through CRs being deleted, does
+// not count, since the two would wait for good. A CR that names itself is
+// such a namer.
 func (s Spec) inUse(ix *trace.Index, t time.Duration) func(trace.Ref) bool {
 	var blocked map[trace.Ref][]trace.Ref
 	deletingCR := map[trace.Ref]bool{}
