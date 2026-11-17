@@ -49,6 +49,7 @@ var bugs = map[int]string{
 	161: "Finalizes only Clusters whose finalization this process began.",
 	162: "Requeues a Cluster being deleted every 1 ms while its Volumes remain, and deletes them again each time.",
 	172: "Counts a Volume ready on a Ready condition of an older generation.",
+	188: "Under --protect-secrets, never removes the in-use finalizer, so a Secret that no Database names stays in deletion.",
 }
 
 func TestEveryGateBugHasADescription(t *testing.T) {

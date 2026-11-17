@@ -72,7 +72,7 @@ Each Cluster owns Volumes of a third party's kind, which a model sets ready. A D
 
 | Bug | Description | Plan | Check | Step |
 |---|---|---|---|---|
-| B0 | The correct controller. | all 52 plans of config.yaml, database/config.yaml, order/config.yaml, protect/config.yaml, secret/config.yaml, storageclass/config.yaml, upgrade/config.yaml | none | |
+| B0 | The correct controller. | all 53 plans of config.yaml, database/config.yaml, order/config.yaml, protect/config.yaml, secret/config.yaml, storageclass/config.yaml, upgrade/config.yaml | none | |
 | B0 | The correct controller. | uninstall/crd-first-stop | none | |
 | B0 | The correct controller. | uninstall/kill-recreate | none | |
 | B0 | The correct controller. | uninstall/recreate | none | |
@@ -120,3 +120,4 @@ Each Cluster owns Volumes of a third party's kind, which a model sets ready. A D
 | B161 | Finalizes only Clusters whose finalization this process began. | restart-deleting | Converge | 1 |
 | B162 | Requeues a Cluster being deleted every 1 ms while its Volumes remain, and deletes them again each time. | slow-delete | Backoff | 1 |
 | B172 | Counts a Volume ready on a Ready condition of an older generation. | resize | Honest | 1 |
+| B188 | Under --protect-secrets, never removes the in-use finalizer, so a Secret that no Database names stays in deletion. | secret/b188 | Converge | 2 |

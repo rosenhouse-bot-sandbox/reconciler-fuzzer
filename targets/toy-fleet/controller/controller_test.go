@@ -1225,7 +1225,7 @@ func TestReconcileOfAMissingCRSucceeds(t *testing.T) {
 }
 
 func TestParseBugAcceptsOnlyKnownBugs(t *testing.T) {
-	for _, id := range []int{0, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 131, 132, 133, 135, 140, 141, 142, 150, 151, 152, 160, 161, 162, 170, 171, 172} {
+	for _, id := range []int{0, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 131, 132, 133, 135, 140, 141, 142, 150, 151, 152, 160, 161, 162, 170, 171, 172, 188} {
 		if b, err := ParseBug(id); int(b) != id || err != nil {
 			t.Errorf("ParseBug(%d) = %v, %v", id, b, err)
 		}
@@ -1299,6 +1299,17 @@ func TestB125KeepsADatabaseReadyAfterItsSecretGoes(t *testing.T) {
 	f.settle(f.databases, "db")
 	if got := f.database().Status; got != readyStatus() {
 		t.Errorf("Under B125, after its Secret went, the Database is %+v, want Ready.", got)
+	}
+}
+
+func TestB188NeverReleasesASecret(t *testing.T) {
+	f := newBuggyFleet(t, B188, passwordSecret(nil), databaseNaming("admin-password"))
+	f.settle(f.secrets, "admin-password")
+	f.delete(f.database())
+	f.delete(f.secret())
+	f.settle(f.secrets, "admin-password")
+	if s := f.secret(); s.DeletionTimestamp.IsZero() || !slices.Equal(s.Finalizers, []string{fleetv1.SecretInUseFinalizer}) {
+		t.Errorf("Under B188, with no Database, the deleted Secret has finalizers %q.", s.Finalizers)
 	}
 }
 

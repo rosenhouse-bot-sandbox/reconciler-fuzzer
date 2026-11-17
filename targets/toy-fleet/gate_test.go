@@ -73,6 +73,7 @@ var gate = []gateRow{
 	{plan: "slow-delete", bug: 118},
 	{plan: "slow-delete", bug: 119, finding: "Teardown: released a CR before deleting its resources", step: 1, detail: "-cluster (rule 3, slot a)", config: storageClassConfig},
 	{plan: "secret-first", bug: 126, finding: "Ordered: released an object that another names", step: 1, detail: "/admin-password: slot a names it", config: secretConfig},
+	{plan: "b188", bug: 188, finding: "Converge: did not settle (clause 2)", step: 2, detail: "/admin-password is being deleted, held by finalizer fleet.toy/secret-in-use", config: secretConfig},
 	{plan: "b131", bug: 131, finding: "Honest: reported ready before seeing its dependency ready", step: 0, detail: "/cluster-vol-1 seen not ready"},
 	{plan: "b131", bug: 131, finding: "Honest: reported ready before seeing its dependency ready", step: 1, detail: "/cluster-vol-2 seen not ready"},
 	// The kill follows the first process's second Volume create. The

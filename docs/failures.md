@@ -164,7 +164,7 @@ Look at the clause first:
 | Clause | Meaning | Look at |
 | --- | --- | --- |
 | 1 | A CR is not `ready`. | The status that the line quotes, and `ready` in the config. |
-| 2 | A CR is still being deleted. | The finalizers that the line names. The controller should remove its own once its cleanup is done. |
+| 2 | A CR, or an object of a `block` reference's `to` kind, is still being deleted. | The finalizers that the line names. The controller should remove its own once its cleanup is done. |
 | 3 | The controller is down, or restarted within `stable`. | `controller.log`, and any [Crash](#crash-the-controller-exited) finding. |
 | 4 | The controller made no successful request since it started. | Its startup in `controller.log`, and its RBAC. A restart's `args`, from the plan or `launch.upgrades`, replace `launch.args`. If the controller does not read `KUBECONFIG`, pass `--kubeconfig=${systems.kube.kubeconfig}` in those `args` too. |
 | 5 | The controller did not look at an object a `damage`, `changeFixture` or `createFixture` changed. | Its watches and the kinds it reads. |
@@ -182,6 +182,9 @@ then, clause 2's line says `waits in deletion, which counts as settled only
 from <t>`, or `only once the step's faults end` while they go on. If the
 controller holds a named CR's deletion by design, and clause 2 names that
 CR, set the reference's `onDelete: block`.
+
+For an object of a `block` reference's `to` kind, such as a Secret, the
+controller should remove its finalizer once no live CR names the object.
 
 CRs being deleted that name each other, directly or through other CRs
 being deleted, would wait for good, so those names do not count. A CR

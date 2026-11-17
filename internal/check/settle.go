@@ -52,7 +52,7 @@ func unmetClauses(ix *trace.Index, t time.Duration, s Spec) []unmet {
 		crs += len(live)
 	}
 	if !stopped {
-		unmets = append(unmets, runClauses(ix, t, s)...)
+		unmets = slices.Concat(unmets, unreleased(ix, t, s, inUse), runClauses(ix, t, s))
 	}
 	for _, model := range ix.Pending(t) {
 		unmets = append(unmets, unmet{6, "", "model " + model + " has work pending"})
@@ -70,6 +70,31 @@ func unfinalized(ix *trace.Index, live []trace.Version, t time.Duration, s Spec,
 		}
 	}
 	return unmets
+}
+
+// unreleased holds to clause 2 each object of an unlisted block to kind
+// that a CR named before its deletion started: while a finalizer that may be
+// the controller's own holds it, a live CR must name it. It needs no delay,
+// since the controller writes no status of it as it starts to wait.
+func unreleased(ix *trace.Index, t time.Duration, s Spec, inUse func(trace.Ref) bool) []unmet {
+	var unmets []unmet
+	for _, to := range s.blockedKinds() {
+		for _, v := range ix.Live(to.Group, to.Resource, t) {
+			if !inUse(v.Ref) && heldByController(ix, v) && s.namedBeforeDeletion(ix, v) {
+				unmets = append(unmets, unmetDeletion(v))
+			}
+		}
+	}
+	return unmets
+}
+
+// heldByController reports whether v holds a finalizer that may be the
+// controller's own.
+func heldByController(ix *trace.Index, v trace.Version) bool {
+	return slices.ContainsFunc(finalizers(v), func(f string) bool {
+		_, foreign := adder(ix, v, f)
+		return !foreign
+	})
 }
 
 // runClauses holds the controller to clauses 3 to 5.
@@ -233,11 +258,7 @@ func quoteJSON(v any) string {
 func deletionClauses(ix *trace.Index, cr trace.Version, t time.Duration, s Spec, inUse func(trace.Ref) bool) []unmet {
 	name, k := describe(cr.Ref), kind(cr.Ref)
 	if !inUse(cr.Ref) {
-		text := name + " is being deleted"
-		if f := finalizers(cr); len(f) > 0 {
-			text += ", held by " + listFinalizers(f)
-		}
-		return []unmet{{2, k, text}}
+		return []unmet{unmetDeletion(cr)}
 	}
 	start, _ := deletionStart(ix.Versions(cr.Ref, cr.UID))
 	step, _ := latestStep(ix, t)
@@ -248,6 +269,15 @@ func deletionClauses(ix *trace.Index, cr trace.Version, t time.Duration, s Spec,
 		return []unmet{{2, k, fmt.Sprintf("%s waits in deletion, which counts as settled only from %v", name, from)}}
 	}
 	return nil
+}
+
+// unmetDeletion is clause 2 unmet by v, an instance being deleted.
+func unmetDeletion(v trace.Version) unmet {
+	text := describe(v.Ref) + " is being deleted"
+	if f := finalizers(v); len(f) > 0 {
+		text += ", held by " + listFinalizers(f)
+	}
+	return unmet{2, kind(v.Ref), text}
 }
 
 // listFinalizers names finalizers as "finalizer a", "finalizers a, b" or
