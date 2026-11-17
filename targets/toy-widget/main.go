@@ -51,6 +51,7 @@ func run(args []string, out io.Writer) error {
 	labelFrom := flags.String("label-from", "", "a ConfigMap in the Widget's namespace whose data.label each child copies")
 	lease := flags.Duration("lease", 0, "elect a leader through a Lease in $WATCH_NAMESPACE that lasts this long, and exit on losing it; 0 elects none")
 	gadget := flags.Bool("gadget", false, "give each Widget a Gadget, and report whether it is ready in status.gadgetReady")
+	workload := flags.String("workload", "", "give each Widget a deployment or a pod, and report whether it is ready in status.workloadReady")
 	index := flags.Bool("index", false, "index Widgets by spec.count, which starts their informer before the manager leads")
 	tenant := flags.Bool("tenant", false, "reconcile Tenants instead of Widgets, watching every namespace")
 	grant := flags.Bool("grant", false, "reconcile Grants instead of Widgets")
@@ -78,6 +79,9 @@ func run(args []string, out io.Writer) error {
 	mode, err := modeOf(*gadget, *tenant, *grant)
 	if err != nil {
 		return err
+	}
+	if *workload != "" && *workload != controller.DeploymentWorkload && *workload != controller.PodWorkload {
+		return fmt.Errorf("--workload=%s: want %s or %s", *workload, controller.DeploymentWorkload, controller.PodWorkload)
 	}
 
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
@@ -121,6 +125,7 @@ func run(args []string, out io.Writer) error {
 			CleanupDelay: *cleanupDelay,
 			LabelFrom:    *labelFrom,
 			Gadget:       *gadget,
+			Workload:     *workload,
 		}
 	}
 	if err := reconciler.SetupWithManager(manager); err != nil {

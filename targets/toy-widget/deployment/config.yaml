@@ -1,0 +1,36 @@
+# config.yaml with --workload=deployment: each Widget runs a modelled
+# Deployment of spec.count replicas.
+launch:
+  binary: ../../../bin/toy-widget
+  args:
+    - --label-from=widget-config
+    - --workload=deployment
+    - --bug=0                      # A later --launch-arg --bug=N wins.
+  env:
+    KUBECONFIG: ${systems.kube.kubeconfig}
+    WATCH_NAMESPACE: ${systems.kube.namespace}
+  rbac:
+    - ../rbac/role.yaml
+    - role.yaml
+crds:
+  - ../crds/
+primary:
+  kind: toy.reconciler-fuzzer/v1/Widget
+  sample: ../widget.yaml
+  ready: >-
+    has(self.status) && has(self.status.observedGeneration) && self.status.observedGeneration == self.metadata.generation
+    && has(self.status.ready) && self.status.ready == self.spec.count
+    && has(self.status.workloadReady) && self.status.workloadReady
+models:
+  - kind: apps/v1/Deployment
+    stages: deployment
+    after: 200ms
+    dependency: {track: 1s}
+fixtures:
+  - ../widget-config.yaml
+timeouts:
+  settle: 5s
+  stable: 2s
+values:
+  fixtures:
+    ../widget-config.yaml: [data.label]

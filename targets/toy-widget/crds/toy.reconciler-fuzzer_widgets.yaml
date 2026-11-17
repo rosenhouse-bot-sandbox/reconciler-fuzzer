@@ -70,6 +70,11 @@ spec:
                 description: Ready is how many of those ConfigMaps are present.
                 format: int32
                 type: integer
+              workloadReady:
+                description: |-
+                  WorkloadReady says whether the Widget's Deployment or Pod is ready.
+                  Only --workload writes it.
+                type: boolean
             type: object
         required:
         - spec
