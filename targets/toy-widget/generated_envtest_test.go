@@ -43,7 +43,7 @@ func generator(t *testing.T, path string) (*generate.Generator, []map[string]any
 // request or model fault that picked a request or held an object, so the gate
 // fails if faults stop firing.
 func TestGeneratedPlansWithFaultsPassB0(t *testing.T) {
-	for _, cfg := range []string{"config.yaml", gadgetConfig, tenantConfig, grantConfig, deploymentConfig, podConfig} {
+	for _, cfg := range []string{"config.yaml", gadgetConfig, tenantConfig, grantConfig, deploymentConfig, podConfig, syncedConfig} {
 		t.Run(cfg, func(t *testing.T) {
 			t.Parallel()
 			generatedPlansPassB0(t, cfg)
@@ -56,7 +56,7 @@ func generatedPlansPassB0(t *testing.T, cfg string) {
 	g, _ := generator(t, cfg)
 	var fired atomic.Int32
 	drawn := faults
-	if cfg == gadgetConfig || cfg == deploymentConfig || cfg == podConfig {
+	if cfg == gadgetConfig || cfg == deploymentConfig || cfg == podConfig || cfg == syncedConfig {
 		drawn = modelFaults
 	}
 	t.Cleanup(func() {

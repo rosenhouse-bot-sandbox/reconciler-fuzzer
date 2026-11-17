@@ -289,7 +289,7 @@ func checkFault(cfg *config.Config, f plan.Fault) error {
 			continue
 		}
 		if renamed.Match.Resource == f.Match.Resource {
-			return fmt.Errorf("no model takes %s; the %s stage's failures are %s", f, m.Stage, cmp.Or(strings.Join(m.Failures(), ", "), "none"))
+			return fmt.Errorf("no model takes %s; the %s model's failures are %s", f, gvr.Resource, cmp.Or(strings.Join(m.Failures(), ", "), "none"))
 		}
 		resources = append(resources, gvr.Resource)
 	}

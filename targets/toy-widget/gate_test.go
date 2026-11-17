@@ -34,10 +34,11 @@ const (
 	leaseConfig      = "lease/config.yaml"
 	deploymentConfig = "deployment/config.yaml"
 	podConfig        = "pod/config.yaml"
+	syncedConfig     = "synced/config.yaml"
 )
 
 // configs are the toy's configs.
-var configs = []string{"config.yaml", gadgetConfig, tenantConfig, grantConfig, leaseConfig, deploymentConfig, podConfig}
+var configs = []string{"config.yaml", gadgetConfig, tenantConfig, grantConfig, leaseConfig, deploymentConfig, podConfig, syncedConfig}
 
 func (g gateRow) configPath() string { return cmp.Or(g.config, "config.yaml") }
 
@@ -97,6 +98,7 @@ var gate = []gateRow{
 	{plan: "b36", bug: 36, finding: "Honest: reported ready before seeing its dependency ready", step: 1, detail: "deployments.apps", config: deploymentConfig},
 	{plan: "b37", bug: 37, finding: "Honest: stayed ready after seeing its dependency not ready", step: 1, detail: "seen not ready", config: podConfig},
 	{plan: "sidecar-failed", bug: 37, finding: "Honest: stayed ready after seeing its dependency not ready", step: 1, detail: "seen not ready", config: podConfig},
+	{plan: "b38", bug: 38, finding: "Honest: stayed ready after seeing its dependency not ready", step: 1, detail: "seen not ready", config: syncedConfig},
 	{plan: "b25", bug: 25, finding: "Backoff: retried a failing request in a tight loop", step: 1, detail: "patch gadgets.toy.reconciler-fuzzer", config: gadgetConfig,
 		notes: []string{"kube: launch.rbac forbids the controller's patch on the status subresource of gadgets.toy.reconciler-fuzzer in namespace "}},
 	{plan: "b26", bug: 26, finding: "Clean: left resources behind", step: 1, detail: "clusterroles.rbac.authorization.k8s.io tenant-tenant (rule 3, slot a)", config: tenantConfig},

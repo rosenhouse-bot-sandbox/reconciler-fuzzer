@@ -162,8 +162,8 @@ writes through its own listener from `k.Listen`, hears versions through
 instance whose owners a live read finds gone, following Kubernetes' cross-scope,
 foreground and orphan rules (`gc.go`). `namespace` finishes a terminating
 namespace. `model.NewStage` makes a stage model per `models:` entry, named
-`trace.ModelCaller` of its kind. Its `shape` writes `Ready` True and `status:`
-for `readyCondition`, or Kubernetes' status for `deployment` and `pod`, `after`
+`trace.ModelCaller` of its kind. Its `shape` writes `conditions:` True and renders
+`${CEL}` in `status:` for `readyCondition`, or Kubernetes' status for `deployment` and `pod`, `after`
 a generation's first version. `stuck` writes its `failure`'s status,
 `slowDelete` adds a finalizer, and either's end writes ready again. A stage
 holds each live object with its `finalizer:` until `finalizer.after` past the
@@ -457,7 +457,7 @@ timeouts: {settle: 30s, stable: 3s, backoffCap: 60s}    # defaults
 and `mutate` sit in the top-level `values`. An entry also takes `retain` and
 `halted`. A CRD under `crds` or Kubernetes must serve each kind. No kind appears
 twice among `primaries` and `models`, and no kube fixture is a CR. A model's
-stage defaults to `readyCondition`; `deployment` and `pod` take no `status:`. `dependency.required` defaults to true, and
+stage defaults to `readyCondition`; `deployment` and `pod` take no `status:`, `conditions:` or `ready:`. `dependency.required` defaults to true, and
 `stuckStatus` to `status`. `vault` needs a `token`. `access: read` says the
 controller only reads the fake. `values.fixtures` may name a system's fixtures
 file, whose entries' body paths `changeFixture` sets. `config.go` holds the
@@ -565,7 +565,7 @@ Each entry changes a check, exception, `System` interface or ignore list.
 27. Crash allows an exit within 1 s of a faulted Lease request.
 29. The runner waits for the settle condition before step 0, for singletons. A run whose controller made no successful request by then exits 2 (#145).
 34. A stage model has one stage and an exact `after`; `outputs:` waits. `deployment` and `pod` model kubelet and the Deployment controller only by status, so they create no ReplicaSets or Pods (#208).
-38. `stuck` writes `Ready` False rather than nothing, so B18 and B25 see it. A model fault holds an object if its model wrote a version that the model's ready rejects.
+38. `stuck` writes `Ready` False rather than nothing, so B18 and B25 see it. With several `conditions:`, its failure holds one False (#210). A model fault holds an object if its model wrote a version that the model's ready rejects.
 39. A model fault's end writes a fresh status, for a controller without a watch.
 40. Restore ignores a model kind's `status`, which the model writes.
 41. A model fault that held no object gets a note, as a request fault does.

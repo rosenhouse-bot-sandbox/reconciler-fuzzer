@@ -69,6 +69,8 @@ type Reconciler struct {
 	LabelFrom string
 	// Gadget gives each Widget a Gadget it depends on.
 	Gadget bool
+	// GadgetSynced also waits for the Gadget's Synced condition and endpoint.
+	GadgetSynced bool
 	// Workload gives each Widget a DeploymentWorkload or PodWorkload it
 	// depends on. Empty gives none.
 	Workload string

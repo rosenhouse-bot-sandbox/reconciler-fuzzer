@@ -254,7 +254,7 @@ type Action struct {
 }
 
 // SlowDeleteFinalizer is the finalizer a slowDelete fault holds objects
-// with, and StuckReason the Ready condition's reason a stuck fault writes.
+// with, and StuckReason the default reason of the conditions a stuck fault writes.
 const (
 	SlowDeleteFinalizer = "reconciler-fuzzer.dev/slow-delete"
 	StuckReason         = "Stuck"

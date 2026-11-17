@@ -862,3 +862,143 @@ func TestPodReady(t *testing.T) {
 		}
 	}
 }
+
+func TestCompileStatus(t *testing.T) {
+	render, err := config.CompileStatus(map[string]any{
+		"observedGeneration": "${self.metadata.generation}",
+		"endpoint":           map[string]any{"host": "${self.metadata.name + '.db.example.com'}", "port": 5432},
+		"ports":              []any{map[string]any{"name": "${self.metadata.name}"}},
+		"phase":              "Running",
+		"note":               "costs $5",
+		"host":               "${self.spec.host}",
+		"cleared":            nil,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := json.Marshal(render(map[string]any{"metadata": map[string]any{"name": "db", "generation": 3}}))
+	want := `{"cleared":null,"endpoint":{"host":"db.db.example.com","port":5432},"host":null,"note":"costs $5","observedGeneration":3,"phase":"Running","ports":[{"name":"db"}]}`
+	if string(got) != want {
+		t.Errorf("rendered %s, want %s", got, want)
+	}
+	for _, fields := range []map[string]any{{"a": "${self.(}"}, {"a": map[string]any{"b": "${other}"}}} {
+		if _, err := config.CompileStatus(fields, nil); err == nil {
+			t.Errorf("%v compiles", fields)
+		}
+	}
+	object := func(properties map[string]any) map[string]any {
+		return map[string]any{"type": "object", "properties": properties}
+	}
+	schema := object(map[string]any{
+		"spec":   object(map[string]any{"size": map[string]any{"type": "integer"}}),
+		"status": object(map[string]any{"endpoint": object(map[string]any{"port": map[string]any{"type": "integer"}})}),
+	})
+	sized, err := config.CompileStatus(map[string]any{"endpoint": map[string]any{"port": "${self.spec.size + 1}"}}, schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := json.Marshal(sized(map[string]any{"spec": map[string]any{"size": 3.0}})); string(got) != `{"endpoint":{"port":4}}` {
+		t.Errorf("rendered %s, want port 4", got)
+	}
+	for fields, want := range map[string]string{
+		`{"a": "${self.spec.sise}"}`:                  "a: ",
+		`{"endpoint": {"port": "${self.spec.size}"}}`: "",
+		`{"endpoint": {"port": "${'443'}"}}`:          "endpoint.port: ",
+		`{"ports": [{"name": "${self.(}"}]}`:          "ports[0].name: ",
+		`{"url": "https://${self.metadata.name}"}`:    "url: ",
+		`{"a": "${systems.kube.namespace}"}`:          "a: ",
+	} {
+		_, err := config.CompileStatus(jsonMap(t, fields), schema)
+		if want == "" && err != nil || want != "" && (err == nil || !strings.HasPrefix(err.Error(), want)) {
+			t.Errorf("%s: err = %v, want %q", fields, err, want)
+		}
+	}
+}
+
+func jsonMap(t *testing.T, s string) map[string]any {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+func TestModelConditions(t *testing.T) {
+	c, err := config.Load(writeConfig(t, minimal(t)+`models:
+  - kind: example.com/v1/Gadget
+    after: 1s
+    conditions:
+      - {type: Ready}
+      - {type: Synced, reason: ReconcileSuccess, message: synced, stuckReason: ReconcileError}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := c.Models[0]
+	want := []config.Condition{{Type: "Ready"}, {Type: "Synced", Reason: "ReconcileSuccess", Message: "synced", StuckReason: "ReconcileError"}}
+	if !reflect.DeepEqual(m.Conditions, want) {
+		t.Errorf("conditions = %+v, want %+v", m.Conditions, want)
+	}
+	if got := m.Failures(); !reflect.DeepEqual(got, []string{"Ready", "Synced"}) {
+		t.Errorf("failures = %v, want each condition", got)
+	}
+	if got := (config.Model{Conditions: want[:1]}).Failures(); got != nil {
+		t.Errorf("one condition's failures = %v, want none", got)
+	}
+	ready, err := config.CompileReady(m.Ready(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	condition := func(kind, status string, generation int) map[string]any {
+		return map[string]any{"type": kind, "status": status, "observedGeneration": generation}
+	}
+	for name, tc := range map[string]struct {
+		conditions []any
+		want       bool
+	}{
+		"both true":     {[]any{condition("Ready", "True", 2), condition("Synced", "True", 2)}, true},
+		"synced false":  {[]any{condition("Ready", "True", 2), condition("Synced", "False", 2)}, false},
+		"synced absent": {[]any{condition("Ready", "True", 2)}, false},
+		"synced stale":  {[]any{condition("Ready", "True", 2), condition("Synced", "True", 1)}, false},
+		"ready false":   {[]any{condition("Ready", "False", 2), condition("Synced", "True", 2)}, false},
+	} {
+		obj := map[string]any{"metadata": map[string]any{"generation": 2}, "status": map[string]any{"conditions": tc.conditions}}
+		if got, err := ready(obj); got != tc.want || err != nil {
+			t.Errorf("%s: ready = %t, %v", name, got, err)
+		}
+	}
+}
+
+func TestModelReadyOverridesItsStage(t *testing.T) {
+	c, err := config.Load(writeConfig(t, minimal(t)+`models:
+  - {kind: example.com/v1/Gadget, after: 1s, conditions: [{type: Synced}], ready: "self.status.phase == 'Up'"}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Models[0].Ready(); got != "self.status.phase == 'Up'" {
+		t.Errorf("Ready() = %q", got)
+	}
+}
+
+func TestModelStatusRefusesMistakes(t *testing.T) {
+	for models, want := range map[string]string{
+		"- {kind: v1/Pod, stages: pod, after: 1s, conditions: [{type: Ready}]}":                     "models[0].conditions: only readyCondition takes conditions",
+		"- {kind: v1/Pod, stages: pod, after: 1s, ready: 'true'}":                                   "models[0].ready: only readyCondition takes ready",
+		"- {kind: example.com/v1/Gadget, after: 1s, conditions: [{reason: Up}]}":                    "models[0].conditions[0].type is required",
+		"- {kind: example.com/v1/Gadget, after: 1s, conditions: [{type: 'a b'}]}":                   `models[0].conditions[0].type "a b"`,
+		"- {kind: example.com/v1/Gadget, after: 1s, conditions: [{type: Ready}, {type: Ready}]}":    "models[0].conditions[1].type Ready: another condition has this type",
+		"- {kind: example.com/v1/Gadget, after: 1s, conditions: [{type: Ready, reason: 'no way'}]}": `models[0].conditions[0].reason "no way"`,
+		"- {kind: example.com/v1/Gadget, after: 1s, conditions: [{type: Ready, stuckReason: '1'}]}": `models[0].conditions[0].stuckReason "1"`,
+		"- {kind: example.com/v1/Gadget, after: 1s, ready: 'self.('}":                               "models[0].ready",
+		"- {kind: example.com/v1/Gadget, after: 1s, ready: '1'}":                                    "models[0].ready",
+		"- {kind: example.com/v1/Gadget, after: 1s, status: {a: '${self.(}'}}":                      "models[0].status",
+		"- {kind: example.com/v1/Gadget, after: 1s, stuckStatus: {a: '${self.(}'}}":                 "models[0].stuckStatus",
+	} {
+		_, err := config.Load(writeConfig(t, minimal(t)+"models:\n"+models+"\n"))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("models %q: err = %v, want %q", models, err, want)
+		}
+	}
+}

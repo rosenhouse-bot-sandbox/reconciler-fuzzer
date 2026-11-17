@@ -55,6 +55,7 @@ func TestTheGadgetConfigDependsOnAModelledGadget(t *testing.T) {
 		After:      200 * time.Millisecond,
 		Dependency: &config.Dependency{Required: true, Track: time.Second},
 	}
+	want.Schema = c.Schema(want.Kind)
 	if len(c.Models) != 1 || !reflect.DeepEqual(c.Models[0], want) {
 		t.Errorf("Models are %+v, want [%+v].", c.Models, want)
 	}

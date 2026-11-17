@@ -5,7 +5,7 @@
 
 | Bug | Description | Plan | Check | Step |
 |---|---|---|---|---|
-| B0 | The correct controller. | all 62 committed plans | none | |
+| B0 | The correct controller. | all 64 committed plans | none | |
 | B1 | Reports children ready before it creates them. | b1 | Converge | 0 |
 | B2 | Creates children with generated names, so it duplicates them. | b2 | Converge | 0 |
 | B3 | Leaves child 0 without an owner reference. | b3 | Clean | 1 |
@@ -45,6 +45,7 @@
 | B36 | Reports its Deployment ready once it is Available, while old Pods still serve a rollout. | deployment/b36 | Honest | 1 |
 | B37 | Reports its Pod ready once it is Running, without reading its Ready condition. | pod/b37 | Honest | 1 |
 | B37 | Reports its Pod ready once it is Running, without reading its Ready condition. | pod/sidecar-failed | Honest | 1 |
+| B38 | Reports its Gadget ready without reading its Synced condition. | synced/b38 | Honest | 1 |
 
 ## Bucket toy
 

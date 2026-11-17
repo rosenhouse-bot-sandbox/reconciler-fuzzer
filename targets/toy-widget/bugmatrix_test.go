@@ -120,6 +120,7 @@ var bugs = map[int]string{
 	29: "Never releases a Tenant's children while the Tenant is being deleted, so only a Foreground delete wedges.",
 	36: "Reports its Deployment ready once it is Available, while old Pods still serve a rollout.",
 	37: "Reports its Pod ready once it is Running, without reading its Ready condition.",
+	38: "Reports its Gadget ready without reading its Synced condition.",
 }
 
 // renderBugMatrix renders the gate table, plus a B0 row for every plan.

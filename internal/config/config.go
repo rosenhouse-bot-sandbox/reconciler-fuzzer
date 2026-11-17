@@ -268,10 +268,32 @@ var stages = map[string]stage{
 }
 
 // Ready is the CEL that says whether an object of m's kind is ready.
-func (m Model) Ready() string { return stages[cmp.Or(m.Stage, ReadyCondition)].ready }
+func (m Model) Ready() string {
+	if m.ReadyCEL != "" {
+		return m.ReadyCEL
+	}
+	if len(m.Conditions) > 0 {
+		var types []string
+		for _, c := range m.Conditions {
+			types = append(types, "'"+c.Type+"'")
+		}
+		return `has(self.status) && has(self.status.conditions) && [` + strings.Join(types, ", ") + `].all(t, self.status.conditions.exists(c, c.type == t && c.status == 'True' && (!has(c.observedGeneration) || c.observedGeneration == self.metadata.generation)))`
+	}
+	return stages[cmp.Or(m.Stage, ReadyCondition)].ready
+}
 
 // Failures are the failures m's stage takes besides its default.
-func (m Model) Failures() []string { return stages[cmp.Or(m.Stage, ReadyCondition)].failures }
+// A model with more than one condition fails each of them alone.
+func (m Model) Failures() []string {
+	if len(m.Conditions) > 1 {
+		var types []string
+		for _, c := range m.Conditions {
+			types = append(types, c.Type)
+		}
+		return types
+	}
+	return stages[cmp.Or(m.Stage, ReadyCondition)].failures
+}
 
 // Model is one models entry: the harness plays the controller of Kind.
 type Model struct {
@@ -282,12 +304,29 @@ type Model struct {
 	// Status holds literal fields the stage sets in each status write, and
 	// StuckStatus those it sets in their place while a stuck fault lasts.
 	// A nil StuckStatus means Status, and an empty one means no fields.
+	// A string field that is ${<CEL>} takes its value over the object.
 	Status, StuckStatus map[string]any
-	After               time.Duration
+	// Conditions, when set, replace a readyCondition model's Ready condition.
+	Conditions []Condition
+	// ReadyCEL, when set, replaces the ready the stage implies.
+	ReadyCEL string
+	// Schema is the openAPIV3Schema of Kind's CRD, or nil.
+	Schema map[string]any
+	After  time.Duration
 	// Finalizer is nil unless the model holds each object's deletion.
 	Finalizer *Finalizer
 	// Dependency is nil unless the kind is a readiness dependency.
 	Dependency *Dependency
+}
+
+// Condition is a condition that a readyCondition model writes: True when
+// ready, and False under a stuck fault. An empty Reason means Modelled, and
+// an empty StuckReason means Stuck.
+type Condition struct {
+	Type        string `json:"type"`
+	Reason      string `json:"reason"`
+	Message     string `json:"message"`
+	StuckReason string `json:"stuckReason"`
 }
 
 // Finalizer is a finalizer the model adds to each live object it hears. It
@@ -353,6 +392,8 @@ type declaration struct {
 		Stages      string              `json:"stages"`
 		Status      map[string]any      `json:"status"`
 		StuckStatus map[string]any      `json:"stuckStatus"`
+		Conditions  []Condition         `json:"conditions"`
+		Ready       string              `json:"ready"`
 		After       string              `json:"after"`
 		Finalizer   *declaredFinalizer  `json:"finalizer"`
 		Dependency  *declaredDependency `json:"dependency"`
@@ -892,7 +933,10 @@ func models(d declaration, listed []schema.GroupKind, kinds servedKinds) ([]Mode
 			return nil, fmt.Errorf("%s.kind %s: a primary or another model has this kind", key, declared.Kind)
 		}
 		seen[kind.GroupKind()] = true
-		m := Model{Kind: kind, Resource: served.resource, Stage: cmp.Or(declared.Stages, ReadyCondition), Status: declared.Status, StuckStatus: declared.StuckStatus}
+		m := Model{
+			Kind: kind, Resource: served.resource, Stage: cmp.Or(declared.Stages, ReadyCondition), Status: declared.Status, StuckStatus: declared.StuckStatus,
+			Conditions: declared.Conditions, ReadyCEL: declared.Ready, Schema: served.schema,
+		}
 		switch st, known := stages[m.Stage]; {
 		case !known:
 			return nil, fmt.Errorf("%s.stages %q: want %s, %s or %s", key, m.Stage, ReadyCondition, DeploymentStage, PodStage)
@@ -900,6 +944,13 @@ func models(d declaration, listed []schema.GroupKind, kinds servedKinds) ([]Mode
 			return nil, fmt.Errorf("%s.stages %s: it models %s, not %s", key, m.Stage, st.kind, declared.Kind)
 		case m.Stage != ReadyCondition && (m.Status != nil || m.StuckStatus != nil):
 			return nil, fmt.Errorf("%s.status: only %s takes status and stuckStatus", key, ReadyCondition)
+		case m.Stage != ReadyCondition && m.Conditions != nil:
+			return nil, fmt.Errorf("%s.conditions: only %s takes conditions", key, ReadyCondition)
+		case m.Stage != ReadyCondition && m.ReadyCEL != "":
+			return nil, fmt.Errorf("%s.ready: only %s takes ready", key, ReadyCondition)
+		}
+		if err := programmable(key, m); err != nil {
+			return nil, err
 		}
 		if declared.After == "" {
 			return nil, fmt.Errorf("%s.after is required", key)
@@ -916,6 +967,44 @@ func models(d declaration, listed []schema.GroupKind, kinds servedKinds) ([]Mode
 		models = append(models, m)
 	}
 	return models, nil
+}
+
+// conditionReason is what the API server accepts as a condition's reason.
+var conditionReason = regexp.MustCompile(`^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$`)
+
+// programmable refuses m's conditions unless the API server would accept
+// them, and its CEL unless it compiles.
+func programmable(key string, m Model) error {
+	for i, c := range m.Conditions {
+		at := fmt.Sprintf("%s.conditions[%d]", key, i)
+		switch problems := validation.IsQualifiedName(c.Type); {
+		case c.Type == "":
+			return fmt.Errorf("%s.type is required", at)
+		case len(problems) > 0:
+			return fmt.Errorf("%s.type %q: %s", at, c.Type, strings.Join(problems, "; "))
+		case slices.ContainsFunc(m.Conditions[:i], func(o Condition) bool { return o.Type == c.Type }):
+			return fmt.Errorf("%s.type %s: another condition has this type", at, c.Type)
+		}
+		for _, reason := range []struct{ field, value string }{{"reason", c.Reason}, {"stuckReason", c.StuckReason}} {
+			if reason.value != "" && !conditionReason.MatchString(reason.value) {
+				return fmt.Errorf("%s.%s %q: want a match of %s", at, reason.field, reason.value, conditionReason)
+			}
+		}
+	}
+	if m.ReadyCEL != "" {
+		if _, err := CompileReady(m.ReadyCEL, m.Schema); err != nil {
+			return fmt.Errorf("%s.ready %q: %w", key, m.ReadyCEL, err)
+		}
+	}
+	for _, status := range []struct {
+		field  string
+		fields map[string]any
+	}{{"status", m.Status}, {"stuckStatus", m.StuckStatus}} {
+		if _, err := CompileStatus(status.fields, m.Schema); err != nil {
+			return fmt.Errorf("%s.%s.%w", key, status.field, err)
+		}
+	}
+	return nil
 }
 
 // finalizer refuses slowDelete's name and any name without a domain. On a

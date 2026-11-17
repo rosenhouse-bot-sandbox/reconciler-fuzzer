@@ -45,10 +45,11 @@ const (
 const (
 	B36 Bug = iota + 36
 	B37
+	B38
 )
 
 // MaxBug is the highest seeded bug ID.
-const MaxBug = int(B37)
+const MaxBug = int(B38)
 
 // bucketBug says whether id is one of toy-bucket's.
 func bucketBug(id int) bool { return id > int(B29) && id < int(B36) }
